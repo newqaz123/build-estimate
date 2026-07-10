@@ -12,7 +12,6 @@ import type { Boq } from "@/lib/boq-schema"
 import { ProtoBadge } from "@/components/proto-badge"
 import { ProtoFilterChip } from "@/components/proto-filter-chip"
 import { ProtoDataTable } from "@/components/proto-data-table"
-import { ProtoPagination } from "@/components/proto-pagination"
 
 const typeFilters = ["All", "Structural", "MEP", "Finishing"] as const
 const statusFilters = ["Draft", "Active", "Review", "Approved", "Parsed"] as const
@@ -166,6 +165,42 @@ export default function BoqsPage() {
               { label: 'Std ⓘ', tooltip: 'Standardization status: matched (auto or approved) vs unmatched items' },
               { label: 'Actions', className: 'text-right whitespace-nowrap' },
             ]}
+            footer={
+              <div className="flex items-center justify-between px-4 py-3 text-sm text-muted-foreground border-t border-border">
+                <span>Showing {(page - 1) * 10 + 1}–{Math.min(page * 10, total)} of {total}</span>
+                <div className="flex gap-0.5">
+                  <button
+                    onClick={() => setPage(Math.max(1, page - 1))}
+                    disabled={page <= 1}
+                    className="w-7 h-7 grid place-items-center rounded-md border border-transparent hover:bg-muted disabled:opacity-30 disabled:cursor-default transition-colors"
+                  >
+                    ‹
+                  </button>
+                  {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                    const p = i + 1
+                    return (
+                      <button
+                        key={p}
+                        onClick={() => setPage(p)}
+                        className={`w-7 h-7 grid place-items-center rounded-md text-sm transition-colors ${
+                          p === page ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    )
+                  })}
+                  {totalPages > 7 && <span className="w-7 h-7 grid place-items-center text-sm">…</span>}
+                  <button
+                    onClick={() => setPage(Math.min(totalPages, page + 1))}
+                    disabled={page >= totalPages}
+                    className="w-7 h-7 grid place-items-center rounded-md border border-transparent hover:bg-muted disabled:opacity-30 disabled:cursor-default transition-colors"
+                  >
+                    ›
+                  </button>
+                </div>
+              </div>
+            }
           >
             {boqs.map(boq => {
               const std = computeStdStats(boq)
@@ -209,10 +244,6 @@ export default function BoqsPage() {
               )
             })}
           </ProtoDataTable>
-
-          <div className="border-t border-border px-4">
-            <ProtoPagination page={page} totalPages={totalPages} total={total} limit={10} onPageChange={setPage} />
-          </div>
         </>
       )}
 
