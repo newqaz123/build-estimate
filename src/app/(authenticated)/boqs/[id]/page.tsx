@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { CollapsibleSection } from "@/components/collapsible-section"
 import { CatalogMatchModal } from "@/components/catalog-match-modal"
 import { toast } from "sonner"
-import { ChevronLeft, Search, Download, Sparkles, Save, FileDown } from "lucide-react"
+import { ChevronLeft, Search, Sparkles, Save, FileDown } from "lucide-react"
 import { ProtoBadge } from "@/components/proto-badge"
 import type { Boq, BoqItem } from "@/lib/boq-schema"
 
@@ -383,12 +383,19 @@ export default function BoqDetailPage() {
       >
         {([
           { key: "vendor", label: "Vendor", value: boq.vendor, editable: true },
-          { key: "workType", label: "Work Type", value: boq.workType, editable: true, type: "select" as const, options: ["Structural", "MEP", "Finishing"] },
-          { key: "date", label: "Date", value: boq.date, editable: true, type: "date" as const },
+          { key: "workType", label: "Work Type", value: boq.workType, editable: true, type: "select", options: ["Structural", "MEP", "Finishing"] },
+          { key: "date", label: "Date", value: boq.date, editable: true, type: "date" },
           { key: null, label: "Total Items", value: String(boq.totalItems), editable: false },
           { key: null, label: "Grand Total", value: `฿${grandTotal.toLocaleString()}`, editable: false },
           { key: null, label: "BOQ ID", value: boq.id.slice(0, 8), editable: false },
-        ] as const).map((meta) => (
+        ] as Array<{
+          key: string | null
+          label: string
+          value: string
+          editable: boolean
+          type?: "text" | "select" | "date"
+          options?: string[]
+        }>).map((meta) => (
           <MetaField
             key={meta.label}
             label={meta.label}
@@ -396,8 +403,8 @@ export default function BoqDetailPage() {
             editable={meta.editable}
             field={meta.key}
             onSave={handleMetaEdit}
-            type={"type" in meta ? meta.type : undefined}
-            options={"options" in meta ? [...meta.options] : undefined}
+            type={meta.type}
+            options={meta.options}
           />
         ))}
       </div>
@@ -598,17 +605,37 @@ export default function BoqDetailPage() {
                                 >
                                   Done
                                 </button>
+                                <button
+                                  onClick={() => {
+                                    if (confirm('Remove this item from the BOQ?')) {
+                                      handleDeleteItem(si, ii)
+                                    }
+                                  }}
+                                  className="text-xs px-2 py-1 rounded text-destructive hover:bg-destructive/10"
+                                >
+                                  Delete
+                                </button>
                               </div>
                             ) : (
-                              <button
-                                onClick={() => {
-                                  editingRef.current = key
-                                  setEdits({ ...edits })
-                                }}
-                                className="text-xs text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity"
-                              >
-                                Edit
-                              </button>
+                              <div className="flex items-center gap-1">
+                                {hasEdits && (
+                                  <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3 h-3">
+                                      <circle cx="8" cy="8" r="6.5" /><polyline points="8 4 8 8 11 11" />
+                                    </svg>
+                                    Unsaved
+                                  </span>
+                                )}
+                                <button
+                                  onClick={() => {
+                                    editingRef.current = key
+                                    setEdits({ ...edits })
+                                  }}
+                                  className="text-xs text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity"
+                                >
+                                  Edit
+                                </button>
+                              </div>
                             )}
                           </td>
                         </tr>
