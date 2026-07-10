@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
-import { getDb } from '@/lib/firebase-admin'
+import { getDocument, setDocument } from '@/lib/db'
 import type { DoclingSettings, FuzzySettings, LlmSettings, PromptSettings, WorkspaceSettings } from '@/lib/settings-schema'
+
+const SETTINGS_ID = 'workspace'
 
 const DEFAULT_SETTINGS: WorkspaceSettings = {
   llm: { provider: 'openai', model: 'gpt-4o' },
@@ -23,13 +25,12 @@ export async function GET() {
   }
 
   try {
-    const db = getDb()
-    const doc = await db.collection('settings').doc('workspace').get()
-    if (!doc.exists) {
+    const existing = await getDocument<WorkspaceSettings>('settings', SETTINGS_ID)
+    if (!existing) {
+      await setDocument('settings', SETTINGS_ID, DEFAULT_SETTINGS as unknown as Record<string, unknown>, false)
       return NextResponse.json(DEFAULT_SETTINGS)
     }
-    const data = doc.data() as WorkspaceSettings
-    return NextResponse.json({ ...DEFAULT_SETTINGS, ...data })
+    return NextResponse.json({ ...DEFAULT_SETTINGS, ...existing })
   } catch (error) {
     console.error('Error fetching settings:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -55,12 +56,7 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid section' }, { status: 400 })
     }
 
-    const db = getDb()
-    await db.collection('settings').doc('workspace').set(
-      { [section]: data },
-      { merge: true }
-    )
-
+    await setDocument('settings', SETTINGS_ID, { [section]: data })
     return NextResponse.json({ success: true })
   } catch (error) {
     console.error('Error updating settings:', error)

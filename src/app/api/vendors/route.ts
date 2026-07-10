@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
-import { getDb } from '@/lib/firebase-admin'
+import { getDb } from '@/lib/db'
 import type { Vendor } from '@/lib/settings-schema'
 
 export async function GET() {
