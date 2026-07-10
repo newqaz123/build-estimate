@@ -1,0 +1,46 @@
+- generic [active] [ref=f10e1]:
+  - generic [ref=f10e2]:
+    - complementary [ref=f10e3]:
+      - generic [ref=f10e4]:
+        - generic [ref=f10e8]: BuildEstimate
+        - button "Collapse sidebar" [ref=f10e9] [cursor=pointer]
+      - navigation [ref=f10e12]:
+        - link "Dashboard" [ref=f10e13] [cursor=pointer]:
+          - /url: /dashboard
+        - link "BOQs" [ref=f10e20] [cursor=pointer]:
+          - /url: /boqs
+        - link "Compare" [ref=f10e25] [cursor=pointer]:
+          - /url: /compare
+        - link "Catalog" [ref=f10e30] [cursor=pointer]:
+          - /url: /catalog
+        - link "Estimator" [ref=f10e35] [cursor=pointer]:
+          - /url: /estimator
+        - link "Settings" [ref=f10e39] [cursor=pointer]:
+          - /url: /settings
+      - button "Sign out" [ref=f10e46] [cursor=pointer]
+    - generic [ref=f10e50]:
+      - banner [ref=f10e51]:
+        - heading "Bills of Quantities" [level=1] [ref=f10e53]
+        - generic [ref=f10e54]:
+          - generic [ref=f10e55]: Construction Consultant
+          - generic [ref=f10e56]: CC
+      - main [ref=f10e57]:
+        - paragraph [ref=f10e59]: Upload, manage, and track all vendor BOQs across your projects.
+        - generic [ref=f10e60]:
+          - generic [ref=f10e61]:
+            - textbox "Search BOQs…" [ref=f10e63]
+            - generic [ref=f10e64]:
+              - button "All" [ref=f10e65] [cursor=pointer]
+              - button "Structural" [ref=f10e66] [cursor=pointer]
+              - button "MEP" [ref=f10e67] [cursor=pointer]
+              - button "Finishing" [ref=f10e68] [cursor=pointer]
+              - button "Draft" [ref=f10e70] [cursor=pointer]
+              - button "Active" [ref=f10e71] [cursor=pointer]
+              - button "Review" [ref=f10e72] [cursor=pointer]
+              - button "Approved" [ref=f10e73] [cursor=pointer]
+              - button "Parsed" [ref=f10e74] [cursor=pointer]
+          - button "Upload BOQ" [ref=f10e75] [cursor=pointer]
+        - generic [ref=f10e79]: Loading BOQs…
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f10e87] [cursor=pointer]
+  - alert [ref=f10e91]

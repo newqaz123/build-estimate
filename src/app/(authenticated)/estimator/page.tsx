@@ -1,38 +1,15 @@
 "use client"
 
-import { useEffect, useState, useCallback, useRef } from "react"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import {
-  Plus,
-  Trash2,
-  Send,
-  MessageSquare,
-  X,
-  Loader2,
-  Check,
-  Lightbulb,
-  FileDown,
-  Pencil,
-} from "lucide-react"
+import { useEffect, useState, useRef, useCallback } from "react"
 import { toast } from "sonner"
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-  DialogClose,
-} from "@/components/ui/dialog"
-import type { Estimate, EstimateItem } from "@/lib/estimate-schema"
+import type { Estimate } from "@/lib/estimate-schema"
 
 interface EstimateItemLocal {
   id: string
-  code: string
   desc: string
-  unit: string
   qty: number
   rate: number
+  unit: string
   total: number
   source: "imported" | "manual" | "adjustment"
 }
@@ -40,6 +17,7 @@ interface EstimateItemLocal {
 interface ChatMessage {
   role: "user" | "bot"
   text: string
+  choices?: string[]
   suggestions?: {
     desc: string
     unit: string
@@ -48,69 +26,49 @@ interface ChatMessage {
   }[]
 }
 
-const SUGGESTIONS_MAP: Record<string, ChatMessage["suggestions"]> = {
-  concrete: [
-    { desc: "Structural concrete C32/40", unit: "m³", rate: 3850, qty: 50 },
-    { desc: "Structural concrete C25/30", unit: "m³", rate: 3450, qty: 80 },
-    { desc: "Reinforcement bar SD40 — 16mm", unit: "ton", rate: 28500, qty: 12 },
-    { desc: "Reinforcement bar SD40 — 12mm", unit: "ton", rate: 29000, qty: 8 },
-    { desc: "Formwork — column", unit: "m²", rate: 680, qty: 300 },
-    { desc: "Formwork — slab", unit: "m²", rate: 590, qty: 500 },
-  ],
-  steel: [
-    { desc: "Steel frame — main beams", unit: "ton", rate: 42000, qty: 25 },
-    { desc: "Metal deck flooring", unit: "m²", rate: 950, qty: 400 },
-    { desc: "Bored pile — D0.80m x 18m", unit: "m", rate: 4500, qty: 16 },
-  ],
-  mep: [
-    { desc: "HVAC ductwork — supply", unit: "m²", rate: 1850, qty: 150 },
-    { desc: "Electrical cable tray — 300mm", unit: "m", rate: 850, qty: 80 },
-    { desc: "Plumbing — PVC pipe 4\"", unit: "m", rate: 280, qty: 120 },
-    { desc: "Fire suppression — sprinkler head", unit: "ea", rate: 450, qty: 30 },
-  ],
-  finishing: [
-    { desc: "Ceramic tile — floor 600×600", unit: "m²", rate: 680, qty: 350 },
-    { desc: "Suspended ceiling — T-grid system", unit: "m²", rate: 520, qty: 300 },
-    { desc: "Paint — interior emulsion", unit: "m²", rate: 85, qty: 800 },
-    { desc: "Door — hollow core 0.9m", unit: "ea", rate: 4500, qty: 15 },
-  ],
-}
+const HISTORICAL_ITEMS = [
+  { id: 'h1', desc: 'Structural concrete C32/40', avgRate: 3850, unit: 'm³', category: 'Structural', source: '3 BOQs' },
+  { id: 'h2', desc: 'Structural concrete C25/30', avgRate: 3450, unit: 'm³', category: 'Structural', source: '4 BOQs' },
+  { id: 'h3', desc: 'Reinforcement bar SD40 — 16mm', avgRate: 28500, unit: 'ton', category: 'Structural', source: '3 BOQs' },
+  { id: 'h4', desc: 'Reinforcement bar SD40 — 12mm', avgRate: 29000, unit: 'ton', category: 'Structural', source: '3 BOQs' },
+  { id: 'h5', desc: 'Formwork — column', avgRate: 680, unit: 'm²', category: 'Structural', source: '4 BOQs' },
+  { id: 'h6', desc: 'Formwork — slab', avgRate: 590, unit: 'm²', category: 'Structural', source: '4 BOQs' },
+  { id: 'h7', desc: 'Structural steel frame — beams', avgRate: 42000, unit: 'ton', category: 'Structural', source: '2 BOQs' },
+  { id: 'h8', desc: 'Metal deck flooring', avgRate: 950, unit: 'm²', category: 'Structural', source: '3 BOQs' },
+  { id: 'h9', desc: 'HVAC ductwork — supply', avgRate: 1850, unit: 'm²', category: 'MEP', source: '2 BOQs' },
+  { id: 'h10', desc: 'HVAC ductwork — return', avgRate: 1700, unit: 'm²', category: 'MEP', source: '2 BOQs' },
+  { id: 'h11', desc: 'Electrical cable tray — 300mm', avgRate: 850, unit: 'm', category: 'MEP', source: '3 BOQs' },
+  { id: 'h12', desc: 'Electrical cable — THW 50mm²', avgRate: 320, unit: 'm', category: 'MEP', source: '3 BOQs' },
+  { id: 'h13', desc: 'Plumbing — PVC pipe 4"', avgRate: 280, unit: 'm', category: 'MEP', source: '4 BOQs' },
+  { id: 'h14', desc: 'Fire suppression — sprinkler head', avgRate: 450, unit: 'ea', category: 'MEP', source: '2 BOQs' },
+  { id: 'h15', desc: 'Ceramic tile — floor 600×600', avgRate: 680, unit: 'm²', category: 'Finishing', source: '3 BOQs' },
+  { id: 'h16', desc: 'Ceramic tile — wall 300×600', avgRate: 620, unit: 'm²', category: 'Finishing', source: '3 BOQs' },
+  { id: 'h17', desc: 'Paint — interior emulsion', avgRate: 85, unit: 'm²', category: 'Finishing', source: '4 BOQs' },
+  { id: 'h18', desc: 'Suspended ceiling — T-grid system', avgRate: 520, unit: 'm²', category: 'Finishing', source: '2 BOQs' },
+  { id: 'h19', desc: 'Door — hollow core 0.9m', avgRate: 4500, unit: 'ea', category: 'Finishing', source: '3 BOQs' },
+  { id: 'h20', desc: 'Door — solid core 1.2m', avgRate: 8200, unit: 'ea', category: 'Finishing', source: '2 BOQs' },
+]
 
-function getSuggestions(input: string): ChatMessage["suggestions"] {
-  const t = input.toLowerCase()
-  const result: ChatMessage["suggestions"] = []
-  if (/concrete|column|slab|beam|foundation|rc/i.test(t))
-    result.push(...(SUGGESTIONS_MAP.concrete ?? []))
-  if (/steel|metal|frame|deck/i.test(t))
-    result.push(...(SUGGESTIONS_MAP.steel ?? []))
-  if (/hvac|ac|air|electrical|cable|plumbing|pipe|fire|sprinkler|mep/i.test(t))
-    result.push(...(SUGGESTIONS_MAP.mep ?? []))
-  if (/finish|tile|paint|ceiling|floor|wall|interior|door/i.test(t))
-    result.push(...(SUGGESTIONS_MAP.finishing ?? []))
-  if (result.length === 0) {
-    result.push(
-      { desc: "Concrete C32/40 — columns", unit: "m³", rate: 3850, qty: 30 },
-      { desc: "Rebar SD40 — 16mm", unit: "ton", rate: 28500, qty: 8 },
-      { desc: "Formwork — slab", unit: "m²", rate: 590, qty: 400 },
-      { desc: "Ceramic tile — floor 600×600", unit: "m²", rate: 680, qty: 200 }
-    )
-  }
-  return result.slice(0, 6)
-}
+const CHAT_FLOWS = [
+  "Hi! I'm your BOQ Assistant. Tell me about your project — what kind of building or structure?",
+  "What type of structure?<br>• <b>RC / Concrete</b><br>• <b>Steel structure</b><br>• <b>Mixed</b>",
+  "How many floors? This helps estimate foundation, columns, and slabs.",
+  "Does the project include any of these?<br>• Basement / underground parking<br>• MEP (HVAC, electrical, plumbing)<br>• Finishing works (tiles, paint, ceiling)<br>Let me know.",
+]
 
 export default function EstimatorPage() {
   const [projectName, setProjectName] = useState("New Estimate")
-  const [projectDate, setProjectDate] = useState(
-    new Date().toISOString().split("T")[0]
-  )
+  const [projectDate, setProjectDate] = useState(new Date().toISOString().split("T")[0])
   const [projectDesc, setProjectDesc] = useState("")
   const [items, setItems] = useState<EstimateItemLocal[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+
   const [chatOpen, setChatOpen] = useState(false)
   const [chatInput, setChatInput] = useState("")
   const [chatMsgs, setChatMsgs] = useState<ChatMessage[]>([])
   const [chatWaiting, setChatWaiting] = useState(false)
+  const [chatStep, setChatStep] = useState(0)
   const chatEndRef = useRef<HTMLDivElement>(null)
 
   const [itemModalOpen, setItemModalOpen] = useState(false)
@@ -119,7 +77,7 @@ export default function EstimatorPage() {
   const [modalQty, setModalQty] = useState("1")
   const [modalRate, setModalRate] = useState("0")
   const [modalUnit, setModalUnit] = useState("")
-  const [modalCode, setModalCode] = useState("")
+  const [descSuggestions, setDescSuggestions] = useState<typeof HISTORICAL_ITEMS>([])
 
   useEffect(() => {
     async function fetchEstimates() {
@@ -146,12 +104,11 @@ export default function EstimatorPage() {
     if (chatEndRef.current) {
       chatEndRef.current.scrollIntoView({ behavior: "smooth" })
     }
-  }, [chatMsgs])
+  }, [chatMsgs, chatWaiting])
 
   function addItem(item?: Partial<EstimateItemLocal>) {
     const newItem: EstimateItemLocal = {
       id: `e${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      code: item?.code || "",
       desc: item?.desc || "",
       unit: item?.unit || "",
       qty: item?.qty ?? 1,
@@ -162,11 +119,7 @@ export default function EstimatorPage() {
     setItems((prev) => [...prev, newItem])
   }
 
-  function updateItem(
-    id: string,
-    field: "qty" | "rate" | "desc" | "code" | "unit",
-    value: string | number
-  ) {
+  function updateItem(id: string, field: keyof EstimateItemLocal, value: string | number) {
     setItems((prev) =>
       prev.map((item) => {
         if (item.id !== id) return item
@@ -183,54 +136,6 @@ export default function EstimatorPage() {
 
   function removeItem(id: string) {
     setItems((prev) => prev.filter((i) => i.id !== id))
-  }
-
-  function openItemModal(itemId?: string) {
-    if (itemId) {
-      const item = items.find((i) => i.id === itemId)
-      if (!item) return
-      setEditingItemId(itemId)
-      setModalCode(item.code || "")
-      setModalDesc(item.desc || "")
-      setModalQty(String(item.qty))
-      setModalRate(String(item.rate))
-      setModalUnit(item.unit || "")
-    } else {
-      setEditingItemId(null)
-      setModalCode("")
-      setModalDesc("")
-      setModalQty("1")
-      setModalRate("0")
-      setModalUnit("")
-    }
-    setItemModalOpen(true)
-  }
-
-  function saveItemModal() {
-    const desc = modalDesc.trim()
-    if (!desc) {
-      toast.error("Enter a description")
-      return
-    }
-    const qty = parseFloat(modalQty) || 0
-    const rate = parseFloat(modalRate) || 0
-    const unit = modalUnit.trim()
-
-    if (editingItemId) {
-      setItems((prev) =>
-        prev.map((item) =>
-          item.id === editingItemId
-            ? { ...item, desc, code: modalCode, qty, rate, unit, total: qty * rate }
-            : item
-        )
-      )
-      toast.success("Item saved")
-    } else {
-      addItem({ desc, code: modalCode, qty, rate, unit, source: "manual" })
-      toast.success("Item added")
-    }
-    setItemModalOpen(false)
-    setEditingItemId(null)
   }
 
   const totalAmount = items.reduce((sum, i) => sum + i.total, 0)
@@ -251,7 +156,7 @@ export default function EstimatorPage() {
           date: projectDate,
           notes: projectDesc,
           items: items.map((i) => ({
-            code: i.code,
+            code: "",
             desc: i.desc,
             unit: i.unit,
             qty: i.qty,
@@ -270,15 +175,77 @@ export default function EstimatorPage() {
     }
   }
 
-  function openChat() {
-    setChatOpen(true)
-    if (chatMsgs.length === 0) {
-      setChatMsgs([
-        {
-          role: "bot",
-          text: "Hi! I'm your BOQ Assistant. Tell me about your project — what kind of building or structure?",
-        },
-      ])
+  // ── Item modal ──
+  function openItemModal(itemId?: string) {
+    if (itemId) {
+      const item = items.find((i) => i.id === itemId)
+      if (!item) return
+      setEditingItemId(itemId)
+      setModalDesc(item.desc || "")
+      setModalQty(String(item.qty))
+      setModalRate(String(item.rate))
+      setModalUnit(item.unit || "")
+    } else {
+      setEditingItemId(null)
+      setModalDesc("")
+      setModalQty("1")
+      setModalRate("0")
+      setModalUnit("")
+    }
+    setDescSuggestions([])
+    setItemModalOpen(true)
+  }
+
+  function saveItemModal() {
+    const desc = modalDesc.trim()
+    if (!desc) {
+      toast.error("Enter a description")
+      return
+    }
+    const qty = parseFloat(modalQty) || 0
+    const rate = parseFloat(modalRate) || 0
+    const unit = modalUnit.trim()
+
+    if (editingItemId) {
+      updateItem(editingItemId, "desc", desc)
+      updateItem(editingItemId, "unit", unit)
+      updateItem(editingItemId, "qty", qty)
+      updateItem(editingItemId, "rate", rate)
+      toast.success("Item saved")
+    } else {
+      addItem({ desc, unit, qty, rate, source: "manual" })
+      toast.success("Item added")
+    }
+    setItemModalOpen(false)
+    setEditingItemId(null)
+  }
+
+  // ── Description autocomplete ──
+  function onDescInput(value: string) {
+    setModalDesc(value)
+    const val = value.trim().toLowerCase()
+    if (!val) {
+      setDescSuggestions([])
+      return
+    }
+    const matches = HISTORICAL_ITEMS.filter((h) => h.desc.toLowerCase().includes(val))
+    setDescSuggestions(matches)
+  }
+
+  function pickDescSuggestion(h: (typeof HISTORICAL_ITEMS)[number]) {
+    setModalDesc(h.desc)
+    setModalRate(String(h.avgRate))
+    setModalUnit(h.unit)
+    setDescSuggestions([])
+  }
+
+  // ── Chat ──
+  function toggleChat() {
+    const next = !chatOpen
+    setChatOpen(next)
+    if (next && chatMsgs.length === 0) {
+      setChatMsgs([{ role: "bot", text: CHAT_FLOWS[0] }])
+      setChatStep(1)
     }
   }
 
@@ -288,220 +255,199 @@ export default function EstimatorPage() {
     setChatInput("")
     setChatMsgs((prev) => [...prev, { role: "user", text }])
     setChatWaiting(true)
+
     setTimeout(() => {
-      const suggestions = getSuggestions(text) || []
-      const total = suggestions.reduce(
-        (s, i) => s + i.qty * i.rate,
-        0
-      )
-      setChatMsgs((prev) => [
-        ...prev,
-        {
-          role: "bot",
-          text: `Based on your description, here are suggested items (quantities are estimates):`,
-          suggestions,
-        },
-      ])
-      setChatWaiting(false)
-    }, 800)
+      const t = text.toLowerCase()
+      const isLong = text.length > 15
+      const isConcrete = /concrete|foundation|column|slab|beam|rc/i.test(t)
+      const isSteel = /steel|metal|frame/i.test(t)
+      const isFinishing = /finish|tile|paint|ceiling|floor|wall|interior/i.test(t)
+      const isMep = /hvac|ac|air|electrical|cable|plumbing|pipe|fire|sprinkler/i.test(t)
+      const isBasement = /basement|underground|parking|excavation|pile/i.test(t)
+
+      if (chatStep < CHAT_FLOWS.length && !isLong) {
+        const flowMsg = CHAT_FLOWS[chatStep]
+        const choices = chatStep === 1 ? ["RC / Concrete", "Steel structure", "Mixed"] : undefined
+        setChatMsgs((prev) => [...prev, { role: "bot", text: flowMsg, choices }])
+        setChatStep((s) => s + 1)
+        setChatWaiting(false)
+      } else {
+        const sugg: ChatMessage["suggestions"] = []
+        if (isBasement || isConcrete) {
+          sugg.push({ desc: 'Bored pile — D0.80m x 18m', qty: 20, unit: 'm', rate: 4500 })
+          sugg.push({ desc: 'Concrete C32/40 — columns', qty: 50, unit: 'm³', rate: 3850 })
+          sugg.push({ desc: 'Concrete C30/37 — slabs', qty: 80, unit: 'm³', rate: 3450 })
+          sugg.push({ desc: 'Rebar SD40 — 16mm', qty: 12, unit: 'ton', rate: 28500 })
+          sugg.push({ desc: 'Formwork — column', qty: 300, unit: 'm²', rate: 680 })
+          sugg.push({ desc: 'Formwork — slab', qty: 500, unit: 'm²', rate: 590 })
+          sugg.push({ desc: 'Waterproofing membrane — basement', qty: 200, unit: 'm²', rate: 520 })
+        }
+        if (isSteel) {
+          if (!isConcrete) sugg.push({ desc: 'Bored pile — D0.80m x 18m', qty: 16, unit: 'm', rate: 4500 })
+          sugg.push({ desc: 'Steel frame — main beams', qty: 25, unit: 'ton', rate: 42000 })
+          sugg.push({ desc: 'Metal deck flooring', qty: 400, unit: 'm²', rate: 950 })
+        }
+        if (isMep || isConcrete || isSteel) {
+          sugg.push({ desc: 'HVAC ductwork — supply', qty: 150, unit: 'm²', rate: 1850 })
+          sugg.push({ desc: 'Electrical cable tray — 300mm', qty: 80, unit: 'm', rate: 850 })
+          sugg.push({ desc: 'Plumbing — PVC pipe 4"', qty: 120, unit: 'm', rate: 280 })
+          sugg.push({ desc: 'Fire suppression — sprinkler head', qty: 30, unit: 'ea', rate: 450 })
+        }
+        if (isFinishing || isConcrete || isSteel) {
+          sugg.push({ desc: 'Ceramic tile — floor 600×600', qty: 350, unit: 'm²', rate: 680 })
+          sugg.push({ desc: 'Suspended ceiling — T-grid system', qty: 300, unit: 'm²', rate: 520 })
+          sugg.push({ desc: 'Paint — interior emulsion', qty: 800, unit: 'm²', rate: 85 })
+          sugg.push({ desc: 'Door — hollow core 0.9m', qty: 15, unit: 'ea', rate: 4500 })
+        }
+        if (sugg.length === 0) {
+          sugg.push({ desc: 'Concrete C32/40 — columns', qty: 30, unit: 'm³', rate: 3850 })
+          sugg.push({ desc: 'Rebar SD40 — 16mm', qty: 8, unit: 'ton', rate: 28500 })
+          sugg.push({ desc: 'Formwork — slab', qty: 400, unit: 'm²', rate: 590 })
+          sugg.push({ desc: 'Ceramic tile — floor 600×600', qty: 200, unit: 'm²', rate: 680 })
+          sugg.push({ desc: 'Paint — interior emulsion', qty: 500, unit: 'm²', rate: 85 })
+        }
+
+        setChatMsgs((prev) => [
+          ...prev,
+          {
+            role: "bot",
+            text: "Based on your description, here are suggested items (quantities are estimates):",
+            suggestions: sugg,
+          },
+        ])
+        setChatWaiting(false)
+      }
+    }, 700)
   }
 
-  type SuggestionItem = NonNullable<ChatMessage["suggestions"]>[number]
-
-  function chatAddSuggestion(s: SuggestionItem) {
-    addItem({
-      desc: s.desc,
-      unit: s.unit,
-      rate: s.rate,
-      qty: s.qty,
-      source: "manual",
-    })
+  function chatAddSuggestion(s: NonNullable<ChatMessage["suggestions"]>[number]) {
+    addItem({ desc: s.desc, unit: s.unit, rate: s.rate, qty: s.qty, source: "manual" })
     toast.success(`Added "${s.desc}"`)
   }
 
-  function chatAddAll() {
-    const lastMsg = chatMsgs[chatMsgs.length - 1]
-    if (!lastMsg?.suggestions) return
-    let count = 0
-    for (const s of lastMsg.suggestions) {
-      addItem({
-        desc: s.desc,
-        unit: s.unit,
-        rate: s.rate,
-        qty: s.qty,
-        source: "manual",
-      })
-      count++
+  function chatAddAll(suggestions: NonNullable<ChatMessage["suggestions"]>) {
+    for (const s of suggestions) {
+      addItem({ desc: s.desc, unit: s.unit, rate: s.rate, qty: s.qty, source: "manual" })
     }
-    toast.success(`Added ${count} items`)
+    toast.success(`Added ${suggestions.length} items`)
+  }
+
+  function chatChoose(choice: string) {
+    setChatMsgs((prev) => [...prev, { role: "user", text: choice }])
+    setChatWaiting(true)
+    setTimeout(() => {
+      const nextStep = chatStep
+      if (nextStep < CHAT_FLOWS.length) {
+        setChatMsgs((prev) => [...prev, { role: "bot", text: CHAT_FLOWS[nextStep] }])
+        setChatStep((s) => s + 1)
+      }
+      setChatWaiting(false)
+    }, 500)
   }
 
   if (loading) {
     return (
-      <div
-        className="flex items-center justify-center h-64 text-muted-foreground text-sm"
-        data-od-id="estimator-loading"
-      >
-        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+      <div className="flex items-center justify-center h-64 text-muted-foreground text-sm" data-od-id="estimator-loading">
+        <div className="proto-spinner mr-3" />
         Loading...
       </div>
     )
   }
 
   return (
-    <div className="relative min-h-[calc(100vh-8rem)]" data-od-id="estimator-page">
-      <div className="pb-20">
-        <div className="flex flex-wrap gap-4 items-start mb-4" data-od-id="project-meta">
-          <div className="flex flex-col gap-1 flex-1 min-w-[200px]">
-            <label className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
-              Project Name
-            </label>
-            <Input
+    <div data-od-id="estimator-page">
+      <div className="est-page">
+        <div className="project-meta">
+          <div className="pm-group" style={{ flex: 1 }}>
+            <label>Project Name</label>
+            <input
+              className="pm-name"
               value={projectName}
               onChange={(e) => setProjectName(e.target.value)}
               placeholder="Project name…"
               data-od-id="project-name"
-              className="text-base font-semibold h-9"
             />
           </div>
-          <div className="flex flex-col gap-1 w-[160px]">
-            <label className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
-              Date of Estimate
-            </label>
-            <Input
+          <div className="pm-group">
+            <label>Date of Estimate</label>
+            <input
+              className="pm-date"
               type="date"
               value={projectDate}
               onChange={(e) => setProjectDate(e.target.value)}
               data-od-id="project-date"
-              className="h-9"
             />
           </div>
         </div>
-        <div className="mb-4">
-          <div className="flex flex-col gap-1">
-            <label className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
-              Description
-            </label>
+        <div className="project-meta" style={{ marginTop: "-8px" }}>
+          <div className="pm-group" style={{ flex: 1 }}>
+            <label>Description</label>
             <textarea
               value={projectDesc}
               onChange={(e) => setProjectDesc(e.target.value)}
               placeholder="Project description, location, notes…"
               rows={2}
               data-od-id="project-desc"
-              className="h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 resize-y min-h-[32px] leading-relaxed"
+              style={{ fontSize: "13px", padding: "6px 10px" }}
             />
           </div>
         </div>
 
-        <div
-          className="flex items-center justify-between mb-3"
-          data-od-id="est-header"
-        >
-          <h2 className="text-base font-semibold">
+        <div className="est-header" data-od-id="est-header">
+          <h2>
             Estimate Items
-            {items.length > 0 && (
-              <span className="text-sm font-normal text-muted-foreground ml-2">
-                ({items.length} items)
-              </span>
-            )}
+            {items.length > 0 && <span className="meta" style={{ marginLeft: "8px" }}>({items.length} items)</span>}
           </h2>
-          <button
-            className="btn btn-primary btn-sm"
-            onClick={() => openItemModal()}
-            data-od-id="add-item-btn"
-          >
-            <Plus className="w-4 h-4 mr-1" />
-            Add Item
+          <button className="btn btn-primary btn-sm" onClick={() => openItemModal()} data-od-id="add-item-btn">
+            + Add Item
           </button>
         </div>
 
-        <div
-          className="rounded-xl border border-border bg-card overflow-hidden"
-          data-od-id="est-list"
-        >
+        <div className="est-list" data-od-id="est-list">
           {items.length === 0 ? (
-            <div
-              className="flex flex-col items-center justify-center py-16 text-center"
-              data-od-id="est-empty"
-            >
-              <Lightbulb className="w-8 h-8 text-muted-foreground/40 mb-3" />
-              <h3 className="text-sm font-medium mb-1">No items added</h3>
-              <p className="text-xs text-muted-foreground mb-4">
-                Click <strong>+ Add Item</strong> to add manually, or use the
-                chat bubble to generate items with AI.
+            <div className="empty-state" data-od-id="est-empty">
+              <h3>No items added</h3>
+              <p>
+                Click <strong>+ Add Item</strong> to add manually, or use the chat bubble <strong>💬</strong> to
+                generate items with AI.
               </p>
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={openChat}
-                data-od-id="open-chat-empty"
-              >
-                <MessageSquare className="w-3.5 h-3.5 mr-1.5" />
-                Open AI Assistant
-              </button>
             </div>
           ) : (
-            <div>
-              {items.map((item) => (
-                <div
-                  key={item.id}
-                  className="grid grid-cols-[60px_1fr_56px_60px_100px_100px_28px_28px] gap-1.5 items-center px-3 py-2 border-b border-border last:border-b-0 hover:bg-accent/5 transition-colors cursor-pointer"
-                  data-od-id={`est-row-${item.id}`}
-                  onClick={() => openItemModal(item.id)}
-                >
-                  <span className="text-xs font-mono text-muted-foreground truncate" onClick={(e) => e.stopPropagation()}>
-                    {item.code || "—"}
-                  </span>
-                  <span className="text-xs truncate" onClick={(e) => e.stopPropagation()}>
-                    {item.desc || "Untitled"}
-                  </span>
-                  <span className="text-xs text-muted-foreground truncate" onClick={(e) => e.stopPropagation()}>
-                    {item.unit || "—"}
-                  </span>
-                  <span className="text-xs font-mono text-right" onClick={(e) => e.stopPropagation()}>
-                    {item.qty.toLocaleString()}
-                  </span>
-                  <span className="text-xs font-mono text-right" onClick={(e) => e.stopPropagation()}>
-                    ฿{item.rate.toLocaleString()}
-                  </span>
-                  <span className="text-right font-mono text-sm font-semibold">
-                    ฿{item.total.toLocaleString()}
-                  </span>
-                  <div className="text-center" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      onClick={() => openItemModal(item.id)}
-                      className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer border-none bg-transparent p-1"
-                      data-od-id={`edit-item-${item.id}`}
-                    >
-                      <Pencil className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                  <div className="text-center" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      onClick={() => removeItem(item.id)}
-                      className="text-muted-foreground hover:text-destructive transition-colors cursor-pointer border-none bg-transparent p-1"
-                      data-od-id={`delete-item-${item.id}`}
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
+            items.map((item) => (
+              <div key={item.id} className="est-row" data-od-id={`est-row-${item.id}`} onClick={() => openItemModal(item.id)}>
+                <div className="rd">
+                  {item.desc || "Untitled"}
+                  {item.unit && <span className="rd-sub">{item.unit}</span>}
                 </div>
-              ))}
-            </div>
+                <div className="rqty">{item.qty.toLocaleString()}</div>
+                <div className="rrate">฿{(item.rate || 0).toLocaleString()}</div>
+                <div className="rtotal">฿{item.total.toLocaleString()}</div>
+                <div className="ract" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    onClick={() => removeItem(item.id)}
+                    className="btn btn-icon btn-ghost"
+                    style={{ width: "28px", height: "28px" }}
+                    data-od-id={`delete-item-${item.id}`}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: "14px", height: "14px" }}>
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            ))
           )}
         </div>
       </div>
 
       {items.length > 0 && (
-        <div
-          className="estimate-summary"
-          style={{ position: 'fixed', bottom: 0, left: 'var(--sidebar-w, 240px)', right: 0, zIndex: 10 }}
-          data-od-id="est-summary"
-        >
+        <div className="est-summary" data-od-id="est-summary">
           <div>
-            <div className="total-label">Estimated Total</div>
-            <div className="total-value">฿{totalAmount.toLocaleString()}</div>
+            <div className="est-total-label">Estimated Total</div>
+            <div className="est-total-value num">฿{totalAmount.toLocaleString()}</div>
           </div>
-          <div className="total-actions flex items-center gap-2">
+          <div className="est-total-actions">
             <button
               className="btn btn-secondary btn-sm"
               onClick={() => {
@@ -512,234 +458,185 @@ export default function EstimatorPage() {
             >
               Clear
             </button>
-            <button
-              className="btn btn-ghost btn-sm"
-              onClick={() => window.print()}
-              data-od-id="export-pdf"
-            >
-              <FileDown className="w-3.5 h-3.5" />
-              PDF
+            <button className="btn btn-primary btn-sm" onClick={handleSave} disabled={saving} data-od-id="save-estimate">
+              {saving ? "Saving…" : "Save Estimate"}
             </button>
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={handleSave}
-              disabled={saving || items.length === 0}
-              data-od-id="save-estimate"
-            >
-              {saving ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                <>
-                  <Check className="w-4 h-4 mr-1.5" />
-                  Save Estimate
-                </>
-              )}
+            <button className="btn btn-ghost btn-sm" onClick={() => window.print()} data-od-id="export-pdf">
+              📄 PDF
             </button>
           </div>
         </div>
       )}
 
-      <button
-        className={`fixed bottom-20 right-6 w-12 h-12 rounded-full bg-accent text-white border-none cursor-pointer flex items-center justify-center shadow-lg z-20 transition-transform hover:scale-105 ${
-          chatOpen ? "scale-0 opacity-0" : ""
-        }`}
-        onClick={openChat}
-        data-od-id="chat-bubble"
-      >
-        <MessageSquare className="w-5 h-5" />
+      {/* Floating chat */}
+      <button className="chat-bubble-btn" onClick={toggleChat} data-od-id="chat-bubble">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+        </svg>
       </button>
 
-      {chatOpen && (
-        <div
-          className="fixed bottom-20 right-6 w-[380px] h-[520px] bg-card rounded-2xl shadow-2xl z-20 flex flex-col overflow-hidden border border-border max-sm:w-[calc(100vw-2rem)] max-sm:h-[60vh]"
-          data-od-id="chat-panel"
-        >
-          <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-muted/30">
-            <MessageSquare className="w-4 h-4 text-accent" />
-            <span className="text-sm font-semibold flex-1">
-              BOQ Assistant
-            </span>
-            <button
-              onClick={() => setChatOpen(false)}
-              className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer border-none bg-transparent p-1"
-              data-od-id="chat-close"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-3 space-y-3">
-            {chatMsgs.map((msg, i) => (
-              <div key={i}>
-                <div
-                  className={`max-w-[90%] px-3 py-2 rounded-2xl text-sm leading-relaxed ${
-                    msg.role === "user"
-                      ? "bg-accent text-accent-foreground ml-auto rounded-br-sm"
-                      : "bg-muted/50 border border-border rounded-bl-sm"
-                  }`}
-                >
-                  {msg.role === "bot" && (
-                    <div className="text-[11px] font-semibold text-accent mb-1">
-                      BOQ Assistant
-                    </div>
-                  )}
-                  <div
-                    dangerouslySetInnerHTML={{
-                      __html: msg.text.replace(/\n/g, "<br/>"),
-                    }}
-                  />
+      <div className={`chat-overlay ${chatOpen ? "open" : ""}`} data-od-id="chat-panel">
+        <div className="chat-header">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="10" />
+            <path d="M12 6v6l4 2" />
+          </svg>
+          BOQ Maker Agent
+          <button className="close-btn" onClick={() => setChatOpen(false)}>
+            ×
+          </button>
+        </div>
+        <div className="chat-msgs" data-od-id="chat-msgs">
+          {chatMsgs.map((msg, i) => (
+            <div key={i} className={`cmsg ${msg.role}`}>
+              {msg.role === "bot" && <div className="clabel">BOQ Assistant</div>}
+              <div dangerouslySetInnerHTML={{ __html: msg.text.replace(/\n/g, "<br/>") }} />
+              {msg.choices && (
+                <div className="cactions">
+                  {msg.choices.map((c) => (
+                    <button key={c} className="btn btn-secondary btn-xs" onClick={() => chatChoose(c)}>
+                      {c}
+                    </button>
+                  ))}
                 </div>
-                {msg.suggestions && msg.suggestions.length > 0 && (
-                  <div className="mt-2 ml-2 space-y-2">
-                    {msg.suggestions.map((s, si) => (
-                      <div
-                        key={si}
-                        className="bg-card border border-border rounded-lg p-2.5"
-                      >
-                        <div className="text-sm font-medium">{s.desc}</div>
-                        <div className="text-xs text-muted-foreground mt-0.5">
-                          {s.qty} {s.unit} × ฿
-                          {s.rate.toLocaleString()} = ฿
-                          {(s.qty * s.rate).toLocaleString()}
-                        </div>
-                        <button
-                          className="btn btn-primary btn-xs mt-1.5"
-                          onClick={() => chatAddSuggestion(s)}
-                          data-od-id={`chat-add-${si}`}
-                        >
-                          <Plus className="w-3 h-3 mr-1" />
+              )}
+              {msg.suggestions && (
+                <>
+                  {msg.suggestions.map((s, si) => (
+                    <div key={si} className="suggest-card">
+                      <div className="sc-title">{s.desc}</div>
+                      <div className="sc-meta">
+                        {s.qty} {s.unit} × ฿{s.rate.toLocaleString()} = ฿{(s.qty * s.rate).toLocaleString()}
+                      </div>
+                      <div className="sc-actions">
+                        <button className="btn btn-primary btn-xs" onClick={() => chatAddSuggestion(s)} data-od-id={`chat-add-${si}`}>
                           Add
                         </button>
                       </div>
-                    ))}
-                    <button
-                      className="btn btn-secondary btn-xs"
-                      onClick={chatAddAll}
-                      data-od-id="chat-add-all"
-                    >
-                      <Plus className="w-3 h-3 mr-1" />
-                      Add All to Estimate
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
-            {chatWaiting && (
-              <div className="bg-muted/50 border border-border rounded-2xl rounded-bl-sm px-3 py-2 max-w-[60%]">
-                <div className="flex gap-1.5 items-center py-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce [animation-delay:0.2s]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce [animation-delay:0.4s]" />
-                </div>
-              </div>
-            )}
-            <div ref={chatEndRef} />
-          </div>
-
-          <div className="flex items-center gap-2 px-3 py-2.5 border-t border-border bg-muted/30">
-            <Input
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") sendChatMsg()
-              }}
-              placeholder="Describe your work…"
-              className="h-8 text-sm"
-              data-od-id="chat-input"
-            />
-            <Button
-              size="icon-sm"
-              onClick={sendChatMsg}
-              disabled={chatWaiting || !chatInput.trim()}
-              data-od-id="chat-send"
-            >
-              <Send className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
-      )}
-
-      <Dialog open={itemModalOpen} onOpenChange={setItemModalOpen}>
-        <DialogContent className="max-w-[520px]">
-          <DialogHeader>
-            <DialogTitle>
-              {editingItemId ? "Edit Item" : "New Item"}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 pt-2">
-            <div className="flex flex-col gap-1.5">
-              <label className="text-sm font-medium">Description</label>
-              <Input
-                value={modalDesc}
-                onChange={(e) => setModalDesc(e.target.value)}
-                placeholder="e.g. Structural concrete C32/40"
-                autoFocus
-                onKeyDown={(e) => { if (e.key === "Enter") saveItemModal() }}
-              />
+                    </div>
+                  ))}
+                  <button className="btn btn-secondary btn-xs mt-1.5" onClick={() => msg.suggestions && chatAddAll(msg.suggestions)} data-od-id="chat-add-all">
+                    Add All to Estimate
+                  </button>
+                </>
+              )}
             </div>
-            <div className="grid grid-cols-4 gap-3">
-              <div className="flex flex-col gap-1.5">
-                <label className="text-sm font-medium">Code</label>
-                <Input
-                  value={modalCode}
-                  onChange={(e) => setModalCode(e.target.value)}
-                  placeholder="B.1.1"
-                  className="font-mono"
-                />
+          ))}
+          {chatWaiting && (
+            <div className="cmsg bot">
+              <div className="typing-dots">
+                <span />
+                <span />
+                <span />
               </div>
-              <div className="flex flex-col gap-1.5">
-                <label className="text-sm font-medium">Unit</label>
-                <Input
-                  value={modalUnit}
-                  onChange={(e) => setModalUnit(e.target.value)}
-                  placeholder="m³"
-                  className="font-mono"
-                />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <label className="text-sm font-medium">Qty</label>
-                <Input
+            </div>
+          )}
+          <div ref={chatEndRef} />
+        </div>
+        <div className="chat-input-area">
+          <input
+            className="input"
+            value={chatInput}
+            onChange={(e) => setChatInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") sendChatMsg()
+            }}
+            placeholder="Describe your work…"
+            data-od-id="chat-input"
+          />
+          <button className="btn btn-primary btn-sm" onClick={sendChatMsg} disabled={chatWaiting || !chatInput.trim()} data-od-id="chat-send">
+            Send
+          </button>
+        </div>
+      </div>
+
+      {/* Item detail modal */}
+      <div className={`modal-overlay ${itemModalOpen ? "open" : ""}`}>
+        <div className="modal" style={{ maxWidth: "520px" }}>
+          <div className="modal-header">
+            <h3>{editingItemId ? "Edit Item" : "New Item"}</h3>
+            <button className="btn btn-icon btn-ghost" onClick={() => setItemModalOpen(false)}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: "16px", height: "16px" }}>
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+          <div className="modal-body" style={{ padding: "var(--space-4)" }}>
+            <div className="form-group">
+              <label>Description</label>
+              <input
+                className="input"
+                value={modalDesc}
+                onChange={(e) => onDescInput(e.target.value)}
+                placeholder="Type to search historical data or enter custom…"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveItemModal()
+                }}
+              />
+              {descSuggestions.length > 0 && (
+                <div className="desc-suggest open">
+                  {descSuggestions.map((h) => (
+                    <div key={h.id} className="ds-item" onClick={() => pickDescSuggestion(h)}>
+                      <div className="ds-title">{h.desc}</div>
+                      <div className="ds-meta">
+                        {h.category} · ฿{h.avgRate.toLocaleString()}/{h.unit} · {h.source}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {modalDesc && descSuggestions.length === 0 && (
+                <div className="desc-suggest open">
+                  <div className="ds-empty">No historical match — type your own description</div>
+                </div>
+              )}
+            </div>
+            <div className="form-row-2">
+              <div className="form-group">
+                <label>Quantity</label>
+                <input
+                  className="input"
                   type="number"
                   value={modalQty}
                   onChange={(e) => setModalQty(e.target.value)}
-                  className="font-mono text-right"
                   min="0"
                   step="0.5"
                 />
               </div>
-              <div className="flex flex-col gap-1.5">
-                <label className="text-sm font-medium">Rate (฿)</label>
-                <Input
+              <div className="form-group">
+                <label>Unit Price (฿)</label>
+                <input
+                  className="input"
                   type="number"
                   value={modalRate}
                   onChange={(e) => setModalRate(e.target.value)}
-                  className="font-mono text-right"
                   min="0"
                   step="100"
                 />
               </div>
             </div>
-            {parseFloat(modalQty) > 0 && parseFloat(modalRate) > 0 && (
-              <div className="text-sm text-muted-foreground">
-                Total: <span className="font-mono font-semibold text-foreground">
-                  ฿{(parseFloat(modalQty || "0") * parseFloat(modalRate || "0")).toLocaleString()}
-                </span>
-              </div>
-            )}
+            <div className="form-group">
+              <label>Unit</label>
+              <input
+                className="input"
+                value={modalUnit}
+                onChange={(e) => setModalUnit(e.target.value)}
+                placeholder="e.g. m³, ton, m²"
+              />
+            </div>
+            <div style={{ display: "flex", gap: "var(--space-2)", justifyContent: "flex-end", marginTop: "var(--space-3)" }}>
+              <button className="btn btn-ghost btn-sm" onClick={() => setItemModalOpen(false)}>
+                Cancel
+              </button>
+              <button className="btn btn-primary btn-sm" onClick={saveItemModal}>
+                {editingItemId ? "Save Item" : "Add Item"}
+              </button>
+            </div>
           </div>
-          <DialogFooter>
-            <DialogClose render={<button className="btn btn-secondary" />}>
-              Cancel
-            </DialogClose>
-            <button className="btn btn-primary" onClick={saveItemModal}>
-              {editingItemId ? "Save" : "Add Item"}
-            </button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </div>
+      </div>
     </div>
   )
 }

@@ -1,0 +1,46 @@
+- generic [active] [ref=f11e1]:
+  - generic [ref=f11e2]:
+    - complementary [ref=f11e3]:
+      - generic [ref=f11e4]:
+        - generic [ref=f11e8]: BuildEstimate
+        - button "Collapse sidebar" [ref=f11e9] [cursor=pointer]
+      - navigation [ref=f11e12]:
+        - link "Dashboard" [ref=f11e13] [cursor=pointer]:
+          - /url: /dashboard
+        - link "BOQs" [ref=f11e20] [cursor=pointer]:
+          - /url: /boqs
+        - link "Compare" [ref=f11e25] [cursor=pointer]:
+          - /url: /compare
+        - link "Catalog" [ref=f11e30] [cursor=pointer]:
+          - /url: /catalog
+        - link "Estimator" [ref=f11e35] [cursor=pointer]:
+          - /url: /estimator
+        - link "Settings" [ref=f11e39] [cursor=pointer]:
+          - /url: /settings
+      - button "Sign out" [ref=f11e46] [cursor=pointer]
+    - generic [ref=f11e50]:
+      - banner [ref=f11e51]:
+        - heading "Catalog" [level=1] [ref=f11e53]
+        - generic [ref=f11e54]:
+          - generic [ref=f11e55]: Construction Consultant
+          - generic [ref=f11e56]: CC
+      - main [ref=f11e57]:
+        - generic [ref=f11e58]:
+          - paragraph [ref=f11e60]: Standard descriptions across all BOQs. Review unmatched items, approve suggestions, and maintain the master standard catalog.
+          - generic [ref=f11e61]:
+            - generic [ref=f11e62]:
+              - generic [ref=f11e63]: "0"
+              - generic [ref=f11e64]: Suggestions
+            - generic [ref=f11e65]:
+              - generic [ref=f11e66]: "0"
+              - generic [ref=f11e67]: Unmatched items
+            - generic [ref=f11e68]:
+              - generic [ref=f11e69]: "0"
+              - generic [ref=f11e70]: Awaiting review
+          - generic [ref=f11e71]:
+            - button "Items to Review" [ref=f11e72] [cursor=pointer]
+            - button "Standard Catalog" [ref=f11e73] [cursor=pointer]
+          - generic [ref=f11e74]: Loading…
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f11e83] [cursor=pointer]
+  - alert [ref=f11e87]

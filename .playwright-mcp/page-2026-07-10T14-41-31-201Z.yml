@@ -1,0 +1,29 @@
+- generic [active] [ref=f9e1]:
+  - generic [ref=f9e2]:
+    - complementary [ref=f9e3]:
+      - generic [ref=f9e4]:
+        - generic [ref=f9e8]: BuildEstimate
+        - button "Collapse sidebar" [ref=f9e9] [cursor=pointer]
+      - navigation [ref=f9e12]:
+        - link "Dashboard" [ref=f9e13] [cursor=pointer]:
+          - /url: /dashboard
+        - link "BOQs" [ref=f9e20] [cursor=pointer]:
+          - /url: /boqs
+        - link "Compare" [ref=f9e25] [cursor=pointer]:
+          - /url: /compare
+        - link "Catalog" [ref=f9e30] [cursor=pointer]:
+          - /url: /catalog
+        - link "Estimator" [ref=f9e35] [cursor=pointer]:
+          - /url: /estimator
+        - link "Settings" [ref=f9e39] [cursor=pointer]:
+          - /url: /settings
+      - button "Sign out" [ref=f9e46] [cursor=pointer]
+    - generic [ref=f9e50]:
+      - banner [ref=f9e51]:
+        - heading "Dashboard" [level=1] [ref=f9e53]
+        - generic [ref=f9e54]:
+          - generic [ref=f9e55]: Construction Consultant
+          - generic [ref=f9e56]: CC
+      - main [ref=f9e57]:
+        - generic [ref=f9e58]: Loading...
+  - region "Notifications alt+T"
