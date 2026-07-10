@@ -267,15 +267,15 @@ export default function CatalogPage() {
       </div>
 
       <div className="flex gap-4 mb-5" data-od-id="stats-bar">
-        <div className="p-3 border border-border rounded-[16px] bg-[#fff]" style={{boxShadow:'0 0 1px rgba(0,0,0,0.32), 0 0 2px rgba(0,0,0,0.08), 0 1px 3px rgba(45,127,249,0.28), inset 0 0 0 0.5px rgba(0,0,0,0.06)'}}>
+        <div className="p-3 px-4 border border-border-soft rounded-[12px] bg-muted/30">
           <div className="text-xl font-semibold leading-tight">{suggestions}</div>
           <div className="text-xs text-muted-foreground uppercase tracking-wider">Suggestions</div>
         </div>
-        <div className="p-3 border border-border rounded-[16px] bg-[#fff]" style={{boxShadow:'0 0 1px rgba(0,0,0,0.32), 0 0 2px rgba(0,0,0,0.08), 0 1px 3px rgba(45,127,249,0.28), inset 0 0 0 0.5px rgba(0,0,0,0.06)'}}>
+        <div className="p-3 px-4 border border-border-soft rounded-[12px] bg-muted/30">
           <div className="text-xl font-semibold leading-tight">{unmatched}</div>
           <div className="text-xs text-muted-foreground uppercase tracking-wider">Unmatched items</div>
         </div>
-        <div className="p-3 border border-border rounded-[16px] bg-[#fff]" style={{boxShadow:'0 0 1px rgba(0,0,0,0.32), 0 0 2px rgba(0,0,0,0.08), 0 1px 3px rgba(45,127,249,0.28), inset 0 0 0 0.5px rgba(0,0,0,0.06)'}}>
+        <div className="p-3 px-4 border border-border-soft rounded-[12px] bg-muted/30">
           <div className="text-xl font-semibold leading-tight">{reviewItems.length}</div>
           <div className="text-xs text-muted-foreground uppercase tracking-wider">Awaiting review</div>
         </div>
@@ -343,8 +343,13 @@ export default function CatalogPage() {
                       <td className="text-right whitespace-nowrap">
                         {isAccepting ? (
                           <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : item.stdStatus === "matched" ? (
+                          <span className="text-xs text-[#006400] flex items-center gap-1 justify-end">
+                            <Check className="w-3 h-3" /> Final
+                          </span>
                         ) : item.stdStatus === "pending" ? (
                           <div className="flex items-center gap-1 justify-end">
+                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground mr-1.5">Suggested</span>
                             <Button
                               size="xs"
                               variant="default"

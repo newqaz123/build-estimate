@@ -1,9 +1,10 @@
 interface ProtoDataTableProps {
   headers: { label: string; className?: string; tooltip?: string }[]
   children: React.ReactNode
+  footer?: React.ReactNode
 }
 
-export function ProtoDataTable({ headers, children }: ProtoDataTableProps) {
+export function ProtoDataTable({ headers, children, footer }: ProtoDataTableProps) {
   return (
     <div className="data-table-wrap">
       <table className="data-table">
@@ -18,6 +19,7 @@ export function ProtoDataTable({ headers, children }: ProtoDataTableProps) {
         </thead>
         <tbody>{children}</tbody>
       </table>
+      {footer}
     </div>
   )
 }

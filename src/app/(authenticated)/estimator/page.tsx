@@ -12,6 +12,7 @@ import {
   Loader2,
   Check,
   Lightbulb,
+  FileDown,
 } from "lucide-react"
 import { toast } from "sonner"
 import type { Estimate, EstimateItem } from "@/lib/estimate-schema"
@@ -379,21 +380,39 @@ export default function EstimatorPage() {
               {items.map((item) => (
                 <div
                   key={item.id}
-                  className="grid grid-cols-[1fr_60px_80px_90px_28px] gap-1 items-center px-3 py-2 border-b border-border last:border-b-0 hover:bg-muted/30 transition-colors"
+                  className="grid grid-cols-[60px_1fr_56px_60px_100px_100px_28px] gap-1.5 items-center px-3 py-2 border-b border-border last:border-b-0 hover:bg-accent/5 transition-colors"
                   data-od-id={`est-row-${item.id}`}
                 >
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium truncate">
-                      {item.desc || (
-                        <span className="text-muted-foreground italic">
-                          Untitled
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground">
-                      {item.code || item.unit || "—"}
-                    </div>
-                  </div>
+                  <Input
+                    type="text"
+                    value={item.code || ""}
+                    onChange={(e) =>
+                      updateItem(item.id, "code", e.target.value)
+                    }
+                    className="h-7 w-16 text-xs font-mono"
+                    placeholder="code"
+                    data-od-id={`edit-code-${item.id}`}
+                  />
+                  <Input
+                    type="text"
+                    value={item.desc || ""}
+                    onChange={(e) =>
+                      updateItem(item.id, "desc", e.target.value)
+                    }
+                    className="h-7 text-xs flex-1"
+                    placeholder="Item description"
+                    data-od-id={`edit-desc-${item.id}`}
+                  />
+                  <Input
+                    type="text"
+                    value={item.unit || ""}
+                    onChange={(e) =>
+                      updateItem(item.id, "unit", e.target.value)
+                    }
+                    className="h-7 w-16 text-xs"
+                    placeholder="unit"
+                    data-od-id={`edit-unit-${item.id}`}
+                  />
                   <Input
                     type="number"
                     value={item.qty}
@@ -405,17 +424,22 @@ export default function EstimatorPage() {
                     step="0.5"
                     data-od-id={`edit-qty-${item.id}`}
                   />
-                  <Input
-                    type="number"
-                    value={item.rate}
-                    onChange={(e) =>
-                      updateItem(item.id, "rate", e.target.value)
-                    }
-                    className="h-7 text-xs font-mono text-right"
-                    min="0"
-                    step="100"
-                    data-od-id={`edit-rate-${item.id}`}
-                  />
+                  <div className="flex items-center justify-end">
+                    <span className="text-xs font-mono text-muted-foreground mr-1">
+                      ฿
+                    </span>
+                    <Input
+                      type="number"
+                      value={item.rate}
+                      onChange={(e) =>
+                        updateItem(item.id, "rate", e.target.value)
+                      }
+                      className="h-7 text-xs font-mono text-right"
+                      min="0"
+                      step="100"
+                      data-od-id={`edit-rate-${item.id}`}
+                    />
+                  </div>
                   <div className="text-right font-mono text-sm font-semibold">
                     ฿{item.total.toLocaleString()}
                   </div>
@@ -435,50 +459,61 @@ export default function EstimatorPage() {
         </div>
       </div>
 
-      <div
-        className="fixed bottom-0 left-[var(--sidebar-w,260px)] right-0 flex items-center justify-between px-5 py-3 bg-card border-t border-border z-10"
-        data-od-id="est-summary"
-      >
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
-            Estimated Total
+      {items.length > 0 && (
+        <div
+          className="fixed bottom-0 left-[var(--sidebar-w,260px)] right-0 flex items-center justify-between px-5 py-3 bg-card border-t border-border z-10"
+          data-od-id="est-summary"
+        >
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
+              Estimated Total
+            </div>
+            <div className="font-mono text-xl font-bold">
+              ฿{totalAmount.toLocaleString()}
+            </div>
           </div>
-          <div className="font-mono text-xl font-bold">
-            ฿{totalAmount.toLocaleString()}
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setItems([])
+                toast.info("Estimate cleared")
+              }}
+              data-od-id="clear-estimate"
+            >
+              Clear
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => window.print()}
+              data-od-id="export-pdf"
+            >
+              <FileDown className="w-3.5 h-3.5" />
+              PDF
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleSave}
+              disabled={saving || items.length === 0}
+              data-od-id="save-estimate"
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Check className="w-4 h-4 mr-1.5" />
+                  Save Estimate
+                </>
+              )}
+            </Button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setItems([])
-              toast.info("Estimate cleared")
-            }}
-            data-od-id="clear-estimate"
-          >
-            Clear
-          </Button>
-          <Button
-            size="sm"
-            onClick={handleSave}
-            disabled={saving || items.length === 0}
-            data-od-id="save-estimate"
-          >
-            {saving ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
-                Saving...
-              </>
-            ) : (
-              <>
-                <Check className="w-4 h-4 mr-1.5" />
-                Save Estimate
-              </>
-            )}
-          </Button>
-        </div>
-      </div>
+      )}
 
       <button
         className={`fixed bottom-20 right-6 w-12 h-12 rounded-full bg-accent text-white border-none cursor-pointer flex items-center justify-center shadow-lg z-20 transition-transform hover:scale-105 ${

@@ -162,8 +162,8 @@ export default function BoqsPage() {
               { label: 'Date' },
               { label: 'Items', className: 'num-col' },
               { label: 'Total', className: 'num-col' },
-              { label: 'Status' },
-              { label: 'Std', tooltip: 'Standardization status: matched (auto or approved) vs unmatched items' },
+              { label: 'Status ⓘ', tooltip: 'Draft: Not yet finalised · Parsed: Docling extracted items, awaiting review · Active: In use on projects · Review: Under verification · Approved: Finalised and locked' },
+              { label: 'Std ⓘ', tooltip: 'Standardization status: matched (auto or approved) vs unmatched items' },
               { label: 'Actions', className: 'text-right whitespace-nowrap' },
             ]}
           >
@@ -180,6 +180,7 @@ export default function BoqsPage() {
                   <td><ProtoBadge status={boq.status as any} /></td>
                   <td>
                     <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: std.color }} />
                       <span className="text-xs text-muted-foreground">{std.matched}/{std.total}</span>
                       <div className="w-12 h-1.5 bg-muted rounded-full overflow-hidden">
                         <div className="h-full rounded-full" style={{ width: `${std.pct}%`, backgroundColor: std.color }} />
@@ -188,13 +189,30 @@ export default function BoqsPage() {
                   </td>
                   <td className="text-right whitespace-nowrap">
                     <Link href={`/boqs/${boq.id}`} className="inline-flex items-center justify-center h-7 px-2.5 text-xs font-medium rounded-lg border border-transparent hover:bg-muted hover:text-foreground transition-colors">View</Link>
+                    <button
+                      onClick={() => {
+                        const csv = boq.sections.flatMap(s => s.items).map(i => `${i.code},"${i.desc}",${i.unit},${i.qty},${i.rate},${i.total}`).join('\n')
+                        const blob = new Blob([`Code,Description,Unit,Qty,Rate,Total\n${csv}`], { type: 'text/csv' })
+                        const url = URL.createObjectURL(blob)
+                        const a = document.createElement('a')
+                        a.href = url
+                        a.download = `${boq.project.replace(/\s+/g, '-')}.csv`
+                        a.click()
+                        URL.revokeObjectURL(url)
+                      }}
+                      className="inline-flex items-center justify-center h-7 px-2.5 text-xs font-medium rounded-lg border border-transparent hover:bg-muted hover:text-foreground transition-colors"
+                    >
+                      Download
+                    </button>
                   </td>
                 </tr>
               )
             })}
           </ProtoDataTable>
 
-          <ProtoPagination page={page} totalPages={totalPages} total={total} limit={10} onPageChange={setPage} />
+          <div className="border-t border-border px-4">
+            <ProtoPagination page={page} totalPages={totalPages} total={total} limit={10} onPageChange={setPage} />
+          </div>
         </>
       )}
 

@@ -269,6 +269,31 @@ export default function BoqDetailPage() {
     toast.success("CSV exported")
   }
 
+  const handleDeleteItem = async (si: number, ii: number) => {
+    if (!boq) return
+    const updatedSections = boq.sections
+      .map((section, sIdx) =>
+        sIdx === si
+          ? { ...section, items: section.items.filter((_, iIdx) => iIdx !== ii) }
+          : section
+      )
+      .filter((section) => section.items.length > 0)
+    try {
+      const res = await fetch(`/api/boqs/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sections: updatedSections }),
+      })
+      if (!res.ok) throw new Error("Failed to delete")
+      const updated = await res.json()
+      setBoq(updated)
+      setEdits({})
+      toast.success("Item removed")
+    } catch {
+      toast.error("Failed to remove item")
+    }
+  }
+
   const filteredSections = boq
     ? boq.sections
         .map((section, si) => ({
@@ -336,6 +361,10 @@ export default function BoqDetailPage() {
           <ProtoBadge status={boq.status as any} />
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={() => window.print()}>
+            <FileDown className="w-3.5 h-3.5" />
+            Download PDF
+          </Button>
           <Button variant="ghost" size="sm" onClick={handleExportCsv}>
             <FileDown className="w-3.5 h-3.5" />
             Export CSV
