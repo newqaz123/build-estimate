@@ -113,7 +113,7 @@
         </div>
 
         <!-- Catalog Fuzzy Rules -->
-        <div class="card section-card" data-od-id="fuzzy-settings" style="margin-top:var(--space-5);">
+        <div class="card section-card" data-od-id="fuzzy-rules-settings" style="margin-top:var(--space-5);">
           <div class="card-header">
             <h3>Catalog Fuzzy Rules</h3>
           </div>
@@ -146,8 +146,8 @@
 }</textarea>
               </div>
               <div class="field" style="margin-top:var(--space-3);">
-                <label for="fuzzyDescRules">Description normalisation rules <span class="meta">(JSON array of [find, replace] pairs, applied in order)</span></label>
-                <textarea class="input" id="fuzzyDescRules" rows="6" style="font-family:var(--font-mono);font-size:12px;resize:vertical;">[
+                <label for="fuzzyNormalizeRules">Description normalisation rules <span class="meta">(JSON array of [find, replace] pairs, applied in order)</span></label>
+                <textarea class="input" id="fuzzyNormalizeRules" rows="6" style="font-family:var(--font-mono);font-size:12px;resize:vertical;">[
   ["structural concrete", "concrete"],
   ["reinforcement bar", "rebar"],
   ["\\bconc\\.", "concrete"],
@@ -518,22 +518,26 @@ Return JSON array: [{itemIndex, matchedStdId, suggestedDesc, suggestedUnit, conf
       showToast('Standardization prompt reset to default', 'info');
     }
 
-    // Load saved values
-    (function initSettings() {
+    function loadFuzzyRules() {
       const savedUnitMap = localStorage.getItem('be_fuzzyUnitMap');
       const savedDescRules = localStorage.getItem('be_fuzzyNormalizeRules');
-      const savedStdPrompt = localStorage.getItem('be_stdPrompt');
       if (savedUnitMap) document.getElementById('fuzzyUnitMap').value = savedUnitMap;
-      if (savedDescRules) document.getElementById('fuzzyDescRules').value = savedDescRules;
+      if (savedDescRules) document.getElementById('fuzzyNormalizeRules').value = savedDescRules;
+    }
+
+    // Load saved values
+    (function initSettings() {
+      loadFuzzyRules();
+      const savedStdPrompt = localStorage.getItem('be_stdPrompt');
       if (savedStdPrompt) document.getElementById('stdPrompt').value = savedStdPrompt;
     })();
 
     function saveFuzzyRules() {
       try {
         JSON.parse(document.getElementById('fuzzyUnitMap').value);
-        JSON.parse(document.getElementById('fuzzyDescRules').value);
+        JSON.parse(document.getElementById('fuzzyNormalizeRules').value);
         localStorage.setItem('be_fuzzyUnitMap', document.getElementById('fuzzyUnitMap').value);
-        localStorage.setItem('be_fuzzyNormalizeRules', document.getElementById('fuzzyDescRules').value);
+        localStorage.setItem('be_fuzzyNormalizeRules', document.getElementById('fuzzyNormalizeRules').value);
         showToast('Fuzzy matching rules saved', 'success');
       } catch (e) {
         showToast('Invalid JSON — ' + e.message, 'error');
@@ -562,7 +566,7 @@ Return JSON array: [{itemIndex, matchedStdId, suggestedDesc, suggestedUnit, conf
         "lm": "m",
         "r.m": "m"
       }, null, 2);
-      document.getElementById('fuzzyDescRules').value = JSON.stringify([
+      document.getElementById('fuzzyNormalizeRules').value = JSON.stringify([
         ["structural concrete", "concrete"],
         ["reinforcement bar", "rebar"],
         ["\\bconc\\.", "concrete"],
