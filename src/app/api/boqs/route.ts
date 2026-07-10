@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
-import { getDb, createDocumentWithId, getDocument } from '@/lib/db'
+import { queryCollection, createDocumentWithId, getDocument } from '@/lib/db'
 import type { Boq } from '@/lib/boq-schema'
 
 function computeTotals(sections: Boq['sections']) {
@@ -23,15 +23,17 @@ export async function GET(request: NextRequest) {
     const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10))
     const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '10', 10)))
 
-    const db = getDb()
-    let query: FirebaseFirestore.Query = db.collection('boqs').orderBy('updatedAt', 'desc')
+    const where: { field: string; op: FirebaseFirestore.WhereFilterOp; value: unknown }[] = []
+    if (status) where.push({ field: 'status', op: '==', value: status })
+    if (workType) where.push({ field: 'workType', op: '==', value: workType })
 
-    if (status) query = query.where('status', '==', status)
-    if (workType) query = query.where('workType', '==', workType)
+    const { docs } = await queryCollection<Boq>('boqs', {
+      orderByField: 'updatedAt',
+      orderDirection: 'desc',
+      where: where.length > 0 ? where : undefined,
+    })
 
-    const snapshot = await query.get()
-    let boqs = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as Boq)
-
+    let boqs = docs
     if (search) {
       boqs = boqs.filter(
         (b) => b.project.toLowerCase().includes(search) || b.vendor.toLowerCase().includes(search)

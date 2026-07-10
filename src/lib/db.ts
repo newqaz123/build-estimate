@@ -47,3 +47,35 @@ export async function deleteDocument(collection: string, id: string): Promise<vo
   const db = getDb()
   await db.collection(collection).doc(id).delete()
 }
+
+type OrderDirection = 'asc' | 'desc'
+
+interface QueryOptions {
+  orderByField?: string
+  orderDirection?: OrderDirection
+  where?: { field: string; op: WhereFilterOp; value: unknown }[]
+  limit?: number
+}
+
+export async function queryCollection<T>(collection: string, options: QueryOptions = {}): Promise<{ docs: T[]; total: number }> {
+  const db = getDb()
+  let query: FirebaseFirestore.Query = db.collection(collection)
+
+  if (options.orderByField) {
+    query = query.orderBy(options.orderByField, options.orderDirection || 'asc')
+  }
+
+  if (options.where) {
+    for (const w of options.where) {
+      query = query.where(w.field, w.op, w.value)
+    }
+  }
+
+  if (options.limit) {
+    query = query.limit(options.limit)
+  }
+
+  const snapshot = await query.get()
+  const docs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }) as T)
+  return { docs, total: docs.length }
+}
