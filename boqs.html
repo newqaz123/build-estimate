@@ -1,0 +1,1083 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BOQs — BuildEstimate</title>
+  <link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" data-od-id="sidebar">
+      <div class="sidebar-brand">
+        <svg viewBox="0 0 28 28" fill="none"><rect width="28" height="28" rx="7" fill="currentColor"/><path d="M8 17l6-11 6 11" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 20h16" stroke="white" stroke-width="1.8" stroke-linecap="round" opacity="0.5"/></svg>
+        <span>BuildEstimate</span>
+          <button class="sidebar-toggle" onclick="toggleSidebar()" title="Collapse sidebar">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="dashboard.html" data-od-id="nav-dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span>Dashboard</span></a>
+        <a href="boqs.html" class="active" data-od-id="nav-boqs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg><span>BOQs</span></a>
+        <a href="compare.html" data-od-id="nav-compare"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M16 18l6-6-6-6M5 12h15"/><path d="M8 6l-6 6 6 6"/></svg><span>Compare</span></a>
+        <a href="catalog.html" data-od-id="nav-catalog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg><span>Catalog</span></a>
+        <a href="estimator.html" data-od-id="nav-estimator"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg><span>Estimator</span></a>
+        <a href="settings.html" data-od-id="nav-settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg><span>Settings</span></a>
+      </nav>
+      <div class="sidebar-footer">
+        <a href="login.html" style="display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-3);border-radius:8px;color:rgba(255,255,255,0.65);font-size:13px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="width:16px;height:16px;"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          Sign out
+        </a>
+      </div>
+    </aside>
+
+    <div class="main-area">
+      <header class="topbar" data-od-id="topbar">
+        <div class="topbar-left">
+          <h1>Bills of Quantities</h1>
+        </div>
+        <div class="topbar-right">
+          <span style="font-size:13px;color:var(--muted);">Construction Consultant</span>
+          <div class="avatar">CC</div>
+        </div>
+      </header>
+
+      <main class="main-content">
+        <div class="page-heading" data-od-id="page-heading">
+          <p>Upload, manage, and track all vendor BOQs across your projects.</p>
+        </div>
+
+        <div class="toolbar" data-od-id="toolbar">
+          <div class="toolbar-left">
+            <div class="search-wrap">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input class="input" type="text" placeholder="Search BOQs…" id="boqSearch" />
+            </div>
+            <div class="filter-bar" id="filterBar">
+              <span class="filter-chip active" data-filter="all">All</span>
+              <span style="width:1px;height:20px;background:var(--border);margin:0 4px;"></span>
+              <span class="filter-chip" data-filter="structural">Structural</span>
+              <span class="filter-chip" data-filter="mep">MEP</span>
+              <span class="filter-chip" data-filter="finishing">Finishing</span>
+              <span style="width:1px;height:20px;background:var(--border);margin:0 4px;"></span>
+              <span class="filter-chip" data-filter="draft">Draft</span>
+              <span class="filter-chip" data-filter="active">Active</span>
+              <span class="filter-chip" data-filter="review">Review</span>
+              <span class="filter-chip" data-filter="approved">Approved</span>
+              <span class="filter-chip" data-filter="parsed">Parsed</span>
+            </div>
+          </div>
+          <div class="toolbar-right">
+            <button class="btn btn-primary" id="uploadBtn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Upload BOQ
+            </button>
+          </div>
+        </div>
+
+        <!-- Loading state -->
+        <div class="loading-state" id="loadingState" style="display:none;" data-od-id="loading-state">
+          <div class="spinner"></div>
+          <span class="spinner-label">Loading BOQs…</span>
+        </div>
+
+        <!-- Empty state -->
+        <div class="empty-state" id="emptyState" style="display:none;" data-od-id="empty-state">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          <h3>No BOQs yet</h3>
+          <p>Upload your first Bill of Quantities PDF to get started.</p>
+          <button class="btn btn-primary" onclick="document.getElementById('uploadBtn').click()">Upload BOQ</button>
+        </div>
+
+        <!-- Table -->
+        <div id="tableWrap" class="data-table-wrap">
+          <div class="table-scroll-hint">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:14px;height:14px;"><path d="M6 2l4 4-4 4"/></svg>
+            Scroll horizontally for more columns
+          </div>
+          <table class="data-table" id="boqTable" data-od-id="boq-table">
+            <thead>
+              <tr>
+                <th>Project</th>
+                <th>Vendor</th>
+                <th>Work Type</th>
+                <th>Date</th>
+                <th class="num-col">Items</th>
+                <th class="num-col">Total</th>
+                <th>
+                  <span class="status-header" data-tooltip="Draft: Not yet finalised · Parsed: Docling extracted items, awaiting review · Active: In use on projects · Review: Under verification · Approved: Finalised and locked">Status ⓘ</span>
+                </th>
+                <th>
+                  <span class="status-header" data-tooltip="Standardization status: matched (auto or approved) vs unmatched items">Std ⓘ</span>
+                </th>
+                <th class="actions-col">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="boqTableBody"></tbody>
+          </table>
+          <div class="pagination" id="pagination" data-od-id="pagination">
+            <span id="pageInfo">Showing 1–10 of 47</span>
+            <div class="pagination-btns">
+              <button disabled id="prevPage" aria-label="Previous page">&lsaquo;</button>
+              <button class="active">1</button>
+              <button>2</button>
+              <button>3</button>
+              <button>…</button>
+              <button>5</button>
+              <button id="nextPage" aria-label="Next page">&rsaquo;</button>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- Upload Modal (smart — no upfront metadata) -->
+  <div class="modal-overlay" id="uploadModal" data-od-id="upload-modal">
+    <div class="modal" style="max-width:520px;">
+      <div class="modal-header">
+        <h2>Upload BOQ</h2>
+        <button class="btn btn-icon btn-ghost" onclick="closeModal()" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size:14px;color:var(--muted);margin-bottom:var(--space-4);">
+          Drop a BOQ PDF. Docling extracts all line items — you fill in the metadata (vendor, project, work type) during review. Optionally verify parsing quality with LLM before saving.
+        </p>
+        <div class="field">
+          <div class="drop-zone" id="dropZone">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <p>Drop your BOQ PDF here, or click to browse</p>
+            <span class="meta">PDF files only · Max 20 MB</span>
+            <input type="file" accept=".pdf" style="display:none;" id="fileInput" />
+          </div>
+        </div>
+        <div class="field" style="margin-top:var(--space-3);">
+          <label for="boqNotes">Notes (optional)</label>
+          <textarea class="textarea" id="boqNotes" placeholder="Any notes about this BOQ…" style="min-height:48px;"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" id="submitUpload" onclick="submitUpload()">Upload &amp; Parse</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Review & Approve Modal (side-by-side) -->
+  <div class="modal-overlay review-overlay" id="reviewModal" data-od-id="review-modal">
+    <div class="review-panel" data-od-id="review-panel">
+      <div class="review-header">
+        <div style="display:flex;align-items:center;gap:var(--space-3);">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="width:20px;height:20px;color:var(--accent);"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <div>
+            <span style="font-weight:600;font-size:15px;">Review BOQ</span>
+            <span style="font-size:12px;color:var(--muted);margin-left:8px;" id="reviewDocName">Ratchaphruek_Tower_BOQ_SinoThai.pdf</span>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:var(--space-2);">
+          <span class="badge badge-draft" style="font-size:11px;">Docling parsed</span>
+          <button class="btn btn-icon btn-ghost" onclick="closeReviewModal()" aria-label="Close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="review-body" id="reviewBody">
+        <!-- LEFT: PDF Preview -->
+        <div class="review-pdf-col" id="reviewPdfCol" data-od-id="review-pdf-panel">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-3);flex-shrink:0;">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <button class="btn btn-icon btn-ghost review-toggle-btn" id="reviewTogglePdf" onclick="toggleReviewPanel('pdf')" title="Toggle PDF panel" style="width:28px;height:28px;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><polyline points="15 18 9 12 15 6"/></svg>
+              </button>
+              <span style="font-size:13px;font-weight:500;display:flex;align-items:center;gap:6px;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="width:16px;height:16px;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                Original BOQ PDF
+              </span>
+            </div>
+            <div style="display:flex;align-items:center;gap:var(--space-2);">
+              <!-- Zoom controls -->
+              <div class="review-zoom-group">
+                <button class="btn btn-ghost btn-sm zoom-btn" onclick="pdfZoom(-0.1)" title="Zoom out" style="padding:3px 6px;font-size:11px;">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                </button>
+                <span class="zoom-label" id="zoomLabel">100%</span>
+                <button class="btn btn-ghost btn-sm zoom-btn" onclick="pdfZoom(0.1)" title="Zoom in" style="padding:3px 6px;font-size:11px;">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                </button>
+              </div>
+              <div class="review-divider-vert"></div>
+              <!-- Page nav -->
+              <button class="btn btn-ghost btn-sm" style="padding:3px 6px;font-size:11px;" onclick="showToast('Previous page','info')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px;"><polyline points="15 18 9 12 15 6"/></svg>
+              </button>
+              <span style="font-size:11px;color:var(--muted);font-family:var(--font-mono);">1 / 3</span>
+              <button class="btn btn-ghost btn-sm" style="padding:3px 6px;font-size:11px;" onclick="showToast('Next page','info')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px;"><polyline points="9 18 15 12 9 6"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Zoom wrapper for scrollable zoomed content -->
+          <div class="pdf-zoom-wrap" id="pdfZoomWrap">
+            <!-- Mock PDF page render -->
+            <div class="pdf-page" id="pdfPage" data-od-id="pdf-preview" style="transform-origin:top left;">
+              <div class="pdf-page-header">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <span style="font-size:10px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;">Sino-Thai Engineering &amp; Construction Co., Ltd.</span>
+                  <span style="font-size:9px;color:#666;">BOQ-001 Rev.A</span>
+                </div>
+                <div style="margin-top:6px;font-size:10px;color:#444;">
+                  <div style="display:flex;justify-content:space-between;">
+                    <span>Project: Ratchaphruek Tower</span>
+                    <span>Date: 8 Jul 2026</span>
+                  </div>
+                  <div style="display:flex;justify-content:space-between;margin-top:2px;">
+                    <span>Contract: Lump Sum</span>
+                    <span>Page 1 of 3</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- PDF table content -->
+              <table class="pdf-table">
+                <thead>
+                  <tr>
+                    <th style="width:14%;">Item Code</th>
+                    <th style="width:36%;">Description</th>
+                    <th style="width:10%;">Unit</th>
+                    <th style="width:12%;">Quantity</th>
+                    <th style="width:14%;">Unit Rate</th>
+                    <th style="width:14%;">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td>B.1.1</td><td>Structural concrete C32/40 (columns)</td><td>m³</td><td style="text-align:right;">120.00</td><td style="text-align:right;">3,850.00</td><td style="text-align:right;">462,000.00</td></tr>
+                  <tr><td>B.1.2</td><td>Structural concrete C25/30 (slabs)</td><td>m³</td><td style="text-align:right;">240.00</td><td style="text-align:right;">3,450.00</td><td style="text-align:right;">828,000.00</td></tr>
+                  <tr><td>B.1.3</td><td>Reinforcement bar SD40 — 16mm</td><td>ton</td><td style="text-align:right;">18.50</td><td style="text-align:right;">28,500.00</td><td style="text-align:right;">527,250.00</td></tr>
+                  <tr><td>B.1.4</td><td>Reinforcement bar SD40 — 12mm</td><td>ton</td><td style="text-align:right;">12.20</td><td style="text-align:right;">29,000.00</td><td style="text-align:right;">353,800.00</td></tr>
+                  <tr><td>B.1.5</td><td>Formwork — column</td><td>m²</td><td style="text-align:right;">520.00</td><td style="text-align:right;">680.00</td><td style="text-align:right;">353,600.00</td></tr>
+                  <tr><td>B.1.6</td><td>Formwork — slab</td><td>m²</td><td style="text-align:right;">980.00</td><td style="text-align:right;">590.00</td><td style="text-align:right;">578,200.00</td></tr>
+                  <tr style="border-top:2px solid #ddd;"><td>B.2.1</td><td>Structural steel frame — main beams</td><td>ton</td><td style="text-align:right;">8.40</td><td style="text-align:right;">42,000.00</td><td style="text-align:right;">352,800.00</td></tr>
+                  <tr class="pdf-subtotal"><td colspan="5" style="text-align:right;font-weight:600;">Section B.1 Subtotal</td><td style="text-align:right;font-weight:600;">3,102,850.00</td></tr>
+                  <tr class="pdf-total"><td colspan="5" style="text-align:right;font-weight:700;">GRAND TOTAL (this page)</td><td style="text-align:right;font-weight:700;">3,455,650.00</td></tr>
+                </tbody>
+              </table>
+
+              <div class="pdf-footer">
+                <span>Notes: All rates in Thai Baht (THB). Prices exclude VAT.</span>
+                <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:9px;color:#999;">
+                  <span>Prepared by: S. Wongsuwan</span>
+                  <span>Approved by: P. Jetsadaporn</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top:var(--space-2);display:flex;align-items:center;gap:var(--space-2);flex-shrink:0;">
+            <span style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:12px;height:12px;"><circle cx="8" cy="8" r="6.5"/><polyline points="6 8 8 10 11 5"/></svg>
+              Parsing verified — 7/7 items match source
+            </span>
+          </div>
+        </div>
+
+        <!-- Resize handle -->
+        <div class="review-resize-handle" id="reviewResizeHandle" data-od-id="resize-handle" title="Drag to resize">
+          <div class="review-resize-grip">
+            <span></span><span></span><span></span>
+          </div>
+        </div>
+
+        <!-- RIGHT: Parsed Data -->
+        <div class="review-data-col" id="reviewDataCol" data-od-id="review-data-panel">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:var(--space-3);flex-shrink:0;">
+            <button class="btn btn-icon btn-ghost review-toggle-btn" id="reviewToggleData" onclick="toggleReviewPanel('data')" title="Toggle data panel" style="width:28px;height:28px;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <span style="font-size:13px;font-weight:500;">Parsed Data</span>
+            <span style="font-size:11px;color:var(--muted);">Metadata &amp; line items</span>
+          </div>
+          <!-- Metadata section (manual, not LLM) -->
+          <div style="margin-bottom:var(--space-4);">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:var(--space-3);">
+              <span style="font-size:13px;font-weight:500;">BOQ Details</span>
+              <span style="font-size:11px;color:var(--muted);">Fill in the metadata fields below</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);">
+              <div class="field">
+                <label for="revVendor" style="font-size:12px;">Vendor</label>
+                <input class="input" id="revVendor" placeholder="e.g. Sino-Thai Engineering" list="vendorSuggest" style="font-size:13px;padding:7px 10px;" />
+                <datalist id="vendorSuggest"><option>Sino-Thai Engineering</option><option>Italian-Thai Development</option><option>Unique Engineering</option><option>ITH Technology</option></datalist>
+              </div>
+              <div class="field">
+                <label for="revProject" style="font-size:12px;">Project</label>
+                <input class="input" id="revProject" placeholder="e.g. Ratchaphruek Tower" list="projectSuggest" style="font-size:13px;padding:7px 10px;" />
+                <datalist id="projectSuggest"><option>Ratchaphruek Tower</option><option>Sathorn Residences</option><option>MRT Orange Line Station</option><option>Bangna Warehouse Complex</option></datalist>
+              </div>
+              <div class="field">
+                <label for="revWorkType" style="font-size:12px;">Work Type</label>
+                <select class="select" id="revWorkType" style="font-size:13px;padding:7px 10px;"><option value="">Select…</option><option>Structural</option><option>MEP</option><option>Finishing</option></select>
+              </div>
+              <div class="field">
+                <label for="revDate" style="font-size:12px;">Document Date</label>
+                <input class="input" type="date" id="revDate" style="font-size:13px;padding:7px 10px;" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Standardization summary bar -->
+          <div id="stdSummaryBar" style="display:none;margin-bottom:var(--space-3);padding:var(--space-2) var(--space-3);border:1px solid var(--border-soft);border-radius:var(--radius-sm);background:var(--bg-2);font-size:12px;">
+            <span style="font-weight:500;">Standardization:</span>
+            <span id="stdSummaryMatched" class="badge badge-matched" style="margin-left:8px;font-size:10px;"></span>
+            <span id="stdSummarySuggested" class="badge badge-suggested" style="font-size:10px;"></span>
+            <span id="stdSummaryUnmatched" class="badge badge-unmatched" style="font-size:10px;"></span>
+            <span style="margin-left:12px;color:var(--muted);font-size:11px;">Review each item's status below and take action on suggested/unmatched items.</span>
+          </div>
+
+          <div id="llmReviewItems" style="margin-bottom:var(--space-3);"></div>
+
+          <!-- LLM suggestion area -->
+          <div id="llmSuggestions" style="display:none;margin-bottom:var(--space-3);padding:var(--space-3);border:1px solid var(--border-soft);border-radius:var(--radius-sm);background:color-mix(in oklab, var(--accent) 4%, transparent);"></div>
+
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:var(--space-2) 0;">
+            <div style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px;">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:13px;height:13px;"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="5" x2="8" y2="9"/><line x1="8" y1="11" x2="8.01" y2="11"/></svg>
+              Docling parsed <strong id="itemCountLabel">0</strong> line items
+            </div>
+            <button class="btn btn-ghost btn-sm" id="verifyBtn" onclick="verifyWithLLM()" style="gap:6px;font-size:12px;padding:5px 10px;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="width:13px;height:13px;"><polygon points="1 12 5 8 9 12 13 4 17 10 21 8"/></svg>
+              Verify with LLM
+            </button>
+          </div>
+
+          <div class="review-footer-actions">
+            <button class="btn btn-secondary btn-sm" onclick="closeReviewModal()" style="font-size:13px;">Discard</button>
+            <button class="btn btn-primary btn-sm" id="approveBtn" onclick="approveBoq()" style="font-size:13px;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px;"><polyline points="20 6 9 17 4 12"/></svg>
+              Approve &amp; Save
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script>
+    const boqs = [
+      { project: 'Ratchaphruek Tower', vendor: 'Sino-Thai Engineering', type: 'Structural', date: '2026-07-08', items: 86, total: 4250000, status: 'active', id: 'BOQ-001' },
+      { project: 'Sathorn Residences', vendor: 'Italian-Thai Dev', type: 'Finishing', date: '2026-07-05', items: 124, total: 6800000, status: 'approved', id: 'BOQ-002' },
+      { project: 'MRT Orange Line Stn', vendor: 'Unique Engineering', type: 'MEP', date: '2026-07-03', items: 212, total: 12200000, status: 'active', id: 'BOQ-003' },
+      { project: 'Bangna Warehouse', vendor: 'ITH Technology', type: 'MEP', date: '2026-06-28', items: 54, total: 1850000, status: 'draft', id: 'BOQ-004' },
+      { project: 'Sukhumvit 62 Condo', vendor: 'Sino-Thai Engineering', type: 'Structural', date: '2026-06-25', items: 98, total: 5100000, status: 'active', id: 'BOQ-005' },
+      { project: 'Sathorn Residences', vendor: 'Italian-Thai Dev', type: 'Structural', date: '2026-06-20', items: 76, total: 3900000, status: 'approved', id: 'BOQ-006' },
+      { project: 'Ratchaphruek Tower', vendor: 'ITH Technology', type: 'MEP', date: '2026-06-18', items: 143, total: 7600000, status: 'review', id: 'BOQ-007' },
+      { project: 'Bangna Warehouse', vendor: 'Sino-Thai Engineering', type: 'Structural', date: '2026-06-15', items: 45, total: 2200000, status: 'draft', id: 'BOQ-008' },
+      { project: 'MRT Orange Line Stn', vendor: 'Italian-Thai Dev', type: 'Finishing', date: '2026-06-12', items: 167, total: 9400000, status: 'active', id: 'BOQ-009' },
+      { project: 'Sukhumvit 62 Condo', vendor: 'ITH Technology', type: 'MEP', date: '2026-06-10', items: 72, total: 3100000, status: 'review', id: 'BOQ-010' },
+    ];
+
+    let filteredBoqs = [...boqs];
+    let currentFilter = 'all';
+
+    function renderTable(data) {
+      const tbody = document.getElementById('boqTableBody');
+      if (!data || data.length === 0) {
+        document.getElementById('tableWrap').style.display = 'none';
+        document.getElementById('emptyState').style.display = 'flex';
+        document.getElementById('pagination').style.display = 'none';
+        return;
+      }
+      document.getElementById('tableWrap').style.display = 'block';
+      document.getElementById('emptyState').style.display = 'none';
+      document.getElementById('pagination').style.display = 'flex';
+
+      tbody.innerHTML = data.map(b => {
+        const statusBadge = {
+          draft: '<span class="badge badge-draft">Draft</span>',
+          parsed: '<span class="badge badge-draft">Parsed</span>',
+          active: '<span class="badge badge-active">Active</span>',
+          review: '<span class="badge badge-review">Review</span>',
+          approved: '<span class="badge badge-approved">Approved</span>',
+        }[b.status] || '<span class="badge badge-draft">Draft</span>';
+
+        const stdMatched = b.stdMatched || Math.round(b.items * (0.5 + Math.random() * 0.4));
+        const stdUnmatched = b.items - stdMatched;
+        const stdPct = b.items > 0 ? Math.round(stdMatched / b.items * 100) : 0;
+        const stdBarColor = stdPct >= 90 ? 'var(--success)' : stdPct >= 60 ? 'var(--accent)' : 'var(--warn)';
+
+        return `<tr data-boq-id="${b.id}">
+          <td><a href="boq-detail.html" style="font-weight:500;color:var(--fg);text-decoration:none;">${b.project}</a></td>
+          <td>${b.vendor}</td>
+          <td>${b.type}</td>
+          <td>${b.date}</td>
+          <td class="num-col">${b.items}</td>
+          <td class="num-col">฿${(b.total / 1e6).toFixed(1)}M</td>
+          <td>${statusBadge}</td>
+          <td style="font-size:12px;">
+            <span style="display:inline-flex;align-items:center;gap:4px;">
+              <span class="status-dot" style="background:${stdBarColor};"></span>
+              ${stdMatched}/${b.items}
+            </span>
+            <div style="width:50px;height:4px;background:var(--border);border-radius:2px;margin-top:2px;overflow:hidden;">
+              <div style="width:${stdPct}%;height:100%;background:${stdBarColor};border-radius:2px;transition:width 0.3s;"></div>
+            </div>
+          </td>
+          <td class="actions-col">
+            <button class="btn btn-ghost btn-sm" onclick="window.location.href='boq-detail.html'">View</button>
+            <button class="btn btn-ghost btn-sm">Download</button>
+          </td>
+        </tr>`;
+      }).join('');
+      document.getElementById('pageInfo').textContent = `Showing 1–${data.length} of ${data.length}`;
+    }
+
+    function applyFilter(filter) {
+      currentFilter = filter;
+      document.querySelectorAll('.filter-chip').forEach(c => c.classList.toggle('active', c.dataset.filter === filter));
+      const search = document.getElementById('boqSearch').value.toLowerCase();
+      filteredBoqs = boqs.filter(b => {
+        const matchFilter = filter === 'all' || b.type.toLowerCase() === filter || b.status === filter;
+        const matchSearch = !search || b.project.toLowerCase().includes(search) || b.vendor.toLowerCase().includes(search);
+        return matchFilter && matchSearch;
+      });
+      renderTable(filteredBoqs);
+    }
+
+    document.querySelectorAll('.filter-chip').forEach(chip => {
+      chip.addEventListener('click', () => applyFilter(chip.dataset.filter));
+    });
+
+    document.getElementById('boqSearch').addEventListener('input', function() {
+      applyFilter(currentFilter);
+    });
+
+    // Upload modal
+    document.getElementById('uploadBtn').addEventListener('click', () => {
+      document.getElementById('uploadModal').classList.add('open');
+      const dz = document.getElementById('dropZone');
+      dz.querySelector('p').textContent = 'Drop your BOQ PDF here, or click to browse';
+      dz.querySelector('.meta').textContent = 'PDF files only · Max 20 MB';
+    });
+
+    function closeModal() {
+      document.getElementById('uploadModal').classList.remove('open');
+    }
+    document.getElementById('uploadModal').addEventListener('click', function(e) {
+      if (e.target === this) closeModal();
+    });
+
+    function closeReviewModal() {
+      document.getElementById('reviewModal').classList.remove('open');
+    }
+    document.getElementById('reviewModal').addEventListener('click', function(e) {
+      if (e.target === this) closeReviewModal();
+    });
+
+    // Drop zone
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.classList.remove('dragover'); });
+    fileInput.addEventListener('change', function() {
+      if (this.files[0]) {
+        dropZone.querySelector('p').textContent = this.files[0].name;
+        dropZone.querySelector('.meta').textContent = (this.files[0].size / 1024).toFixed(0) + ' KB';
+      }
+    });
+
+    // --- Mock Docling-parsed items ---
+    const mockParsedItems = [
+      { code: 'B.1.1', desc: 'Structural concrete C32/40 (columns)', unit: 'm³', qty: 120, rate: 3850, total: 462000, type: 'unit' },
+      { code: 'B.1.2', desc: 'Structural concrete C25/30 (slabs)', unit: 'm³', qty: 240, rate: 3450, total: 828000, type: 'unit' },
+      { code: 'B.1.3', desc: 'Reinforcement bar SD40 — 16mm', unit: 'ton', qty: 18.5, rate: 28500, total: 527250, type: 'unit' },
+      { code: 'B.1.4', desc: 'Reinforcement bar SD40 — 12mm', unit: 'ton', qty: 12.2, rate: 29000, total: 353800, type: 'unit' },
+      { code: 'B.1.5', desc: 'Formwork — column', unit: 'm²', qty: 520, rate: 680, total: 353600, type: 'unit' },
+      { code: 'B.1.6', desc: 'Formwork — slab', unit: 'm²', qty: 980, rate: 590, total: 578200, type: 'unit' },
+      { code: 'B.2.1', desc: 'Structural steel frame — main beams', unit: 'ton', qty: 8.4, rate: 42000, total: 352800, type: 'unit' },
+      { code: 'B.3.1', desc: 'PVC door frame 900x2100', unit: 'set', qty: 25, rate: 4500, total: 112500, type: 'unit' },
+      { code: 'B.3.2', desc: 'Pile cap excavation', unit: 'm³', qty: 180, rate: 420, total: 75600, type: 'unit' },
+    ];
+
+    // ─── Standardization helpers ───
+    function getStandards() {
+      try { return JSON.parse(localStorage.getItem('buildEstimate_standards')) || []; } catch(e) { return []; }
+    }
+
+    function saveStandards(standards) {
+      localStorage.setItem('buildEstimate_standards', JSON.stringify(standards));
+    }
+
+    function getFuzzyUnitMap() {
+      try { return JSON.parse(localStorage.getItem('be_fuzzyUnitMap')); } catch(e) { return null; }
+    }
+
+    function getFuzzyNormalizeRules() {
+      try { return JSON.parse(localStorage.getItem('be_fuzzyNormalizeRules')); } catch(e) { return null; }
+    }
+
+    function normalizeDesc(desc) {
+      let s = desc.toLowerCase().trim().replace(/\s+/g, ' ');
+      s = s.replace(/[^\w\s\/\-\dx]/g, '');
+      const rules = getFuzzyNormalizeRules();
+      if (rules) {
+        rules.forEach(r => {
+          try { s = s.replace(new RegExp(r[0], 'gi'), r[1]); } catch(e) {}
+        });
+      }
+      return s;
+    }
+
+    function matchUnit(unit) {
+      if (!unit) return null;
+      const u = unit.trim().toLowerCase();
+      const map = getFuzzyUnitMap();
+      if (!map) return null;
+      for (const [canonical, variant] of Object.entries(map)) {
+        const vLower = variant.toLowerCase();
+        if (u === canonical.toLowerCase() || u === vLower) {
+          return canonical;
+        }
+      }
+      return null;
+    }
+
+    function runStandardization(items) {
+      const standards = getStandards();
+      const pass3Items = [];
+
+      items.forEach((item, idx) => {
+        item.stdStatus = item.stdStatus || 'unchecked';
+        if (item.stdStatus === 'approved') return;
+
+        const itemUnit = matchUnit(item.unit) || item.unit;
+        const itemDesc = normalizeDesc(item.desc);
+
+        // Pass 1: Exact match
+        let match = standards.find(s =>
+          normalizeDesc(s.stdDesc) === itemDesc &&
+          (matchUnit(s.stdUnit) || s.stdUnit).toLowerCase() === (itemUnit || '').toLowerCase()
+        );
+        if (match) {
+          item.stdStatus = 'matched';
+          item.stdId = match.id;
+          item.stdMatch = match.stdDesc;
+          item.stdConfidence = 'exact';
+          return;
+        }
+
+        // Pass 2: Fuzzy match via aliases
+        match = standards.find(s =>
+          s.aliases.some(a => {
+            const aliasNorm = normalizeDesc(a);
+            const aliasUnit = matchUnit(s.stdUnit) || (s.stdUnit || '').toLowerCase();
+            return aliasNorm === itemDesc && aliasUnit === (itemUnit || '').toLowerCase();
+          })
+        );
+        if (match) {
+          item.stdStatus = 'suggested';
+          item.stdId = match.id;
+          item.stdMatch = match.stdDesc;
+          item.stdConfidence = 'fuzzy';
+          item.stdSuggestedDesc = match.stdDesc;
+          item.stdSuggestedUnit = match.stdUnit;
+          return;
+        }
+
+        // Pass 3: Needs LLM
+        pass3Items.push(idx);
+        item.stdStatus = 'unmatched';
+      });
+
+      return pass3Items;
+    }
+
+    // Simple string similarity (Dice coefficient)
+    function similarity(a, b) {
+      if (!a || !b) return 0;
+      const bigrams = new Set();
+      for (let i = 0; i < a.length - 1; i++) bigrams.add(a.substring(i, i + 2));
+      let matches = 0;
+      for (let i = 0; i < b.length - 1; i++) {
+        if (bigrams.has(b.substring(i, i + 2))) matches++;
+      }
+      return (2 * matches) / (a.length + b.length);
+    }
+
+    function suggestWithLLM(items) {
+      return new Promise((resolve) => {
+        const standards = getStandards();
+        const prompt = localStorage.getItem('be_stdPrompt') || '';
+        const unmatched = items.filter(i => i.stdStatus === 'unmatched');
+
+        if (unmatched.length === 0) { resolve([]); return; }
+
+        // Simulated LLM call (replace with real API)
+        setTimeout(() => {
+          const suggestions = unmatched.map((item) => {
+            let best = null, bestScore = 0;
+            standards.forEach(s => {
+              s.aliases.forEach(a => {
+                const score = similarity(normalizeDesc(item.desc), normalizeDesc(a));
+                if (score > bestScore) { bestScore = score; best = s; }
+              });
+            });
+            if (best && bestScore > 0.6) {
+              return {
+                itemIndex: items.indexOf(item),
+                matchedStdId: best.id,
+                suggestedDesc: best.stdDesc,
+                suggestedUnit: best.stdUnit,
+                confidence: bestScore > 0.8 ? 'high' : 'medium',
+                reason: 'Similar to catalog entry "' + best.stdDesc + '"'
+              };
+            }
+            return {
+              itemIndex: items.indexOf(item),
+              matchedStdId: null,
+              suggestedDesc: item.desc,
+              suggestedUnit: matchUnit(item.unit) || item.unit || 'LS',
+              confidence: 'low',
+              reason: 'No close match found in catalog'
+            };
+          });
+          resolve(suggestions);
+        }, 1500);
+      });
+    }
+
+    function getStdBadge(item) {
+      const labels = { matched: 'Matched', suggested: 'Suggested', unmatched: 'Unmatched' };
+      const status = item.stdStatus || 'unmatched';
+      return `<span class="badge badge-${status}" style="font-size:10px;white-space:nowrap;">${labels[status]}</span>`;
+    }
+
+    function getStdMatchCell(item, i) {
+      if (item.stdStatus === 'matched') {
+        return `<span style="font-size:12px;color:var(--fg);">${item.stdMatch || '—'}</span>`;
+      }
+      if (item.stdStatus === 'suggested') {
+        const srcLabel = item.stdConfidence === 'fuzzy' ? 'Fuzzy' : 'LLM';
+        const srcBadge = `<span class="badge badge-${item.stdConfidence === 'fuzzy' ? 'suggested' : 'draft'}" style="font-size:9px;padding:1px 5px;margin-right:4px;">${srcLabel}</span>`;
+        return `<span style="display:inline-flex;align-items:center;gap:4px;font-size:12px;flex-wrap:wrap;">
+          ${srcBadge}<span style="color:var(--fg);">${item.stdMatch || '—'}</span>
+          <button class="btn btn-primary btn-sm" style="padding:2px 8px;font-size:10px;" onclick="acceptStdSuggestion(${i})">Accept</button>
+          <button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:10px;" onclick="rejectStdSuggestion(${i})">×</button>
+        </span>`;
+      }
+      return `<button class="btn btn-ghost btn-sm" style="padding:2px 10px;font-size:10px;" onclick="matchStdManually(${i})">Match…</button>`;
+    }
+
+    function acceptStdSuggestion(i) {
+      mockParsedItems[i].stdStatus = 'matched';
+      showToast('Accepted: "' + mockParsedItems[i].stdMatch + '"', 'success');
+      renderReviewItems(mockParsedItems);
+    }
+
+    function rejectStdSuggestion(i) {
+      mockParsedItems[i].stdStatus = 'unmatched';
+      mockParsedItems[i].stdMatch = null;
+      showToast('Suggestion dismissed — item marked as unmatched', 'info');
+      renderReviewItems(mockParsedItems);
+    }
+
+    function acceptAllStdSuggestions() {
+      let count = 0;
+      mockParsedItems.forEach((item, i) => {
+        if (item.stdStatus === 'suggested') {
+          acceptStdSuggestion(i);
+          count++;
+        }
+      });
+      if (count > 0) showToast('Accepted ' + count + ' suggestions', 'success');
+      else showToast('No suggestions to accept', 'info');
+    }
+
+    async function runStdLLM() {
+      const btn = document.querySelector('#llmReviewItems + div .btn-primary');
+      if (btn) { btn.classList.add('loading'); btn.disabled = true; }
+      const suggestions = await suggestWithLLM(mockParsedItems);
+      suggestions.forEach(s => {
+        if (s.matchedStdId) {
+          const item = mockParsedItems[s.itemIndex];
+          item.stdStatus = 'suggested';
+          item.stdId = s.matchedStdId;
+          const std = getStandards().find(st => st.id === s.matchedStdId);
+          item.stdMatch = std ? std.stdDesc : s.suggestedDesc;
+          item.stdSuggestedDesc = std ? std.stdDesc : s.suggestedDesc;
+          item.stdSuggestedUnit = std ? std.stdUnit : s.suggestedUnit;
+          item.stdConfidence = 'llm';
+        }
+      });
+      if (btn) { btn.classList.remove('loading'); btn.disabled = false; }
+      renderReviewItems(mockParsedItems);
+      showToast('LLM suggestions applied', 'success');
+    }
+
+    function matchStdManually(i) {
+      const item = mockParsedItems[i];
+      const newStd = prompt('Enter standard catalog description for:\n"' + item.desc + '"', item.desc);
+      if (newStd && newStd.trim()) {
+        item.stdMatch = newStd.trim();
+        item.stdStatus = 'matched';
+        showToast('Manual match set: "' + item.stdMatch + '"', 'success');
+        renderReviewItems(mockParsedItems);
+      }
+    }
+
+    function updateStdSummary(items) {
+      const matched = items.filter(i => i.stdStatus === 'matched').length;
+      const suggested = items.filter(i => i.stdStatus === 'suggested').length;
+      const unmatched = items.filter(i => i.stdStatus === 'unmatched' || !i.stdStatus).length;
+      const bar = document.getElementById('stdSummaryBar');
+      if (unmatched > 0 || suggested > 0) {
+        bar.style.display = 'block';
+        document.getElementById('stdSummaryMatched').textContent = matched + ' matched';
+        document.getElementById('stdSummarySuggested').textContent = suggested + ' suggested';
+        document.getElementById('stdSummaryUnmatched').textContent = unmatched + ' unmatched';
+      } else {
+        bar.style.display = 'none';
+      }
+    }
+
+    let llmVerifyUsed = false;
+
+    function renderReviewItems(items) {
+      const container = document.getElementById('llmReviewItems');
+      const grandTotal = items.reduce((s, i) => s + i.total, 0);
+      document.getElementById('itemCountLabel').textContent = items.length;
+      updateStdSummary(items);
+      container.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-3);">
+          <span style="font-size:14px;font-weight:500;">Parsed Items · ${items.length} line items</span>
+          <span style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:14px;font-family:var(--font-mono);">Grand Total: ฿${grandTotal.toLocaleString()}</span>
+            <button class="btn btn-ghost btn-sm" onclick="runStdLLM()" style="font-size:10px;padding:3px 8px;" title="Run LLM on unmatched items">LLM</button>
+            <button class="btn btn-primary btn-sm" onclick="acceptAllStdSuggestions()" style="font-size:10px;padding:3px 8px;">Accept All</button>
+          </span>
+        </div>
+        <div class="data-table-wrap">
+          <table class="data-table" id="reviewItemsTable">
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Description</th>
+                <th>Unit</th>
+                <th class="num-col">Qty</th>
+                <th class="num-col">Rate (฿)</th>
+                <th class="num-col">Total</th>
+                <th>Type</th>
+                <th>Std</th>
+                <th>Catalog Match</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${items.map((item, i) => `
+                <tr data-ri="${i}">
+                  <td><input class="input ri-code" value="${item.code || ''}" style="width:80px;font-family:var(--font-mono);font-size:12px;padding:4px 8px;" /></td>
+                  <td><input class="input ri-desc" value="${item.desc}" style="width:100%;padding:4px 8px;" /></td>
+                  <td><input class="input ri-unit" value="${item.unit || ''}" style="width:60px;padding:4px 8px;" /></td>
+                  <td><input class="input ri-qty num" value="${item.qty != null ? item.qty : ''}" style="width:70px;padding:4px 8px;text-align:right;" /></td>
+                  <td><input class="input ri-rate num" value="${item.rate != null ? item.rate : ''}" style="width:80px;padding:4px 8px;text-align:right;" /></td>
+                  <td class="num-col ri-total" style="font-family:var(--font-mono);font-size:13px;">฿${item.total.toLocaleString()}</td>
+                  <td>
+                    <select class="select ri-type" style="padding:4px 6px;font-size:12px;">
+                      <option value="unit" ${item.type === 'unit' ? 'selected' : ''}>Unit</option>
+                      <option value="lump_sum" ${item.type === 'lump_sum' ? 'selected' : ''}>L/S</option>
+                      <option value="job" ${item.type === 'job' ? 'selected' : ''}>Job</option>
+                    </select>
+                  </td>
+                  <td>${getStdBadge(item)}</td>
+                  <td>${getStdMatchCell(item, i)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+
+      container.querySelectorAll('.ri-rate, .ri-qty').forEach(el => {
+        el.addEventListener('input', function() {
+          const row = this.closest('tr');
+          const qty = parseFloat(row.querySelector('.ri-qty').value) || 0;
+          const rate = parseFloat(row.querySelector('.ri-rate').value) || 0;
+          const totalCell = row.querySelector('.ri-total');
+          const total = qty * rate;
+          totalCell.textContent = total > 0 ? '฿' + total.toLocaleString() : '—';
+        });
+      });
+    }
+
+    function verifyWithLLM() {
+      const btn = document.getElementById('verifyBtn');
+      btn.classList.add('loading');
+      btn.disabled = true;
+      btn.innerHTML = 'Verifying…';
+      const area = document.getElementById('llmSuggestions');
+      area.style.display = 'none';
+
+      setTimeout(() => {
+        llmVerifyUsed = true;
+        btn.classList.remove('loading');
+        btn.disabled = false;
+        btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="width:14px;height:14px;"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg> Re-verify`;
+        btn.className = 'btn btn-sm';
+        btn.style.cssText = 'gap:6px;color:var(--success);border-color:var(--success);';
+
+        area.style.display = 'block';
+        area.innerHTML = `
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2);">
+            <span style="font-weight:500;font-size:13px;display:flex;align-items:center;gap:6px;">
+              <svg viewBox="0 0 16 16" fill="none" stroke="var(--success)" stroke-width="1.5" style="width:14px;height:14px;"><circle cx="8" cy="8" r="6.5"/><polyline points="6 8 8 10 11 5"/></svg>
+              LLM suggestions (OpenAI, 1 call)
+            </span>
+            <span style="font-size:11px;color:var(--muted);">~1,200 tokens used</span>
+          </div>
+          <div style="display:grid;gap:6px;">
+            <div style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--bg);border-radius:6px;font-size:13px;">
+              <span class="badge badge-draft" style="font-size:10px;cursor:pointer;" onclick="this.textContent=this.textContent==='Apply?'?'Applied':'Apply?'">Apply?</span>
+              <span><strong>Vendor</strong> PDF header mentions "Sino-Thai Engineering" — matches existing vendor</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--bg);border-radius:6px;font-size:13px;">
+              <span class="badge badge-draft" style="font-size:10px;cursor:pointer;" onclick="this.textContent=this.textContent==='Apply?'?'Applied':'Apply?'">Apply?</span>
+              <span><strong>Item #4</strong> "Rebar SD40 — 12mm" rate is ฿29,000 — 78% above other rebar items (avg ฿28,500). Verify this is correct.</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--bg);border-radius:6px;font-size:13px;">
+              <span class="badge badge-draft" style="font-size:10px;cursor:pointer;" onclick="this.textContent=this.textContent==='Apply?'?'Applied':'Apply?'">Apply?</span>
+              <span><strong>Work type</strong> All items are concrete/rebar/formwork → suggest <strong>Structural</strong></span>
+            </div>
+            <div style="font-size:12px;color:var(--muted);margin-top:4px;display:flex;align-items:center;gap:4px;">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:12px;height:12px;"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="5" x2="8" y2="9"/><line x1="8" y1="11" x2="8.01" y2="11"/></svg>
+              Suggestions are not auto-applied. Click "Apply?" to accept. 0 token cost until you verify.
+            </div>
+          </div>
+        `;
+        showToast('LLM verification complete — 3 suggestions', 'success');
+      }, 2000);
+    }
+
+    function submitUpload() {
+      const btn = document.getElementById('submitUpload');
+      btn.classList.add('loading');
+      btn.disabled = true;
+      closeModal();
+      showToast('Uploading PDF to Firebase Storage…', 'info');
+      setTimeout(() => showToast('Docling parsing complete · 7 line items extracted', 'success'), 1800);
+      setTimeout(() => {
+        document.getElementById('revDate').value = new Date().toISOString().split('T')[0];
+        // Run 3-pass standardization on parsed items
+        const pass3Items = runStandardization(mockParsedItems);
+        if (pass3Items.length > 0) {
+          suggestWithLLM(mockParsedItems).then(suggestions => {
+            suggestions.forEach(s => {
+              if (s.matchedStdId) {
+                const item = mockParsedItems[s.itemIndex];
+                item.stdStatus = 'suggested';
+                item.stdId = s.matchedStdId;
+                const std = getStandards().find(st => st.id === s.matchedStdId);
+                item.stdMatch = std ? std.stdDesc : s.suggestedDesc;
+                item.stdSuggestedDesc = std ? std.stdDesc : s.suggestedDesc;
+                item.stdSuggestedUnit = std ? std.stdUnit : s.suggestedUnit;
+                item.stdConfidence = 'llm';
+              }
+            });
+            renderReviewItems(mockParsedItems);
+            document.getElementById('reviewModal').classList.add('open');
+            btn.classList.remove('loading');
+            btn.disabled = false;
+          });
+        } else {
+          renderReviewItems(mockParsedItems);
+          document.getElementById('reviewModal').classList.add('open');
+          btn.classList.remove('loading');
+          btn.disabled = false;
+        }
+      }, 2500);
+    }
+
+    function approveBoq() {
+      document.getElementById('approveBtn').classList.add('loading');
+      document.getElementById('approveBtn').disabled = true;
+      const vendor = document.getElementById('revVendor').value.trim();
+      const project = document.getElementById('revProject').value.trim();
+      const workType = document.getElementById('revWorkType').value;
+      if (!vendor || !project || !workType) {
+        showToast('Please fill in Vendor, Project, and Work Type before approving', 'error');
+        document.getElementById('approveBtn').classList.remove('loading');
+        document.getElementById('approveBtn').disabled = false;
+        return;
+      }
+      setTimeout(() => {
+        document.getElementById('approveBtn').classList.remove('loading');
+        document.getElementById('approveBtn').disabled = false;
+        closeReviewModal();
+
+        // Save approved items to catalog
+        const standards = getStandards();
+        mockParsedItems.forEach(item => {
+          if (item.stdStatus === 'matched' || item.stdStatus === 'approved') {
+            const matchDesc = item.stdMatch || item.desc;
+            let std = standards.find(s => s.stdDesc === matchDesc);
+            if (!std) {
+              std = {
+                id: 'std_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+                stdDesc: matchDesc,
+                stdUnit: item.unit || '',
+                aliases: [item.desc],
+                sourceItems: [],
+                confidence: item.stdConfidence === 'exact' ? 'high' : 'reviewed',
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+              };
+              standards.push(std);
+            }
+            if (!std.aliases.includes(item.desc)) std.aliases.push(item.desc);
+            std.sourceItems.push({ boqId: 'BOQ-NEW', itemCode: item.code || '', vendorId: vendor });
+            std.updatedAt = new Date().toISOString();
+          }
+        });
+        saveStandards(standards);
+
+        const saved = llmVerifyUsed ? ' (LLM-verified)' : '';
+        showToast('BOQ approved and saved to database' + saved, 'success');
+        boqs.unshift({
+          project: project,
+          vendor: vendor,
+          type: workType,
+          date: document.getElementById('revDate').value,
+          items: mockParsedItems.length,
+          total: mockParsedItems.reduce((s, i) => s + i.total, 0),
+          status: 'active',
+          id: 'BOQ-NEW'
+        });
+        applyFilter(currentFilter);
+        // Reset LLM verify state for next upload
+        llmVerifyUsed = false;
+        const vb = document.getElementById('verifyBtn');
+        vb.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="width:14px;height:14px;"><polygon points="1 12 5 8 9 12 13 4 17 10 21 8"/></svg> Verify with LLM`;
+        vb.className = 'btn btn-ghost btn-sm';
+        vb.style.cssText = 'gap:6px;';
+        document.getElementById('llmSuggestions').style.display = 'none';
+      }, 1200);
+    }
+
+    loadingDemo();
+
+    function loadingDemo() {
+      document.getElementById('loadingState').style.display = 'flex';
+      document.getElementById('tableWrap').style.display = 'none';
+      setTimeout(() => {
+        document.getElementById('loadingState').style.display = 'none';
+        renderTable(boqs);
+      }, 800);
+    }
+
+    document.querySelectorAll('.pagination-btns button:not([disabled])').forEach(btn => {
+      btn.addEventListener('click', function() {
+        const val = this.textContent;
+        if (val === '…') return;
+        document.querySelectorAll('.pagination-btns button').forEach(b => b.classList.remove('active'));
+        this.classList.add('active');
+        showToast('Page ' + val, 'info');
+      });
+    });
+
+    function toggleSidebar() {
+      document.querySelector('.sidebar').classList.toggle('collapsed');
+    }
+
+    function showToast(message, type) {
+      const container = document.getElementById('toastContainer');
+      const t = document.createElement('div');
+      t.className = 'toast ' + type;
+      t.textContent = message;
+      container.appendChild(t);
+      setTimeout(() => { t.style.opacity = '0'; t.style.transform = 'translateX(16px)'; setTimeout(() => t.remove(), 300); }, 3500);
+    }
+
+    // ─── Review Panel: Toggle ──────────────────────────────────────────────
+    let reviewPanelState = { pdf: true, data: true };
+    function toggleReviewPanel(side) {
+      const body = document.getElementById('reviewBody');
+      const togglePdf = document.getElementById('reviewTogglePdf');
+      const toggleData = document.getElementById('reviewToggleData');
+
+      if (side === 'pdf') {
+        reviewPanelState.pdf = !reviewPanelState.pdf;
+        body.classList.toggle('pdf-hidden', !reviewPanelState.pdf);
+        togglePdf.classList.toggle('flipped', !reviewPanelState.pdf);
+      } else {
+        reviewPanelState.data = !reviewPanelState.data;
+        body.classList.toggle('data-hidden', !reviewPanelState.data);
+        toggleData.classList.toggle('flipped', !reviewPanelState.data);
+      }
+      // Ensure at least one panel is visible
+      if (!reviewPanelState.pdf && !reviewPanelState.data) {
+        reviewPanelState.pdf = true;
+        body.classList.remove('pdf-hidden');
+        togglePdf.classList.remove('flipped');
+      }
+    }
+
+    // ─── Review Panel: Zoom ────────────────────────────────────────────────
+    let pdfZoomLevel = 1.0;
+    function pdfZoom(delta) {
+      const page = document.getElementById('pdfPage');
+      const wrap = document.getElementById('pdfZoomWrap');
+      const label = document.getElementById('zoomLabel');
+      pdfZoomLevel = Math.max(0.3, Math.min(3.0, pdfZoomLevel + delta));
+      pdfZoomLevel = Math.round(pdfZoomLevel * 10) / 10;
+      page.style.transform = `scale(${pdfZoomLevel})`;
+      page.style.width = pdfZoomLevel < 1 ? `${100 / pdfZoomLevel}%` : '100%';
+      label.textContent = Math.round(pdfZoomLevel * 100) + '%';
+    }
+
+    // ─── Review Panel: Drag-to-resize ──────────────────────────────────────
+    let resizeState = null;
+    const resizeHandle = document.getElementById('reviewResizeHandle');
+    const reviewBody = document.getElementById('reviewBody');
+
+    function startResize(e) {
+      if (reviewBody.classList.contains('pdf-hidden') || reviewBody.classList.contains('data-hidden')) return;
+      resizeState = {
+        startX: e.clientX,
+        startFrac: 0.5,
+      };
+      resizeHandle.classList.add('active');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      document.addEventListener('mousemove', doResize);
+      document.addEventListener('mouseup', stopResize);
+    }
+
+    function doResize(e) {
+      if (!resizeState) return;
+      const rect = reviewBody.getBoundingClientRect();
+      const dx = e.clientX - resizeState.startX;
+      let frac = (rect.width * 0.5 + dx) / rect.width;
+      frac = Math.max(0.2, Math.min(0.8, frac));
+      reviewBody.style.gridTemplateColumns = `${frac * 100}% 8px ${(1 - frac) * 100}%`;
+    }
+
+    function stopResize() {
+      resizeState = null;
+      resizeHandle.classList.remove('active');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', doResize);
+      document.removeEventListener('mouseup', stopResize);
+    }
+
+    if (resizeHandle) {
+      resizeHandle.addEventListener('mousedown', startResize);
+    }
+  </script>
+</body>
+</html>

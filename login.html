@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign in — BuildEstimate</title>
+  <link rel="stylesheet" href="shared.css" />
+  <style>
+    .error-shake { animation: shake 0.3s var(--ease-standard); }
+    @keyframes shake { 25% { transform: translateX(-4px); } 50% { transform: translateX(4px); } 75% { transform: translateX(-2px); } }
+  </style>
+</head>
+<body>
+  <div class="login-page">
+    <div class="login-brand" data-od-id="login-brand">
+      <svg class="brand-icon" viewBox="0 0 40 40" fill="none">
+        <rect width="40" height="40" rx="10" fill="currentColor"/>
+        <path d="M12 24l8-16 8 16" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M10 28h20" stroke="white" stroke-width="2" stroke-linecap="round" opacity="0.5"/>
+      </svg>
+      <h1>BuildEstimate</h1>
+      <p>BOQ management &amp; price comparison for construction consultants. Upload, compare, and estimate — all in one place.</p>
+    </div>
+
+    <div class="login-form-wrap" data-od-id="login-form-wrap">
+      <h2>Sign in</h2>
+      <p class="lead">Enter your credentials to continue.</p>
+
+      <form class="login-form" id="loginForm" novalidate>
+        <div class="field">
+          <label for="email">Email</label>
+          <input class="input" id="email" type="email" placeholder="you@example.com" autocomplete="email" required />
+          <span class="field-error" id="emailError" style="display:none;">Please enter a valid email address.</span>
+        </div>
+
+        <div class="field">
+          <label for="password">Password</label>
+          <input class="input" id="password" type="password" placeholder="Enter your password" autocomplete="current-password" required />
+          <span class="field-error" id="passwordError" style="display:none;">Password is required.</span>
+        </div>
+
+        <div class="form-footer">
+          <button class="btn btn-primary btn-lg" type="submit" id="loginBtn" style="width:100%;justify-content:center;">
+            Sign in
+          </button>
+
+          <div id="loginError" class="field-error" style="display:none;text-align:center;padding:8px;background:color-mix(in oklab, var(--danger) 10%, transparent);border-radius:8px;"></div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('loginForm');
+    const email = document.getElementById('email');
+    const password = document.getElementById('password');
+    const emailErr = document.getElementById('emailError');
+    const passwordErr = document.getElementById('passwordError');
+    const loginErr = document.getElementById('loginError');
+    const loginBtn = document.getElementById('loginBtn');
+
+    function showFieldError(input, errEl) {
+      input.classList.add('input-error');
+      errEl.style.display = 'block';
+    }
+    function clearFieldError(input, errEl) {
+      input.classList.remove('input-error');
+      errEl.style.display = 'none';
+    }
+    function toggleSidebar() {
+      document.querySelector('.sidebar').classList.toggle('collapsed');
+    }
+
+    function showToast(message, type) {
+      const container = document.getElementById('toastContainer') || (() => {
+        const c = document.createElement('div');
+        c.id = 'toastContainer';
+        c.className = 'toast-container';
+        document.body.appendChild(c);
+        return c;
+      })();
+      const t = document.createElement('div');
+      t.className = 'toast ' + type;
+      t.textContent = message;
+      container.appendChild(t);
+      setTimeout(() => { t.style.opacity = '0'; t.style.transform = 'translateX(16px)'; setTimeout(() => t.remove(), 300); }, 3500);
+    }
+
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+      let valid = true;
+
+      clearFieldError(email, emailErr);
+      clearFieldError(password, passwordErr);
+      loginErr.style.display = 'none';
+
+      if (!email.value || !email.value.includes('@')) {
+        showFieldError(email, emailErr);
+        valid = false;
+      }
+      if (!password.value) {
+        showFieldError(password, passwordErr);
+        valid = false;
+      }
+
+      if (!valid) {
+        form.classList.add('error-shake');
+        setTimeout(() => form.classList.remove('error-shake'), 300);
+        return;
+      }
+
+      loginBtn.classList.add('loading');
+      loginBtn.disabled = true;
+
+      setTimeout(() => {
+        loginBtn.classList.remove('loading');
+        loginBtn.disabled = false;
+
+        if (email.value === 'admin@buildestimate.app' && password.value === 'password') {
+          showToast('Signed in successfully', 'success');
+          setTimeout(() => { window.location.href = 'dashboard.html'; }, 600);
+        } else {
+          loginErr.textContent = 'Invalid email or password. Try admin@buildestimate.app / password';
+          loginErr.style.display = 'block';
+          form.classList.add('error-shake');
+          setTimeout(() => form.classList.remove('error-shake'), 300);
+          password.value = '';
+          showFieldError(password, passwordErr);
+        }
+      }, 1200);
+    });
+
+    email.addEventListener('input', () => clearFieldError(email, emailErr));
+    password.addEventListener('input', () => clearFieldError(password, passwordErr));
+  </script>
+</body>
+</html>

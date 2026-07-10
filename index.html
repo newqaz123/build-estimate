@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BuildEstimate — BOQ Management & Price Comparison</title>
+  <link rel="stylesheet" href="shared.css" />
+  <style>
+    .hero-launcher {
+      text-align: center;
+      padding: 80px 24px 48px;
+      max-width: 640px;
+      margin: 0 auto;
+    }
+    .hero-launcher h1 { margin-bottom: 12px; }
+    .hero-launcher p { color: var(--muted); font-size: var(--text-base); max-width: 48ch; margin: 0 auto 40px; }
+    .screen-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: var(--space-4);
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 0 24px 80px;
+    }
+    .screen-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: var(--space-5);
+      text-decoration: none;
+      color: var(--fg);
+      transition: border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+    }
+    .screen-card:hover {
+      border-color: var(--accent);
+      box-shadow: var(--elev-raised);
+    }
+    .screen-card .card-icon {
+      width: 40px; height: 40px;
+      border-radius: 10px;
+      background: color-mix(in oklab, var(--accent) 10%, transparent);
+      display: grid; place-items: center;
+      margin-bottom: var(--space-1);
+    }
+    .screen-card .card-icon svg { width: 20px; height: 20px; color: var(--accent); }
+    .screen-card h3 { font-size: var(--text-base); font-weight: 600; }
+    .screen-card p { font-size: 13px; color: var(--muted); line-height: 1.4; margin: 0; }
+  </style>
+</head>
+<body style="overflow: auto; height: auto; min-height: 100vh;">
+  <div class="hero-launcher">
+    <h1>BuildEstimate</h1>
+    <p>BOQ management, vendor price comparison, and budget estimation for construction consultants.</p>
+  </div>
+
+  <div class="screen-grid">
+    <a href="login.html" class="screen-card" data-od-id="launcher-login">
+      <div class="card-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+      </div>
+      <h3>Login</h3>
+      <p>NextAuth credentials — single-user secure sign-in.</p>
+    </a>
+
+    <a href="dashboard.html" class="screen-card" data-od-id="launcher-dashboard">
+      <div class="card-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      </div>
+      <h3>Dashboard</h3>
+      <p>Summary cards: total BOQs, vendors, projects, recent estimates.</p>
+    </a>
+
+    <a href="boqs.html" class="screen-card" data-od-id="launcher-boqs">
+      <div class="card-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      </div>
+      <h3>BOQ List</h3>
+      <p>All bills of quantities with filter, sort, upload, and status tracking.</p>
+    </a>
+
+    <a href="boq-detail.html" class="screen-card" data-od-id="launcher-boq-detail">
+      <div class="card-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </div>
+      <h3>BOQ Detail</h3>
+      <p>Categorized line-item table with unit prices, totals, and status indicators.</p>
+    </a>
+
+    <a href="compare.html" class="screen-card" data-od-id="launcher-compare">
+      <div class="card-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M16 18l6-6-6-6M5 12h15"/><path d="M8 6l-6 6 6 6"/></svg>
+      </div>
+      <h3>Compare</h3>
+      <p>Upload vendor quotes, LLM-powered item comparison, import to history.</p>
+    </a>
+
+    <a href="estimator.html" class="screen-card" data-od-id="launcher-estimator">
+      <div class="card-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+      </div>
+      <h3>Estimator</h3>
+      <p>Search historical items, assign quantities, calculate estimated totals.</p>
+    </a>
+
+    <a href="settings.html" class="screen-card" data-od-id="launcher-settings">
+      <div class="card-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      </div>
+      <h3>Settings</h3>
+      <p>LLM provider configuration, API keys, vendor management.</p>
+    </a>
+  </div>
+
+  <footer class="pagefoot" style="text-align:center;padding:32px;font-size:13px;color:var(--muted);border-top:1px solid var(--border);">
+    BuildEstimate — Construction BOQ Management · Prototype
+  </footer>
+  <script>
+    function toggleSidebar() {
+      document.querySelector('.sidebar').classList.toggle('collapsed');
+    }
+  </script>
+</body>
+</html>

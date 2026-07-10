@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dashboard — BuildEstimate</title>
+  <link rel="stylesheet" href="shared.css" />
+  <style>
+    .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-4); margin-bottom: var(--space-6); }
+    .recent-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-4); }
+    .recent-header h2 { font-size: 18px; }
+    .activity-item { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--border-soft); }
+    .activity-item:last-child { border-bottom: 0; }
+    .activity-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; flex-shrink: 0; }
+    .activity-dot.upload { background: var(--accent); }
+    .activity-dot.compare { background: var(--warn); }
+    .activity-dot.estimate { background: var(--success); }
+    .activity-content { flex: 1; }
+    .activity-content .title { font-size: var(--text-sm); font-weight: 500; }
+    .activity-content .meta { display: block; margin-top: 2px; }
+    .cat-bar { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) 0; border-bottom: 1px solid var(--border-soft); }
+    .cat-bar:last-child { border-bottom: 0; }
+    .cat-bar .cat-name { width: 100px; font-size: var(--text-sm); font-weight: 500; flex-shrink: 0; }
+    .cat-bar .cat-track { flex: 1; height: 8px; background: var(--border-soft); border-radius: 999px; overflow: hidden; }
+    .cat-bar .cat-fill { height: 100%; border-radius: 999px; background: var(--accent); }
+    .cat-bar .cat-fill.low { background: var(--muted); }
+    .cat-bar .cat-val { width: 80px; text-align: right; font-family: var(--font-mono); font-size: 13px; }
+    .cat-bar .cat-count { width: 60px; text-align: right; font-size: 12px; color: var(--muted); }
+    @media (max-width: 920px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 480px) { .stat-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" data-od-id="sidebar">
+      <div class="sidebar-brand">
+        <svg viewBox="0 0 28 28" fill="none"><rect width="28" height="28" rx="7" fill="currentColor"/><path d="M8 17l6-11 6 11" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 20h16" stroke="white" stroke-width="1.8" stroke-linecap="round" opacity="0.5"/></svg>
+        <span>BuildEstimate</span>
+          <button class="sidebar-toggle" onclick="toggleSidebar()" title="Collapse sidebar">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="dashboard.html" class="active" data-od-id="nav-dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span>Dashboard</span></a>
+        <a href="boqs.html" data-od-id="nav-boqs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg><span>BOQs</span></a>
+        <a href="compare.html" data-od-id="nav-compare"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M16 18l6-6-6-6M5 12h15"/><path d="M8 6l-6 6 6 6"/></svg><span>Compare</span></a>
+        <a href="catalog.html" data-od-id="nav-catalog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg><span>Catalog</span></a>
+        <a href="estimator.html" data-od-id="nav-estimator"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg><span>Estimator</span></a>
+        <a href="settings.html" data-od-id="nav-settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg><span>Settings</span></a>
+      </nav>
+      <div class="sidebar-footer">
+        <a href="login.html" data-od-id="nav-signout" style="display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-3);border-radius:8px;color:rgba(255,255,255,0.65);font-size:13px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="width:16px;height:16px;"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          Sign out
+        </a>
+      </div>
+    </aside>
+
+    <div class="main-area">
+      <header class="topbar" data-od-id="topbar">
+        <div class="topbar-left">
+          <h1>Dashboard</h1>
+        </div>
+        <div class="topbar-right">
+          <span style="font-size:13px;color:var(--muted);">Construction Consultant</span>
+          <div class="avatar">CC</div>
+        </div>
+      </header>
+
+      <main class="main-content">
+        <div class="stat-grid">
+          <div class="card stat-card" data-od-id="stat-items">
+            <div class="stat-value num">1,847</div>
+            <div class="stat-label">Price Database Items</div>
+            <div class="stat-trend up">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px;"><polyline points="2 12 6 8 10 12 14 4"/><polyline points="9 4 14 4 14 9"/></svg>
+              +142 this month
+            </div>
+          </div>
+          <div class="card stat-card" data-od-id="stat-categories">
+            <div class="stat-value num">16</div>
+            <div class="stat-label">Categories Tracked</div>
+            <div class="stat-trend up">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px;"><polyline points="2 12 6 8 10 12 14 4"/><polyline points="9 4 14 4 14 9"/></svg>
+              Structural · MEP · Finishing
+            </div>
+          </div>
+          <div class="card stat-card" data-od-id="stat-matchrate">
+            <div class="stat-value num">85%</div>
+            <div class="stat-label">Comparison Match Rate</div>
+            <div class="stat-trend down">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px;"><polyline points="2 4 6 8 10 4 14 12"/><polyline points="9 12 14 12 14 7"/></svg>
+              -3% vs last qtr
+            </div>
+          </div>
+          <div class="card stat-card" data-od-id="stat-coverage">
+            <div class="stat-value num">72%</div>
+            <div class="stat-label">Data Coverage</div>
+            <div class="stat-trend up">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px;"><polyline points="2 12 6 8 10 12 14 4"/><polyline points="9 4 14 4 14 9"/></svg>
+              Items with 3+ data points
+            </div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-5);">
+          <div class="card" data-od-id="recent-activity">
+            <div class="recent-header">
+              <h2>Recent Activity</h2>
+              <a href="boqs.html" class="btn btn-ghost btn-sm" style="text-decoration:none;">View all</a>
+            </div>
+            <div>
+              <div class="activity-item" data-od-id="activity-1">
+                <div class="activity-dot upload"></div>
+                <div class="activity-content">
+                  <div class="title">BOQ uploaded — Ratchaphruek Tower</div>
+                  <span class="meta">Structural works · Sino-Thai Engineering · 2h ago</span>
+                </div>
+              </div>
+              <div class="activity-item" data-od-id="activity-2">
+                <div class="activity-dot compare"></div>
+                <div class="activity-content">
+                  <div class="title">Quotation compared — Sathorn Residences</div>
+                  <span class="meta">14 items matched · 2 below average · 8h ago</span>
+                </div>
+              </div>
+              <div class="activity-item" data-od-id="activity-3">
+                <div class="activity-dot estimate"></div>
+                <div class="activity-content">
+                  <div class="title">Estimate saved — MRT Orange Line Station</div>
+                  <span class="meta">42 items · ฿3.2M total · yesterday</span>
+                </div>
+              </div>
+              <div class="activity-item" data-od-id="activity-4">
+                <div class="activity-dot upload"></div>
+                <div class="activity-content">
+                  <div class="title">BOQ uploaded — Bangna Warehouse Complex</div>
+                  <span class="meta">MEP works · ITH Technology · yesterday</span>
+                </div>
+              </div>
+              <div class="activity-item" data-od-id="activity-5">
+                <div class="activity-dot compare"></div>
+                <div class="activity-content">
+                  <div class="title">7 items imported from comparison</div>
+                  <span class="meta">Sukhumvit 62 · Finishing works · 2 days ago</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" data-od-id="price-analysis">
+            <div class="recent-header">
+              <h2>Price Analysis by Category</h2>
+              <a href="compare.html" class="btn btn-ghost btn-sm" style="text-decoration:none;">Full comparison</a>
+            </div>
+            <div>
+              <div class="cat-bar">
+                <span class="cat-name">Rebar</span>
+                <div class="cat-track"><div class="cat-fill" style="width:92%"></div></div>
+                <span class="cat-val">฿32.50 /kg</span>
+                <span class="cat-count">14 quotes</span>
+              </div>
+              <div class="cat-bar">
+                <span class="cat-name">Concrete</span>
+                <div class="cat-track"><div class="cat-fill" style="width:78%"></div></div>
+                <span class="cat-val">฿2,450 /m³</span>
+                <span class="cat-count">11 quotes</span>
+              </div>
+              <div class="cat-bar">
+                <span class="cat-name">Formwork</span>
+                <div class="cat-track"><div class="cat-fill" style="width:65%"></div></div>
+                <span class="cat-val">฿380 /m²</span>
+                <span class="cat-count">9 quotes</span>
+              </div>
+              <div class="cat-bar">
+                <span class="cat-name">Steel Struct.</span>
+                <div class="cat-track"><div class="cat-fill" style="width:71%"></div></div>
+                <span class="cat-val">฿85,000 /ton</span>
+                <span class="cat-count">8 quotes</span>
+              </div>
+              <div class="cat-bar">
+                <span class="cat-name">Pile Work</span>
+                <div class="cat-track"><div class="cat-fill low" style="width:34%"></div></div>
+                <span class="cat-val">฿1,850 /m</span>
+                <span class="cat-count">3 quotes</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script>
+    (function() {
+      const navLinks = document.querySelectorAll('.sidebar-nav a');
+      navLinks.forEach(a => {
+        if (a.getAttribute('href') === 'dashboard.html') return;
+        a.addEventListener('click', function(e) {
+          const href = this.getAttribute('href');
+          if (href && href !== '#') return;
+          e.preventDefault();
+          const c = document.getElementById('toastContainer');
+          const t = document.createElement('div');
+          t.className = 'toast info';
+          t.textContent = 'Navigating…';
+          c.appendChild(t);
+          setTimeout(() => t.remove(), 2000);
+        });
+      });
+    })();
+
+    function toggleSidebar() {
+      document.querySelector('.sidebar').classList.toggle('collapsed');
+    }
+  </script>
+</body>
+</html>

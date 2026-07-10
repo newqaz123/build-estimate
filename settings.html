@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Settings — BuildEstimate</title>
+  <link rel="stylesheet" href="shared.css" />
+  <style>
+    .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-5); align-items: start; }
+    .section-card + .section-card { margin-top: var(--space-5); }
+    .api-mask { font-family: var(--font-mono); font-size: 13px; letter-spacing: 0.05em; }
+    @media (max-width: 920px) { .settings-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" data-od-id="sidebar">
+      <div class="sidebar-brand">
+        <svg viewBox="0 0 28 28" fill="none"><rect width="28" height="28" rx="7" fill="currentColor"/><path d="M8 17l6-11 6 11" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 20h16" stroke="white" stroke-width="1.8" stroke-linecap="round" opacity="0.5"/></svg>
+        <span>BuildEstimate</span>
+          <button class="sidebar-toggle" onclick="toggleSidebar()" title="Collapse sidebar">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="dashboard.html" data-od-id="nav-dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span>Dashboard</span></a>
+        <a href="boqs.html" data-od-id="nav-boqs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg><span>BOQs</span></a>
+        <a href="compare.html" data-od-id="nav-compare"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M16 18l6-6-6-6M5 12h15"/><path d="M8 6l-6 6 6 6"/></svg><span>Compare</span></a>
+        <a href="catalog.html" data-od-id="nav-catalog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg><span>Catalog</span></a>
+        <a href="estimator.html" data-od-id="nav-estimator"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg><span>Estimator</span></a>
+        <a href="settings.html" class="active" data-od-id="nav-settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg><span>Settings</span></a>
+      </nav>
+      <div class="sidebar-footer">
+        <a href="login.html" style="display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-3);border-radius:8px;color:rgba(255,255,255,0.65);font-size:13px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="width:16px;height:16px;"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          Sign out
+        </a>
+      </div>
+    </aside>
+
+    <div class="main-area">
+      <header class="topbar" data-od-id="topbar">
+        <div class="topbar-left">
+          <h1>Settings</h1>
+        </div>
+        <div class="topbar-right">
+          <span style="font-size:13px;color:var(--muted);">Construction Consultant</span>
+          <div class="avatar">CC</div>
+        </div>
+      </header>
+
+      <main class="main-content">
+        <div class="settings-grid">
+          <!-- Left column -->
+          <div>
+            <!-- LLM Provider -->
+            <div class="card section-card" data-od-id="llm-settings">
+              <div class="card-header">
+                <h3>LLM Provider</h3>
+              </div>
+              <div class="card-body">
+                <div class="form-group">
+                  <div class="field">
+                    <label for="llmProvider">Provider</label>
+                    <select class="select" id="llmProvider" onchange="toggleApiKey()">
+                      <option value="openai" selected>OpenAI</option>
+                      <option value="anthropic">Anthropic</option>
+                      <option value="google">Google Gemini</option>
+                      <option value="openrouter">OpenRouter</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="apiKey">API Key</label>
+                    <input class="input" type="password" id="apiKey" value="sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+                    <span class="field-help">Stored as environment variable. Never exposed to the client.</span>
+                  </div>
+                  <div class="field">
+                    <label for="llmModel">Model</label>
+                    <input class="input" type="text" id="llmModel" value="gpt-4o" placeholder="e.g. gpt-4o, claude-sonnet-4, gemini-2.5-pro" />
+                  </div>
+                  <div class="field">
+                    <label for="llmEndpoint">Custom Endpoint (optional)</label>
+                    <input class="input" type="text" id="llmEndpoint" placeholder="https://api.openai.com/v1" />
+                    <span class="field-help">Override the default API endpoint for self-hosted proxies.</span>
+                  </div>
+                  <div style="margin-top:var(--space-3);">
+                    <button class="btn btn-primary btn-sm" onclick="testConnection()">Test Connection</button>
+                    <button class="btn btn-secondary btn-sm" onclick="saveSettings()">Save Changes</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Docling Sidecar -->
+            <div class="card section-card" data-od-id="docling-settings" style="margin-top:var(--space-5);">
+              <div class="card-header">
+                <h3>Docling Sidecar</h3>
+              </div>
+              <div class="card-body">
+                <div class="form-group">
+                  <div class="field">
+                    <label for="doclingEndpoint">Sidecar URL</label>
+                    <input class="input" type="text" id="doclingEndpoint" value="http://localhost:8000" placeholder="http://localhost:8000" />
+                    <span class="field-help">FastAPI server running Docling for PDF parsing.</span>
+                  </div>
+                  <div style="display:flex;gap:var(--space-2);margin-top:var(--space-2);">
+                    <button class="btn btn-secondary btn-sm" onclick="testDocling()">Test Connection</button>
+                    <span id="doclingStatus" class="meta" style="align-self:center;"></span>
+                  </div>
+                </div>
+              </div>
+          </div>
+        </div>
+
+        <!-- Catalog Fuzzy Rules -->
+        <div class="card section-card" data-od-id="fuzzy-settings" style="margin-top:var(--space-5);">
+          <div class="card-header">
+            <h3>Catalog Fuzzy Rules</h3>
+          </div>
+          <div class="card-body">
+            <p style="font-size:13px;color:var(--muted);margin-bottom:var(--space-3);">
+              These rules control how incoming BOQ items are fuzzy-matched to standard catalog entries during Pass 2.
+              Edits take effect on the next upload.
+            </p>
+            <div class="form-group">
+              <div class="field">
+                <label for="fuzzyUnitMap">Unit equivalence map <span class="meta">(JSON object: key → canonical unit)</span></label>
+                <textarea class="input" id="fuzzyUnitMap" rows="5" style="font-family:var(--font-mono);font-size:12px;resize:vertical;">{
+  "m2": "m²",
+  "m3": "m³",
+  "sqm": "m²",
+  "sq.m.": "m²",
+  "cbm": "m³",
+  "cu.m.": "m³",
+  "kg": "kg",
+  "kgs": "kg",
+  "tonne": "ton",
+  "tons": "ton",
+  "each": "set",
+  "ea": "set",
+  "nos": "set",
+  "no.": "set",
+  "lin.m": "m",
+  "lm": "m",
+  "r.m": "m"
+}</textarea>
+              </div>
+              <div class="field" style="margin-top:var(--space-3);">
+                <label for="fuzzyDescRules">Description normalisation rules <span class="meta">(JSON array of [find, replace] pairs, applied in order)</span></label>
+                <textarea class="input" id="fuzzyDescRules" rows="6" style="font-family:var(--font-mono);font-size:12px;resize:vertical;">[
+  ["structural concrete", "concrete"],
+  ["reinforcement bar", "rebar"],
+  ["\\bconc\\.", "concrete"],
+  ["\\d+mm\\b", "$& dia."],
+  ["\\bformwork\\b", "formwork"],
+  ["\\bmobilisation\\b", "mobilization"],
+  ["\\bdemobilisation\\b", "demobilization"],
+  ["\\s+", " "]
+]</textarea>
+              </div>
+              <div style="margin-top:var(--space-3);">
+                <button class="btn btn-primary btn-sm" onclick="saveFuzzyRules()">Save Rules</button>
+                <button class="btn btn-secondary btn-sm" onclick="testFuzzyRules()" style="margin-left:8px;">Test Match</button>
+                <span id="fuzzyTestResult" class="meta" style="margin-left:8px;"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right column -->
+          <div>
+            <!-- Vendor Management -->
+            <div class="card section-card" data-od-id="vendor-settings">
+              <div class="card-header">
+                <h3>Vendors</h3>
+                <button class="btn btn-primary btn-sm" onclick="showAddVendor()">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:14px;height:14px;"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>
+                  Add Vendor
+                </button>
+              </div>
+              <div class="card-body" style="padding:0;">
+                <table class="data-table" style="border:0;border-radius:0;">
+                  <thead>
+                    <tr>
+                      <th>Vendor Name</th>
+                      <th>Specialty</th>
+                      <th class="num-col">Linked BOQs</th>
+                      <th>Last Used</th>
+                      <th class="actions-col">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><span style="font-weight:500;">Sino-Thai Engineering Co., Ltd.</span><br><span class="meta">contact@sinothai.co.th</span></td>
+                      <td>Structural &amp; Civil</td>
+                      <td class="num-col">3</td>
+                      <td style="font-size:13px;">8 Jul 2026</td>
+                      <td class="actions-col">
+                        <button class="btn btn-ghost btn-sm" onclick="editVendor(this)" style="padding:3px 8px;font-size:12px;">Edit</button>
+                        <button class="btn btn-outline-danger btn-sm" onclick="confirmDelete('Sino-Thai Engineering')" style="padding:3px 8px;font-size:12px;">Remove</button>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><span style="font-weight:500;">Italian-Thai Development PCL</span><br><span class="meta">procurement@itd.co.th</span></td>
+                      <td>Full scope</td>
+                      <td class="num-col">2</td>
+                      <td style="font-size:13px;">5 Jul 2026</td>
+                      <td class="actions-col">
+                        <button class="btn btn-ghost btn-sm" onclick="editVendor(this)" style="padding:3px 8px;font-size:12px;">Edit</button>
+                        <button class="btn btn-outline-danger btn-sm" onclick="confirmDelete('Italian-Thai Development')" style="padding:3px 8px;font-size:12px;">Remove</button>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><span style="font-weight:500;">Unique Engineering &amp; Construction</span><br><span class="meta">info@unique-eng.com</span></td>
+                      <td>MEP Specialist</td>
+                      <td class="num-col">2</td>
+                      <td style="font-size:13px;">3 Jul 2026</td>
+                      <td class="actions-col">
+                        <button class="btn btn-ghost btn-sm" onclick="editVendor(this)" style="padding:3px 8px;font-size:12px;">Edit</button>
+                        <button class="btn btn-outline-danger btn-sm" onclick="confirmDelete('Unique Engineering')" style="padding:3px 8px;font-size:12px;">Remove</button>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><span style="font-weight:500;">ITH Technology Co., Ltd.</span><br><span class="meta">support@ith-tech.com</span></td>
+                      <td>MEP &amp; Systems</td>
+                      <td class="num-col">3</td>
+                      <td style="font-size:13px;">28 Jun 2026</td>
+                      <td class="actions-col">
+                        <button class="btn btn-ghost btn-sm" onclick="editVendor(this)" style="padding:3px 8px;font-size:12px;">Edit</button>
+                        <button class="btn btn-outline-danger btn-sm" onclick="confirmDelete('ITH Technology')" style="padding:3px 8px;font-size:12px;">Remove</button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div style="padding:var(--space-3) var(--space-4);border-top:1px solid var(--border-soft);font-size:12px;color:var(--muted);display:flex;align-items:center;gap:var(--space-2);">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:12px;height:12px;"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="5" x2="8" y2="9"/><line x1="8" y1="11" x2="8.01" y2="11"/></svg>
+                  Renaming a vendor here updates the name across all linked BOQs and historical data.
+                </div>
+              </div>
+            </div>
+
+            <!-- LLM Analysis Prompt -->
+            <div class="card section-card" data-od-id="llm-prompt-settings" style="margin-top:var(--space-5);">
+              <div class="card-header">
+                <div>
+                  <h3>LLM Analysis Prompt</h3>
+                  <span style="font-size:12px;color:var(--muted);">Customise how the LLM evaluates pricing across all analysis features</span>
+                </div>
+                <span class="meta" id="promptTokenCount">~320 tokens</span>
+              </div>
+              <div class="card-body">
+                <div class="form-group">
+                  <div class="field">
+                    <label for="llmPrompt">System prompt</label>
+                    <textarea class="textarea" id="llmPrompt" style="min-height:160px;font-size:13px;font-family:var(--font-mono);line-height:1.6;">You are a construction cost estimation assistant. Analyse the provided BOQ/quotations data and return structured JSON with the following fields for each item:
+- item_code: The item reference code
+- description: Item description 
+- quantity: Quantity from the document
+- unit: Unit of measure
+- rate: Unit rate in THB
+- total: Total amount (qty × rate)
+- trend: "below", "at", "above", or "new" compared to historical averages
+- analysis: Brief commentary explaining the pricing context, considering both quantity and rate</textarea>
+                  </div>
+                  <div style="display:flex;align-items:center;justify-content:space-between;margin-top:var(--space-2);">
+                    <div style="display:flex;gap:var(--space-2);">
+                      <button class="btn btn-primary btn-sm" onclick="savePrompt()">Save Prompt</button>
+                      <button class="btn btn-ghost btn-sm" onclick="resetPrompt()">Reset to Default</button>
+                    </div>
+                    <span style="font-size:11px;color:var(--muted);">Applies to: BOQ verification · Quotation comparison · Item suggestions · Standardization</span>
+                  </div>
+                </div>
+                <div class="field" style="margin-top:var(--space-3);padding-top:var(--space-3);border-top:1px solid var(--border-soft);">
+                  <label for="stdPrompt">Standardization prompt <span class="meta">(used during Pass 3 — LLM suggestion for unmatched items)</span></label>
+                  <textarea class="textarea" id="stdPrompt" style="min-height:100px;font-size:13px;font-family:var(--font-mono);line-height:1.6;">You are a construction BOQ standardization assistant. Given a list of raw items and a reference catalog, standardize each item:
+1. If the item matches an existing catalog entry (by description + unit), return the catalog entry ID
+2. If no match exists, suggest a standardized description and unit following these conventions:
+   - Use clear format: "Material — spec/location/dimension"
+   - Units: m³, m², m, ton, ea, set, kg, LS
+   - Group similar items (e.g. "Reinforcement bar SD40 — 12mm")
+3. Do NOT create a duplicate if a matching entry already exists
+Return JSON array: [{itemIndex, matchedStdId, suggestedDesc, suggestedUnit, confidence: "high"|"medium"|"low", reason}]</textarea>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-top:var(--space-2);">
+                  <div style="display:flex;gap:var(--space-2);">
+                    <button class="btn btn-primary btn-sm" onclick="saveStdPrompt()">Save Std Prompt</button>
+                    <button class="btn btn-ghost btn-sm" onclick="resetStdPrompt()">Reset to Default</button>
+                  </div>
+                  <span style="font-size:11px;color:var(--muted);">Stored as <code>be_stdPrompt</code> in localStorage</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Account -->
+            <div class="card section-card" data-od-id="account-settings" style="margin-top:var(--space-5);">
+              <div class="card-header">
+                <h3>Account</h3>
+              </div>
+              <div class="card-body">
+                <div class="form-group">
+                  <div class="field">
+                    <label for="accountName">Name</label>
+                    <input class="input" type="text" id="accountName" value="Construction Consultant" />
+                  </div>
+                  <div class="field">
+                    <label for="accountEmail">Email</label>
+                    <input class="input" type="email" id="accountEmail" value="admin@buildestimate.app" />
+                  </div>
+                  <hr class="rule" style="margin:var(--space-2) 0;" />
+                  <button class="btn btn-secondary btn-sm" onclick="showToast('Password changed — stored as AUTH_SECRET', 'success')">Change Password</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- Add / Edit Vendor Modal -->
+  <div class="modal-overlay" id="addVendorModal" data-od-id="add-vendor-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="vendorModalTitle">Add Vendor</h2>
+        <button class="btn btn-icon btn-ghost" onclick="closeVendorModal()" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <div class="field">
+            <label for="vendorName">Vendor Name</label>
+            <input class="input" type="text" id="vendorName" placeholder="e.g. Bangkok Construction Co." />
+          </div>
+          <div class="field">
+            <label for="vendorContact">Contact Info</label>
+            <input class="input" type="text" id="vendorContact" placeholder="email or phone" />
+          </div>
+          <div class="field">
+            <label for="vendorSpecialty">Specialty</label>
+            <select class="select" id="vendorSpecialty">
+              <option>Structural</option>
+              <option>MEP</option>
+              <option>Finishing</option>
+              <option>Full Scope</option>
+            </select>
+          </div>
+          <div id="vendorRenameWarning" style="display:none;padding:var(--space-3);background:color-mix(in oklab, var(--warn) 14%, transparent);border-radius:var(--radius-sm);font-size:12px;color:color-mix(in oklab, var(--warn), black 40%);">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:12px;height:12px;display:inline;margin-right:4px;"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="5" x2="8" y2="9"/><line x1="8" y1="11" x2="8.01" y2="11"/></svg>
+            Renaming this vendor will update the name across <strong id="vendorRenameCount">0</strong> linked BOQs.
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeVendorModal()">Cancel</button>
+        <button class="btn btn-primary" id="vendorSaveBtn" onclick="saveVendor()">Add Vendor</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script>
+    function toggleApiKey() {
+      const provider = document.getElementById('llmProvider').value;
+      const modelInput = document.getElementById('llmModel');
+      const models = { openai: 'gpt-4o', anthropic: 'claude-sonnet-4', google: 'gemini-2.5-pro', openrouter: 'openrouter/auto' };
+      modelInput.value = models[provider] || 'gpt-4o';
+    }
+
+    function testConnection() {
+      const btn = event.target;
+      btn.classList.add('loading');
+      btn.disabled = true;
+      setTimeout(() => {
+        btn.classList.remove('loading');
+        btn.disabled = false;
+        showToast('LLM connection successful (OpenAI GPT-4o)', 'success');
+      }, 1500);
+    }
+
+    function testDocling() {
+      const status = document.getElementById('doclingStatus');
+      status.textContent = 'Testing…';
+      setTimeout(() => {
+        status.textContent = '✓ Connected (v0.8.2)';
+        showToast('Docling sidecar is reachable', 'success');
+      }, 800);
+    }
+
+    function saveSettings() {
+      showToast('Settings saved successfully', 'success');
+    }
+
+    function closeVendorModal() {
+      document.getElementById('addVendorModal').classList.remove('open');
+      editingVendorRow = null;
+    }
+    document.getElementById('addVendorModal').addEventListener('click', function(e) {
+      if (e.target === this) closeVendorModal();
+    });
+
+    let editingVendorRow = null;
+
+    function showAddVendor() {
+      editingVendorRow = null;
+      document.getElementById('vendorModalTitle').textContent = 'Add Vendor';
+      document.getElementById('vendorSaveBtn').textContent = 'Add Vendor';
+      document.getElementById('vendorName').value = '';
+      document.getElementById('vendorContact').value = '';
+      document.getElementById('vendorSpecialty').value = 'Structural';
+      document.getElementById('vendorRenameWarning').style.display = 'none';
+      document.getElementById('addVendorModal').classList.add('open');
+    }
+
+    function editVendor(btn) {
+      const row = btn.closest('tr');
+      editingVendorRow = row;
+      const cells = row.querySelectorAll('td');
+      const nameEl = cells[0].querySelector('span:first-child');
+      const emailEl = cells[0].querySelector('.meta');
+      const specEl = cells[1];
+      const boqCount = cells[2].textContent.trim();
+
+      document.getElementById('vendorModalTitle').textContent = 'Edit Vendor';
+      document.getElementById('vendorSaveBtn').textContent = 'Save Changes';
+      document.getElementById('vendorName').value = nameEl.textContent.trim();
+      document.getElementById('vendorContact').value = emailEl ? emailEl.textContent.trim() : '';
+      document.getElementById('vendorSpecialty').value = specEl.textContent.trim();
+
+      const warning = document.getElementById('vendorRenameWarning');
+      document.getElementById('vendorRenameCount').textContent = boqCount;
+      warning.style.display = 'block';
+      document.getElementById('addVendorModal').classList.add('open');
+    }
+
+    function saveVendor() {
+      const name = document.getElementById('vendorName').value.trim();
+      const contact = document.getElementById('vendorContact').value.trim();
+      const spec = document.getElementById('vendorSpecialty').value;
+      if (!name) {
+        showToast('Vendor name is required', 'error');
+        return;
+      }
+      if (editingVendorRow) {
+        // Update existing row
+        const cells = editingVendorRow.querySelectorAll('td');
+        cells[0].querySelector('span:first-child').textContent = name;
+        const meta = cells[0].querySelector('.meta');
+        if (meta) meta.textContent = contact;
+        cells[1].textContent = spec;
+        showToast('Vendor updated — name changed across ' + document.getElementById('vendorRenameCount').textContent + ' linked BOQs', 'success');
+      } else {
+        showToast('Added "' + name + '" to vendors', 'success');
+      }
+      closeVendorModal();
+    }
+
+    let deleteConfirmPending = false;
+    function confirmDelete(name) {
+      if (deleteConfirmPending) {
+        showToast('Removed ' + name, 'success');
+        deleteConfirmPending = false;
+        return;
+      }
+      deleteConfirmPending = true;
+      showToast('Click again to confirm removal of ' + name, 'error');
+      setTimeout(() => { deleteConfirmPending = false; }, 4000);
+    }
+
+    function toggleSidebar() {
+      document.querySelector('.sidebar').classList.toggle('collapsed');
+    }
+
+    const defaultPrompt = `You are a construction cost estimation assistant. Analyse the provided BOQ/quotations data and return structured JSON with the following fields for each item:
+- item_code: The item reference code
+- description: Item description 
+- quantity: Quantity from the document
+- unit: Unit of measure
+- rate: Unit rate in THB
+- total: Total amount (qty × rate)
+- trend: "below", "at", "above", or "new" compared to historical averages
+- analysis: Brief commentary explaining the pricing context, considering both quantity and rate`;
+
+    function savePrompt() {
+      const prompt = document.getElementById('llmPrompt').value.trim();
+      if (!prompt) {
+        showToast('Prompt cannot be empty', 'error');
+        return;
+      }
+      showToast('LLM analysis prompt saved', 'success');
+    }
+
+    function resetPrompt() {
+      document.getElementById('llmPrompt').value = defaultPrompt;
+      showToast('Prompt reset to default', 'info');
+    }
+
+    // Live token estimate
+    document.getElementById('llmPrompt').addEventListener('input', function() {
+      const words = this.value.trim().split(/\s+/).length;
+      document.getElementById('promptTokenCount').textContent = `~${Math.round(words * 1.3)} tokens`;
+    });
+
+    // ─── Standardization prompt ───
+    const defaultStdPrompt = document.getElementById('stdPrompt').value;
+
+    function saveStdPrompt() {
+      const val = document.getElementById('stdPrompt').value.trim();
+      if (!val) { showToast('Prompt cannot be empty', 'error'); return; }
+      localStorage.setItem('be_stdPrompt', val);
+      showToast('Standardization prompt saved', 'success');
+    }
+
+    function resetStdPrompt() {
+      document.getElementById('stdPrompt').value = defaultStdPrompt;
+      localStorage.removeItem('be_stdPrompt');
+      showToast('Standardization prompt reset to default', 'info');
+    }
+
+    // Load saved values
+    (function initSettings() {
+      const savedUnitMap = localStorage.getItem('be_fuzzyUnitMap');
+      const savedDescRules = localStorage.getItem('be_fuzzyNormalizeRules');
+      const savedStdPrompt = localStorage.getItem('be_stdPrompt');
+      if (savedUnitMap) document.getElementById('fuzzyUnitMap').value = savedUnitMap;
+      if (savedDescRules) document.getElementById('fuzzyDescRules').value = savedDescRules;
+      if (savedStdPrompt) document.getElementById('stdPrompt').value = savedStdPrompt;
+    })();
+
+    function saveFuzzyRules() {
+      try {
+        JSON.parse(document.getElementById('fuzzyUnitMap').value);
+        JSON.parse(document.getElementById('fuzzyDescRules').value);
+        localStorage.setItem('be_fuzzyUnitMap', document.getElementById('fuzzyUnitMap').value);
+        localStorage.setItem('be_fuzzyNormalizeRules', document.getElementById('fuzzyDescRules').value);
+        showToast('Fuzzy matching rules saved', 'success');
+      } catch (e) {
+        showToast('Invalid JSON — ' + e.message, 'error');
+      }
+    }
+
+    function resetFuzzyRules() {
+      localStorage.removeItem('be_fuzzyUnitMap');
+      localStorage.removeItem('be_fuzzyNormalizeRules');
+      document.getElementById('fuzzyUnitMap').value = JSON.stringify({
+        "m2": "m²",
+        "m3": "m³",
+        "sqm": "m²",
+        "sq.m.": "m²",
+        "cbm": "m³",
+        "cu.m.": "m³",
+        "kg": "kg",
+        "kgs": "kg",
+        "tonne": "ton",
+        "tons": "ton",
+        "each": "set",
+        "ea": "set",
+        "nos": "set",
+        "no.": "set",
+        "lin.m": "m",
+        "lm": "m",
+        "r.m": "m"
+      }, null, 2);
+      document.getElementById('fuzzyDescRules').value = JSON.stringify([
+        ["structural concrete", "concrete"],
+        ["reinforcement bar", "rebar"],
+        ["\\bconc\\.", "concrete"],
+        ["\\d+mm\\b", "$& dia."],
+        ["\\bformwork\\b", "formwork"],
+        ["\\bmobilisation\\b", "mobilization"],
+        ["\\bdemobilisation\\b", "demobilization"],
+        ["\\s+", " "]
+      ], null, 2);
+      showToast('Fuzzy rules reset to default', 'success');
+    }
+
+    function testFuzzyRules() {
+      const input = prompt('Enter a description to test matching:', 'Structural concrete C32/40 (columns)');
+      if (!input) return;
+      const result = document.getElementById('fuzzyTestResult');
+      const normalised = input
+        .toLowerCase()
+        .replace(/structural concrete/g, 'concrete')
+        .replace(/reinforcement bar/g, 'rebar')
+        .replace(/\bconc\./g, 'concrete')
+        .replace(/\s+/g, ' ').trim();
+      result.textContent = 'Normalised: "' + normalised + '"';
+      result.style.color = 'var(--muted)';
+      setTimeout(() => { result.textContent = ''; }, 5000);
+    }
+
+    function showToast(message, type) {
+      const container = document.getElementById('toastContainer');
+      const t = document.createElement('div');
+      t.className = 'toast ' + type;
+      t.textContent = message;
+      container.appendChild(t);
+      setTimeout(() => { t.style.opacity = '0'; t.style.transform = 'translateX(16px)'; setTimeout(() => t.remove(), 300); }, 3500);
+    }
+  </script>
+</body>
+</html>

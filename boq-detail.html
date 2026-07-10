@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BOQ Detail — BuildEstimate</title>
+  <link rel="stylesheet" href="shared.css" />
+  <style>
+    .boq-meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-4); margin-bottom: var(--space-5); }
+    .boq-meta-item { padding: var(--space-3) var(--space-4); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); position: relative; }
+    .boq-meta-item .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+    .boq-meta-item .value { font-size: var(--text-sm); font-weight: 500; }
+    .boq-meta-item .meta-edit { display: none; margin-top: 4px; }
+    .boq-meta-item.editing .value { display: none; }
+    .boq-meta-item.editing .meta-edit { display: block; }
+    .section-group + .section-group { margin-top: var(--space-5); }
+    .item-edit-actions { display: none; gap: 4px; }
+    tr.editing .item-display { display: none; }
+    tr.editing .item-cell-input { display: block; }
+    tr:not(.editing) .item-cell-input { display: none; }
+    tr:not(.editing) .item-edit-actions { display: none; }
+    tr:hover .item-actions-default { opacity: 1; }
+    .item-actions-default { opacity: 0.3; transition: opacity var(--motion-fast); }
+    .item-cell-input input, .item-cell-input select { padding: 4px 6px; font-size: 13px; border: 1px solid var(--accent); border-radius: 6px; }
+    .edit-indicator { font-size: 11px; color: var(--muted); display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; }
+    .catalog-match-item { padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); cursor: pointer; transition: border-color var(--motion-fast), background var(--motion-fast); }
+    .catalog-match-item:hover { border-color: var(--accent); background: color-mix(in oklab, var(--accent) 6%, transparent); }
+    .catalog-match-item.selected { border-color: var(--accent); background: color-mix(in oklab, var(--accent) 10%, transparent); }
+    .catalog-match-item .aliases { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" data-od-id="sidebar">
+      <div class="sidebar-brand">
+        <svg viewBox="0 0 28 28" fill="none"><rect width="28" height="28" rx="7" fill="currentColor"/><path d="M8 17l6-11 6 11" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 20h16" stroke="white" stroke-width="1.8" stroke-linecap="round" opacity="0.5"/></svg>
+        <span>BuildEstimate</span>
+          <button class="sidebar-toggle" onclick="toggleSidebar()" title="Collapse sidebar">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="dashboard.html" data-od-id="nav-dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span>Dashboard</span></a>
+        <a href="boqs.html" class="active" data-od-id="nav-boqs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg><span>BOQs</span></a>
+        <a href="compare.html" data-od-id="nav-compare"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M16 18l6-6-6-6M5 12h15"/><path d="M8 6l-6 6 6 6"/></svg><span>Compare</span></a>
+        <a href="catalog.html" data-od-id="nav-catalog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg><span>Catalog</span></a>
+        <a href="estimator.html" data-od-id="nav-estimator"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg><span>Estimator</span></a>
+        <a href="settings.html" data-od-id="nav-settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg><span>Settings</span></a>
+      </nav>
+      <div class="sidebar-footer">
+        <a href="login.html" style="display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-3);border-radius:8px;color:rgba(255,255,255,0.65);font-size:13px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="width:16px;height:16px;"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          Sign out
+        </a>
+      </div>
+    </aside>
+
+    <div class="main-area">
+      <header class="topbar" data-od-id="topbar">
+        <div class="topbar-left">
+          <button class="btn btn-ghost btn-sm" onclick="history.back()" style="margin-right:8px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <h1>Ratchaphruek Tower</h1>
+          <span class="badge badge-review" style="margin-left:8px;">Under Review</span>
+        </div>
+        <div class="topbar-right">
+          <button class="btn btn-ghost btn-sm">Download PDF</button>
+          <button class="btn btn-primary btn-sm" onclick="showToast('BOQ approved','success')">Approve</button>
+        </div>
+      </header>
+
+      <main class="main-content">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div class="boq-meta-grid" style="flex:1;" data-od-id="boq-meta">
+            <div class="boq-meta-item" data-meta="vendor">
+              <div class="label">Vendor <button class="btn btn-ghost btn-sm" style="padding:0 4px;font-size:11px;vertical-align:middle;" onclick="toggleMetaEdit('vendor')">Edit</button></div>
+              <div class="value" id="mv-vendor">Sino-Thai Engineering Co., Ltd.</div>
+              <div class="meta-edit"><input class="input" id="me-vendor" value="Sino-Thai Engineering Co., Ltd." style="width:100%;" /></div>
+            </div>
+            <div class="boq-meta-item" data-meta="worktype">
+              <div class="label">Work Type <button class="btn btn-ghost btn-sm" style="padding:0 4px;font-size:11px;vertical-align:middle;" onclick="toggleMetaEdit('worktype')">Edit</button></div>
+              <div class="value" id="mv-worktype">Structural</div>
+              <div class="meta-edit">
+                <select class="select" id="me-worktype"><option selected>Structural</option><option>MEP</option><option>Finishing</option></select>
+              </div>
+            </div>
+            <div class="boq-meta-item" data-meta="date">
+              <div class="label">Date <button class="btn btn-ghost btn-sm" style="padding:0 4px;font-size:11px;vertical-align:middle;" onclick="toggleMetaEdit('date')">Edit</button></div>
+              <div class="value" id="mv-date">2026-07-08</div>
+              <div class="meta-edit"><input class="input" type="date" id="me-date" value="2026-07-08" /></div>
+            </div>
+            <div class="boq-meta-item">
+              <div class="label">Total Items</div>
+              <div class="value num">86</div>
+            </div>
+            <div class="boq-meta-item">
+              <div class="label">Grand Total</div>
+              <div class="value" id="grandTotalDisplay">฿4,250,000</div>
+            </div>
+            <div class="boq-meta-item">
+              <div class="label">BOQ ID</div>
+              <div class="value" style="font-family:var(--font-mono);font-size:12px;">BOQ-001</div>
+            </div>
+          </div>
+        </div>
+
+          <div class="toolbar" style="margin-bottom:var(--space-5);">
+          <div class="toolbar-left">
+            <div class="search-wrap">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input class="input" type="text" placeholder="Search items…" id="itemSearch" />
+            </div>
+            <div class="filter-bar">
+              <span class="filter-chip active" data-filter="all">All</span>
+              <span class="filter-chip" data-filter="unit">Unit</span>
+              <span class="filter-chip" data-filter="lump_sum">Lump Sum</span>
+              <span class="filter-chip" data-filter="job">Job</span>
+            </div>
+          </div>
+          <div class="toolbar-right">
+            <button class="btn btn-ghost btn-sm" onclick="runStdLLM()" style="font-size:11px;padding:3px 8px;" title="Run LLM on unmatched items">LLM Suggest</button>
+            <button class="btn btn-primary btn-sm" onclick="acceptAllStdSuggestions()" style="font-size:11px;padding:3px 8px;" title="Accept all fuzzy/LLM suggestions">Accept All</button>
+            <button class="btn btn-ghost btn-sm" onclick="saveAllEdits()" id="saveAllBtn" style="display:none;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+              Save all changes
+            </button>
+            <button class="btn btn-ghost btn-sm">Export CSV</button>
+          </div>
+        </div>
+
+        <!-- Sections with collapsible categories -->
+        <div id="boqSections" data-od-id="boq-sections"></div>
+
+        <!-- Edit history inline -->
+        <div style="margin-top:var(--space-4);padding:var(--space-3) var(--space-4);border:1px solid var(--border-soft);border-radius:var(--radius-sm);font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px;">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:14px;height:14px;"><circle cx="8" cy="8" r="6.5"/><polyline points="8 4 8 8 11 11"/></svg>
+          <span>Last edited <strong style="color:var(--fg);">2 hours ago</strong> by you · Items with unsaved changes are highlighted in the table</span>
+        </div>
+
+      </main>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="catalogMatchModal">
+    <div class="modal" style="max-width:520px;">
+      <div class="modal-header">
+        <h3>Match to Standard Catalog</h3>
+        <button class="btn btn-icon btn-ghost" onclick="closeCatalogMatch()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body" style="padding:var(--space-4);">
+        <p style="font-size:13px;color:var(--muted);margin-bottom:var(--space-3);" id="catalogMatchContext">Select a standard entry for: <strong></strong></p>
+        <div class="search-wrap" style="margin-bottom:var(--space-3);display:flex;align-items:center;gap:8px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input class="input" type="text" placeholder="Search catalog…" id="catalogMatchSearch" oninput="filterCatalogMatch()" />
+        </div>
+        <div id="catalogMatchList" style="max-height:320px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;"></div>
+        <div style="margin-top:var(--space-3);display:flex;gap:8px;align-items:center;">
+          <button class="btn btn-secondary btn-sm" onclick="closeCatalogMatch()">Cancel</button>
+          <span style="font-size:11px;color:var(--muted);" id="catalogMatchCount"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script>
+    let sections = [
+      {
+        header: 'B.1 Concrete Works',
+        items: [
+      { code: 'B.1.1', desc: 'Structural concrete C32/40 (columns)', unit: 'm³', qty: 120, rate: 3850, total: 462000, type: 'unit', stdStatus: 'matched', stdMatch: 'Concrete C32/40 — columns' },
+      { code: 'B.1.2', desc: 'Structural concrete C25/30 (slabs)', unit: 'm³', qty: 240, rate: 3450, total: 828000, type: 'unit', stdStatus: 'matched', stdMatch: 'Concrete C25/30 — slabs' },
+      { code: 'B.1.3', desc: 'Reinforcement bar SD40 — 16mm', unit: 'ton', qty: 18.5, rate: 28500, total: 527250, type: 'unit', stdStatus: 'matched', stdMatch: 'Rebar SD40 — 16mm' },
+      { code: 'B.1.4', desc: 'Reinforcement bar SD40 — 12mm', unit: 'ton', qty: 12.2, rate: 29000, total: 353800, type: 'unit', stdStatus: 'matched', stdMatch: 'Rebar SD40 — 12mm' },
+      { code: 'B.1.5', desc: 'Formwork — column', unit: 'm²', qty: 520, rate: 680, total: 353600, type: 'unit', stdStatus: 'matched', stdMatch: 'Formwork — column' },
+      { code: 'B.1.6', desc: 'Formwork — slab', unit: 'm²', qty: 980, rate: 590, total: 578200, type: 'unit', stdStatus: 'matched', stdMatch: 'Formwork — slab' },
+        ]
+      },
+      {
+        header: 'B.2 Steel Works',
+        items: [
+      { code: 'B.2.1', desc: 'Structural steel frame — main beams', unit: 'ton', qty: 8.4, rate: 42000, total: 352800, type: 'unit', stdStatus: 'matched', stdMatch: 'Steel frame — main beams' },
+      { code: 'B.2.2', desc: 'Steel staircase — complete (incl. handrail)', unit: 'set', qty: 2, rate: 185000, total: 370000, type: 'lump_sum', stdStatus: 'fuzzy', stdMatch: 'Steel staircase — complete set' },
+      { code: 'B.2.3', desc: 'Metal deck flooring', unit: 'm²', qty: 450, rate: 950, total: 427500, type: 'unit', stdStatus: 'llm', stdMatch: 'Metal deck flooring' },
+        ]
+      },
+      {
+        header: 'B.3 Foundation & Substructure',
+        items: [
+      { code: 'B.3.1', desc: 'Bored pile — diameter 0.80m, depth 18m', unit: 'm', qty: 320, rate: 2100, total: 672000, type: 'unit', stdStatus: 'matched', stdMatch: 'Bored pile — D0.80m x 18m' },
+      { code: 'B.3.2', desc: 'Pile cap excavation', unit: 'm³', qty: 180, rate: 420, total: 75600, type: 'unit', stdStatus: 'unmatched', stdMatch: null },
+      { code: 'B.3.3', desc: 'Ground beam concreting', unit: 'm³', qty: 85, rate: 3600, total: 306000, type: 'unit', stdStatus: 'matched', stdMatch: 'Ground beam concreting' },
+        ]
+      },
+      {
+        header: 'B.4 Miscellaneous',
+        items: [
+      { code: 'B.4.1', desc: 'Waterproofing membrane — basement', unit: 'm²', qty: 620, rate: 520, total: 322400, type: 'unit', stdStatus: 'matched', stdMatch: 'Waterproofing membrane — basement' },
+      { code: 'B.4.2', desc: 'Expansion joint installation', unit: 'm', qty: 45, rate: 2800, total: 126000, type: 'unit', stdStatus: 'fuzzy', stdMatch: 'Expansion joint' },
+      { code: 'B.4.3', desc: 'Site mobilisation & demobilisation', unit: null, qty: null, rate: null, total: 245000, type: 'lump_sum', stdStatus: 'unmatched', stdMatch: null },
+        ]
+      }
+    ];
+
+    function renderStdCell(item, si, ii) {
+      const labels = { matched: 'Matched', fuzzy: 'Fuzzy', llm: 'LLM', unmatched: 'Unmatched' };
+      const status = item.stdStatus || 'unmatched';
+      const badge = `<span class="badge badge-${status}">${labels[status]}</span>`;
+      if (status === 'matched') {
+        return `<div style="display:flex;flex-direction:column;gap:2px;"><span>${badge}</span><span style="font-size:11px;color:var(--muted);">${item.stdMatch || '—'}</span></div>`;
+      }
+      if (status === 'fuzzy' || status === 'llm') {
+        const sourceLabel = status === 'fuzzy' ? 'Fuzzy match' : 'LLM suggestion';
+        return `<div style="display:flex;flex-direction:column;gap:4px;">
+          <span>${badge}</span>
+          <span style="font-size:11px;color:var(--fg-2);">${item.stdMatch || '—'}</span>
+          <span style="font-size:10px;color:var(--muted);">${sourceLabel}</span>
+          <span style="display:flex;gap:4px;">
+            <button class="btn btn-primary btn-sm" style="padding:2px 8px;font-size:10px;" onclick="acceptStdSuggestion(${si},${ii})">Accept</button>
+            <button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:10px;" onclick="rejectStdSuggestion(${si},${ii})">×</button>
+          </span>
+        </div>`;
+      }
+      return `<div style="display:flex;flex-direction:column;gap:4px;">
+        <span>${badge}</span>
+        <button class="btn btn-ghost btn-sm" style="padding:2px 10px;font-size:10px;" onclick="matchStdManually(${si},${ii})">Match…</button>
+      </div>`;
+    }
+
+    function renderStdCellEdit(item, si, ii) {
+      const labels = { matched: 'Matched', fuzzy: 'Fuzzy', llm: 'LLM', unmatched: 'Unmatched' };
+      const status = item.stdStatus || 'unmatched';
+      const badge = `<span class="badge badge-${status}">${labels[status]}</span>`;
+      return `<div style="display:flex;flex-direction:column;gap:6px;min-width:180px;">
+        <span>${badge}</span>
+        <input class="input ie-stdmatch" value="${item.stdMatch || ''}" placeholder="Manual match description…" style="font-size:11px;padding:4px 8px;width:100%;" />
+        <div style="display:flex;gap:4px;flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" style="padding:2px 8px;font-size:10px;" onclick="editStdSearch(${si},${ii})" title="Search catalog">Search</button>
+          <button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:10px;" onclick="editStdSuggestLLM(${si},${ii})" title="Suggest from LLM">LLM</button>
+        </div>
+      </div>`;
+    }
+
+    function editStdSearch(si, ii) {
+      matchStdManually(si, ii);
+    }
+
+    function editStdSuggestLLM(si, ii) {
+      const item = sections[si].items[ii];
+      // Mock LLM suggestion: pick a random catalog entry
+      const pick = stdCatalog[Math.floor(Math.random() * stdCatalog.length)];
+      item.stdMatch = pick.desc;
+      item.stdStatus = 'llm';
+      showToast('LLM suggestion: "' + pick.desc + '"', 'info');
+      renderSections(sections);
+    }
+
+    function acceptStdSuggestion(si, ii) {
+      const item = sections[si].items[ii];
+      item.stdStatus = 'matched';
+      showToast('Accepted: "' + item.stdMatch + '"', 'success');
+      renderSections(sections);
+    }
+
+    function rejectStdSuggestion(si, ii) {
+      const item = sections[si].items[ii];
+      item.stdStatus = 'unmatched';
+      item.stdMatch = null;
+      showToast('Suggestion dismissed', 'info');
+      renderSections(sections);
+    }
+
+    function acceptAllStdSuggestions() {
+      let count = 0;
+      sections.forEach((section, si) => {
+        section.items.forEach((item, ii) => {
+          if (item.stdStatus === 'fuzzy' || item.stdStatus === 'llm') {
+            acceptStdSuggestion(si, ii);
+            count++;
+          }
+        });
+      });
+      if (count > 0) showToast('Accepted ' + count + ' suggestions', 'success');
+      else showToast('No suggestions to accept', 'info');
+    }
+
+    function runStdLLM() {
+      let count = 0;
+      sections.forEach((section, si) => {
+        section.items.forEach((item, ii) => {
+          if (item.stdStatus === 'unmatched' || item.stdStatus === 'unchecked') {
+            const pick = stdCatalog[Math.floor(Math.random() * stdCatalog.length)];
+            item.stdMatch = pick.desc;
+            item.stdStatus = 'llm';
+            count++;
+          }
+        });
+      });
+      showToast('LLM suggestions applied to ' + count + ' items', 'success');
+      renderSections(sections);
+    }
+
+    // ─── Catalog match modal ───
+    const stdCatalog = [
+      { desc: 'Concrete C32/40 — columns', unit: 'm³', aliases: ['Structural concrete C32/40 (columns)', 'Col conc C32/40'] },
+      { desc: 'Concrete C30/37 — slabs', unit: 'm³', aliases: ['Conc. C30/37 slab work', 'Slab concrete C30/37'] },
+      { desc: 'Concrete C25/30 — slabs', unit: 'm³', aliases: ['Structural concrete C25/30', 'Slab conc C25/30', 'Concrete slab C25/30'] },
+      { desc: 'Rebar SD40 — 16mm', unit: 'ton', aliases: ['Reinforcement bar SD40 — 16mm', 'Steel rebar 16mm dia', 'Rebar 16mm'] },
+      { desc: 'Rebar SD40 — 12mm', unit: 'ton', aliases: ['Reinforcement bar SD40 — 12mm', 'Rebar 12mm SD40', 'Steel rebar 12mm'] },
+      { desc: 'Formwork — column', unit: 'm²', aliases: ['Column formwork', 'Formwork column'] },
+      { desc: 'Formwork — slab', unit: 'm²', aliases: ['Slab formwork', 'Formwork slab'] },
+      { desc: 'Steel frame — main beams', unit: 'ton', aliases: ['Structural steel frame — main beams', 'Steel beam main frame', 'Main steel beams'] },
+      { desc: 'Steel staircase — complete set', unit: 'set', aliases: ['Steel staircase complete', 'Steel stair incl handrail'] },
+      { desc: 'Metal deck flooring', unit: 'm²', aliases: ['Metal deck', 'Metal deck floor'] },
+      { desc: 'Bored pile — D0.80m x 18m', unit: 'm', aliases: ['Bored pile 0.8m dia', 'Bored pile D0.80m'] },
+      { desc: 'Pile cap excavation', unit: 'm³', aliases: ['Pile cap dig', 'Excavation pile cap'] },
+      { desc: 'Ground beam concreting', unit: 'm³', aliases: ['Ground beam concrete', 'GB concreting'] },
+      { desc: 'Waterproofing membrane — basement', unit: 'm²', aliases: ['Basement waterproofing', 'Waterproof membrane'] },
+      { desc: 'Expansion joint', unit: 'm', aliases: ['Expansion joint installation', 'EJ installation'] },
+      { desc: 'Site mobilisation & demobilisation', unit: 'ls', aliases: ['Site mobilisation', 'Mob/demob', 'Site setup'] },
+    ];
+
+    let matchModalTarget = null;
+    let _filteredCatalog = [];
+
+    function matchStdManually(si, ii) {
+      matchModalTarget = { si, ii };
+      const item = sections[si].items[ii];
+      document.getElementById('catalogMatchContext').innerHTML = 'Select a standard entry for: <strong>' + item.desc + '</strong>';
+      const search = document.getElementById('catalogMatchSearch');
+      search.value = '';
+      filterCatalogMatch();
+      document.getElementById('catalogMatchModal').classList.add('open');
+      setTimeout(() => search.focus(), 100);
+    }
+
+    function closeCatalogMatch() {
+      document.getElementById('catalogMatchModal').classList.remove('open');
+      matchModalTarget = null;
+    }
+
+    function filterCatalogMatch() {
+      const q = document.getElementById('catalogMatchSearch').value.toLowerCase();
+      const list = document.getElementById('catalogMatchList');
+      _filteredCatalog = stdCatalog.filter(c =>
+        c.desc.toLowerCase().includes(q) ||
+        c.aliases.some(a => a.toLowerCase().includes(q))
+      );
+      document.getElementById('catalogMatchCount').textContent = _filteredCatalog.length + ' entries';
+      list.innerHTML = _filteredCatalog.map((c, idx) => `
+        <div class="catalog-match-item" onclick="selectCatalogMatch(${idx})">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-weight:500;font-size:13px;">${c.desc}</span>
+            <span style="font-size:11px;color:var(--muted);font-family:var(--font-mono);">${c.unit}</span>
+          </div>
+          <div class="aliases">${c.aliases.slice(0, 3).join(' · ')}</div>
+        </div>
+      `).join('');
+    }
+
+    function selectCatalogMatch(idx) {
+      const entry = _filteredCatalog[idx];
+      if (!entry || !matchModalTarget) return;
+      const { si, ii } = matchModalTarget;
+      const item = sections[si].items[ii];
+      item.stdMatch = entry.desc;
+      item.stdStatus = 'matched';
+      showToast('Matched to: "' + entry.desc + '"', 'success');
+      closeCatalogMatch();
+      renderSections(sections);
+    }
+
+    // Track which items have been edited
+    let editedItems = new Set();
+    let editingItemId = null;
+
+    function toggleMetaEdit(key) {
+      const item = document.querySelector(`.boq-meta-item[data-meta="${key}"]`);
+      if (!item) return;
+      item.classList.toggle('editing');
+      if (!item.classList.contains('editing')) {
+        const display = document.getElementById(`mv-${key}`);
+        const input = document.getElementById(`me-${key}`);
+        if (display && input && display.textContent !== input.value) {
+          display.textContent = input.value;
+          showToast(`${key.charAt(0).toUpperCase() + key.slice(1)} updated`, 'success');
+          document.getElementById('saveAllBtn').style.display = 'inline-flex';
+        }
+      }
+    }
+
+    function editItem(si, ii) {
+      const row = document.querySelector(`tr[data-item-id="${si}-${ii}"]`);
+      if (!row) return;
+      const isEditing = row.classList.contains('editing');
+      if (isEditing) {
+        // Save this row
+        const item = sections[si].items[ii];
+        const newDesc = row.querySelector('.ie-desc').value;
+        const newUnit = row.querySelector('.ie-unit').value;
+        const newQty = parseFloat(row.querySelector('.ie-qty').value) || 0;
+        const newRate = parseFloat(row.querySelector('.ie-rate').value) || 0;
+        const newType = row.querySelector('.ie-type').value;
+        const newCode = row.querySelector('.ie-code').value;
+        const newStdMatch = row.querySelector('.ie-stdmatch');
+        const newStdVal = newStdMatch ? newStdMatch.value.trim() : null;
+
+        const changed = item.desc !== newDesc || item.unit !== newUnit ||
+          item.qty !== newQty || item.rate !== newRate ||
+          item.type !== newType || item.code !== newCode ||
+          (newStdVal != null && item.stdMatch !== newStdVal);
+
+        if (changed) {
+          item.code = newCode;
+          item.desc = newDesc;
+          item.unit = newUnit;
+          item.qty = newQty;
+          item.rate = newRate;
+          item.total = newQty * newRate || item.total;
+          item.type = newType;
+          if (newStdVal != null && item.stdMatch !== newStdVal) {
+            item.stdMatch = newStdVal || null;
+            item.stdStatus = newStdVal ? 'matched' : 'unmatched';
+          }
+          editedItems.add(`${si}-${ii}`);
+          document.getElementById('saveAllBtn').style.display = 'inline-flex';
+          showToast('Item updated — saving highlights pending changes', 'success');
+        }
+        row.classList.remove('editing');
+        editingItemId = null;
+        renderSections(sections);
+      } else {
+        row.classList.add('editing');
+        editingItemId = `${si}-${ii}`;
+      }
+    }
+
+    function deleteItem(si, ii) {
+      if (!confirm('Remove this item from the BOQ?')) return;
+      sections[si].items.splice(ii, 1);
+      if (sections[si].items.length === 0) {
+        sections.splice(si, 1);
+      }
+      showToast('Item removed', 'info');
+      editedItems.add(`deleted-${si}`);
+      document.getElementById('saveAllBtn').style.display = 'inline-flex';
+      renderSections(sections);
+    }
+
+    function saveAllEdits() {
+      const btn = document.getElementById('saveAllBtn');
+      btn.classList.add('loading');
+      btn.disabled = true;
+      setTimeout(() => {
+        editedItems.clear();
+        btn.style.display = 'none';
+        btn.classList.remove('loading');
+        btn.disabled = false;
+        showToast('All changes saved to database', 'success');
+        updateGrandTotal();
+      }, 1000);
+    }
+
+    function updateGrandTotal() {
+      let total = 0;
+      sections.forEach(s => { s.items.forEach(i => { total += i.total; }); });
+      document.getElementById('grandTotalDisplay').textContent = '฿' + total.toLocaleString();
+    }
+
+    function renderSections(data) {
+      const container = document.getElementById('boqSections');
+      container.innerHTML = data.map((section, si) => {
+        const itemRows = section.items.map((item, ii) => {
+          const typeLabel = item.type === 'lump_sum' ? '<span class="badge badge-draft" style="font-size:11px;">L/S</span>' :
+            item.type === 'job' ? '<span class="badge badge-draft" style="font-size:11px;">Job</span>' : '';
+          const typeOpts = ['unit', 'lump_sum', 'job'].map(t =>
+            `<option value="${t}" ${item.type === t ? 'selected' : ''}>${t === 'unit' ? 'Unit' : t === 'lump_sum' ? 'L/S' : 'Job'}</option>`
+          ).join('');
+          const isHighlighted = editedItems.has(`${si}-${ii}`);
+
+          return `<tr data-item-id="${si}-${ii}" style="${isHighlighted ? 'background:color-mix(in oklab, var(--warn) 8%, transparent);' : ''}">
+            <td>
+              <span class="item-display" style="font-family:var(--font-mono);font-size:12px;">${item.code || '—'}</span>
+              <span class="item-cell-input"><input class="ie-code" value="${item.code || ''}" style="width:70px;font-family:var(--font-mono);" /></span>
+            </td>
+            <td>
+              <span class="item-display">${item.desc}</span>
+              <span class="item-cell-input"><input class="ie-desc" value="${item.desc.replace(/"/g, '&quot;')}" style="width:100%;" /></span>
+            </td>
+            <td>
+              <span class="item-display">${item.unit || '—'}</span>
+              <span class="item-cell-input"><input class="ie-unit" value="${item.unit || ''}" style="width:50px;" /></span>
+            </td>
+            <td class="num-col">
+              <span class="item-display">${item.qty != null ? item.qty.toLocaleString() : '—'}</span>
+              <span class="item-cell-input"><input class="ie-qty num" value="${item.qty != null ? item.qty : ''}" style="width:60px;text-align:right;" /></span>
+            </td>
+            <td class="num-col">
+              <span class="item-display">${item.rate != null ? '฿' + item.rate.toLocaleString() : '—'}</span>
+              <span class="item-cell-input"><input class="ie-rate num" value="${item.rate != null ? item.rate : ''}" style="width:80px;text-align:right;" /></span>
+            </td>
+            <td class="num-col" style="font-family:var(--font-mono);">฿${item.total.toLocaleString()}</td>
+            <td>
+              <span class="item-display">${typeLabel || '—'}</span>
+              <span class="item-cell-input"><select class="ie-type" style="padding:4px 6px;font-size:12px;">${typeOpts}</select></span>
+            </td>
+            <td>
+              <span class="item-display">${renderStdCell(item, si, ii)}</span>
+              <span class="item-cell-input">${renderStdCellEdit(item, si, ii)}</span>
+            </td>
+            <td>
+              <span class="item-actions-default" style="display:inline-flex;gap:4px;">
+                <button class="btn btn-ghost btn-sm" onclick="editItem(${si}, ${ii})" title="Edit item" style="padding:2px 6px;font-size:12px;">Edit</button>
+              </span>
+              <span class="item-edit-actions" style="display:inline-flex;gap:4px;">
+                <button class="btn btn-primary btn-sm" onclick="editItem(${si}, ${ii})" style="padding:2px 8px;font-size:12px;">Save</button>
+                <button class="btn btn-ghost btn-sm" onclick="deleteItem(${si}, ${ii})" style="padding:2px 6px;font-size:12px;color:var(--danger);">Delete</button>
+              </span>
+              ${isHighlighted ? '<span class="edit-indicator"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:10px;height:10px;"><circle cx="8" cy="8" r="6.5"/><polyline points="8 4 8 8 11 11"/></svg>Unsaved</span>' : ''}
+            </td>
+          </tr>`;
+        }).join('');
+
+        const sectionTotal = section.items.reduce((s, i) => s + i.total, 0);
+
+        return `<div class="section-group" data-od-id="section-${si}">
+          <div class="collapsible-header" onclick="toggleSection(this)" data-section="${si}">
+            <svg class="toggle-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 4 10 8 6 12"/></svg>
+            ${section.header}
+            <span class="meta" style="margin-left:auto;font-size:12px;">${section.items.length} items · ฿${sectionTotal.toLocaleString()}</span>
+          </div>
+          <div class="collapsible-body">
+            <div class="data-table-wrap" style="border-radius:0 0 var(--radius-sm) var(--radius-sm);border-top:0;">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Description</th>
+                    <th>Unit</th>
+                    <th class="num-col">Qty</th>
+                    <th class="num-col">Rate</th>
+                    <th class="num-col">Total</th>
+                    <th>Type</th>
+                    <th>Std</th>
+                    <th class="actions-col"></th>
+                  </tr>
+                </thead>
+                <tbody>${itemRows}</tbody>
+              </table>
+            </div>
+          </div>
+        </div>`;
+      }).join('');
+      updateGrandTotal();
+    }
+
+    function toggleSection(header) {
+      const icon = header.querySelector('.toggle-icon');
+      const body = header.nextElementSibling;
+      icon.classList.toggle('collapsed');
+      body.classList.toggle('collapsed');
+    }
+
+    function toggleSidebar() {
+      document.querySelector('.sidebar').classList.toggle('collapsed');
+    }
+
+    function showToast(message, type) {
+      const container = document.getElementById('toastContainer');
+      const t = document.createElement('div');
+      t.className = 'toast ' + type;
+      t.textContent = message;
+      container.appendChild(t);
+      setTimeout(() => { t.style.opacity = '0'; t.style.transform = 'translateX(16px)'; setTimeout(() => t.remove(), 300); }, 3500);
+    }
+
+    document.querySelectorAll('.filter-chip').forEach(chip => {
+      chip.addEventListener('click', function() {
+        document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+        this.classList.add('active');
+      });
+    });
+
+    document.getElementById('itemSearch').addEventListener('input', function() {
+      const q = this.value.toLowerCase();
+      document.querySelectorAll('.section-group').forEach(group => {
+        const rows = group.querySelectorAll('tbody tr');
+        let anyMatch = false;
+        rows.forEach(r => {
+          const match = r.textContent.toLowerCase().includes(q);
+          r.style.display = match ? '' : 'none';
+          if (match) anyMatch = true;
+        });
+        group.style.display = anyMatch ? '' : 'none';
+      });
+    });
+
+    document.getElementById('catalogMatchModal').addEventListener('click', function(e) {
+      if (e.target === this) closeCatalogMatch();
+    });
+
+    renderSections(sections);
+  </script>
+</body>
+</html>

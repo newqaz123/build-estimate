@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Compare — BuildEstimate</title>
+  <link rel="stylesheet" href="shared.css" />
+  <style>
+    .compare-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-4); margin-bottom: var(--space-5); }
+    .compare-item { transition: background var(--motion-fast) var(--ease-standard); }
+    .compare-item td { vertical-align: middle; }
+
+    /* LLM compact badge */
+    .llm-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 8px;
+      border-radius: var(--radius-pill);
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      user-select: none;
+      transition: background var(--motion-fast);
+    }
+    .llm-badge.below { background: color-mix(in oklab, var(--success) 12%, transparent); color: var(--success); }
+    .llm-badge.at { background: color-mix(in oklab, var(--muted) 12%, transparent); color: var(--fg-2); }
+    .llm-badge.above { background: color-mix(in oklab, var(--danger) 12%, transparent); color: var(--danger); }
+    .llm-badge.new { background: color-mix(in oklab, var(--warn) 18%, transparent); color: color-mix(in oklab, var(--warn), black 40%); }
+    .llm-badge:hover { filter: brightness(0.92); }
+
+    /* LLM full text expandable */
+    .llm-fulltext {
+      display: none;
+      margin-top: 6px;
+      padding: 6px 8px;
+      background: color-mix(in oklab, var(--accent) 5%, var(--bg));
+      border-radius: 6px;
+      font-size: 11px;
+      line-height: 1.5;
+      color: var(--fg-2);
+    }
+    .llm-fulltext.open { display: block; }
+
+    /* Historical data modal */
+    .hist-modal { max-width: 420px; }
+    .hist-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border-soft);
+    }
+    .hist-item:last-of-type { border-bottom: none; }
+    .hist-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .hist-dot.below { background: var(--success); }
+    .hist-dot.above { background: var(--danger); }
+    .hist-dot.at { background: var(--muted); }
+
+    .imported-label { font-size: 11px; color: var(--success); font-weight: 500; display: inline-flex; align-items: center; gap: 3px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" data-od-id="sidebar">
+      <div class="sidebar-brand">
+        <svg viewBox="0 0 28 28" fill="none"><rect width="28" height="28" rx="7" fill="currentColor"/><path d="M8 17l6-11 6 11" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 20h16" stroke="white" stroke-width="1.8" stroke-linecap="round" opacity="0.5"/></svg>
+        <span>BuildEstimate</span>
+          <button class="sidebar-toggle" onclick="toggleSidebar()" title="Collapse sidebar">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="dashboard.html" data-od-id="nav-dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span>Dashboard</span></a>
+        <a href="boqs.html" data-od-id="nav-boqs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg><span>BOQs</span></a>
+        <a href="compare.html" class="active" data-od-id="nav-compare"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M16 18l6-6-6-6M5 12h15"/><path d="M8 6l-6 6 6 6"/></svg><span>Compare</span></a>
+        <a href="catalog.html" data-od-id="nav-catalog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg><span>Catalog</span></a>
+        <a href="estimator.html" data-od-id="nav-estimator"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg><span>Estimator</span></a>
+        <a href="settings.html" data-od-id="nav-settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg><span>Settings</span></a>
+      </nav>
+      <div class="sidebar-footer">
+        <a href="login.html" style="display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-3);border-radius:8px;color:rgba(255,255,255,0.65);font-size:13px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="width:16px;height:16px;"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          Sign out
+        </a>
+      </div>
+    </aside>
+
+    <div class="main-area">
+      <header class="topbar" data-od-id="topbar">
+        <div class="topbar-left">
+          <h1>Compare Quotations</h1>
+        </div>
+        <div class="topbar-right">
+          <span style="font-size:13px;color:var(--muted);">Construction Consultant</span>
+          <div class="avatar">CC</div>
+        </div>
+      </header>
+
+      <main class="main-content">
+        <div class="page-heading" data-od-id="page-heading">
+          <p>Upload a vendor quotation PDF to compare against historical BOQ data. Each item is matched by description similarity and analysed by LLM.</p>
+        </div>
+
+        <!-- Drop zone for quotation -->
+        <div class="card" style="margin-bottom:var(--space-5);" data-od-id="upload-card">
+          <div class="card-header">
+            <h3>Upload Quotation to Compare</h3>
+          </div>
+          <div class="drop-zone" id="quoteDropZone" data-od-id="quote-drop-zone">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <p id="quoteDropText">Drop quotation PDF here, or click to browse</p>
+            <span class="meta">PDF files only · Docling parsing + LLM comparison</span>
+            <input type="file" accept=".pdf" style="display:none;" id="quoteFileInput" />
+          </div>
+          <div style="display:flex;align-items:center;justify-content:flex-end;gap:var(--space-3);margin-top:var(--space-4);">
+            <span id="selectedFileName" style="font-size:13px;color:var(--muted);display:none;"></span>
+            <button class="btn btn-primary" id="compareUploadBtn" onclick="handleFile()" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Upload &amp; Compare
+            </button>
+          </div>
+        </div>
+
+        <!-- Processing state -->
+        <div class="loading-state" id="processingState" style="display:none;" data-od-id="processing-state">
+          <div class="spinner"></div>
+          <span class="spinner-label">Parsing quotation via Docling…</span>
+        </div>
+
+        <!-- LLM processing state -->
+        <div class="loading-state" id="llmState" style="display:none;" data-od-id="llm-state">
+          <div class="spinner"></div>
+          <span class="spinner-label">Analysing with LLM (OpenAI)…</span>
+        </div>
+
+        <!-- Results -->
+        <div id="resultsArea" style="display:none;" data-od-id="results-area">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-4);">
+            <span style="font-size:13px;color:var(--muted);">Quotation analysed · <strong id="quoteFileName"></strong></span>
+            <button class="btn btn-ghost btn-sm" onclick="resetUpload()" style="gap:6px;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="width:14px;height:14px;"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
+              Compare Another
+            </button>
+          </div>
+          <div class="compare-summary">
+            <div class="card stat-card" data-od-id="summary-matched">
+              <div class="stat-value num">14</div>
+              <div class="stat-label">Items Matched</div>
+            </div>
+            <div class="card stat-card" data-od-id="summary-unique">
+              <div class="stat-value num">3</div>
+              <div class="stat-label" style="color:var(--warn);">New Items</div>
+            </div>
+            <div class="card stat-card" data-od-id="summary-below">
+              <div class="stat-value num" style="color:var(--success);">8</div>
+              <div class="stat-label">Below Historical Avg</div>
+            </div>
+          </div>
+
+          <div class="data-table-wrap">
+            <div class="table-scroll-hint">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:14px;height:14px;"><path d="M6 2l4 4-4 4"/></svg>
+              Scroll horizontally for full comparison
+            </div>
+            <table class="data-table" data-od-id="compare-table">
+              <thead>
+                <tr>
+                  <th>Item Description</th>
+                  <th>Unit</th>
+                  <th class="num-col">New Qty</th>
+                  <th class="num-col">New Rate</th>
+                  <th class="num-col">Hist. Avg</th>
+                  <th>Analysis</th>
+                  <th class="actions-col">Action</th>
+                </tr>
+              </thead>
+              <tbody id="compareTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- Historical data modal -->
+  <div class="modal-overlay" id="historyModal" data-od-id="history-modal">
+    <div class="modal hist-modal">
+      <div class="modal-header">
+        <h2 style="font-size:15px;">Historical Prices</h2>
+        <button class="btn btn-icon btn-ghost" onclick="closeHistoryModal()" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body" style="padding-top:var(--space-4);">
+        <div style="font-size:13px;font-weight:500;margin-bottom:var(--space-3);" id="histModalTitle"></div>
+        <div id="histModalBody"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-sm" onclick="closeHistoryModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script>
+    const comparisonData = [
+      { desc: 'Structural concrete C32/40 (columns)', unit: 'm³', newQty: 110, newRate: 3750, histAvg: 3850, histPrices: [{qty:120,rate:3800},{qty:100,rate:3900},{qty:110,rate:3850},{qty:130,rate:3750}], trend: 'below', llm: '2.6% below avg. Qty 110m³ is within historical range (100–130m³). Rate ฿3,750/m³ is fair — bulk discount not expected at this volume.', imported: false },
+      { desc: 'Structural concrete C25/30 (slabs)', unit: 'm³', newQty: 230, newRate: 3400, histAvg: 3450, histPrices: [{qty:240,rate:3400},{qty:220,rate:3500},{qty:230,rate:3450},{qty:250,rate:3400}], trend: 'below', llm: '1.4% below avg. Qty 230m³ aligns with historical range (220–250m³). Rate ฿3,400/m³ matches the lowest historic quote for similar volume. Acceptable.', imported: false },
+      { desc: 'Reinforcement bar SD40 — 16mm', unit: 'ton', newQty: 20, newRate: 29200, histAvg: 28500, histPrices: [{qty:22,rate:28000},{qty:18,rate:29000},{qty:20,rate:28500},{qty:24,rate:28000}], trend: 'above', llm: '2.5% above avg at ฿29,200/ton. Qty 20 ton is mid-range (18–24 ton) — smaller orders typically command 1–3% premium. Recent steel index up 4% MoM may explain the increase.', imported: false },
+      { desc: 'Reinforcement bar SD40 — 12mm', unit: 'ton', newQty: 14, newRate: 29500, histAvg: 29000, histPrices: [{qty:16,rate:28500},{qty:12,rate:29500},{qty:14,rate:29000},{qty:15,rate:28500}], trend: 'at', llm: '+1.7% vs avg — within normal variance. Qty 14 ton is consistent with order sizes in historical data (12–16 ton). Marginal premium of ฿500/ton. Acceptable.', imported: false },
+      { desc: 'Formwork — column', unit: 'm²', newQty: 500, newRate: 650, histAvg: 680, histPrices: [{qty:520,rate:670},{qty:480,rate:690},{qty:500,rate:680},{qty:540,rate:660}], trend: 'below', llm: '4.4% below avg at ฿650/m². Qty 500m² matches historical volumes (480–540m²). Competitive pricing — ฿30/m² below typical. Confirm quality standards.', imported: false },
+      { desc: 'Formwork — slab', unit: 'm²', newQty: 950, newRate: 580, histAvg: 590, histPrices: [{qty:980,rate:585},{qty:920,rate:595},{qty:950,rate:590},{qty:1000,rate:580}], trend: 'below', llm: '1.7% below avg. Qty 950m² is mid-range (920–1,000m²). Rate ฿580/m² matches the lowest historic quote at the largest volume. Consistent pricing.', imported: false },
+      { desc: 'Steel frame — main beams', unit: 'ton', newQty: 9, newRate: 43500, histAvg: 42000, histPrices: [{qty:10,rate:41500},{qty:8,rate:42500},{qty:9,rate:42000},{qty:11,rate:41000}], trend: 'above', llm: '3.6% above avg. Qty 9 ton is small — historical data shows rates drop ฿500/ton when volume exceeds 10 ton (฿41,000 at 11 ton vs ฿42,500 at 8 ton). Volume leverage possible.', imported: false },
+      { desc: 'Metal deck flooring', unit: 'm²', newQty: 430, newRate: 920, histAvg: 950, histPrices: [{qty:450,rate:940},{qty:410,rate:960},{qty:430,rate:950},{qty:470,rate:930}], trend: 'below', llm: '3.2% below avg at ฿920/m². Qty 430m² is among larger orders in history (410–470m²). Rate is the best observed — ฿20/m² below the previous low. Good pricing.', imported: true },
+      { desc: 'Bored pile — 0.80m × 18m', unit: 'm', newQty: 310, newRate: 2050, histAvg: 2100, histPrices: [{qty:320,rate:2080},{qty:300,rate:2120},{qty:310,rate:2100},{qty:330,rate:2050}], trend: 'below', llm: '2.4% below avg. Qty 310m is in line with historical orders (300–330m). Rate ฿2,050/m ties the best price at the largest volume. Consistent vendor pricing.', imported: false },
+      { desc: 'Pile cap excavation', unit: 'm³', newQty: 170, newRate: 400, histAvg: 420, histPrices: [{qty:180,rate:410},{qty:160,rate:430},{qty:170,rate:420},{qty:190,rate:400}], trend: 'below', llm: '4.8% below avg. Qty 170m³ within range (160–190m³). At ฿400/m³ this is the lowest rate observed — correlated with the largest past order of 190m³ at ฿400. Worth verifying scope is comparable.', imported: false },
+      { desc: 'Waterproofing membrane', unit: 'm²', newQty: 600, newRate: 500, histAvg: 520, histPrices: [{qty:620,rate:515},{qty:580,rate:525},{qty:600,rate:520},{qty:640,rate:510}], trend: 'below', llm: '3.8% below avg. Qty 600m² matches typical volumes (580–640m²). Rate ฿500/m² is the lowest observed — typically rates drop ฿5–10/m² at quantities over 620m². Acceptable.', imported: false },
+      { desc: 'Expansion joint', unit: 'm', newQty: 42, newRate: 2700, histAvg: 2800, histPrices: [{qty:45,rate:2750},{qty:40,rate:2850},{qty:42,rate:2800},{qty:44,rate:2700}], trend: 'below', llm: '3.6% below avg. Qty 42m consistent with history (40–45m). Rate ฿2,700/m matches the best past price at largest quantity (44m, ฿2,700). Acceptable.', imported: false },
+      { desc: 'Site mobilisation', unit: 'LS', newQty: 1, newRate: 240000, histAvg: 245000, histPrices: [{qty:1,rate:240000},{qty:1,rate:250000},{qty:1,rate:245000},{qty:1,rate:240000}], trend: 'below', llm: 'Lump sum item. Flat qty across all quotes. Rate ฿240k matches the lowest observed — in line with historical range (฿240k–250k). Acceptable.', imported: false },
+      { desc: 'Safety netting & perimeter', unit: 'LS', newQty: 1, newRate: 185000, histAvg: null, histPrices: null, trend: 'new', llm: 'New item — no historical data. LS ฿185,000. Industry benchmark for similar projects: ฿150k–200k. Within range. Qty is fixed at 1 LS, so unit price analysis is straightforward.', imported: false },
+    ];
+
+    let llmExpandedIdx = null;
+
+    function renderComparison(data) {
+      const tbody = document.getElementById('compareTableBody');
+      tbody.innerHTML = data.map((item, i) => {
+        const trendIcon = item.trend === 'below' ? '↓' : item.trend === 'above' ? '↑' : item.trend === 'new' ? '★' : '→';
+        const trendClass = item.trend === 'below' ? 'below' : item.trend === 'above' ? 'above' : 'at';
+        const variance = item.histAvg ? ((item.newRate - item.histAvg) / item.histAvg * 100).toFixed(1) : '—';
+        const importedBadge = item.imported ? '<span class="imported-label" style="margin-left:6px;"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:12px;height:12px;display:inline;"><path d="M3 12l4 4 8-8"/></svg>Imported</span>' : '';
+
+        // Analysis cell: trend badge (click for full LLM text)
+        const badgeText = item.trend === 'new' ? 'New item' : `${trendIcon} ${variance}% vs avg`;
+        const isExpanded = llmExpandedIdx === i;
+
+        return `<tr class="compare-item" data-compare-idx="${i}">
+          <td style="max-width:220px;">${item.desc}${importedBadge}</td>
+          <td style="font-family:var(--font-mono);font-size:13px;color:var(--fg-2);">${item.unit}</td>
+          <td class="num-col">${item.newQty != null ? item.newQty.toLocaleString() : '—'}</td>
+          <td class="num-col">฿${item.newRate.toLocaleString()}</td>
+          <td class="num-col">${item.histAvg ? '฿' + item.histAvg.toLocaleString() : '—'}</td>
+          <td style="min-width:140px;">
+            <span class="llm-badge ${trendClass}" onclick="toggleLlmText(${i})" title="Click for full LLM analysis">
+              ${badgeText}
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:10px;height:10px;"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="5" x2="8" y2="9"/><line x1="8" y1="11" x2="8.01" y2="11"/></svg>
+            </span>
+            <div class="llm-fulltext ${isExpanded ? 'open' : ''}">
+              <div style="font-size:10px;color:var(--muted);margin-bottom:3px;font-weight:500;">LLM analysis · OpenAI GPT-4o</div>
+              ${item.llm}
+            </div>
+          </td>
+          <td class="actions-col" style="white-space:nowrap;">
+            <button class="btn btn-sm ${item.imported ? 'btn-ghost' : 'btn-primary'}" onclick="importItem(${i})" ${item.imported ? 'disabled' : ''} style="padding:4px 10px;font-size:12px;">
+              ${item.imported ? 'Imported' : 'Import'}
+            </button>
+            <button class="btn btn-ghost btn-sm" onclick="showHistory(${i})" style="padding:4px 10px;font-size:12px;" ${item.histPrices ? '' : 'disabled'}>History</button>
+          </td>
+        </tr>`;
+      }).join('');
+    }
+
+    function toggleLlmText(idx) {
+      llmExpandedIdx = llmExpandedIdx === idx ? null : idx;
+      renderComparison(comparisonData);
+    }
+
+    function showHistory(idx) {
+      const item = comparisonData[idx];
+      if (!item.histPrices) {
+        showToast('No historical data for this item', 'info');
+        return;
+      }
+      const modal = document.getElementById('historyModal');
+      const title = document.getElementById('histModalTitle');
+      const body = document.getElementById('histModalBody');
+      title.textContent = item.desc;
+      const rates = item.histPrices.map(p => p.rate);
+      const qtys = item.histPrices.map(p => p.qty);
+      const minRate = Math.min(...rates);
+      const maxRate = Math.max(...rates);
+      const minQty = Math.min(...qtys);
+      const maxQty = Math.max(...qtys);
+      body.innerHTML = `
+        <div style="font-size:12px;color:var(--muted);margin-bottom:var(--space-3);display:flex;gap:var(--space-4);flex-wrap:wrap;">
+          <span>Rate: ฿${minRate.toLocaleString()} – ฿${maxRate.toLocaleString()}</span>
+          <span style="font-weight:600;">Avg: ฿${item.histAvg.toLocaleString()}</span>
+          <span style="color:var(--fg-2);">|</span>
+          <span>Qty: ${minQty.toLocaleString()} – ${maxQty.toLocaleString()} ${item.unit}</span>
+          <span style="font-weight:600;">Avg: ${Math.round(rates.reduce((s,p)=>s+p.qty,0)/rates.length).toLocaleString()} ${item.unit}</span>
+        </div>
+        ${item.histPrices.map((p, pi) => {
+          const rel = p.rate < item.histAvg ? 'below' : p.rate > item.histAvg ? 'above' : 'at';
+          return `<div class="hist-item">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span class="hist-dot ${rel}"></span>
+              <span style="font-size:13px;">Quote #${pi + 1}</span>
+              <span style="font-size:11px;color:var(--muted);font-family:var(--font-mono);">${p.qty.toLocaleString()} ${item.unit}</span>
+            </div>
+            <span style="font-family:var(--font-mono);font-size:14px;font-weight:500;">฿${p.rate.toLocaleString()}</span>
+          </div>`;
+        }).join('')}
+        <div class="hist-item" style="border-top:1px solid var(--border);margin-top:4px;padding-top:10px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:13px;font-weight:600;">Your new quote</span>
+            <span style="font-size:11px;color:var(--muted);font-family:var(--font-mono);">${item.newQty.toLocaleString()} ${item.unit}</span>
+          </div>
+          <span style="font-family:var(--font-mono);font-size:14px;font-weight:600;color:var(--accent);">฿${item.newRate.toLocaleString()}</span>
+        </div>
+      `;
+      modal.classList.add('open');
+    }
+
+    function closeHistoryModal() {
+      document.getElementById('historyModal').classList.remove('open');
+    }
+
+    document.getElementById('historyModal').addEventListener('click', function(e) {
+      if (e.target === this) closeHistoryModal();
+    });
+
+    function importItem(idx) {
+      const item = comparisonData[idx];
+      if (item.imported) return;
+      item.imported = true;
+      showToast('Imported "' + item.desc + '" to historical database', 'success');
+      renderComparison(comparisonData);
+    }
+
+    function resetUpload() {
+      selectedQuoteFile = null;
+      document.getElementById('resultsArea').style.display = 'none';
+      document.getElementById('quoteDropZone').style.display = '';
+      document.getElementById('quoteDropText').textContent = 'Drop quotation PDF here, or click to browse';
+      document.getElementById('compareUploadBtn').style.display = '';
+      document.getElementById('compareUploadBtn').disabled = true;
+      document.getElementById('selectedFileName').style.display = 'none';
+      document.getElementById('processingState').style.display = 'none';
+      document.getElementById('llmState').style.display = 'none';
+      fileInput.value = '';
+    }
+
+    function toggleSidebar() {
+      document.querySelector('.sidebar').classList.toggle('collapsed');
+    }
+
+    function showToast(message, type) {
+      const container = document.getElementById('toastContainer');
+      const t = document.createElement('div');
+      t.className = 'toast ' + type;
+      t.textContent = message;
+      container.appendChild(t);
+      setTimeout(() => { t.style.opacity = '0'; t.style.transform = 'translateX(16px)'; setTimeout(() => t.remove(), 300); }, 3500);
+    }
+
+    let selectedQuoteFile = null;
+
+    // Drop zone
+    const dropZone = document.getElementById('quoteDropZone');
+    const fileInput = document.getElementById('quoteFileInput');
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.classList.remove('dragover'); if (e.dataTransfer.files[0]) selectFile(e.dataTransfer.files[0]); });
+    fileInput.addEventListener('change', () => { if (fileInput.files[0]) selectFile(fileInput.files[0]); });
+
+    function selectFile(file) {
+      selectedQuoteFile = file;
+      document.getElementById('quoteDropText').textContent = file.name;
+      document.getElementById('selectedFileName').textContent = (file.size / 1024).toFixed(0) + ' KB';
+      document.getElementById('selectedFileName').style.display = 'inline';
+      document.getElementById('compareUploadBtn').disabled = false;
+    }
+
+    function handleFile() {
+      if (!selectedQuoteFile) return;
+      document.getElementById('quoteFileName').textContent = selectedQuoteFile.name;
+      dropZone.style.display = 'none';
+      document.getElementById('compareUploadBtn').style.display = 'none';
+      document.getElementById('selectedFileName').style.display = 'none';
+      document.getElementById('processingState').style.display = 'flex';
+      document.getElementById('processingState').style.display = 'flex';
+      setTimeout(() => {
+        document.getElementById('processingState').style.display = 'none';
+        document.getElementById('llmState').style.display = 'flex';
+        setTimeout(() => {
+          document.getElementById('llmState').style.display = 'none';
+          document.getElementById('resultsArea').style.display = 'block';
+          renderComparison(comparisonData);
+          showToast('Quotation parsed — 17 items extracted, 14 matched, 3 new', 'success');
+        }, 2000);
+      }, 1500);
+    }
+  </script>
+</body>
+</html>
