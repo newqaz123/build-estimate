@@ -383,8 +383,8 @@ export default function BoqDetailPage() {
       >
         {([
           { key: "vendor", label: "Vendor", value: boq.vendor, editable: true },
-          { key: "workType", label: "Work Type", value: boq.workType, editable: true },
-          { key: "date", label: "Date", value: boq.date, editable: true },
+          { key: "workType", label: "Work Type", value: boq.workType, editable: true, type: "select" as const, options: ["Structural", "MEP", "Finishing"] },
+          { key: "date", label: "Date", value: boq.date, editable: true, type: "date" as const },
           { key: null, label: "Total Items", value: String(boq.totalItems), editable: false },
           { key: null, label: "Grand Total", value: `฿${grandTotal.toLocaleString()}`, editable: false },
           { key: null, label: "BOQ ID", value: boq.id.slice(0, 8), editable: false },
@@ -396,6 +396,8 @@ export default function BoqDetailPage() {
             editable={meta.editable}
             field={meta.key}
             onSave={handleMetaEdit}
+            type={"type" in meta ? meta.type : undefined}
+            options={"options" in meta ? [...meta.options] : undefined}
           />
         ))}
       </div>
@@ -677,12 +679,16 @@ function MetaField({
   editable,
   field,
   onSave,
+  type = "text",
+  options,
 }: {
   label: string
   value: string
   editable: boolean
   field: string | null
   onSave: (field: string, value: string) => void
+  type?: "text" | "select" | "date"
+  options?: string[]
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
@@ -714,17 +720,34 @@ function MetaField({
         )}
       </div>
       {editing ? (
-        <Input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={handleSave}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") handleSave()
-            if (e.key === "Escape") setEditing(false)
-          }}
-          className="h-7 text-sm mt-0.5"
-          autoFocus
-        />
+        type === "select" ? (
+          <select
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={handleSave}
+            className="h-7 text-sm mt-0.5 rounded-lg border border-input bg-transparent px-2"
+            autoFocus
+          >
+            {options?.map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <Input
+            type={type === "date" ? "date" : "text"}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={handleSave}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleSave()
+              if (e.key === "Escape") setEditing(false)
+            }}
+            className="h-7 text-sm mt-0.5"
+            autoFocus
+          />
+        )
       ) : (
         <div className="text-sm font-medium">{value}</div>
       )}

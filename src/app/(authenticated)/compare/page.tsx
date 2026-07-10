@@ -13,6 +13,7 @@ import {
   ArrowLeftRight,
   Loader2,
 } from "lucide-react"
+import { toast } from "sonner"
 import type { Boq, BoqItem } from "@/lib/boq-schema"
 import { ProtoDataTable } from "@/components/proto-data-table"
 
@@ -161,6 +162,11 @@ export default function ComparePage() {
     return matchItems(boqs)
   }, [boqs])
 
+  const [rows, setRows] = useState<MatchedRow[]>([])
+  useEffect(() => {
+    setRows(matchedRows)
+  }, [matchedRows])
+
   const baselineName =
     boqs.length > 0
       ? boqs[baselineIdx]?.project + " (" + boqs[baselineIdx]?.vendor + ")"
@@ -247,7 +253,7 @@ export default function ComparePage() {
           </Select>
         </div>
         <span className="text-xs text-muted-foreground">
-          Green = below avg &middot; Amber = at avg &middot; Red = above avg
+          Green = below avg &middot; Grey = at avg &middot; Red = above avg &middot; Amber = new item
         </span>
       </div>
 
@@ -261,8 +267,13 @@ export default function ComparePage() {
           { label: 'Actions', className: 'text-right whitespace-nowrap' },
         ]}
       >
-        {matchedRows.map(row => {
+        {rows.map(row => {
           const expanded = expandedLlm === row.id
+          const baselineItem = row.items[baselineIdx]
+          const baselineRate = baselineItem?.rate
+          const variancePct = baselineRate
+            ? Math.abs(((row.avgRate - baselineRate) / baselineRate) * 100).toFixed(1)
+            : null
           return (
             <tr key={row.id}>
               <td className="font-medium">{row.desc}</td>
@@ -270,21 +281,43 @@ export default function ComparePage() {
               {row.items.map((item, i) => {
                 const trend = item ? getTrend(item.rate, row.avgRate) : null
                 const trendColor = trend === 'below' ? 'text-[#006400]' : trend === 'above' ? 'text-[#dc2626]' : ''
-                return <td key={i} className={`num-col ${trendColor}`}>{item ? item.rate.toLocaleString() : '—'}</td>
+                return <td key={i} className={`num-col ${trendColor}`}>{item ? `฿${item.rate.toLocaleString()}` : '—'}</td>
               })}
-              <td className="num-col">{row.avgRate.toLocaleString()}</td>
+              <td className="num-col">฿{row.avgRate.toLocaleString()}</td>
               <td>
                 <span className={`inline-flex items-center gap-[5px] px-[10px] py-[2px] rounded-[9999px] text-xs font-medium cursor-pointer ${
-                  row.trend === 'below' ? 'badge-approved' : row.trend === 'above' ? 'badge-rejected' : 'badge-draft'
+                  row.trend === 'new' ? 'badge-suggested' : row.trend === 'below' ? 'badge-approved' : row.trend === 'above' ? 'badge-rejected' : 'badge-draft'
                 }`}
                   onClick={() => setExpandedLlm(expandedLlm === row.id ? null : row.id)}
                 >
-                  {row.trend}
+                  {row.trend === 'below' && `↓ ${variancePct}% vs avg`}
+                  {row.trend === 'at' && `→ at avg`}
+                  {row.trend === 'above' && `↑ +${variancePct}% vs avg`}
+                  {row.trend === 'new' && `★ New item`}
                 </span>
-                {expanded && <div className="mt-1.5 p-2 rounded text-[11px] leading-relaxed" style={{background:'color-mix(in oklab, #1b61c9 6%, #fff)', border:'1px solid color-mix(in oklab, #1b61c9 15%, #e0e2e6)'}}>{row.llm}</div>}
+                {expanded && (
+                  <div className="mt-1.5 p-2 rounded text-[11px] leading-relaxed" style={{background:'color-mix(in oklab, #1b61c9 6%, #fff)', border:'1px solid color-mix(in oklab, #1b61c9 15%, #e0e2e6)'}}>
+                    <div className="text-[10px] text-muted-foreground mb-1">LLM analysis · OpenAI GPT-4o</div>
+                    {row.llm}
+                  </div>
+                )}
               </td>
               <td className="text-right whitespace-nowrap">
-                <span className="text-[11px] text-[#006400] font-medium inline-flex items-center gap-1">{row.imported ? <><Check className="w-3 h-3" /> Imported</> : ''}</span>
+                {row.imported ? (
+                  <span className="text-[11px] text-[#006400] font-medium inline-flex items-center gap-1">
+                    <Check className="w-3 h-3" /> Imported
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setRows(prev => prev.map(r => r.id === row.id ? { ...r, imported: true } : r))
+                      toast.success(`Imported "${row.desc}" to estimate`)
+                    }}
+                    className="text-[11px] px-2 py-1 rounded-lg bg-accent text-accent-foreground hover:bg-accent/90 transition-colors"
+                  >
+                    Import
+                  </button>
+                )}
               </td>
             </tr>
           )
