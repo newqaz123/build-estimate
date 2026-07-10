@@ -343,6 +343,24 @@
           <!-- LLM suggestion area -->
           <div id="llmSuggestions" style="display:none;margin-bottom:var(--space-3);padding:var(--space-3);border:1px solid var(--border-soft);border-radius:var(--radius-sm);background:color-mix(in oklab, var(--accent) 4%, transparent);"></div>
 
+          <!-- Standardization review section -->
+          <div class="review-section" data-od-id="standardization-review" style="margin-top:var(--space-4);border-top:1px solid var(--border-soft);padding-top:var(--space-3);">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2);">
+              <span style="font-weight:500;font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;" onclick="toggleStdReview()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="width:14px;height:14px;" id="stdReviewArrow"><polyline points="9 18 15 12 9 6"/></svg>
+                Standardization
+              </span>
+              <span style="font-size:11px;color:var(--muted);" id="stdStatusSummary">0 matched · 0 suggested · 0 need review</span>
+            </div>
+            <div id="stdReviewContent" style="display:none;">
+              <div id="stdReviewItems" style="display:grid;gap:6px;max-height:300px;overflow-y:auto;"></div>
+              <div style="display:flex;gap:var(--space-2);margin-top:var(--space-2);">
+                <button class="btn btn-primary btn-sm" onclick="acceptAllStdSuggestions()">Accept All Suggested</button>
+                <button class="btn btn-ghost btn-sm" onclick="runStdLLM()">Run LLM on Unmatched</button>
+              </div>
+            </div>
+          </div>
+
           <div style="display:flex;align-items:center;justify-content:space-between;padding:var(--space-2) 0;">
             <div style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px;">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:13px;height:13px;"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="5" x2="8" y2="9"/><line x1="8" y1="11" x2="8.01" y2="11"/></svg>
@@ -678,14 +696,14 @@
     function acceptStdSuggestion(i) {
       mockParsedItems[i].stdStatus = 'matched';
       showToast('Accepted: "' + mockParsedItems[i].stdMatch + '"', 'success');
-      renderReviewItems(mockParsedItems);
+      renderStandardization(mockParsedItems);
     }
 
     function rejectStdSuggestion(i) {
       mockParsedItems[i].stdStatus = 'unmatched';
       mockParsedItems[i].stdMatch = null;
       showToast('Suggestion dismissed — item marked as unmatched', 'info');
-      renderReviewItems(mockParsedItems);
+      renderStandardization(mockParsedItems);
     }
 
     function acceptAllStdSuggestions() {
@@ -717,7 +735,7 @@
         }
       });
       if (btn) { btn.classList.remove('loading'); btn.disabled = false; }
-      renderReviewItems(mockParsedItems);
+      renderStandardization(mockParsedItems);
       showToast('LLM suggestions applied', 'success');
     }
 
@@ -728,7 +746,7 @@
         item.stdMatch = newStd.trim();
         item.stdStatus = 'matched';
         showToast('Manual match set: "' + item.stdMatch + '"', 'success');
-        renderReviewItems(mockParsedItems);
+        renderStandardization(mockParsedItems);
       }
     }
 
@@ -745,6 +763,44 @@
       } else {
         bar.style.display = 'none';
       }
+    }
+
+    let currentStdItems = [];
+
+    function toggleStdReview() {
+      const content = document.getElementById('stdReviewContent');
+      const arrow = document.getElementById('stdReviewArrow');
+      content.style.display = content.style.display === 'none' ? 'block' : 'none';
+      arrow.style.transform = content.style.display === 'block' ? 'rotate(90deg)' : '';
+    }
+
+    function renderStandardization(items) {
+      currentStdItems = items;
+      renderReviewItems(items);
+      const unmatched = items.filter(i => i.stdStatus === 'unmatched').length;
+      const suggested = items.filter(i => i.stdStatus === 'suggested').length;
+      const matched = items.filter(i => i.stdStatus === 'matched').length;
+      document.getElementById('stdStatusSummary').textContent =
+        matched + ' matched · ' + suggested + ' suggested · ' + unmatched + ' need review';
+      const container = document.getElementById('stdReviewItems');
+      container.innerHTML = items.map((item, idx) => {
+        let badge, suggestion = '';
+        if (item.stdStatus === 'matched') {
+          badge = '<span class="badge badge-matched" style="font-size:10px;">Matched</span>';
+        } else if (item.stdStatus === 'suggested') {
+          badge = '<span class="badge badge-suggested" style="font-size:10px;cursor:pointer;" onclick="acceptStdSuggestion(' + idx + ')">Accept?</span>';
+          suggestion = ' → <span style="color:var(--accent);">' + (item.stdSuggestedDesc || '') + ' · ' + (item.stdSuggestedUnit || '') + '</span>';
+        } else if (item.stdStatus === 'unmatched') {
+          badge = '<span class="badge badge-unmatched" style="font-size:10px;">Unmatched</span>';
+        } else {
+          badge = '<span class="badge badge-approved" style="font-size:10px;">Approved</span>';
+        }
+        return '<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--bg);border-radius:6px;font-size:13px;">' +
+          badge +
+          '<span><strong>' + (item.code || '#') + '</strong> ' + item.desc + ' · ' + (item.unit || '—') + '</span>' +
+          suggestion +
+          '</div>';
+      }).join('');
     }
 
     let llmVerifyUsed = false;
@@ -888,13 +944,13 @@
                 item.stdConfidence = 'llm';
               }
             });
-            renderReviewItems(mockParsedItems);
+            renderStandardization(mockParsedItems);
             document.getElementById('reviewModal').classList.add('open');
             btn.classList.remove('loading');
             btn.disabled = false;
           });
         } else {
-          renderReviewItems(mockParsedItems);
+          renderStandardization(mockParsedItems);
           document.getElementById('reviewModal').classList.add('open');
           btn.classList.remove('loading');
           btn.disabled = false;
