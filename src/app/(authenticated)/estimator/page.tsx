@@ -13,8 +13,17 @@ import {
   Check,
   Lightbulb,
   FileDown,
+  Pencil,
 } from "lucide-react"
 import { toast } from "sonner"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogClose,
+} from "@/components/ui/dialog"
 import type { Estimate, EstimateItem } from "@/lib/estimate-schema"
 
 interface EstimateItemLocal {
@@ -104,6 +113,14 @@ export default function EstimatorPage() {
   const [chatWaiting, setChatWaiting] = useState(false)
   const chatEndRef = useRef<HTMLDivElement>(null)
 
+  const [itemModalOpen, setItemModalOpen] = useState(false)
+  const [editingItemId, setEditingItemId] = useState<string | null>(null)
+  const [modalDesc, setModalDesc] = useState("")
+  const [modalQty, setModalQty] = useState("1")
+  const [modalRate, setModalRate] = useState("0")
+  const [modalUnit, setModalUnit] = useState("")
+  const [modalCode, setModalCode] = useState("")
+
   useEffect(() => {
     async function fetchEstimates() {
       try {
@@ -166,6 +183,54 @@ export default function EstimatorPage() {
 
   function removeItem(id: string) {
     setItems((prev) => prev.filter((i) => i.id !== id))
+  }
+
+  function openItemModal(itemId?: string) {
+    if (itemId) {
+      const item = items.find((i) => i.id === itemId)
+      if (!item) return
+      setEditingItemId(itemId)
+      setModalCode(item.code || "")
+      setModalDesc(item.desc || "")
+      setModalQty(String(item.qty))
+      setModalRate(String(item.rate))
+      setModalUnit(item.unit || "")
+    } else {
+      setEditingItemId(null)
+      setModalCode("")
+      setModalDesc("")
+      setModalQty("1")
+      setModalRate("0")
+      setModalUnit("")
+    }
+    setItemModalOpen(true)
+  }
+
+  function saveItemModal() {
+    const desc = modalDesc.trim()
+    if (!desc) {
+      toast.error("Enter a description")
+      return
+    }
+    const qty = parseFloat(modalQty) || 0
+    const rate = parseFloat(modalRate) || 0
+    const unit = modalUnit.trim()
+
+    if (editingItemId) {
+      setItems((prev) =>
+        prev.map((item) =>
+          item.id === editingItemId
+            ? { ...item, desc, code: modalCode, qty, rate, unit, total: qty * rate }
+            : item
+        )
+      )
+      toast.success("Item saved")
+    } else {
+      addItem({ desc, code: modalCode, qty, rate, unit, source: "manual" })
+      toast.success("Item added")
+    }
+    setItemModalOpen(false)
+    setEditingItemId(null)
   }
 
   const totalAmount = items.reduce((sum, i) => sum + i.total, 0)
@@ -342,7 +407,7 @@ export default function EstimatorPage() {
           </h2>
           <Button
             size="sm"
-            onClick={() => addItem()}
+            onClick={() => openItemModal()}
             data-od-id="add-item-btn"
           >
             <Plus className="w-4 h-4 mr-1" />
@@ -380,70 +445,38 @@ export default function EstimatorPage() {
               {items.map((item) => (
                 <div
                   key={item.id}
-                  className="grid grid-cols-[60px_1fr_56px_60px_100px_100px_28px] gap-1.5 items-center px-3 py-2 border-b border-border last:border-b-0 hover:bg-accent/5 transition-colors"
+                  className="grid grid-cols-[60px_1fr_56px_60px_100px_100px_28px_28px] gap-1.5 items-center px-3 py-2 border-b border-border last:border-b-0 hover:bg-accent/5 transition-colors cursor-pointer"
                   data-od-id={`est-row-${item.id}`}
+                  onClick={() => openItemModal(item.id)}
                 >
-                  <Input
-                    type="text"
-                    value={item.code || ""}
-                    onChange={(e) =>
-                      updateItem(item.id, "code", e.target.value)
-                    }
-                    className="h-7 w-16 text-xs font-mono"
-                    placeholder="code"
-                    data-od-id={`edit-code-${item.id}`}
-                  />
-                  <Input
-                    type="text"
-                    value={item.desc || ""}
-                    onChange={(e) =>
-                      updateItem(item.id, "desc", e.target.value)
-                    }
-                    className="h-7 text-xs flex-1"
-                    placeholder="Item description"
-                    data-od-id={`edit-desc-${item.id}`}
-                  />
-                  <Input
-                    type="text"
-                    value={item.unit || ""}
-                    onChange={(e) =>
-                      updateItem(item.id, "unit", e.target.value)
-                    }
-                    className="h-7 w-16 text-xs"
-                    placeholder="unit"
-                    data-od-id={`edit-unit-${item.id}`}
-                  />
-                  <Input
-                    type="number"
-                    value={item.qty}
-                    onChange={(e) =>
-                      updateItem(item.id, "qty", e.target.value)
-                    }
-                    className="h-7 text-xs font-mono text-right"
-                    min="0"
-                    step="0.5"
-                    data-od-id={`edit-qty-${item.id}`}
-                  />
-                  <div className="flex items-center justify-end">
-                    <span className="text-xs font-mono text-muted-foreground mr-1">
-                      ฿
-                    </span>
-                    <Input
-                      type="number"
-                      value={item.rate}
-                      onChange={(e) =>
-                        updateItem(item.id, "rate", e.target.value)
-                      }
-                      className="h-7 text-xs font-mono text-right"
-                      min="0"
-                      step="100"
-                      data-od-id={`edit-rate-${item.id}`}
-                    />
-                  </div>
-                  <div className="text-right font-mono text-sm font-semibold">
+                  <span className="text-xs font-mono text-muted-foreground truncate" onClick={(e) => e.stopPropagation()}>
+                    {item.code || "—"}
+                  </span>
+                  <span className="text-xs truncate" onClick={(e) => e.stopPropagation()}>
+                    {item.desc || "Untitled"}
+                  </span>
+                  <span className="text-xs text-muted-foreground truncate" onClick={(e) => e.stopPropagation()}>
+                    {item.unit || "—"}
+                  </span>
+                  <span className="text-xs font-mono text-right" onClick={(e) => e.stopPropagation()}>
+                    {item.qty.toLocaleString()}
+                  </span>
+                  <span className="text-xs font-mono text-right" onClick={(e) => e.stopPropagation()}>
+                    ฿{item.rate.toLocaleString()}
+                  </span>
+                  <span className="text-right font-mono text-sm font-semibold">
                     ฿{item.total.toLocaleString()}
+                  </span>
+                  <div className="text-center" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      onClick={() => openItemModal(item.id)}
+                      className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer border-none bg-transparent p-1"
+                      data-od-id={`edit-item-${item.id}`}
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
                   </div>
-                  <div className="text-center">
+                  <div className="text-center" onClick={(e) => e.stopPropagation()}>
                     <button
                       onClick={() => removeItem(item.id)}
                       className="text-muted-foreground hover:text-destructive transition-colors cursor-pointer border-none bg-transparent p-1"
@@ -637,6 +670,85 @@ export default function EstimatorPage() {
           </div>
         </div>
       )}
+
+      <Dialog open={itemModalOpen} onOpenChange={setItemModalOpen}>
+        <DialogContent className="max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>
+              {editingItemId ? "Edit Item" : "New Item"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-sm font-medium">Description</label>
+              <Input
+                value={modalDesc}
+                onChange={(e) => setModalDesc(e.target.value)}
+                placeholder="e.g. Structural concrete C32/40"
+                autoFocus
+                onKeyDown={(e) => { if (e.key === "Enter") saveItemModal() }}
+              />
+            </div>
+            <div className="grid grid-cols-4 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-medium">Code</label>
+                <Input
+                  value={modalCode}
+                  onChange={(e) => setModalCode(e.target.value)}
+                  placeholder="B.1.1"
+                  className="font-mono"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-medium">Unit</label>
+                <Input
+                  value={modalUnit}
+                  onChange={(e) => setModalUnit(e.target.value)}
+                  placeholder="m³"
+                  className="font-mono"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-medium">Qty</label>
+                <Input
+                  type="number"
+                  value={modalQty}
+                  onChange={(e) => setModalQty(e.target.value)}
+                  className="font-mono text-right"
+                  min="0"
+                  step="0.5"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-medium">Rate (฿)</label>
+                <Input
+                  type="number"
+                  value={modalRate}
+                  onChange={(e) => setModalRate(e.target.value)}
+                  className="font-mono text-right"
+                  min="0"
+                  step="100"
+                />
+              </div>
+            </div>
+            {parseFloat(modalQty) > 0 && parseFloat(modalRate) > 0 && (
+              <div className="text-sm text-muted-foreground">
+                Total: <span className="font-mono font-semibold text-foreground">
+                  ฿{(parseFloat(modalQty || "0") * parseFloat(modalRate || "0")).toLocaleString()}
+                </span>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>
+              Cancel
+            </DialogClose>
+            <Button onClick={saveItemModal}>
+              {editingItemId ? "Save" : "Add Item"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
