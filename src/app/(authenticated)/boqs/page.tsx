@@ -4,41 +4,18 @@ import { useEffect, useState, useCallback } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Upload as UploadIcon, Search, ChevronLeft, ChevronRight } from "lucide-react"
+import { Upload as UploadIcon, Search } from "lucide-react"
 import { toast } from "sonner"
 import { UploadModal } from "@/components/upload-modal"
 import { ReviewPanel } from "@/components/review-panel"
 import type { Boq } from "@/lib/boq-schema"
+import { ProtoBadge } from "@/components/proto-badge"
+import { ProtoFilterChip } from "@/components/proto-filter-chip"
+import { ProtoDataTable } from "@/components/proto-data-table"
+import { ProtoPagination } from "@/components/proto-pagination"
 
-const FILTERS = [
-  "All",
-  "Structural",
-  "MEP",
-  "Finishing",
-  "Draft",
-  "Active",
-  "Review",
-  "Approved",
-  "Parsed",
-] as const
-
-const STATUS_BADGE: Record<string, string> = {
-  draft: "bg-[#666666]/12 text-[#666666]",
-  parsed: "bg-[#666666]/12 text-[#666666]",
-  active: "bg-accent/12 text-accent",
-  review: "bg-[#eab308]/18 text-[#b88a00]",
-  approved: "bg-[#006400]/12 text-[#006400]",
-  rejected: "bg-[#dc2626]/12 text-[#dc2626]",
-}
-
-const STATUS_DOT: Record<string, string> = {
-  draft: "bg-[#666666]",
-  parsed: "bg-[#666666]",
-  active: "bg-accent",
-  review: "bg-[#eab308]",
-  approved: "bg-[#006400]",
-  rejected: "bg-[#dc2626]",
-}
+const typeFilters = ["All", "Structural", "MEP", "Finishing"] as const
+const statusFilters = ["Draft", "Active", "Review", "Approved", "Parsed"] as const
 
 export default function BoqsPage() {
   const [boqs, setBoqs] = useState<Boq[]>([])
@@ -124,23 +101,13 @@ export default function BoqsPage() {
               className="pl-8"
             />
           </div>
-          <div className="flex items-center gap-1.5">
-            {FILTERS.map((f) => (
-              <button
-                key={f}
-                data-filter={f.toLowerCase()}
-                onClick={() => {
-                  setActiveFilter(f)
-                  setPage(1)
-                }}
-                className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
-                  activeFilter === f
-                    ? "bg-accent text-accent-foreground"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                }`}
-              >
-                {f}
-              </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            {typeFilters.map(f => (
+              <ProtoFilterChip key={f} active={activeFilter === f} label={f} onClick={() => { setActiveFilter(f); setPage(1) }} />
+            ))}
+            <span className="w-px h-5 bg-border mx-1" />
+            {statusFilters.map(f => (
+              <ProtoFilterChip key={f} active={activeFilter === f} label={f} onClick={() => { setActiveFilter(f); setPage(1) }} />
             ))}
           </div>
         </div>
@@ -187,142 +154,47 @@ export default function BoqsPage() {
 
       {!loading && boqs.length > 0 && (
         <>
-          <div
-            className="border border-border rounded-lg overflow-hidden"
-            data-od-id="boq-table"
+          <ProtoDataTable
+            headers={[
+              { label: 'Project' },
+              { label: 'Vendor' },
+              { label: 'Work Type' },
+              { label: 'Date' },
+              { label: 'Items', className: 'num-col' },
+              { label: 'Total', className: 'num-col' },
+              { label: 'Status' },
+              { label: 'Std', tooltip: 'Standardization status: matched (auto or approved) vs unmatched items' },
+              { label: 'Actions', className: 'text-right whitespace-nowrap' },
+            ]}
           >
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border bg-muted/50">
-                  <th className="text-left p-3 font-medium">Project</th>
-                  <th className="text-left p-3 font-medium">Vendor</th>
-                  <th className="text-left p-3 font-medium">Work Type</th>
-                  <th className="text-left p-3 font-medium">Date</th>
-                  <th className="text-right p-3 font-medium">Items</th>
-                  <th className="text-right p-3 font-medium">Total</th>
-                  <th className="text-left p-3 font-medium">Status</th>
-                  <th className="text-left p-3 font-medium">Std</th>
-                  <th className="text-left p-3 font-medium">Actions</th>
+            {boqs.map(boq => {
+              const std = computeStdStats(boq)
+              return (
+                <tr key={boq.id} data-boq-id={boq.id}>
+                  <td><Link href={`/boqs/${boq.id}`} className="font-medium text-foreground hover:text-accent no-underline">{boq.project}</Link></td>
+                  <td className="text-muted-foreground">{boq.vendor}</td>
+                  <td>{boq.workType}</td>
+                  <td className="text-muted-foreground">{boq.date}</td>
+                  <td className="num-col">{boq.totalItems}</td>
+                  <td className="num-col">{formatCurrency(boq.grandTotal)}</td>
+                  <td><ProtoBadge status={boq.status as any} /></td>
+                  <td>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">{std.matched}/{std.total}</span>
+                      <div className="w-12 h-1.5 bg-muted rounded-full overflow-hidden">
+                        <div className="h-full rounded-full" style={{ width: `${std.pct}%`, backgroundColor: std.color }} />
+                      </div>
+                    </div>
+                  </td>
+                  <td className="text-right whitespace-nowrap">
+                    <Link href={`/boqs/${boq.id}`} className="inline-flex items-center justify-center h-7 px-2.5 text-xs font-medium rounded-lg border border-transparent hover:bg-muted hover:text-foreground transition-colors">View</Link>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {boqs.map((boq) => {
-                  const std = computeStdStats(boq)
-                  return (
-                    <tr
-                      key={boq.id}
-                      className="border-b border-border last:border-b-0 hover:bg-muted/30"
-                      data-boq-id={boq.id}
-                    >
-                      <td className="p-3">
-                        <Link
-                          href={`/boqs/${boq.id}`}
-                          className="text-sm font-medium text-foreground hover:text-accent no-underline"
-                        >
-                          {boq.project}
-                        </Link>
-                      </td>
-                      <td className="p-3 text-muted-foreground">{boq.vendor}</td>
-                      <td className="p-3">{boq.workType}</td>
-                      <td className="p-3 text-muted-foreground">{boq.date}</td>
-                      <td className="p-3 text-right font-mono text-xs">
-                        {boq.totalItems}
-                      </td>
-                      <td className="p-3 text-right font-mono text-xs">
-                        {formatCurrency(boq.grandTotal)}
-                      </td>
-                      <td className="p-3">
-                        <span
-                          className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-0.5 rounded-full ${
-                            STATUS_BADGE[boq.status] || STATUS_BADGE.draft
-                          }`}
-                        >
-                          <span
-                            className={`w-1.5 h-1.5 rounded-full ${
-                              STATUS_DOT[boq.status] || STATUS_DOT.draft
-                            }`}
-                          />
-                          {boq.status}
-                        </span>
-                      </td>
-                      <td className="p-3">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-muted-foreground">
-                            {std.matched}/{std.total}
-                          </span>
-                          <div className="w-12 h-1.5 bg-muted rounded-full overflow-hidden">
-                            <div
-                              className="h-full rounded-full transition-all"
-                              style={{ width: `${std.pct}%`, backgroundColor: std.color }}
-                            />
-                          </div>
-                        </div>
-                      </td>
-                      <td className="p-3">
-                        <Link
-                          href={`/boqs/${boq.id}`}
-                          className="inline-flex items-center justify-center h-7 px-2.5 text-xs font-medium rounded-lg border border-transparent hover:bg-muted hover:text-foreground transition-colors"
-                        >
-                          View
-                        </Link>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+              )
+            })}
+          </ProtoDataTable>
 
-          <div
-            className="flex items-center justify-between mt-4 text-sm text-muted-foreground"
-            data-od-id="pagination"
-          >
-            <span>
-              Showing {Math.min((page - 1) * 10 + 1, total)}–{Math.min(page * 10, total)} of{" "}
-              {total}
-            </span>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="xs"
-                disabled={page <= 1}
-                onClick={() => setPage((p) => p - 1)}
-              >
-                <ChevronLeft className="w-3 h-3" />
-              </Button>
-              {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
-                let p: number
-                if (totalPages <= 7) {
-                  p = i + 1
-                } else if (page <= 4) {
-                  p = i + 1
-                } else if (page >= totalPages - 3) {
-                  p = totalPages - 6 + i
-                } else {
-                  p = page - 3 + i
-                }
-                return (
-                  <Button
-                    key={p}
-                    variant={p === page ? "default" : "outline"}
-                    size="xs"
-                    onClick={() => setPage(p)}
-                    className="min-w-[28px]"
-                  >
-                    {p}
-                  </Button>
-                )
-              })}
-              <Button
-                variant="outline"
-                size="xs"
-                disabled={page >= totalPages}
-                onClick={() => setPage((p) => p + 1)}
-              >
-                <ChevronRight className="w-3 h-3" />
-              </Button>
-            </div>
-          </div>
+          <ProtoPagination page={page} totalPages={totalPages} total={total} limit={10} onPageChange={setPage} />
         </>
       )}
 
