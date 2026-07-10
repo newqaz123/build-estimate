@@ -9,31 +9,12 @@ import { CollapsibleSection } from "@/components/collapsible-section"
 import { CatalogMatchModal } from "@/components/catalog-match-modal"
 import { toast } from "sonner"
 import { ChevronLeft, Search, Download, Sparkles, Save, FileDown } from "lucide-react"
+import { ProtoBadge } from "@/components/proto-badge"
 import type { Boq, BoqItem } from "@/lib/boq-schema"
 
 type EditsMap = Record<string, Record<string, string | number | undefined>>
 
-const STD_BADGE: Record<string, { label: string; className: string }> = {
-  matched: { label: "Matched", className: "bg-[#006400]/10 text-[#006400]" },
-  fuzzy: { label: "Fuzzy", className: "bg-[#eab308]/15 text-[#b88a00]" },
-  llm: { label: "LLM", className: "bg-[#1b61c9]/10 text-[#1b61c9]" },
-  unmatched: { label: "Unmatched", className: "bg-[#dc2626]/10 text-[#dc2626]" },
-  pending: { label: "Pending", className: "bg-muted text-muted-foreground" },
-}
-
 const FILTERS = ["All", "Unit", "Lump Sum", "Job"] as const
-
-function statusBadge(status: string) {
-  const colors: Record<string, string> = {
-    draft: "bg-[#666666]/12 text-[#666666]",
-    parsed: "bg-[#666666]/12 text-[#666666]",
-    active: "bg-accent/12 text-accent",
-    review: "bg-[#eab308]/18 text-[#b88a00]",
-    approved: "bg-[#006400]/12 text-[#006400]",
-    rejected: "bg-[#dc2626]/12 text-[#dc2626]",
-  }
-  return colors[status] || colors.draft
-}
 
 function renderStdContent(
   item: BoqItem,
@@ -41,63 +22,32 @@ function renderStdContent(
   onAccept: () => void,
   onReject: () => void
 ) {
-  const status = (item.stdStatus || "unmatched") as string
-  const badge = STD_BADGE[status] || STD_BADGE.unmatched
-  if (status === "matched") {
+  const status = (item.stdStatus || 'unmatched') as string
+  if (status === 'matched') {
     return (
       <div className="flex flex-col gap-0.5">
-        <span className={`inline-flex w-fit text-xs font-medium px-2 py-0.5 rounded-full ${badge.className}`}>
-          {badge.label}
-        </span>
-        {item.stdMatch && (
-          <span className="text-[11px] text-muted-foreground truncate max-w-[140px]">
-            {item.stdMatch}
-          </span>
-        )}
+        <ProtoBadge status="matched" />
+        {item.stdMatch && <span className="text-[11px] text-muted-foreground truncate max-w-[140px]">{item.stdMatch}</span>}
       </div>
     )
   }
-  if (status === "fuzzy" || status === "llm") {
-    const source = status === "fuzzy" ? "Fuzzy match" : "LLM suggestion"
+  if (status === 'fuzzy' || status === 'llm') {
+    const badgeStatus = status === 'fuzzy' ? 'fuzzy' : 'llm'
     return (
       <div className="flex flex-col gap-1">
-        <span className={`inline-flex w-fit text-xs font-medium px-2 py-0.5 rounded-full ${badge.className}`}>
-          {badge.label}
-        </span>
-        {item.stdMatch && (
-          <span className="text-[11px] text-foreground truncate max-w-[140px]">
-            {item.stdMatch}
-          </span>
-        )}
-        <span className="text-[10px] text-muted-foreground">{source}</span>
+        <ProtoBadge status={badgeStatus} />
+        {item.stdMatch && <span className="text-[11px] text-foreground truncate max-w-[140px]">{item.stdMatch}</span>}
         <div className="flex gap-1">
-          <button
-            onClick={onAccept}
-            className="text-[10px] px-1.5 py-0.5 rounded bg-accent text-accent-foreground hover:bg-accent/80"
-          >
-            Accept
-          </button>
-          <button
-            onClick={onReject}
-            className="text-[10px] px-1.5 py-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted"
-          >
-            ×
-          </button>
+          <button onClick={onAccept} className="text-[10px] px-1.5 py-0.5 rounded bg-accent text-accent-foreground hover:bg-accent/80">Accept</button>
+          <button onClick={onReject} className="text-[10px] px-1.5 py-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted">×</button>
         </div>
       </div>
     )
   }
   return (
     <div className="flex flex-col gap-1">
-      <span className={`inline-flex w-fit text-xs font-medium px-2 py-0.5 rounded-full ${badge.className}`}>
-        {badge.label}
-      </span>
-      <button
-        onClick={onMatch}
-        className="text-[10px] px-2 py-0.5 rounded border border-border hover:bg-muted text-muted-foreground hover:text-foreground"
-      >
-        Match…
-      </button>
+      <ProtoBadge status="unmatched" />
+      <button onClick={onMatch} className="text-[10px] px-2 py-0.5 rounded border border-border hover:bg-muted text-muted-foreground hover:text-foreground">Match…</button>
     </div>
   )
 }
@@ -383,9 +333,7 @@ export default function BoqDetailPage() {
             Back
           </Link>
           <h1 className="text-lg font-semibold tracking-tight">{boq.project}</h1>
-          <span className={`inline-flex items-center text-xs font-medium px-2.5 py-0.5 rounded-full ${statusBadge(boq.status)}`}>
-            {boq.status}
-          </span>
+          <ProtoBadge status={boq.status as any} />
         </div>
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="sm" onClick={handleExportCsv}>
