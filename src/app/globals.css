@@ -42,7 +42,7 @@
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
   --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
+  --radius-md: 16px;
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) * 1.4);
   --radius-2xl: calc(var(--radius) * 1.8);
@@ -76,6 +76,13 @@
   --radius-brand-sm: 12px;
   --radius-brand-md: 16px;
   --radius-brand-lg: 24px;
+
+  /* Prototype design tokens */
+  --radius-pill: 9999px;
+  --motion-fast: 150ms;
+  --motion-base: 200ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --elev-raised: 0 0 1px rgba(0,0,0,0.32), 0 0 2px rgba(0,0,0,0.08), 0 1px 3px rgba(45,127,249,0.28), inset 0 0 0 0.5px rgba(0,0,0,0.06);
 }
 
 :root {
@@ -138,3 +145,43 @@
     display: block;
   }
 }
+
+/* ─── Status badges ─── */
+.badge-draft { background: color-mix(in oklab, rgba(4,14,32,0.69) 12%, transparent); color: #333; }
+.badge-active { background: color-mix(in oklab, #1b61c9 12%, transparent); color: #1b61c9; }
+.badge-review { background: color-mix(in oklab, #eab308 18%, transparent); color: color-mix(in oklab, #eab308, black 40%); }
+.badge-approved { background: color-mix(in oklab, #006400 12%, transparent); color: #006400; }
+.badge-rejected { background: color-mix(in oklab, #dc2626 12%, transparent); color: #dc2626; }
+.badge-matched { background: color-mix(in oklab, #1b61c9 12%, transparent); color: #1b61c9; }
+.badge-suggested, .badge-fuzzy { background: color-mix(in oklab, #eab308 18%, transparent); color: color-mix(in oklab, #eab308, black 40%); }
+.badge-llm { background: color-mix(in oklab, #8b5cf6 14%, transparent); color: #8b5cf6; }
+.badge-unmatched { background: color-mix(in oklab, #dc2626 12%, transparent); color: #dc2626; }
+
+/* ─── Filter chips ─── */
+.filter-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius-pill); font-size: 12px; color: var(--fg-2); cursor: pointer; transition: border-color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard); }
+.filter-chip:hover { border-color: var(--accent); }
+.filter-chip.active { background: var(--accent); color: var(--accent-on); border-color: var(--accent); }
+
+/* ─── Data table ─── */
+.data-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--elev-raised); }
+.data-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.data-table thead { background: color-mix(in oklab, var(--border) 30%, var(--bg)); }
+.data-table th { padding: 10px 14px; text-align: left; font-weight: 500; font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--border); white-space: nowrap; }
+.data-table td { padding: 10px 14px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
+.data-table tbody tr:hover { background: color-mix(in oklab, var(--accent) 5%, var(--bg)); }
+.data-table tbody tr:last-child td { border-bottom: 0; }
+.data-table .num-col { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+
+/* ─── Pagination ─── */
+.proto-pagination { display: flex; align-items: center; justify-content: space-between; padding: var(--space-3) 0; font-size: 13px; color: var(--muted); }
+.proto-pagination .pp-btns { display: flex; gap: 2px; }
+.proto-pagination .pp-btns button { width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--fg-2); font-size: 13px; cursor: pointer; transition: background var(--motion-fast) var(--ease-standard); }
+.proto-pagination .pp-btns button:hover { background: color-mix(in oklab, var(--fg) 4%, transparent); }
+.proto-pagination .pp-btns button.active { background: var(--accent); color: var(--accent-on); }
+.proto-pagination .pp-btns button:disabled { opacity: 0.3; cursor: default; }
+
+/* ─── Tab buttons ─── */
+.proto-tab-btn { padding: var(--space-2) var(--space-4); border: none; background: none; cursor: pointer; font-size: 13px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; transition: color var(--motion-fast), border-color var(--motion-fast); }
+.proto-tab-btn:hover { color: var(--fg-2); }
+.proto-tab-btn.active { color: var(--fg); border-bottom-color: var(--accent); font-weight: 500; }
+.proto-tab-bar { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: var(--space-4); }
