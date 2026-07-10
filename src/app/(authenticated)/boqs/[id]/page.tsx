@@ -219,15 +219,15 @@ export default function BoqDetailPage() {
   const handleStdAccept = (si: number, ii: number) => {
     if (!boq) return
     const key = `${si}-${ii}`
-    handleEdit(key, "stdStatus", "matched" as BoqItem["stdStatus"])
+    handleEdit(key, "stdStatus", "matched")
     toast.success("Suggestion accepted")
   }
 
   const handleStdReject = (si: number, ii: number) => {
     if (!boq) return
     const key = `${si}-${ii}`
-    handleEdit(key, "stdStatus", "unmatched" as BoqItem["stdStatus"])
-    handleEdit(key, "stdMatch", "")
+    handleEdit(key, "stdStatus", "unmatched")
+    handleEdit(key, "stdMatch", undefined)
     toast.info("Suggestion dismissed")
   }
 
@@ -247,7 +247,7 @@ export default function BoqDetailPage() {
     if (!catalogMatchTarget) return
     const key = `${catalogMatchTarget.si}-${catalogMatchTarget.ii}`
     handleEdit(key, "stdMatch", standardDesc)
-    handleEdit(key, "stdStatus", "matched" as BoqItem["stdStatus"])
+    handleEdit(key, "stdStatus", "matched")
     setCatalogMatchTarget(null)
     toast.success(`Matched to: "${standardDesc}"`)
   }
@@ -261,7 +261,7 @@ export default function BoqDetailPage() {
         const current = edits[key]
         const stdStatus = ((current?.stdStatus ?? item.stdStatus) || "") as string
         if (stdStatus === "unmatched" || stdStatus === "pending") {
-          handleEdit(key, "stdStatus", "llm" as BoqItem["stdStatus"])
+          handleEdit(key, "stdStatus", "llm")
           handleEdit(key, "stdMatch", `${item.desc} (suggested)`)
           count++
         }
@@ -280,7 +280,7 @@ export default function BoqDetailPage() {
         const current = edits[key]
         const stdStatus = ((current?.stdStatus ?? item.stdStatus) || "") as string
         if (stdStatus === "fuzzy" || stdStatus === "llm") {
-          handleEdit(key, "stdStatus", "matched" as BoqItem["stdStatus"])
+          handleEdit(key, "stdStatus", "matched")
           count++
         }
       })
@@ -319,26 +319,31 @@ export default function BoqDetailPage() {
     toast.success("CSV exported")
   }
 
-  const filteredSections = boq?.sections
-    .map((section) => ({
-      ...section,
-      items: section.items.filter((item) => {
-        const edited = edits[`${boq.sections.indexOf(section)}-${section.items.indexOf(item)}`] || {}
-        const type = (edited.type as string) || item.type
-        if (activeFilter !== "All") {
-          const filterMap: Record<string, string> = { "Unit": "unit", "Lump Sum": "lump_sum", "Job": "job" }
-          if (type !== filterMap[activeFilter]) return false
-        }
-        if (search) {
-          const q = search.toLowerCase()
-          const desc = (edited.desc as string) || item.desc
-          const code = (edited.code as string) || item.code
-          if (!desc.toLowerCase().includes(q) && !code.toLowerCase().includes(q)) return false
-        }
-        return true
-      }),
-    }))
-    .filter((s) => s.items.length > 0) ?? []
+  const filteredSections = boq
+    ? boq.sections
+        .map((section, si) => ({
+          realSi: si,
+          header: section.header,
+          items: section.items
+            .map((item, ii) => ({ item, ii }))
+            .filter(({ item, ii }) => {
+              const edited = edits[`${si}-${ii}`] || {}
+              const type = (edited.type as string) || item.type
+              if (activeFilter !== "All") {
+                const filterMap: Record<string, string> = { "Unit": "unit", "Lump Sum": "lump_sum", "Job": "job" }
+                if (type !== filterMap[activeFilter]) return false
+              }
+              if (search) {
+                const q = search.toLowerCase()
+                const desc = (edited.desc as string) || item.desc
+                const code = (edited.code as string) || item.code
+                if (!desc.toLowerCase().includes(q) && !code.toLowerCase().includes(q)) return false
+              }
+              return true
+            }),
+        }))
+        .filter((s) => s.items.length > 0)
+    : []
 
   const grandTotal = boq
     ? boq.sections.reduce((s, sec) => s + sec.items.reduce((s2, i) => s2 + i.total, 0), 0)
@@ -464,10 +469,10 @@ export default function BoqDetailPage() {
       </div>
 
       <div data-od-id="boq-sections" className="space-y-3">
-        {filteredSections.map((section, si) => {
-          const realSi = boq.sections.indexOf(section)
+        {filteredSections.map((section) => {
+          const si = section.realSi
           return (
-            <CollapsibleSection key={realSi} title={section.header}>
+            <CollapsibleSection key={si} title={section.header}>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
@@ -484,9 +489,8 @@ export default function BoqDetailPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {section.items.map((item, ii) => {
-                      const realIi = boq.sections[realSi].items.indexOf(item)
-                      const key = `${realSi}-${realIi}`
+                    {section.items.map(({ item, ii }) => {
+                      const key = `${si}-${ii}`
                       const edited = edits[key] || {}
                       const display = { ...item, ...edited }
                       const hasEdits = key in edits
@@ -572,7 +576,7 @@ export default function BoqDetailPage() {
                               <select
                                 defaultValue={display.type}
                                 className="h-7 text-xs rounded-lg border border-input bg-transparent px-2"
-                                onChange={(e) => handleEdit(key, "type", e.target.value as BoqItem["type"])}
+                                onChange={(e) => handleEdit(key, "type", e.target.value)}
                               >
                                 <option value="unit">Unit</option>
                                 <option value="lump_sum">L/S</option>
@@ -593,9 +597,9 @@ export default function BoqDetailPage() {
                           <td className="p-2.5">
                             {renderStdContent(
                               display as BoqItem,
-                              () => handleStdMatch(realSi, realIi),
-                              () => handleStdAccept(realSi, realIi),
-                              () => handleStdReject(realSi, realIi)
+                              () => handleStdMatch(si, ii),
+                              () => handleStdAccept(si, ii),
+                              () => handleStdReject(si, ii)
                             )}
                           </td>
                           <td className="p-2.5">
