@@ -21,7 +21,6 @@ import {
 import {
   ChevronDown,
   ChevronUp,
-  Info,
   ArrowLeftRight,
   Plus,
   Check,
@@ -40,7 +39,7 @@ interface MatchedRow {
   id: string
   desc: string
   unit: string
-  items: (ItemWithBoq | null)[] // null = BOQ doesn't have this item
+  items: (ItemWithBoq | null)[]
   avgRate: number
   trend: "below" | "at" | "above" | "new"
   llm: string
@@ -49,20 +48,22 @@ interface MatchedRow {
 
 const MOCK_LLM_COMMENTS: Record<string, string> = {
   concrete:
-    "Rates within 3% of average across all BOQs. Qty variance is typical for this work type. No異常 pricing detected.",
-  rebar: "Rebar pricing shows 5% spread. Higher rate correlates with smaller qty — volume discount expected. Consider negotiating.",
+    "Rates within 3% of average across all BOQs. Qty variance is typical for this work type.",
+  rebar:
+    "Rebar pricing shows 5% spread. Higher rate correlates with smaller qty.",
   formwork:
-    "Formwork rates are consistent (±2%). Acceptable range for standard plyform systems.",
-  steel: "Steel frame pricing varies 8%. Suggest verifying grade and connection details before selecting.",
+    "Formwork rates are consistent (+-2%). Acceptable range for standard systems.",
+  steel:
+    "Steel frame pricing varies 8%. Verify grade and connection details.",
   default:
-    "Item appears in multiple BOQs with rate variance within normal thresholds. No action required.",
-  deck: "Metal deck rate below average by 6%. Verify gauge and coating spec matches across quotes.",
-  pile: "Bored pile rate 4% below average. Confirm pile depth and diameter match specification.",
+    "Item appears in multiple BOQs with rate variance within normal thresholds.",
+  deck: "Metal deck rate below average by 6%. Verify gauge and coating match spec.",
+  pile: "Bored pile rate 4% below average. Confirm depth and diameter match.",
   excavation:
     "Excavation rate competitive. Verify if disposal/fill included in all quotes.",
   waterproofing:
-    "Waterproofing rates consistent. Confirm membrane type (liquid vs sheet) is comparable across quotes.",
-  joint: "Expansion joint rates within range. Verify joint width and sealant spec.",
+    "Waterproofing rates consistent. Confirm membrane type is comparable.",
+  joint: "Expansion joint rates within range. Verify width and sealant spec.",
   mobilisation:
     "Site mobilisation LS item. Verify scope inclusions are comparable.",
 }
@@ -74,7 +75,7 @@ function getTrend(rate: number, avg: number): "below" | "at" | "above" {
   return "at"
 }
 
-function generateLlmComment(desc: string, trend: string): string {
+function generateLlmComment(desc: string): string {
   const lower = desc.toLowerCase()
   if (lower.includes("concrete")) return MOCK_LLM_COMMENTS.concrete
   if (lower.includes("rebar") || lower.includes("reinforcement"))
@@ -125,13 +126,13 @@ function matchItems(boqs: Boq[]): MatchedRow[] {
     })
 
     rows.push({
-      id: `row-${desc.replace(/[^a-z0-9]/gi, "-").slice(0, 40)}`,
+      id: "row-" + desc.replace(/[^a-z0-9]/gi, "-").slice(0, 40),
       desc,
       unit,
       items: rowItems,
       avgRate,
       trend: items.length < boqList.length ? "new" : trend,
-      llm: generateLlmComment(desc, trend),
+      llm: generateLlmComment(desc),
       imported: false,
     })
   }
@@ -144,6 +145,33 @@ function matchItems(boqs: Boq[]): MatchedRow[] {
   })
 
   return rows
+}
+
+function formatVariance(row: MatchedRow, baselineIdx: number): string {
+  const baselineRate = row.items[baselineIdx]?.rate ?? row.avgRate
+  const pct = ((baselineRate - row.avgRate) / row.avgRate * 100).toFixed(1)
+  return pct + "% vs avg"
+}
+
+function trendBadgeClass(trend: string): string {
+  if (trend === "below") return "bg-green-900/20 text-green-500"
+  if (trend === "above") return "bg-red-900/20 text-red-500"
+  if (trend === "new") return "bg-yellow-600/20 text-yellow-600"
+  return "bg-gray-500/20 text-gray-400"
+}
+
+function trendIcon(trend: string): string {
+  if (trend === "below") return "\u2193"
+  if (trend === "above") return "\u2191"
+  if (trend === "new") return "\u2605"
+  return "\u2192"
+}
+
+function varianceBg(trend: string | null): string {
+  if (trend === "below") return "bg-green-900/10"
+  if (trend === "above") return "bg-red-900/10"
+  if (trend === "at") return "bg-yellow-600/10"
+  return ""
 }
 
 export default function ComparePage() {
@@ -176,15 +204,11 @@ export default function ComparePage() {
 
   const baselineName =
     boqs.length > 0
-      ? `${boqs[baselineIdx]?.project} (${boqs[baselineIdx]?.vendor})`
-      : "—"
+      ? boqs[baselineIdx]?.project + " (" + boqs[baselineIdx]?.vendor + ")"
+      : "\u2014"
 
-  const itemsBelow = matchedRows.filter(
-    (r) => r.trend === "below"
-  ).length
-  const itemsAbove = matchedRows.filter(
-    (r) => r.trend === "above"
-  ).length
+  const itemsBelow = matchedRows.filter((r) => r.trend === "below").length
+  const itemsAbove = matchedRows.filter((r) => r.trend === "above").length
   const itemsNew = matchedRows.filter((r) => r.trend === "new").length
 
   const avgVariance = useMemo(() => {
@@ -206,10 +230,13 @@ export default function ComparePage() {
       desc: row?.desc,
       unit: row?.unit,
       values: row?.items.map((i) =>
-        i ? { qty: i.qty, rate: i.rate, total: i.total, boq: i.boqProject } : null
+        i
+          ? { qty: i.qty, rate: i.rate, total: i.total, boq: i.boqProject }
+          : null
       ),
     })
-    toast.success(`"${row?.desc}" logged to console`)
+    const label = row?.desc ?? "unknown"
+    toast.success('"' + label + '" logged to console')
   }
 
   if (loading) {
@@ -247,38 +274,47 @@ export default function ComparePage() {
         </div>
 
         <div className="grid grid-cols-3 gap-4 mb-5">
-          <div className="rounded-xl border border-border bg-card p-5" data-od-id="summary-boqs">
+          <div
+            className="rounded-xl border border-border bg-card p-5"
+            data-od-id="summary-boqs"
+          >
             <div className="font-mono text-[40px] font-semibold leading-none tracking-tight text-accent mb-1">
               {boqs.length}
             </div>
             <div className="text-sm text-muted-foreground">BOQs compared</div>
           </div>
-          <div className="rounded-xl border border-border bg-card p-5" data-od-id="summary-matched">
+          <div
+            className="rounded-xl border border-border bg-card p-5"
+            data-od-id="summary-matched"
+          >
             <div className="font-mono text-[40px] font-semibold leading-none tracking-tight text-accent mb-1">
               {matchedRows.length}
             </div>
             <div className="text-sm text-muted-foreground">
               Items matched
               {itemsNew > 0 && (
-                <span className="text-[#eab308] ml-1">
+                <span className="text-yellow-600 ml-1">
                   ({itemsNew} new)
                 </span>
               )}
             </div>
           </div>
-          <div className="rounded-xl border border-border bg-card p-5" data-od-id="summary-variance">
+          <div
+            className="rounded-xl border border-border bg-card p-5"
+            data-od-id="summary-variance"
+          >
             <div className="font-mono text-[40px] font-semibold leading-none tracking-tight mb-1">
               {avgVariance.toFixed(1)}%
             </div>
             <div className="text-sm text-muted-foreground">
               Avg variance from baseline
               {itemsBelow > 0 && (
-                <span className="text-[#006400] ml-2">
+                <span className="text-green-600 ml-2">
                   {itemsBelow} below
                 </span>
               )}
               {itemsAbove > 0 && (
-                <span className="text-[#dc2626] ml-2">
+                <span className="text-red-600 ml-2">
                   {itemsAbove} above
                 </span>
               )}
@@ -287,7 +323,10 @@ export default function ComparePage() {
         </div>
       </div>
 
-      <div className="flex items-center justify-between mb-4" data-od-id="compare-controls">
+      <div
+        className="flex items-center justify-between mb-4"
+        data-od-id="compare-controls"
+      >
         <div className="flex items-center gap-3">
           <span className="text-sm text-muted-foreground">Baseline:</span>
           <Select
@@ -311,7 +350,10 @@ export default function ComparePage() {
         </span>
       </div>
 
-      <div className="rounded-xl border border-border bg-card overflow-hidden" data-od-id="compare-table-wrap">
+      <div
+        className="rounded-xl border border-border bg-card overflow-hidden"
+        data-od-id="compare-table-wrap"
+      >
         <div className="overflow-x-auto">
           <Table data-od-id="compare-table">
             <TableHeader>
@@ -322,9 +364,10 @@ export default function ComparePage() {
                   <TableHead
                     key={boq.id}
                     colSpan={3}
-                    className={`text-center border-l border-border ${
-                      i === baselineIdx ? "bg-accent/5" : ""
-                    }`}
+                    className={
+                      "text-center border-l border-border" +
+                      (i === baselineIdx ? " bg-accent/5" : "")
+                    }
                   >
                     <span className="text-xs font-semibold">
                       {boq.project}
@@ -342,11 +385,12 @@ export default function ComparePage() {
                 <TableHead />
                 {boqs.map((boq, i) => (
                   <TableHead
-                    key={`hdr-${boq.id}`}
+                    key={"hdr-" + boq.id}
                     colSpan={3}
-                    className={`text-center border-l border-border text-[11px] font-normal text-muted-foreground ${
-                      i === baselineIdx ? "bg-accent/5" : ""
-                    }`}
+                    className={
+                      "text-center border-l border-border text-[11px] font-normal text-muted-foreground" +
+                      (i === baselineIdx ? " bg-accent/5" : "")
+                    }
                   >
                     Qty &middot; Rate &middot; Total
                   </TableHead>
@@ -396,40 +440,39 @@ export default function ComparePage() {
                         const trend = item
                           ? getTrend(item.rate, row.avgRate)
                           : null
-                        const bgClass =
-                          trend === "below"
-                            ? "bg-[#006400]/8"
-                            : trend === "above"
-                              ? "bg-[#dc2626]/8"
-                              : trend === "at"
-                                ? "bg-[#eab308]/8"
-                                : ""
+                        const bgClass = varianceBg(trend)
 
                         return (
                           <TableCell
-                            key={`val-${boq.id}`}
+                            key={"val-" + boq.id}
                             colSpan={3}
-                            className={`border-l border-border p-0 ${
-                              isBaseline ? "ring-1 ring-accent/20 ring-inset" : ""
-                            }`}
+                            className={
+                              "border-l border-border p-0" +
+                              (isBaseline
+                                ? " ring-1 ring-accent/20 ring-inset"
+                                : "")
+                            }
                           >
                             {item ? (
                               <div
-                                className={`grid grid-cols-3 gap-0 ${bgClass}`}
+                                className={
+                                  "grid grid-cols-3 gap-0" +
+                                  (bgClass ? " " + bgClass : "")
+                                }
                               >
                                 <div className="text-right font-mono text-sm px-2 py-2">
                                   {item.qty.toLocaleString()}
                                 </div>
                                 <div className="text-right font-mono text-sm px-2 py-2 border-l border-border/50">
-                                  ฿{item.rate.toLocaleString()}
+                                  {"\u0E3F" + item.rate.toLocaleString()}
                                 </div>
                                 <div className="text-right font-mono text-sm font-semibold px-2 py-2 border-l border-border/50">
-                                  ฿{item.total.toLocaleString()}
+                                  {"\u0E3F" + item.total.toLocaleString()}
                                 </div>
                               </div>
                             ) : (
                               <div className="text-center text-muted-foreground text-xs py-2">
-                                —
+                                {"\u2014"}
                               </div>
                             )}
                           </TableCell>
@@ -437,15 +480,10 @@ export default function ComparePage() {
                       })}
                       <TableCell className="min-w-[140px]">
                         <button
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium cursor-pointer transition-colors border-none ${
-                            row.trend === "below"
-                              ? "bg-[#006400]/12 text-[#006400]"
-                              : row.trend === "above"
-                                ? "bg-[#dc2626]/12 text-[#dc2626]"
-                                : row.trend === "new"
-                                  ? "bg-[#eab308]/18 text-[#b88a00]"
-                                  : "bg-[#666666]/12 text-[#666666]"
-                          }`}
+                          className={
+                            "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium cursor-pointer transition-colors border-none " +
+                            trendBadgeClass(row.trend)
+                          }
                           onClick={() =>
                             setExpandedLlm(
                               isExpanded ? null : row.id
@@ -453,21 +491,10 @@ export default function ComparePage() {
                           }
                           data-od-id={"llm-badge-" + row.id}
                         >
-                          {row.trend === "below"
-                            ? "↓"
-                            : row.trend === "above"
-                              ? "↑"
-                              : row.trend === "new"
-                                ? "★"
-                                : "→"}{" "}
+                          {trendIcon(row.trend)}{" "}
                           {row.trend === "new"
                             ? "New item"
-                            : `${(
-                                ((row.items[baselineIdx]?.rate ?? row.avgRate) -
-                                  row.avgRate) /
-                                row.avgRate *
-                                100
-                              ).toFixed(1)}% vs avg`}
+                            : formatVariance(row, baselineIdx)}
                           {isExpanded ? (
                             <ChevronUp className="w-3 h-3" />
                           ) : (
@@ -485,9 +512,7 @@ export default function ComparePage() {
                       </TableCell>
                       <TableCell>
                         <Button
-                          variant={
-                            row.imported ? "ghost" : "outline"
-                          }
+                          variant={row.imported ? "ghost" : "outline"}
                           size="xs"
                           disabled={row.imported}
                           onClick={() => handleRowAction(row.id)}
