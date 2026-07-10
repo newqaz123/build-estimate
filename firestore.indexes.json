@@ -1,0 +1,18 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "boqs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "standards",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "description", "order": "ASCENDING" }
+      ]
+    }
+  ]
+}

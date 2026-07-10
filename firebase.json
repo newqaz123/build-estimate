@@ -1,0 +1,14 @@
+{
+  "hosting": {
+    "source": ".",
+    "ignore": ["firebase.json", "**/node_modules/**", ".git", ".env*", "py-sidecar/"],
+    "frameworksBackend": { "region": "asia-southeast1" }
+  },
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  }
+}
