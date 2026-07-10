@@ -3,10 +3,8 @@
 import { useEffect, useState, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Badge } from "@/components/ui/badge"
-import { Card } from "@/components/ui/card"
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
-import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table"
+import { ProtoBadge } from "@/components/proto-badge"
+import { ProtoDataTable } from "@/components/proto-data-table"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Search, Plus, Check, X, Pencil, Trash2, Loader2 } from "lucide-react"
 import { toast } from "sonner"
@@ -91,19 +89,6 @@ export default function CatalogPage() {
 
   const suggestions = reviewItems.filter((i) => i.stdStatus === "pending").length
   const unmatched = reviewItems.filter((i) => i.stdStatus === "unmatched").length
-
-  const statusBadge = (status: string) => {
-    const map: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
-      matched: "default",
-      pending: "secondary",
-      unmatched: "outline",
-    }
-    return (
-      <Badge variant={map[status] || "outline"}>
-        {status.charAt(0).toUpperCase() + status.slice(1)}
-      </Badge>
-    )
-  }
 
   const handleAccept = async (item: ReviewItem) => {
     const key = `${item.boqId}-${item.sectionIndex}-${item.code}`
@@ -281,40 +266,28 @@ export default function CatalogPage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-3 gap-4 mb-6" data-od-id="stats-bar">
-        <Card size="sm">
-          <div className="px-4 pt-4">
-            <div className="font-mono text-[32px] font-semibold leading-none tracking-tight text-accent mb-1">
-              {suggestions}
-            </div>
-            <div className="text-sm text-muted-foreground">Suggestions</div>
-          </div>
-        </Card>
-        <Card size="sm">
-          <div className="px-4 pt-4">
-            <div className="font-mono text-[32px] font-semibold leading-none tracking-tight text-[#eab308] mb-1">
-              {unmatched}
-            </div>
-            <div className="text-sm text-muted-foreground">Unmatched items</div>
-          </div>
-        </Card>
-        <Card size="sm">
-          <div className="px-4 pt-4">
-            <div className="font-mono text-[32px] font-semibold leading-none tracking-tight text-[#b88a00] mb-1">
-              {reviewItems.length}
-            </div>
-            <div className="text-sm text-muted-foreground">Awaiting review</div>
-          </div>
-        </Card>
+      <div className="flex gap-4 mb-5" data-od-id="stats-bar">
+        <div className="p-3 border border-border rounded-[16px] bg-[#fff]" style={{boxShadow:'0 0 1px rgba(0,0,0,0.32), 0 0 2px rgba(0,0,0,0.08), 0 1px 3px rgba(45,127,249,0.28), inset 0 0 0 0.5px rgba(0,0,0,0.06)'}}>
+          <div className="text-xl font-semibold leading-tight">{suggestions}</div>
+          <div className="text-xs text-muted-foreground uppercase tracking-wider">Suggestions</div>
+        </div>
+        <div className="p-3 border border-border rounded-[16px] bg-[#fff]" style={{boxShadow:'0 0 1px rgba(0,0,0,0.32), 0 0 2px rgba(0,0,0,0.08), 0 1px 3px rgba(45,127,249,0.28), inset 0 0 0 0.5px rgba(0,0,0,0.06)'}}>
+          <div className="text-xl font-semibold leading-tight">{unmatched}</div>
+          <div className="text-xs text-muted-foreground uppercase tracking-wider">Unmatched items</div>
+        </div>
+        <div className="p-3 border border-border rounded-[16px] bg-[#fff]" style={{boxShadow:'0 0 1px rgba(0,0,0,0.32), 0 0 2px rgba(0,0,0,0.08), 0 1px 3px rgba(45,127,249,0.28), inset 0 0 0 0.5px rgba(0,0,0,0.06)'}}>
+          <div className="text-xl font-semibold leading-tight">{reviewItems.length}</div>
+          <div className="text-xs text-muted-foreground uppercase tracking-wider">Awaiting review</div>
+        </div>
       </div>
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v)} data-od-id="catalog-tabs">
-        <TabsList variant="line">
-          <TabsTrigger value="review" data-od-id="tab-review-trigger">Items to Review</TabsTrigger>
-          <TabsTrigger value="catalog" data-od-id="tab-catalog-trigger">Standard Catalog</TabsTrigger>
-        </TabsList>
+      <div className="proto-tab-bar">
+        <button className={`proto-tab-btn ${tab === 'review' ? 'active' : ''}`} onClick={() => setTab('review')}>Items to Review</button>
+        <button className={`proto-tab-btn ${tab === 'catalog' ? 'active' : ''}`} onClick={() => setTab('catalog')}>Standard Catalog</button>
+      </div>
 
-        <TabsContent value="review" data-od-id="tab-review">
+      {tab === 'review' && (
+        <div data-od-id="tab-review">
           {loading ? (
             <div className="flex items-center justify-center h-64 text-sm text-muted-foreground" data-od-id="loading-state">
               <Loader2 className="w-4 h-4 animate-spin mr-2" />
@@ -347,73 +320,70 @@ export default function CatalogPage() {
                   </Button>
                 )}
               </div>
-              <div className="border border-border rounded-lg overflow-hidden">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Source BOQ</TableHead>
-                      <TableHead>Original Description</TableHead>
-                      <TableHead>Unit</TableHead>
-                      <TableHead>Match Status</TableHead>
-                      <TableHead>Suggested Standard</TableHead>
-                      <TableHead className="w-[100px]">Action</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {reviewItems.map((item, i) => {
-                      const key = `${item.boqId}-${item.sectionIndex}-${item.code}`
-                      const isAccepting = acceptingIds.has(key)
-                      return (
-                        <TableRow key={key} data-od-id={`review-item-${i}`}>
-                          <TableCell className="font-medium">{item.boqProject}</TableCell>
-                          <TableCell>{item.desc}</TableCell>
-                          <TableCell className="font-mono text-xs">{item.unit}</TableCell>
-                          <TableCell>{statusBadge(item.stdStatus)}</TableCell>
-                          <TableCell>{item.stdMatch || "\u2014"}</TableCell>
-                          <TableCell>
-                            {isAccepting ? (
-                              <Loader2 className="w-3 h-3 animate-spin" />
-                            ) : item.stdStatus === "pending" ? (
-                              <div className="flex items-center gap-1">
-                                <Button
-                                  size="xs"
-                                  variant="default"
-                                  onClick={() => handleAccept(item)}
-                                  data-od-id={`accept-${i}`}
-                                >
-                                  <Check className="w-3 h-3" />
-                                </Button>
-                                <Button
-                                  size="xs"
-                                  variant="ghost"
-                                  onClick={() => handleReject(item)}
-                                  data-od-id={`reject-${i}`}
-                                >
-                                  <X className="w-3 h-3" />
-                                </Button>
-                              </div>
-                            ) : (
-                              <Button
-                                size="xs"
-                                variant="outline"
-                                onClick={() => handleAccept(item)}
-                                data-od-id={`match-${i}`}
-                              >
-                                Match&hellip;
-                              </Button>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      )
-                    })}
-                  </TableBody>
-                </Table>
-              </div>
+              <ProtoDataTable
+                headers={[
+                  { label: 'Source BOQ' },
+                  { label: 'Original Description' },
+                  { label: 'Unit' },
+                  { label: 'Match Status' },
+                  { label: 'Suggested Standard' },
+                  { label: 'Action', className: 'text-right whitespace-nowrap' },
+                ]}
+              >
+                {reviewItems.map((item, i) => {
+                  const key = `${item.boqId}-${item.sectionIndex}-${item.code}`
+                  const isAccepting = acceptingIds.has(key)
+                  return (
+                    <tr key={key} data-od-id={`review-item-${i}`}>
+                      <td className="font-medium">{item.boqProject}</td>
+                      <td>{item.desc}</td>
+                      <td className="font-mono text-xs">{item.unit}</td>
+                      <td><ProtoBadge status={item.stdStatus as any} /></td>
+                      <td className="text-muted-foreground text-sm">{item.stdMatch || "\u2014"}</td>
+                      <td className="text-right whitespace-nowrap">
+                        {isAccepting ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : item.stdStatus === "pending" ? (
+                          <div className="flex items-center gap-1 justify-end">
+                            <Button
+                              size="xs"
+                              variant="default"
+                              onClick={() => handleAccept(item)}
+                              data-od-id={`accept-${i}`}
+                            >
+                              <Check className="w-3 h-3" />
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="ghost"
+                              onClick={() => handleReject(item)}
+                              data-od-id={`reject-${i}`}
+                            >
+                              <X className="w-3 h-3" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            onClick={() => handleAccept(item)}
+                            data-od-id={`match-${i}`}
+                          >
+                            Match&hellip;
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </ProtoDataTable>
             </>
           )}
-        </TabsContent>
+        </div>
+      )}
 
-        <TabsContent value="catalog" data-od-id="tab-catalog">
+      {tab === 'catalog' && (
+        <div data-od-id="tab-catalog">
           {loading ? (
             <div className="flex items-center justify-center h-64 text-sm text-muted-foreground" data-od-id="loading-state">
               <Loader2 className="w-4 h-4 animate-spin mr-2" />
@@ -439,124 +409,119 @@ export default function CatalogPage() {
                   </Button>
                 </div>
               </div>
-              <div className="border border-border rounded-lg overflow-hidden">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Standard Description</TableHead>
-                      <TableHead>Unit</TableHead>
-                      <TableHead>Aliases</TableHead>
-                      <TableHead>Source BOQ Count</TableHead>
-                      <TableHead>Last Updated</TableHead>
-                      <TableHead className="w-[80px]">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredStandards.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                          No catalog entries found
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      filteredStandards.map((std) => {
-                        const isEditing = editingId === std.id
-                        return (
-                          <TableRow key={std.id} data-od-id={`catalog-row-${std.id}`}>
-                            {isEditing ? (
-                              <>
-                                <TableCell>
-                                  <Input
-                                    value={editDesc}
-                                    onChange={(e) => setEditDesc(e.target.value)}
-                                    className="h-7 text-xs"
-                                  />
-                                </TableCell>
-                                <TableCell>
-                                  <Input
-                                    value={editUnit}
-                                    onChange={(e) => setEditUnit(e.target.value)}
-                                    className="h-7 text-xs font-mono w-16"
-                                  />
-                                </TableCell>
-                                <TableCell>
-                                  <Input
-                                    value={editAliases}
-                                    onChange={(e) => setEditAliases(e.target.value)}
-                                    className="h-7 text-xs"
-                                    placeholder="Comma-separated"
-                                  />
-                                </TableCell>
-                                <TableCell>{std.sourceBoqCount}</TableCell>
-                                <TableCell className="text-xs text-muted-foreground">
-                                  {std.updatedAt ? new Date(std.updatedAt).toLocaleDateString() : "\u2014"}
-                                </TableCell>
-                                <TableCell>
-                                  <div className="flex items-center gap-1">
-                                    <Button size="xs" variant="default" onClick={() => saveEditing(std.id)}>
-                                      <Check className="w-3 h-3" />
-                                    </Button>
-                                    <Button size="xs" variant="ghost" onClick={() => setEditingId(null)}>
-                                      <X className="w-3 h-3" />
-                                    </Button>
-                                  </div>
-                                </TableCell>
-                              </>
-                            ) : (
-                              <>
-                                <TableCell className="font-medium">{std.description}</TableCell>
-                                <TableCell className="font-mono text-xs">{std.unit}</TableCell>
-                                <TableCell>
-                                  <div className="flex flex-wrap gap-1">
-                                    {(std.aliases || []).slice(0, 3).map((alias, ai) => (
-                                      <Badge key={ai} variant="outline" className="text-[10px]">
-                                        {alias}
-                                      </Badge>
-                                    ))}
-                                    {(std.aliases || []).length > 3 && (
-                                      <span className="text-[10px] text-muted-foreground">
-                                        +{std.aliases.length - 3} more
-                                      </span>
-                                    )}
-                                  </div>
-                                </TableCell>
-                                <TableCell>{std.sourceBoqCount}</TableCell>
-                                <TableCell className="text-xs text-muted-foreground">
-                                  {std.updatedAt ? new Date(std.updatedAt).toLocaleDateString() : "\u2014"}
-                                </TableCell>
-                                <TableCell>
-                                  <div className="flex items-center gap-1">
-                                    <Button
-                                      size="xs"
-                                      variant="ghost"
-                                      onClick={() => startEditing(std)}
-                                      data-od-id={`edit-${std.id}`}
-                                    >
-                                      <Pencil className="w-3 h-3" />
-                                    </Button>
-                                    <Button
-                                      size="xs"
-                                      variant="ghost"
-                                      onClick={() => handleDelete(std.id)}
-                                      data-od-id={`delete-${std.id}`}
-                                    >
-                                      <Trash2 className="w-3 h-3 text-destructive" />
-                                    </Button>
-                                  </div>
-                                </TableCell>
-                              </>
-                            )}
-                          </TableRow>
-                        )
-                      })
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
+              <ProtoDataTable
+                headers={[
+                  { label: 'Description' },
+                  { label: 'Unit' },
+                  { label: 'Aliases' },
+                  { label: 'Source BOQ Count' },
+                  { label: 'Last Updated' },
+                  { label: 'Actions', className: 'text-right whitespace-nowrap' },
+                ]}
+              >
+                {filteredStandards.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="text-center text-muted-foreground py-8">
+                      No catalog entries found
+                    </td>
+                  </tr>
+                ) : (
+                  filteredStandards.map((std) => {
+                    const isEditing = editingId === std.id
+                    return (
+                      <tr key={std.id} data-od-id={`catalog-row-${std.id}`}>
+                        {isEditing ? (
+                          <>
+                            <td>
+                              <Input
+                                value={editDesc}
+                                onChange={(e) => setEditDesc(e.target.value)}
+                                className="h-7 text-xs"
+                              />
+                            </td>
+                            <td>
+                              <Input
+                                value={editUnit}
+                                onChange={(e) => setEditUnit(e.target.value)}
+                                className="h-7 text-xs font-mono w-16"
+                              />
+                            </td>
+                            <td>
+                              <Input
+                                value={editAliases}
+                                onChange={(e) => setEditAliases(e.target.value)}
+                                className="h-7 text-xs"
+                                placeholder="Comma-separated"
+                              />
+                            </td>
+                            <td>{std.sourceBoqCount}</td>
+                            <td className="text-xs text-muted-foreground">
+                              {std.updatedAt ? new Date(std.updatedAt).toLocaleDateString() : "\u2014"}
+                            </td>
+                            <td className="text-right whitespace-nowrap">
+                              <div className="flex items-center gap-1 justify-end">
+                                <Button size="xs" variant="default" onClick={() => saveEditing(std.id)}>
+                                  <Check className="w-3 h-3" />
+                                </Button>
+                                <Button size="xs" variant="ghost" onClick={() => setEditingId(null)}>
+                                  <X className="w-3 h-3" />
+                                </Button>
+                              </div>
+                            </td>
+                          </>
+                        ) : (
+                          <>
+                            <td className="font-medium">{std.description}</td>
+                            <td className="font-mono text-xs">{std.unit}</td>
+                            <td>
+                              <div className="flex flex-wrap gap-1">
+                                {(std.aliases || []).slice(0, 3).map((alias, ai) => (
+                                  <span key={ai} className="inline-flex items-center gap-[5px] px-[10px] py-[2px] rounded-[9999px] text-[10px] font-medium tracking-[0.02em] whitespace-nowrap badge-draft">
+                                    {alias}
+                                  </span>
+                                ))}
+                                {(std.aliases || []).length > 3 && (
+                                  <span className="text-[10px] text-muted-foreground">
+                                    +{std.aliases.length - 3} more
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td>{std.sourceBoqCount}</td>
+                            <td className="text-xs text-muted-foreground">
+                              {std.updatedAt ? new Date(std.updatedAt).toLocaleDateString() : "\u2014"}
+                            </td>
+                            <td className="text-right whitespace-nowrap">
+                              <div className="flex items-center gap-1 justify-end">
+                                <Button
+                                  size="xs"
+                                  variant="ghost"
+                                  onClick={() => startEditing(std)}
+                                  data-od-id={`edit-${std.id}`}
+                                >
+                                  <Pencil className="w-3 h-3" />
+                                </Button>
+                                <Button
+                                  size="xs"
+                                  variant="ghost"
+                                  onClick={() => handleDelete(std.id)}
+                                  data-od-id={`delete-${std.id}`}
+                                >
+                                  <Trash2 className="w-3 h-3 text-destructive" />
+                                </Button>
+                              </div>
+                            </td>
+                          </>
+                        )}
+                      </tr>
+                    )
+                  })
+                )}
+              </ProtoDataTable>
             </>
           )}
-        </TabsContent>
-      </Tabs>
+        </div>
+      )}
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent>
