@@ -206,6 +206,7 @@
       }
     ];
 
+    function renderStdBadge(item) { return renderStdCell(item, -1, -1); }
     function renderStdCell(item, si, ii) {
       const labels = { matched: 'Matched', fuzzy: 'Fuzzy', llm: 'LLM', unmatched: 'Unmatched' };
       const status = item.stdStatus || 'unmatched';

@@ -695,6 +695,7 @@
 
     function acceptStdSuggestion(i) {
       mockParsedItems[i].stdStatus = 'matched';
+      mockParsedItems[i].stdConfidence = 'manual';
       showToast('Accepted: "' + mockParsedItems[i].stdMatch + '"', 'success');
       renderStandardization(mockParsedItems);
     }
