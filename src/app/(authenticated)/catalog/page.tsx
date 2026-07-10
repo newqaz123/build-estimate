@@ -56,7 +56,7 @@ export default function CatalogPage() {
       const boqsData = await boqsRes.json()
       const boqs: Boq[] = boqsData.boqs || []
 
-      setStandards(standardsData)
+      setStandards(Array.isArray(standardsData) ? standardsData : [])
 
       const items: ReviewItem[] = []
       for (const boq of boqs) {
