@@ -1,7 +1,6 @@
 "use client"
 
 import { useEffect, useState, useCallback } from "react"
-import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ProtoBadge } from "@/components/proto-badge"
 import { ProtoDataTable } from "@/components/proto-data-table"
@@ -266,24 +265,24 @@ export default function CatalogPage() {
         </p>
       </div>
 
-      <div className="flex gap-4 mb-5" data-od-id="stats-bar">
-        <div className="p-3 px-4 border border-border-soft rounded-[12px] bg-muted/30">
-          <div className="text-xl font-semibold leading-tight">{suggestions}</div>
-          <div className="text-xs text-muted-foreground uppercase tracking-wider">Suggestions</div>
+      <div className="review-stats" data-od-id="stats-bar">
+        <div className="review-stat">
+          <div className="num">{suggestions}</div>
+          <div className="label">Suggestions</div>
         </div>
-        <div className="p-3 px-4 border border-border-soft rounded-[12px] bg-muted/30">
-          <div className="text-xl font-semibold leading-tight">{unmatched}</div>
-          <div className="text-xs text-muted-foreground uppercase tracking-wider">Unmatched items</div>
+        <div className="review-stat">
+          <div className="num">{unmatched}</div>
+          <div className="label">Unmatched items</div>
         </div>
-        <div className="p-3 px-4 border border-border-soft rounded-[12px] bg-muted/30">
-          <div className="text-xl font-semibold leading-tight">{reviewItems.length}</div>
-          <div className="text-xs text-muted-foreground uppercase tracking-wider">Awaiting review</div>
+        <div className="review-stat">
+          <div className="num">{reviewItems.length}</div>
+          <div className="label">Awaiting review</div>
         </div>
       </div>
 
-      <div className="proto-tab-bar">
-        <button className={`proto-tab-btn ${tab === 'review' ? 'active' : ''}`} onClick={() => setTab('review')}>Items to Review</button>
-        <button className={`proto-tab-btn ${tab === 'catalog' ? 'active' : ''}`} onClick={() => setTab('catalog')}>Standard Catalog</button>
+      <div className="catalog-tabs">
+        <button className={`tab-btn ${tab === 'review' ? 'active' : ''}`} onClick={() => setTab('review')}>Items to Review</button>
+        <button className={`tab-btn ${tab === 'catalog' ? 'active' : ''}`} onClick={() => setTab('catalog')}>Standard Catalog</button>
       </div>
 
       {tab === 'review' && (
@@ -314,10 +313,10 @@ export default function CatalogPage() {
             <>
               <div className="flex items-center justify-end mb-3">
                 {suggestions > 0 && (
-                  <Button size="sm" onClick={handleSuggestAll} disabled={suggestingAll} data-od-id="suggest-all-btn">
+                  <button className="btn btn-primary btn-sm" onClick={handleSuggestAll} disabled={suggestingAll} data-od-id="suggest-all-btn">
                     {suggestingAll && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
                     Suggest All
-                  </Button>
+                  </button>
                 )}
               </div>
               <ProtoDataTable
@@ -350,32 +349,29 @@ export default function CatalogPage() {
                         ) : item.stdStatus === "pending" ? (
                           <div className="flex items-center gap-1 justify-end">
                             <span className="text-[9px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground mr-1.5">Suggested</span>
-                            <Button
-                              size="xs"
-                              variant="default"
+                            <button
+                              className="btn btn-primary btn-xs"
                               onClick={() => handleAccept(item)}
                               data-od-id={`accept-${i}`}
                             >
                               <Check className="w-3 h-3" />
-                            </Button>
-                            <Button
-                              size="xs"
-                              variant="ghost"
+                            </button>
+                            <button
+                              className="btn btn-ghost btn-xs"
                               onClick={() => handleReject(item)}
                               data-od-id={`reject-${i}`}
                             >
                               <X className="w-3 h-3" />
-                            </Button>
+                            </button>
                           </div>
                         ) : (
-                          <Button
-                            size="xs"
-                            variant="outline"
+                          <button
+                            className="btn btn-ghost btn-xs"
                             onClick={() => handleAccept(item)}
                             data-od-id={`match-${i}`}
                           >
                             Match&hellip;
-                          </Button>
+                          </button>
                         )}
                       </td>
                     </tr>
@@ -397,21 +393,21 @@ export default function CatalogPage() {
           ) : (
             <>
               <div className="flex items-center justify-between mb-3" data-od-id="catalog-toolbar">
-                <div className="relative max-w-xs">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search catalog&hellip;"
+                <div className="search-wrap">
+                  <Search className="w-4 h-4" />
+                  <input
+                    className="proto-input"
+                    placeholder="Search catalog…"
                     value={catalogSearch}
                     onChange={(e) => setCatalogSearch(e.target.value)}
-                    className="pl-8"
                   />
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-xs text-muted-foreground">{filteredStandards.length} entries</span>
-                  <Button size="sm" onClick={() => setAddOpen(true)} data-od-id="add-entry-btn">
+                  <button className="btn btn-primary btn-sm" onClick={() => setAddOpen(true)} data-od-id="add-entry-btn">
                     <Plus className="w-3 h-3" />
                     Add Entry
-                  </Button>
+                  </button>
                 </div>
               </div>
               <ProtoDataTable
@@ -465,12 +461,12 @@ export default function CatalogPage() {
                             </td>
                             <td className="text-right whitespace-nowrap">
                               <div className="flex items-center gap-1 justify-end">
-                                <Button size="xs" variant="default" onClick={() => saveEditing(std.id)}>
+                                <button className="btn btn-primary btn-xs" onClick={() => saveEditing(std.id)}>
                                   <Check className="w-3 h-3" />
-                                </Button>
-                                <Button size="xs" variant="ghost" onClick={() => setEditingId(null)}>
+                                </button>
+                                <button className="btn btn-ghost btn-xs" onClick={() => setEditingId(null)}>
                                   <X className="w-3 h-3" />
-                                </Button>
+                                </button>
                               </div>
                             </td>
                           </>
@@ -498,22 +494,20 @@ export default function CatalogPage() {
                             </td>
                             <td className="text-right whitespace-nowrap">
                               <div className="flex items-center gap-1 justify-end">
-                                <Button
-                                  size="xs"
-                                  variant="ghost"
+                                <button
+                                  className="btn btn-ghost btn-xs"
                                   onClick={() => startEditing(std)}
                                   data-od-id={`edit-${std.id}`}
                                 >
                                   <Pencil className="w-3 h-3" />
-                                </Button>
-                                <Button
-                                  size="xs"
-                                  variant="ghost"
+                                </button>
+                                <button
+                                  className="btn btn-ghost btn-xs"
                                   onClick={() => handleDelete(std.id)}
                                   data-od-id={`delete-${std.id}`}
                                 >
                                   <Trash2 className="w-3 h-3 text-destructive" />
-                                </Button>
+                                </button>
                               </div>
                             </td>
                           </>
@@ -562,7 +556,7 @@ export default function CatalogPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button onClick={handleAddEntry}>Create Entry</Button>
+            <button className="btn btn-primary" onClick={handleAddEntry}>Create Entry</button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

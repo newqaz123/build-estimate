@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback, useRef } from "react"
 import { useParams } from "next/navigation"
 import Link from "next/link"
-import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { CollapsibleSection } from "@/components/collapsible-section"
 import { CatalogMatchModal } from "@/components/catalog-match-modal"
@@ -361,18 +360,18 @@ export default function BoqDetailPage() {
           <ProtoBadge status={boq.status as any} />
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={() => window.print()}>
+          <button onClick={() => window.print()} className="btn btn-ghost btn-sm">
             <FileDown className="w-3.5 h-3.5" />
             Download PDF
-          </Button>
-          <Button variant="ghost" size="sm" onClick={handleExportCsv}>
+          </button>
+          <button onClick={handleExportCsv} className="btn btn-ghost btn-sm">
             <FileDown className="w-3.5 h-3.5" />
             Export CSV
-          </Button>
+          </button>
           {boq.status !== "approved" && (
-            <Button size="sm" onClick={handleApprove}>
+            <button onClick={handleApprove} className="btn btn-primary btn-sm">
               Approve
-            </Button>
+            </button>
           )}
         </div>
       </header>
@@ -411,13 +410,13 @@ export default function BoqDetailPage() {
 
       <div className="flex items-center justify-between mb-4 gap-4" data-od-id="toolbar">
         <div className="flex items-center gap-3 flex-1">
-          <div className="relative flex-1 max-w-xs">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <div className="search-wrap">
+            <Search />
             <Input
               placeholder="Search items…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="pl-8"
+              className="proto-input"
             />
           </div>
           <div className="flex items-center gap-1.5">
@@ -426,11 +425,7 @@ export default function BoqDetailPage() {
                 key={f}
                 data-filter={f.toLowerCase().replace(/\s+/g, "_")}
                 onClick={() => setActiveFilter(f)}
-                className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
-                  activeFilter === f
-                    ? "bg-accent text-accent-foreground"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                }`}
+                className={`filter-chip ${activeFilter === f ? "active" : ""}`}
               >
                 {f}
               </button>
@@ -438,18 +433,18 @@ export default function BoqDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="xs" onClick={handleLlmSuggest}>
+          <button className="btn btn-ghost btn-sm" onClick={handleLlmSuggest}>
             <Sparkles className="w-3 h-3" />
             LLM Suggest
-          </Button>
-          <Button variant="ghost" size="xs" onClick={handleAcceptAll}>
+          </button>
+          <button className="btn btn-primary btn-sm" onClick={handleAcceptAll}>
             Accept All
-          </Button>
+          </button>
           {editsCount > 0 && (
-            <Button size="xs" onClick={handleSaveAll}>
+            <button className="btn btn-primary btn-sm" onClick={handleSaveAll}>
               <Save className="w-3 h-3" />
               Save all changes ({editsCount})
-            </Button>
+            </button>
           )}
         </div>
       </div>
@@ -601,7 +596,7 @@ export default function BoqDetailPage() {
                                     editingRef.current = null
                                     setEdits({ ...edits })
                                   }}
-                                  className="text-xs px-2 py-1 rounded bg-accent text-accent-foreground"
+                                  className="btn btn-primary btn-xs"
                                 >
                                   Done
                                 </button>
@@ -631,7 +626,7 @@ export default function BoqDetailPage() {
                                     editingRef.current = key
                                     setEdits({ ...edits })
                                   }}
-                                  className="text-xs text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity"
+                                  className="btn btn-ghost btn-xs opacity-0 group-hover:opacity-100 transition-opacity"
                                 >
                                   Edit
                                 </button>
@@ -670,22 +665,17 @@ export default function BoqDetailPage() {
       </div>
 
       <div
-        className="fixed bottom-0 left-[240px] right-0 border-t border-border bg-background/95 backdrop-blur-sm px-6 py-3 flex items-center justify-between z-40"
-        style={{ boxShadow: "0 -4px 12px rgba(4, 14, 32, 0.06)" }}
+        className="estimate-summary"
+        style={{ position: 'fixed', bottom: 0, left: '240px', right: 0, zIndex: 40 }}
         data-od-id="summary-bar"
       >
-        <div className="flex items-center gap-4 text-sm">
-          <span className="text-muted-foreground">
-            {boq.totalItems} item{boq.totalItems !== 1 ? "s" : ""}
-          </span>
-          <span className="text-muted-foreground">·</span>
-          <span className="font-semibold text-base">
-            Grand Total: ฿{grandTotal.toLocaleString()}
-          </span>
+        <div>
+          <div className="total-label">{boq.totalItems} items</div>
+          <div className="total-value">฿{grandTotal.toLocaleString()}</div>
         </div>
-        <Button>
-          Add to Estimate
-        </Button>
+        <div className="total-actions">
+          <button className="btn btn-primary">Add to Estimate</button>
+        </div>
       </div>
 
       {catalogMatchTarget && (
@@ -771,7 +761,7 @@ function MetaField({
               if (e.key === "Enter") handleSave()
               if (e.key === "Escape") setEditing(false)
             }}
-            className="h-7 text-sm mt-0.5"
+            className="proto-input"
             autoFocus
           />
         )

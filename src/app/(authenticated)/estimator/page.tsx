@@ -405,14 +405,14 @@ export default function EstimatorPage() {
               </span>
             )}
           </h2>
-          <Button
-            size="sm"
+          <button
+            className="btn btn-primary btn-sm"
             onClick={() => openItemModal()}
             data-od-id="add-item-btn"
           >
             <Plus className="w-4 h-4 mr-1" />
             Add Item
-          </Button>
+          </button>
         </div>
 
         <div
@@ -430,15 +430,14 @@ export default function EstimatorPage() {
                 Click <strong>+ Add Item</strong> to add manually, or use the
                 chat bubble to generate items with AI.
               </p>
-              <Button
-                variant="outline"
-                size="sm"
+              <button
+                className="btn btn-secondary btn-sm"
                 onClick={openChat}
                 data-od-id="open-chat-empty"
               >
                 <MessageSquare className="w-3.5 h-3.5 mr-1.5" />
                 Open AI Assistant
-              </Button>
+              </button>
             </div>
           ) : (
             <div>
@@ -494,21 +493,17 @@ export default function EstimatorPage() {
 
       {items.length > 0 && (
         <div
-          className="fixed bottom-0 left-[var(--sidebar-w,260px)] right-0 flex items-center justify-between px-5 py-3 bg-card border-t border-border z-10"
+          className="estimate-summary"
+          style={{ position: 'fixed', bottom: 0, left: 'var(--sidebar-w, 240px)', right: 0, zIndex: 10 }}
           data-od-id="est-summary"
         >
           <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
-              Estimated Total
-            </div>
-            <div className="font-mono text-xl font-bold">
-              ฿{totalAmount.toLocaleString()}
-            </div>
+            <div className="total-label">Estimated Total</div>
+            <div className="total-value">฿{totalAmount.toLocaleString()}</div>
           </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
+          <div className="total-actions flex items-center gap-2">
+            <button
+              className="btn btn-secondary btn-sm"
               onClick={() => {
                 setItems([])
                 toast.info("Estimate cleared")
@@ -516,18 +511,17 @@ export default function EstimatorPage() {
               data-od-id="clear-estimate"
             >
               Clear
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
+            </button>
+            <button
+              className="btn btn-ghost btn-sm"
               onClick={() => window.print()}
               data-od-id="export-pdf"
             >
               <FileDown className="w-3.5 h-3.5" />
               PDF
-            </Button>
-            <Button
-              size="sm"
+            </button>
+            <button
+              className="btn btn-primary btn-sm"
               onClick={handleSave}
               disabled={saving || items.length === 0}
               data-od-id="save-estimate"
@@ -543,7 +537,7 @@ export default function EstimatorPage() {
                   Save Estimate
                 </>
               )}
-            </Button>
+            </button>
           </div>
         </div>
       )}
@@ -611,27 +605,24 @@ export default function EstimatorPage() {
                           {s.rate.toLocaleString()} = ฿
                           {(s.qty * s.rate).toLocaleString()}
                         </div>
-                        <Button
-                          variant="default"
-                          size="xs"
-                          className="mt-1.5"
+                        <button
+                          className="btn btn-primary btn-xs mt-1.5"
                           onClick={() => chatAddSuggestion(s)}
                           data-od-id={`chat-add-${si}`}
                         >
                           <Plus className="w-3 h-3 mr-1" />
                           Add
-                        </Button>
+                        </button>
                       </div>
                     ))}
-                    <Button
-                      variant="outline"
-                      size="xs"
+                    <button
+                      className="btn btn-secondary btn-xs"
                       onClick={chatAddAll}
                       data-od-id="chat-add-all"
                     >
                       <Plus className="w-3 h-3 mr-1" />
                       Add All to Estimate
-                    </Button>
+                    </button>
                   </div>
                 )}
               </div>
@@ -740,12 +731,12 @@ export default function EstimatorPage() {
             )}
           </div>
           <DialogFooter>
-            <DialogClose render={<Button variant="outline" />}>
+            <DialogClose render={<button className="btn btn-secondary" />}>
               Cancel
             </DialogClose>
-            <Button onClick={saveItemModal}>
+            <button className="btn btn-primary" onClick={saveItemModal}>
               {editingItemId ? "Save" : "Add Item"}
-            </Button>
+            </button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
