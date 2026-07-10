@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
-import { getDb } from '@/lib/db'
+import { queryCollection, getDocument, createDocumentWithId } from '@/lib/db'
 import type { StandardEntry } from '@/lib/standard-schema'
 
 export async function GET(request: NextRequest) {
@@ -10,12 +10,20 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const db = getDb()
-    const snapshot = await db.collection('standards').orderBy('description', 'asc').get()
-    const standards: StandardEntry[] = snapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data(),
-    })) as StandardEntry[]
+    const { searchParams } = new URL(request.url)
+    const search = searchParams.get('search')?.toLowerCase()
+
+    const { docs } = await queryCollection<StandardEntry>('standards', {
+      orderByField: 'description',
+      orderDirection: 'asc',
+    })
+
+    let standards = docs
+    if (search) {
+      standards = standards.filter(
+        (s) => s.description.toLowerCase().includes(search) || s.aliases?.some(a => a.toLowerCase().includes(search))
+      )
+    }
 
     return NextResponse.json(standards)
   } catch (error) {
@@ -43,24 +51,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Description and unit are required' }, { status: 400 })
     }
 
-    const now = new Date().toISOString()
     const id = crypto.randomUUID()
-
-    const entry: StandardEntry = {
+    const entry: Omit<StandardEntry, 'createdAt' | 'updatedAt'> = {
       id,
       description,
       unit,
       category: category || '',
       aliases: aliases || [],
       sourceBoqCount: 0,
-      createdAt: now,
-      updatedAt: now,
     }
 
-    const db = getDb()
-    await db.collection('standards').doc(id).set(entry)
+    await createDocumentWithId('standards', id, entry as unknown as Record<string, unknown>)
+    const created = await getDocument<StandardEntry>('standards', id)
 
-    return NextResponse.json(entry, { status: 201 })
+    return NextResponse.json(created, { status: 201 })
   } catch (error) {
     console.error('Error creating standard:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
