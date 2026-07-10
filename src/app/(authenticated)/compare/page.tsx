@@ -1,8 +1,6 @@
 "use client"
 
 import { useEffect, useState, useMemo } from "react"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import {
   Select,
   SelectContent,
@@ -11,23 +9,12 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import {
-  Table,
-  TableHeader,
-  TableBody,
-  TableHead,
-  TableRow,
-  TableCell,
-} from "@/components/ui/table"
-import {
-  ChevronDown,
-  ChevronUp,
-  ArrowLeftRight,
-  Plus,
   Check,
+  ArrowLeftRight,
   Loader2,
 } from "lucide-react"
-import { toast } from "sonner"
 import type { Boq, BoqItem } from "@/lib/boq-schema"
+import { ProtoDataTable } from "@/components/proto-data-table"
 
 interface ItemWithBoq extends BoqItem {
   boqId: string
@@ -147,39 +134,11 @@ function matchItems(boqs: Boq[]): MatchedRow[] {
   return rows
 }
 
-function formatVariance(row: MatchedRow, baselineIdx: number): string {
-  const baselineRate = row.items[baselineIdx]?.rate ?? row.avgRate
-  const pct = ((baselineRate - row.avgRate) / row.avgRate * 100).toFixed(1)
-  return pct + "% vs avg"
-}
-
-function trendBadgeClass(trend: string): string {
-  if (trend === "below") return "bg-green-900/20 text-green-500"
-  if (trend === "above") return "bg-red-900/20 text-red-500"
-  if (trend === "new") return "bg-yellow-600/20 text-yellow-600"
-  return "bg-gray-500/20 text-gray-400"
-}
-
-function trendIcon(trend: string): string {
-  if (trend === "below") return "\u2193"
-  if (trend === "above") return "\u2191"
-  if (trend === "new") return "\u2605"
-  return "\u2192"
-}
-
-function varianceBg(trend: string | null): string {
-  if (trend === "below") return "bg-green-900/10"
-  if (trend === "above") return "bg-red-900/10"
-  if (trend === "at") return "bg-yellow-600/10"
-  return ""
-}
-
 export default function ComparePage() {
   const [boqs, setBoqs] = useState<Boq[]>([])
   const [loading, setLoading] = useState(true)
   const [baselineIdx, setBaselineIdx] = useState(0)
   const [expandedLlm, setExpandedLlm] = useState<string | null>(null)
-  const [importedRows, setImportedRows] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     async function fetchData() {
@@ -189,7 +148,7 @@ export default function ComparePage() {
         const data = await res.json()
         setBoqs(data.boqs || [])
       } catch {
-        toast.error("Failed to load BOQs")
+        console.error("Failed to load BOQs")
       } finally {
         setLoading(false)
       }
@@ -207,10 +166,6 @@ export default function ComparePage() {
       ? boqs[baselineIdx]?.project + " (" + boqs[baselineIdx]?.vendor + ")"
       : "\u2014"
 
-  const itemsBelow = matchedRows.filter((r) => r.trend === "below").length
-  const itemsAbove = matchedRows.filter((r) => r.trend === "above").length
-  const itemsNew = matchedRows.filter((r) => r.trend === "new").length
-
   const avgVariance = useMemo(() => {
     if (matchedRows.length === 0) return 0
     const totalVar = matchedRows.reduce((sum, row) => {
@@ -220,24 +175,6 @@ export default function ComparePage() {
     }, 0)
     return (totalVar / matchedRows.length) * 100
   }, [matchedRows, baselineIdx])
-
-  function handleRowAction(rowId: string) {
-    const next = new Set(importedRows)
-    next.add(rowId)
-    setImportedRows(next)
-    const row = matchedRows.find((r) => r.id === rowId)
-    console.log("Imported item:", {
-      desc: row?.desc,
-      unit: row?.unit,
-      values: row?.items.map((i) =>
-        i
-          ? { qty: i.qty, rate: i.rate, total: i.total, boq: i.boqProject }
-          : null
-      ),
-    })
-    const label = row?.desc ?? "unknown"
-    toast.success('"' + label + '" logged to console')
-  }
 
   if (loading) {
     return (
@@ -274,52 +211,16 @@ export default function ComparePage() {
         </div>
 
         <div className="grid grid-cols-3 gap-4 mb-5">
-          <div
-            className="rounded-xl border border-border bg-card p-5"
-            data-od-id="summary-boqs"
-          >
-            <div className="font-mono text-[40px] font-semibold leading-none tracking-tight text-accent mb-1">
-              {boqs.length}
+          {[
+            { label: 'BOQs Compared', value: boqs.length },
+            { label: 'Items Matched', value: matchedRows.length },
+            { label: 'Avg Variance', value: avgVariance > 0 ? `+${avgVariance.toFixed(1)}%` : `${avgVariance.toFixed(1)}%` },
+          ].map(stat => (
+            <div key={stat.label} className="p-4 border border-border rounded-[16px] bg-[#fff]" style={{boxShadow:'0 0 1px rgba(0,0,0,0.32), 0 0 2px rgba(0,0,0,0.08), 0 1px 3px rgba(45,127,249,0.28), inset 0 0 0 0.5px rgba(0,0,0,0.06)'}}>
+              <div className="text-3xl font-semibold leading-none tracking-tight">{stat.value}</div>
+              <div className="text-sm text-muted-foreground mt-1">{stat.label}</div>
             </div>
-            <div className="text-sm text-muted-foreground">BOQs compared</div>
-          </div>
-          <div
-            className="rounded-xl border border-border bg-card p-5"
-            data-od-id="summary-matched"
-          >
-            <div className="font-mono text-[40px] font-semibold leading-none tracking-tight text-accent mb-1">
-              {matchedRows.length}
-            </div>
-            <div className="text-sm text-muted-foreground">
-              Items matched
-              {itemsNew > 0 && (
-                <span className="text-yellow-600 ml-1">
-                  ({itemsNew} new)
-                </span>
-              )}
-            </div>
-          </div>
-          <div
-            className="rounded-xl border border-border bg-card p-5"
-            data-od-id="summary-variance"
-          >
-            <div className="font-mono text-[40px] font-semibold leading-none tracking-tight mb-1">
-              {avgVariance.toFixed(1)}%
-            </div>
-            <div className="text-sm text-muted-foreground">
-              Avg variance from baseline
-              {itemsBelow > 0 && (
-                <span className="text-green-600 ml-2">
-                  {itemsBelow} below
-                </span>
-              )}
-              {itemsAbove > 0 && (
-                <span className="text-red-600 ml-2">
-                  {itemsAbove} above
-                </span>
-              )}
-            </div>
-          </div>
+          ))}
         </div>
       </div>
 
@@ -350,196 +251,45 @@ export default function ComparePage() {
         </span>
       </div>
 
-      <div
-        className="rounded-xl border border-border bg-card overflow-hidden"
-        data-od-id="compare-table-wrap"
+      <ProtoDataTable
+        headers={[
+          { label: 'Description' },
+          { label: 'Unit' },
+          ...boqs.map(b => ({ label: `${b.project} — Rate`, className: 'num-col' })),
+          { label: 'Avg Rate', className: 'num-col' },
+          { label: 'Trend' },
+          { label: 'Actions', className: 'text-right whitespace-nowrap' },
+        ]}
       >
-        <div className="overflow-x-auto">
-          <Table data-od-id="compare-table">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="min-w-[180px]">Description</TableHead>
-                <TableHead className="w-[60px]">Unit</TableHead>
-                {boqs.map((boq, i) => (
-                  <TableHead
-                    key={boq.id}
-                    colSpan={3}
-                    className={
-                      "text-center border-l border-border" +
-                      (i === baselineIdx ? " bg-accent/5" : "")
-                    }
-                  >
-                    <span className="text-xs font-semibold">
-                      {boq.project}
-                    </span>
-                    <span className="block text-[10px] font-normal text-muted-foreground">
-                      {boq.vendor}
-                    </span>
-                  </TableHead>
-                ))}
-                <TableHead className="w-[120px]">Analysis</TableHead>
-                <TableHead className="w-[80px]">Action</TableHead>
-              </TableRow>
-              <TableRow>
-                <TableHead />
-                <TableHead />
-                {boqs.map((boq, i) => (
-                  <TableHead
-                    key={"hdr-" + boq.id}
-                    colSpan={3}
-                    className={
-                      "text-center border-l border-border text-[11px] font-normal text-muted-foreground" +
-                      (i === baselineIdx ? " bg-accent/5" : "")
-                    }
-                  >
-                    Qty &middot; Rate &middot; Total
-                  </TableHead>
-                ))}
-                <TableHead />
-                <TableHead />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {matchedRows.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={3 + boqs.length * 3 + 2}
-                    className="text-center text-muted-foreground py-8"
-                  >
-                    No matched items found across these BOQs
-                  </TableCell>
-                </TableRow>
-              ) : (
-                matchedRows.map((row) => {
-                  const isExpanded = expandedLlm === row.id
-                  return (
-                    <TableRow
-                      key={row.id}
-                      data-od-id={"compare-row-" + row.id}
-                    >
-                      <TableCell className="max-w-[200px]">
-                        <div className="text-sm font-medium truncate">
-                          {row.desc}
-                        </div>
-                        {row.imported && (
-                          <Badge
-                            variant="secondary"
-                            className="mt-1 text-[10px] h-4 px-1.5"
-                          >
-                            <Check className="w-2.5 h-2.5 mr-0.5" />
-                            Imported
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="font-mono text-sm text-muted-foreground">
-                        {row.unit}
-                      </TableCell>
-                      {boqs.map((boq, boqIdx) => {
-                        const item = row.items[boqIdx]
-                        const isBaseline = boqIdx === baselineIdx
-                        const trend = item
-                          ? getTrend(item.rate, row.avgRate)
-                          : null
-                        const bgClass = varianceBg(trend)
-
-                        return (
-                          <TableCell
-                            key={"val-" + boq.id}
-                            colSpan={3}
-                            className={
-                              "border-l border-border p-0" +
-                              (isBaseline
-                                ? " ring-1 ring-accent/20 ring-inset"
-                                : "")
-                            }
-                          >
-                            {item ? (
-                              <div
-                                className={
-                                  "grid grid-cols-3 gap-0" +
-                                  (bgClass ? " " + bgClass : "")
-                                }
-                              >
-                                <div className="text-right font-mono text-sm px-2 py-2">
-                                  {item.qty.toLocaleString()}
-                                </div>
-                                <div className="text-right font-mono text-sm px-2 py-2 border-l border-border/50">
-                                  {"\u0E3F" + item.rate.toLocaleString()}
-                                </div>
-                                <div className="text-right font-mono text-sm font-semibold px-2 py-2 border-l border-border/50">
-                                  {"\u0E3F" + item.total.toLocaleString()}
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="text-center text-muted-foreground text-xs py-2">
-                                {"\u2014"}
-                              </div>
-                            )}
-                          </TableCell>
-                        )
-                      })}
-                      <TableCell className="min-w-[140px]">
-                        <button
-                          className={
-                            "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium cursor-pointer transition-colors border-none " +
-                            trendBadgeClass(row.trend)
-                          }
-                          onClick={() =>
-                            setExpandedLlm(
-                              isExpanded ? null : row.id
-                            )
-                          }
-                          data-od-id={"llm-badge-" + row.id}
-                        >
-                          {trendIcon(row.trend)}{" "}
-                          {row.trend === "new"
-                            ? "New item"
-                            : formatVariance(row, baselineIdx)}
-                          {isExpanded ? (
-                            <ChevronUp className="w-3 h-3" />
-                          ) : (
-                            <ChevronDown className="w-3 h-3" />
-                          )}
-                        </button>
-                        {isExpanded && (
-                          <div className="mt-2 text-xs text-muted-foreground leading-relaxed bg-muted/30 rounded-lg p-2">
-                            <div className="text-[10px] text-muted-foreground font-medium mb-1 uppercase tracking-wider">
-                              LLM Analysis
-                            </div>
-                            {row.llm}
-                          </div>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          variant={row.imported ? "ghost" : "outline"}
-                          size="xs"
-                          disabled={row.imported}
-                          onClick={() => handleRowAction(row.id)}
-                          data-od-id={"action-btn-" + row.id}
-                          className="whitespace-nowrap"
-                        >
-                          {row.imported ? (
-                            <>
-                              <Check className="w-3 h-3 mr-1" />
-                              Done
-                            </>
-                          ) : (
-                            <>
-                              <Plus className="w-3 h-3 mr-1" />
-                              Import
-                            </>
-                          )}
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  )
-                })
-              )}
-            </TableBody>
-          </Table>
-        </div>
-      </div>
+        {matchedRows.map(row => {
+          const expanded = expandedLlm === row.id
+          return (
+            <tr key={row.id}>
+              <td className="font-medium">{row.desc}</td>
+              <td>{row.unit}</td>
+              {row.items.map((item, i) => {
+                const trend = item ? getTrend(item.rate, row.avgRate) : null
+                const trendColor = trend === 'below' ? 'text-[#006400]' : trend === 'above' ? 'text-[#dc2626]' : ''
+                return <td key={i} className={`num-col ${trendColor}`}>{item ? item.rate.toLocaleString() : '—'}</td>
+              })}
+              <td className="num-col">{row.avgRate.toLocaleString()}</td>
+              <td>
+                <span className={`inline-flex items-center gap-[5px] px-[10px] py-[2px] rounded-[9999px] text-xs font-medium cursor-pointer ${
+                  row.trend === 'below' ? 'badge-approved' : row.trend === 'above' ? 'badge-rejected' : 'badge-draft'
+                }`}
+                  onClick={() => setExpandedLlm(expandedLlm === row.id ? null : row.id)}
+                >
+                  {row.trend}
+                </span>
+                {expanded && <div className="mt-1.5 p-2 rounded text-[11px] leading-relaxed" style={{background:'color-mix(in oklab, #1b61c9 6%, #fff)', border:'1px solid color-mix(in oklab, #1b61c9 15%, #e0e2e6)'}}>{row.llm}</div>}
+              </td>
+              <td className="text-right whitespace-nowrap">
+                <span className="text-[11px] text-[#006400] font-medium inline-flex items-center gap-1">{row.imported ? <><Check className="w-3 h-3" /> Imported</> : ''}</span>
+              </td>
+            </tr>
+          )
+        })}
+      </ProtoDataTable>
     </div>
   )
 }
