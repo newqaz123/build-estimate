@@ -115,25 +115,25 @@ export default function DashboardPage() {
   return (
     <>
       <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="rounded-xl border border-border bg-card p-5">
+        <div className="elev-raised rounded-[16px] border border-border bg-card p-5">
           <div className="font-mono text-[40px] font-semibold leading-none tracking-tight text-accent mb-1">
             {data.boqTotal}
           </div>
           <div className="text-sm text-muted-foreground">Total BOQs</div>
         </div>
-        <div className="rounded-xl border border-border bg-card p-5">
+        <div className="elev-raised rounded-[16px] border border-border bg-card p-5">
           <div className="font-mono text-[40px] font-semibold leading-none tracking-tight text-[#006400] mb-1">
             {totalItems}
           </div>
           <div className="text-sm text-muted-foreground">Total Items</div>
         </div>
-        <div className="rounded-xl border border-border bg-card p-5">
+        <div className="elev-raised rounded-[16px] border border-border bg-card p-5">
           <div className="font-mono text-[40px] font-semibold leading-none tracking-tight text-[#eab308] mb-1">
             {data.vendors}
           </div>
           <div className="text-sm text-muted-foreground">Vendors</div>
         </div>
-        <div className="rounded-xl border border-border bg-card p-5">
+        <div className="elev-raised rounded-[16px] border border-border bg-card p-5">
           <div className="font-mono text-[40px] font-semibold leading-none tracking-tight text-accent mb-1">
             {data.estimates}
           </div>
@@ -142,7 +142,7 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-2 gap-5">
-        <div className="rounded-xl border border-border bg-card">
+        <div className="elev-raised rounded-[16px] border border-border bg-card">
           <div className="flex items-center justify-between px-5 pt-5 pb-4">
             <h2 className="text-[18px] font-semibold">Recent Activity</h2>
             <Link
@@ -200,7 +200,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div className="rounded-xl border border-border bg-card">
+        <div className="elev-raised rounded-[16px] border border-border bg-card">
           <div className="flex items-center justify-between px-5 pt-5 pb-4">
             <h2 className="text-[18px] font-semibold">Quick Stats</h2>
           </div>

@@ -123,13 +123,13 @@ export function Sidebar() {
               key={item.href}
               href={item.href}
               data-od-id={item.odId}
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-[450] whitespace-nowrap transition-colors duration-150 no-underline ${
+              className={`group flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-[450] whitespace-nowrap transition-colors duration-150 no-underline ${
                 isActive
                   ? "bg-accent text-accent-foreground"
                   : "text-white/65 hover:bg-white/8 hover:text-white"
               } ${collapsed ? "justify-center px-2 gap-0" : ""}`}
             >
-              <span className="w-[18px] h-[18px] shrink-0 opacity-70 [.active_&]:opacity-100 group-hover:opacity-100">
+              <span className={`w-[18px] h-[18px] shrink-0 transition-opacity ${isActive ? "opacity-100" : "opacity-70 group-hover:opacity-100"}`}>
                 {item.icon}
               </span>
               <span

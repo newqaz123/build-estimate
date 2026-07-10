@@ -1,0 +1,69 @@
+- generic [active] [ref=f2e1]:
+  - generic [ref=f2e31]:
+    - complementary [ref=f2e32]:
+      - generic [ref=f2e33]:
+        - generic [ref=f2e37]: BuildEstimate
+        - button "Collapse sidebar" [ref=f2e38] [cursor=pointer]
+      - navigation [ref=f2e41]:
+        - link "Dashboard" [ref=f2e42] [cursor=pointer]:
+          - /url: /dashboard
+        - link "BOQs" [ref=f2e50] [cursor=pointer]:
+          - /url: /boqs
+        - link "Compare" [ref=f2e56] [cursor=pointer]:
+          - /url: /compare
+        - link "Catalog" [ref=f2e62] [cursor=pointer]:
+          - /url: /catalog
+        - link "Estimator" [ref=f2e68] [cursor=pointer]:
+          - /url: /estimator
+        - link "Settings" [ref=f2e73] [cursor=pointer]:
+          - /url: /settings
+      - button "Sign out" [ref=f2e81] [cursor=pointer]
+    - generic [ref=f2e85]:
+      - banner [ref=f2e86]:
+        - generic [ref=f2e87]:
+          - generic [ref=f2e88]: Construction Consultant
+          - generic [ref=f2e89]: CC
+      - main [ref=f2e90]:
+        - generic [ref=f2e91]:
+          - generic [ref=f2e92]:
+            - generic [ref=f2e93]: "1"
+            - generic [ref=f2e94]: Total BOQs
+          - generic [ref=f2e95]:
+            - generic [ref=f2e96]: "7"
+            - generic [ref=f2e97]: Total Items
+          - generic [ref=f2e98]:
+            - generic [ref=f2e99]: "0"
+            - generic [ref=f2e100]: Vendors
+          - generic [ref=f2e101]:
+            - generic [ref=f2e102]: "0"
+            - generic [ref=f2e103]: Estimates
+        - generic [ref=f2e104]:
+          - generic [ref=f2e105]:
+            - generic [ref=f2e106]:
+              - heading "Recent Activity" [level=2] [ref=f2e107]
+              - link "View all" [ref=f2e108] [cursor=pointer]:
+                - /url: /boqs
+            - generic [ref=f2e110]:
+              - generic [ref=f2e112]:
+                - generic [ref=f2e113]: BOQ uploaded — Untitled BOQ
+                - generic [ref=f2e114]: Structural · Unknown Vendor · 38m ago
+              - generic [ref=f2e115]: approved
+          - generic [ref=f2e117]:
+            - heading "Quick Stats" [level=2] [ref=f2e119]
+            - generic [ref=f2e120]:
+              - generic [ref=f2e121]:
+                - generic [ref=f2e122]: Total Items Across BOQs
+                - generic [ref=f2e123]: "7"
+              - generic [ref=f2e124]:
+                - generic [ref=f2e125]: Comparison Match Rate
+                - generic [ref=f2e126]:
+                  - generic [ref=f2e127]: —
+                  - generic [ref=f2e128]: Add BOQs to calculate
+              - generic [ref=f2e129]:
+                - generic [ref=f2e130]: Data Coverage
+                - generic [ref=f2e131]:
+                  - generic [ref=f2e132]: —
+                  - generic [ref=f2e133]: Standardize items to calculate
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f2e26] [cursor=pointer]
+  - alert [ref=f2e30]

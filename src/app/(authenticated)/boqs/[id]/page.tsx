@@ -417,10 +417,15 @@ export default function BoqDetailPage() {
       </div>
 
       <div data-od-id="boq-sections" className="space-y-3">
-        {filteredSections.map((section) => {
+          {filteredSections.map((section) => {
           const si = section.realSi
+          const sectionTotal = section.items.reduce((sum, { item }) => sum + (item.total ?? 0), 0)
           return (
-            <CollapsibleSection key={si} title={section.header}>
+            <CollapsibleSection
+              key={si}
+              title={section.header}
+              subtitle={`${section.items.length} items · ฿${sectionTotal.toLocaleString()}`}
+            >
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
@@ -448,7 +453,7 @@ export default function BoqDetailPage() {
                         <tr
                           key={`${display.code}-${ii}`}
                           data-item-id={key}
-                          className={`border-b border-border last:border-b-0 hover:bg-muted/20 transition-colors ${
+                          className={`group border-b border-border last:border-b-0 hover:bg-muted/20 transition-colors ${
                             hasEdits ? "bg-[#eab308]/6" : ""
                           } ${isEditing ? "bg-accent/6" : ""}`}
                         >
@@ -556,18 +561,11 @@ export default function BoqDetailPage() {
                                 <button
                                   onClick={() => {
                                     editingRef.current = null
-                                    setEdits((prev) => {
-                                      if (prev[key]) {
-                                        const next = { ...prev }
-                                        delete next[key]
-                                        return next
-                                      }
-                                      return prev
-                                    })
+                                    setEdits({ ...edits })
                                   }}
                                   className="text-xs px-2 py-1 rounded bg-accent text-accent-foreground"
                                 >
-                                  Save
+                                  Done
                                 </button>
                               </div>
                             ) : (
@@ -615,6 +613,7 @@ export default function BoqDetailPage() {
 
       <div
         className="fixed bottom-0 left-[240px] right-0 border-t border-border bg-background/95 backdrop-blur-sm px-6 py-3 flex items-center justify-between z-40"
+        style={{ boxShadow: "0 -4px 12px rgba(4, 14, 32, 0.06)" }}
         data-od-id="summary-bar"
       >
         <div className="flex items-center gap-4 text-sm">

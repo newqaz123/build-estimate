@@ -1,0 +1,199 @@
+- generic [active] [ref=f7e1]:
+  - generic [ref=f7e2]:
+    - complementary [ref=f7e3]:
+      - generic [ref=f7e4]:
+        - generic [ref=f7e8]: BuildEstimate
+        - button "Collapse sidebar" [ref=f7e9] [cursor=pointer]
+      - navigation [ref=f7e12]:
+        - link "Dashboard" [ref=f7e13] [cursor=pointer]:
+          - /url: /dashboard
+        - link "BOQs" [ref=f7e21] [cursor=pointer]:
+          - /url: /boqs
+        - link "Compare" [ref=f7e27] [cursor=pointer]:
+          - /url: /compare
+        - link "Catalog" [ref=f7e33] [cursor=pointer]:
+          - /url: /catalog
+        - link "Estimator" [ref=f7e39] [cursor=pointer]:
+          - /url: /estimator
+        - link "Settings" [ref=f7e44] [cursor=pointer]:
+          - /url: /settings
+      - button "Sign out" [ref=f7e52] [cursor=pointer]
+    - generic [ref=f7e56]:
+      - banner [ref=f7e57]:
+        - generic [ref=f7e58]:
+          - link "Back" [ref=f7e59] [cursor=pointer]:
+            - /url: /boqs
+          - heading "BOQ Detail" [level=1] [ref=f7e62]
+        - generic [ref=f7e63]:
+          - generic [ref=f7e64]: Construction Consultant
+          - generic [ref=f7e65]: CC
+      - main [ref=f7e66]:
+        - generic [ref=f7e67]:
+          - generic [ref=f7e80]:
+            - generic [ref=f7e81]:
+              - link "Back" [ref=f7e82] [cursor=pointer]:
+                - /url: /boqs
+              - heading "Untitled BOQ" [level=1] [ref=f7e85]
+              - generic [ref=f7e86]: Approved
+            - button "Export CSV" [ref=f7e88]
+          - generic [ref=f7e89]:
+            - generic [ref=f7e90]:
+              - generic [ref=f7e91]:
+                - generic [ref=f7e92]: Vendor
+                - button "Edit" [ref=f7e93]
+              - generic [ref=f7e94]: Unknown Vendor
+            - generic [ref=f7e95]:
+              - generic [ref=f7e96]:
+                - generic [ref=f7e97]: Work Type
+                - button "Edit" [ref=f7e98]
+              - generic [ref=f7e99]: Structural
+            - generic [ref=f7e100]:
+              - generic [ref=f7e101]:
+                - generic [ref=f7e102]: Date
+                - button "Edit" [ref=f7e103]
+              - generic [ref=f7e104]: 2026-07-10
+            - generic [ref=f7e105]:
+              - generic [ref=f7e106]: Total Items
+              - generic [ref=f7e108]: "7"
+            - generic [ref=f7e109]:
+              - generic [ref=f7e110]: Grand Total
+              - generic [ref=f7e112]: ฿3,455,650
+            - generic [ref=f7e113]:
+              - generic [ref=f7e114]: BOQ ID
+              - generic [ref=f7e116]: 9fb8b6ed
+          - generic [ref=f7e117]:
+            - generic [ref=f7e118]:
+              - textbox "Search items…" [ref=f7e123]
+              - generic [ref=f7e124]:
+                - button "All" [ref=f7e125]
+                - button "Unit" [ref=f7e126]
+                - button "Lump Sum" [ref=f7e127]
+                - button "Job" [ref=f7e128]
+            - generic [ref=f7e129]:
+              - button "LLM Suggest" [ref=f7e130]
+              - button "Accept All" [ref=f7e131]
+          - generic [ref=f7e133]:
+            - button "Parsed Items 7 items · ฿3,455,650" [ref=f7e134]:
+              - generic [ref=f7e137]: Parsed Items
+              - generic [ref=f7e138]: 7 items · ฿3,455,650
+            - table [ref=f7e142]:
+              - rowgroup [ref=f7e143]:
+                - row [ref=f7e144]:
+                  - columnheader "Code" [ref=f7e145]
+                  - columnheader "Description" [ref=f7e146]
+                  - columnheader "Unit" [ref=f7e147]
+                  - columnheader "Qty" [ref=f7e148]
+                  - columnheader "Rate" [ref=f7e149]
+                  - columnheader "Total" [ref=f7e150]
+                  - columnheader "Type" [ref=f7e151]
+                  - columnheader "Std" [ref=f7e152]
+                  - columnheader [ref=f7e153]
+              - rowgroup [ref=f7e154]:
+                - row [ref=f7e155]:
+                  - cell "B.1.1" [ref=f7e156]
+                  - cell "Structural concrete C32/40 (columns)" [ref=f7e157]
+                  - cell "m³" [ref=f7e158]
+                  - cell "120" [ref=f7e159]
+                  - cell "฿3,850" [ref=f7e160]
+                  - cell "฿462,000" [ref=f7e161]
+                  - cell "—" [ref=f7e162]
+                  - cell "Unmatched Match…" [ref=f7e163]:
+                    - generic [ref=f7e164]:
+                      - generic [ref=f7e165]: Unmatched
+                      - button "Match…" [ref=f7e166]
+                  - cell [ref=f7e167]:
+                    - button "Edit" [ref=f7e168]
+                - row [ref=f7e169]:
+                  - cell "B.1.2" [ref=f7e170]
+                  - cell "Structural concrete C25/30 (slabs)" [ref=f7e171]
+                  - cell "m³" [ref=f7e172]
+                  - cell "240" [ref=f7e173]
+                  - cell "฿3,450" [ref=f7e174]
+                  - cell "฿828,000" [ref=f7e175]
+                  - cell "—" [ref=f7e176]
+                  - cell "Unmatched Match…" [ref=f7e177]:
+                    - generic [ref=f7e178]:
+                      - generic [ref=f7e179]: Unmatched
+                      - button "Match…" [ref=f7e180]
+                  - cell [ref=f7e181]:
+                    - button "Edit" [ref=f7e182]
+                - row [ref=f7e183]:
+                  - cell "B.1.3" [ref=f7e184]
+                  - cell "Reinforcement bar SD40 — 16mm" [ref=f7e185]
+                  - cell "ton" [ref=f7e186]
+                  - cell "18.5" [ref=f7e187]
+                  - cell "฿28,500" [ref=f7e188]
+                  - cell "฿527,250" [ref=f7e189]
+                  - cell "—" [ref=f7e190]
+                  - cell "Unmatched Match…" [ref=f7e191]:
+                    - generic [ref=f7e192]:
+                      - generic [ref=f7e193]: Unmatched
+                      - button "Match…" [ref=f7e194]
+                  - cell [ref=f7e195]:
+                    - button "Edit" [ref=f7e196]
+                - row [ref=f7e197]:
+                  - cell "B.1.4" [ref=f7e198]
+                  - cell "Reinforcement bar SD40 — 12mm" [ref=f7e199]
+                  - cell "ton" [ref=f7e200]
+                  - cell "12.2" [ref=f7e201]
+                  - cell "฿29,000" [ref=f7e202]
+                  - cell "฿353,800" [ref=f7e203]
+                  - cell "—" [ref=f7e204]
+                  - cell "Unmatched Match…" [ref=f7e205]:
+                    - generic [ref=f7e206]:
+                      - generic [ref=f7e207]: Unmatched
+                      - button "Match…" [ref=f7e208]
+                  - cell [ref=f7e209]:
+                    - button "Edit" [ref=f7e210]
+                - row [ref=f7e211]:
+                  - cell "B.1.5" [ref=f7e212]
+                  - cell "Formwork — column" [ref=f7e213]
+                  - cell "m²" [ref=f7e214]
+                  - cell "520" [ref=f7e215]
+                  - cell "฿680" [ref=f7e216]
+                  - cell "฿353,600" [ref=f7e217]
+                  - cell "—" [ref=f7e218]
+                  - cell "Unmatched Match…" [ref=f7e219]:
+                    - generic [ref=f7e220]:
+                      - generic [ref=f7e221]: Unmatched
+                      - button "Match…" [ref=f7e222]
+                  - cell [ref=f7e223]:
+                    - button "Edit" [ref=f7e224]
+                - row [ref=f7e225]:
+                  - cell "B.1.6" [ref=f7e226]
+                  - cell "Formwork — slab" [ref=f7e227]
+                  - cell "m²" [ref=f7e228]
+                  - cell "980" [ref=f7e229]
+                  - cell "฿590" [ref=f7e230]
+                  - cell "฿578,200" [ref=f7e231]
+                  - cell "—" [ref=f7e232]
+                  - cell "Unmatched Match…" [ref=f7e233]:
+                    - generic [ref=f7e234]:
+                      - generic [ref=f7e235]: Unmatched
+                      - button "Match…" [ref=f7e236]
+                  - cell [ref=f7e237]:
+                    - button "Edit" [ref=f7e238]
+                - row [ref=f7e239]:
+                  - cell "B.2.1" [ref=f7e240]
+                  - cell "Structural steel frame — main beams" [ref=f7e241]
+                  - cell "ton" [ref=f7e242]
+                  - cell "8.4" [ref=f7e243]
+                  - cell "฿42,000" [ref=f7e244]
+                  - cell "฿352,800" [ref=f7e245]
+                  - cell "—" [ref=f7e246]
+                  - cell "Unmatched Match…" [ref=f7e247]:
+                    - generic [ref=f7e248]:
+                      - generic [ref=f7e249]: Unmatched
+                      - button "Match…" [ref=f7e250]
+                  - cell [ref=f7e251]:
+                    - button "Edit" [ref=f7e252]
+          - generic [ref=f7e253]: All changes saved
+          - generic [ref=f7e258]:
+            - generic [ref=f7e259]:
+              - generic [ref=f7e260]: 7 items
+              - generic [ref=f7e261]: ·
+              - generic [ref=f7e262]: "Grand Total: ฿3,455,650"
+            - button "Add to Estimate" [ref=f7e263]
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f7e75] [cursor=pointer]
+  - alert [ref=f7e79]

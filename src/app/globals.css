@@ -157,6 +157,26 @@
 .badge-llm { background: color-mix(in oklab, #8b5cf6 14%, transparent); color: #8b5cf6; }
 .badge-unmatched { background: color-mix(in oklab, #dc2626 12%, transparent); color: #dc2626; }
 
+/* Badge status dots (::before) */
+.badge-draft::before, .badge-active::before, .badge-review::before,
+.badge-approved::before, .badge-rejected::before, .badge-matched::before,
+.badge-suggested::before, .badge-fuzzy::before, .badge-llm::before,
+.badge-unmatched::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; display: inline-block;
+}
+.badge-draft::before { background: rgba(4,14,32,0.69); }
+.badge-active::before { background: #1b61c9; }
+.badge-review::before { background: #eab308; }
+.badge-approved::before { background: #006400; }
+.badge-rejected::before { background: #dc2626; }
+.badge-matched::before { background: #1b61c9; }
+.badge-suggested::before, .badge-fuzzy::before { background: #eab308; }
+.badge-llm::before { background: #8b5cf6; }
+.badge-unmatched::before { background: #dc2626; }
+
+/* ─── Elevated shadow utility ─── */
+.elev-raised { box-shadow: var(--elev-raised); }
+
 /* ─── Filter chips ─── */
 .filter-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius-pill); font-size: 12px; color: var(--fg-2); cursor: pointer; transition: border-color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard); }
 .filter-chip:hover { border-color: var(--accent); }

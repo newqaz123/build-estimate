@@ -1,5 +1,5 @@
 interface ProtoBadgeProps {
-  status: 'draft' | 'active' | 'review' | 'approved' | 'rejected' | 'matched' | 'suggested' | 'fuzzy' | 'llm' | 'unmatched'
+  status: 'draft' | 'active' | 'review' | 'approved' | 'rejected' | 'matched' | 'suggested' | 'fuzzy' | 'llm' | 'unmatched' | 'parsed' | 'pending'
   label?: string
   className?: string
   children?: React.ReactNode
@@ -16,14 +16,32 @@ const BADGE_CLASS: Record<string, string> = {
   fuzzy: 'badge-fuzzy',
   llm: 'badge-llm',
   unmatched: 'badge-unmatched',
+  parsed: 'badge-draft',
+  pending: 'badge-suggested',
+}
+
+const LABEL_MAP: Record<string, string> = {
+  draft: 'Draft',
+  active: 'Active',
+  review: 'Review',
+  approved: 'Approved',
+  rejected: 'Rejected',
+  matched: 'Matched',
+  suggested: 'Suggested',
+  fuzzy: 'Fuzzy',
+  llm: 'LLM',
+  unmatched: 'Unmatched',
+  parsed: 'Parsed',
+  pending: 'Pending',
 }
 
 export function ProtoBadge({ status, label, className = '', children }: ProtoBadgeProps) {
   const cls = BADGE_CLASS[status] || 'badge-draft'
+  const text = label || LABEL_MAP[status] || status
   return (
     <span className={`inline-flex items-center gap-[5px] px-[10px] py-[2px] rounded-[9999px] text-xs font-medium tracking-[0.02em] whitespace-nowrap ${cls} ${className}`}>
       {children}
-      {label || status}
+      {text}
     </span>
   )
 }

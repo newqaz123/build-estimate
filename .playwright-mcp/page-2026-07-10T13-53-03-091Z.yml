@@ -1,0 +1,46 @@
+- generic [active] [ref=f6e1]:
+  - generic [ref=f6e2]:
+    - complementary [ref=f6e3]:
+      - generic [ref=f6e4]:
+        - generic [ref=f6e8]: BuildEstimate
+        - button "Collapse sidebar" [ref=f6e9] [cursor=pointer]
+      - navigation [ref=f6e12]:
+        - link "Dashboard" [ref=f6e13] [cursor=pointer]:
+          - /url: /dashboard
+        - link "BOQs" [ref=f6e21] [cursor=pointer]:
+          - /url: /boqs
+        - link "Compare" [ref=f6e27] [cursor=pointer]:
+          - /url: /compare
+        - link "Catalog" [ref=f6e33] [cursor=pointer]:
+          - /url: /catalog
+        - link "Estimator" [ref=f6e39] [cursor=pointer]:
+          - /url: /estimator
+        - link "Settings" [ref=f6e44] [cursor=pointer]:
+          - /url: /settings
+      - button "Sign out" [ref=f6e52] [cursor=pointer]
+    - generic [ref=f6e56]:
+      - banner [ref=f6e57]:
+        - heading "Bills of Quantities" [level=1] [ref=f6e59]
+        - generic [ref=f6e60]:
+          - generic [ref=f6e61]: Construction Consultant
+          - generic [ref=f6e62]: CC
+      - main [ref=f6e63]:
+        - paragraph [ref=f6e65]: Upload, manage, and track all vendor BOQs across your projects.
+        - generic [ref=f6e66]:
+          - generic [ref=f6e67]:
+            - textbox "Search BOQs…" [ref=f6e72]
+            - generic [ref=f6e73]:
+              - button "All" [ref=f6e74] [cursor=pointer]
+              - button "Structural" [ref=f6e75] [cursor=pointer]
+              - button "MEP" [ref=f6e76] [cursor=pointer]
+              - button "Finishing" [ref=f6e77] [cursor=pointer]
+              - button "Draft" [ref=f6e79] [cursor=pointer]
+              - button "Active" [ref=f6e80] [cursor=pointer]
+              - button "Review" [ref=f6e81] [cursor=pointer]
+              - button "Approved" [ref=f6e82] [cursor=pointer]
+              - button "Parsed" [ref=f6e83] [cursor=pointer]
+          - button "Upload BOQ" [ref=f6e84]
+        - generic [ref=f6e85]: Loading BOQs…
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f6e93] [cursor=pointer]
+  - alert [ref=f6e97]

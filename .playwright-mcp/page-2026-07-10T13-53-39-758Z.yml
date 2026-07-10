@@ -1,0 +1,34 @@
+- generic [active] [ref=f7e1]:
+  - generic [ref=f7e2]:
+    - complementary [ref=f7e3]:
+      - generic [ref=f7e4]:
+        - generic [ref=f7e8]: BuildEstimate
+        - button "Collapse sidebar" [ref=f7e9] [cursor=pointer]
+      - navigation [ref=f7e12]:
+        - link "Dashboard" [ref=f7e13] [cursor=pointer]:
+          - /url: /dashboard
+        - link "BOQs" [ref=f7e21] [cursor=pointer]:
+          - /url: /boqs
+        - link "Compare" [ref=f7e27] [cursor=pointer]:
+          - /url: /compare
+        - link "Catalog" [ref=f7e33] [cursor=pointer]:
+          - /url: /catalog
+        - link "Estimator" [ref=f7e39] [cursor=pointer]:
+          - /url: /estimator
+        - link "Settings" [ref=f7e44] [cursor=pointer]:
+          - /url: /settings
+      - button "Sign out" [ref=f7e52] [cursor=pointer]
+    - generic [ref=f7e56]:
+      - banner [ref=f7e57]:
+        - generic [ref=f7e58]:
+          - link "Back" [ref=f7e59] [cursor=pointer]:
+            - /url: /boqs
+          - heading "BOQ Detail" [level=1] [ref=f7e62]
+        - generic [ref=f7e63]:
+          - generic [ref=f7e64]: Construction Consultant
+          - generic [ref=f7e65]: CC
+      - main [ref=f7e66]:
+        - generic [ref=f7e67]: Loading BOQ…
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f7e75] [cursor=pointer]
+  - alert [ref=f7e79]

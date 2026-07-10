@@ -1,6 +1,23 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
+
+const ROUTE_TITLES: Record<string, string> = {
+  "/dashboard": "Dashboard",
+  "/boqs": "Bills of Quantities",
+  "/compare": "Compare Quotations",
+  "/catalog": "Catalog",
+  "/estimator": "Estimator",
+  "/settings": "Settings",
+};
+
+function deriveTitle(pathname: string): { title: string; backHref?: string } {
+  if (ROUTE_TITLES[pathname]) return { title: ROUTE_TITLES[pathname] };
+  if (pathname.startsWith("/boqs/")) return { title: "BOQ Detail", backHref: "/boqs" };
+  if (pathname.startsWith("/boqs")) return { title: "Bills of Quantities" };
+  return { title: "BuildEstimate" };
+}
 
 export function Topbar({
   title,
@@ -9,15 +26,20 @@ export function Topbar({
   title?: string;
   backHref?: string;
 }) {
+  const pathname = usePathname();
+  const derived = title ? { title, backHref } : deriveTitle(pathname);
+  const displayTitle = derived.title;
+  const displayBackHref = backHref ?? derived.backHref;
+
   return (
     <header
       data-od-id="topbar"
       className="h-14 border-b border-border flex items-center justify-between px-5 bg-background shrink-0"
     >
       <div className="flex items-center gap-3">
-        {backHref && (
+        {displayBackHref && (
           <Link
-            href={backHref}
+            href={displayBackHref}
             className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground no-underline"
           >
             <svg
@@ -32,10 +54,10 @@ export function Topbar({
             Back
           </Link>
         )}
-        {title && <h1 className="text-lg font-semibold tracking-tight">{title}</h1>}
+        {displayTitle && <h1 className="text-lg font-semibold tracking-tight">{displayTitle}</h1>}
       </div>
       <div className="flex items-center gap-3">
-        <span className="text-xs text-muted-foreground">Construction Consultant</span>
+        <span className="text-[13px] text-muted-foreground">Construction Consultant</span>
         <div className="w-8 h-8 rounded-full bg-[#e8f0fe] grid place-items-center text-xs font-semibold text-accent">
           CC
         </div>

@@ -1,0 +1,22 @@
+- generic [ref=f2e1]:
+  - generic [ref=f2e2]:
+    - generic [ref=f2e3]:
+      - heading "BuildEstimate" [level=1] [ref=f2e7]
+      - paragraph [ref=f2e8]: BOQ management & price comparison for construction consultants. Upload, compare, and estimate — all in one place.
+    - generic [ref=f2e10]:
+      - heading "Sign in" [level=2] [ref=f2e11]
+      - paragraph [ref=f2e12]: Enter your credentials to continue.
+      - generic [ref=f2e13]:
+        - generic [ref=f2e14]:
+          - generic [ref=f2e15]: Email
+          - textbox "Email" [ref=f2e16]:
+            - /placeholder: you@example.com
+            - text: admin@buildestimate.app
+        - generic [ref=f2e17]:
+          - generic [ref=f2e18]: Password
+          - textbox "Password" [active] [ref=f2e19]:
+            - /placeholder: Enter your password
+        - button "Sign in" [ref=f2e20] [cursor=pointer]
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f2e26] [cursor=pointer]
+  - alert [ref=f2e30]
