@@ -2,9 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react"
 import Link from "next/link"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Upload as UploadIcon, Search } from "lucide-react"
+import { Upload as UploadIcon } from "lucide-react"
 import { toast } from "sonner"
 import { UploadModal } from "@/components/upload-modal"
 import { ReviewPanel } from "@/components/review-panel"
@@ -77,7 +75,7 @@ export default function BoqsPage() {
 
   return (
     <>
-      <div data-od-id="page-heading" className="mb-4">
+      <div data-od-id="page-heading" className="mb-6">
         <p className="text-sm text-muted-foreground">
           Upload, manage, and track all vendor BOQs across your projects.
         </p>
@@ -88,16 +86,20 @@ export default function BoqsPage() {
         data-od-id="toolbar"
       >
         <div className="flex items-center gap-3 flex-1">
-          <div className="relative flex-1 max-w-xs">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
+          <div className="search-wrap">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input
+              className="proto-input"
+              type="text"
               placeholder="Search BOQs…"
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value)
                 setPage(1)
               }}
-              className="pl-8"
             />
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -110,10 +112,10 @@ export default function BoqsPage() {
             ))}
           </div>
         </div>
-        <Button onClick={() => setUploadOpen(true)}>
+        <button onClick={() => setUploadOpen(true)} className="btn btn-primary btn-sm">
           <UploadIcon className="w-4 h-4" />
           Upload BOQ
-        </Button>
+        </button>
       </div>
 
       {loading && (
@@ -122,7 +124,7 @@ export default function BoqsPage() {
           data-od-id="loading-state"
         >
           <div className="flex items-center gap-2">
-            <div className="w-4 h-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" />
+            <div className="proto-spinner" />
             Loading BOQs…
           </div>
         </div>
@@ -147,7 +149,7 @@ export default function BoqsPage() {
           </svg>
           <h3 className="text-sm font-medium">No BOQs yet</h3>
           <p className="text-sm">Upload your first Bill of Quantities PDF to get started.</p>
-          <Button onClick={() => setUploadOpen(true)}>Upload BOQ</Button>
+          <button onClick={() => setUploadOpen(true)} className="btn btn-primary">Upload BOQ</button>
         </div>
       )}
 
@@ -223,7 +225,7 @@ export default function BoqsPage() {
                     </div>
                   </td>
                   <td className="text-right whitespace-nowrap">
-                    <Link href={`/boqs/${boq.id}`} className="inline-flex items-center justify-center h-7 px-2.5 text-xs font-medium rounded-lg border border-transparent hover:bg-muted hover:text-foreground transition-colors">View</Link>
+                    <Link href={`/boqs/${boq.id}`} className="btn btn-ghost btn-xs">View</Link>
                     <button
                       onClick={() => {
                         const csv = boq.sections.flatMap(s => s.items).map(i => `${i.code},"${i.desc}",${i.unit},${i.qty},${i.rate},${i.total}`).join('\n')
@@ -235,7 +237,7 @@ export default function BoqsPage() {
                         a.click()
                         URL.revokeObjectURL(url)
                       }}
-                      className="inline-flex items-center justify-center h-7 px-2.5 text-xs font-medium rounded-lg border border-transparent hover:bg-muted hover:text-foreground transition-colors"
+                      className="btn btn-ghost btn-xs"
                     >
                       Download
                     </button>

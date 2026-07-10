@@ -85,28 +85,18 @@ export function Sidebar() {
   return (
     <aside
       data-od-id="sidebar"
-      className={`${
-        collapsed ? "w-[60px] min-w-[60px]" : "w-[240px] min-w-[240px]"
-      } bg-[#181d26] text-white/80 flex flex-col overflow-y-auto transition-all duration-200`}
+      className={`sidebar ${collapsed ? "collapsed" : ""}`}
     >
-      <div className="flex items-center gap-3 px-4 py-5 border-b border-white/8">
+      <div className="sidebar-brand">
         <svg viewBox="0 0 28 28" fill="none" className="w-7 h-7 shrink-0 text-accent">
           <rect width="28" height="28" rx="7" fill="currentColor" />
           <path d="M8 17l6-11 6 11" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
           <path d="M6 20h16" stroke="white" strokeWidth="1.8" strokeLinecap="round" opacity="0.5" />
         </svg>
-        <span
-          className={`font-display text-lg font-semibold text-white tracking-tight whitespace-nowrap overflow-hidden transition-all duration-200 ${
-            collapsed ? "opacity-0 w-0 m-0" : "opacity-100"
-          }`}
-        >
-          BuildEstimate
-        </span>
+        <span>BuildEstimate</span>
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className={`ml-auto w-6 h-6 grid place-items-center bg-transparent border-none text-white/40 cursor-pointer rounded-md hover:text-white/80 transition-all duration-200 ${
-            collapsed ? "rotate-180" : ""
-          }`}
+          className="sidebar-toggle"
           title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5">
@@ -115,7 +105,7 @@ export function Sidebar() {
         </button>
       </div>
 
-      <nav className="flex-1 p-3 flex flex-col gap-0.5">
+      <nav className="sidebar-nav">
         {navItems.map((item) => {
           const isActive = pathname.startsWith(item.href);
           return (
@@ -123,39 +113,24 @@ export function Sidebar() {
               key={item.href}
               href={item.href}
               data-od-id={item.odId}
-              className={`group flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-[450] whitespace-nowrap transition-colors duration-150 no-underline ${
-                isActive
-                  ? "bg-accent text-accent-foreground"
-                  : "text-white/65 hover:bg-white/8 hover:text-white"
-              } ${collapsed ? "justify-center px-2 gap-0" : ""}`}
+              className={isActive ? "active" : ""}
             >
-              <span className={`w-[18px] h-[18px] shrink-0 transition-opacity ${isActive ? "opacity-100" : "opacity-70 group-hover:opacity-100"}`}>
-                {item.icon}
-              </span>
-              <span
-                className={`transition-all duration-200 ${
-                  collapsed ? "opacity-0 w-0 overflow-hidden m-0" : ""
-                }`}
-              >
-                {item.label}
-              </span>
+              {item.icon}
+              <span>{item.label}</span>
             </Link>
           );
         })}
       </nav>
 
-      <div
-        className={`p-3 border-t border-white/8 transition-opacity duration-200 ${
-          collapsed ? "opacity-0 pointer-events-none" : ""
-        }`}
-      >
+      <div className="sidebar-footer">
         <form action="/api/auth/signout" method="POST">
           <button
             type="submit"
             data-od-id="nav-signout"
-            className="flex items-center gap-3 w-full px-3 py-2 rounded-lg text-white/65 text-sm hover:bg-white/8 hover:text-white transition-colors duration-150 no-underline cursor-pointer bg-transparent border-none"
+            className="sidebar-nav"
+            style={{ background: 'transparent', border: 'none', width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 12px', borderRadius: '8px', color: 'rgba(255,255,255,0.65)', fontSize: '14px', cursor: 'pointer' }}
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="w-[18px] h-[18px] shrink-0 opacity-70">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="w-[18px] h-[18px] shrink-0" style={{ opacity: 0.7 }}>
               <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
               <polyline points="16 17 21 12 16 7" />
               <line x1="21" y1="12" x2="9" y2="12" />

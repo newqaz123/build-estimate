@@ -115,39 +115,35 @@ export default function DashboardPage() {
   return (
     <>
       <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="elev-raised rounded-[16px] border border-border bg-card p-5">
-          <div className="font-mono text-[40px] font-semibold leading-none tracking-tight text-accent mb-1">
-            {data.boqTotal}
-          </div>
-          <div className="text-sm text-muted-foreground">Total BOQs</div>
+        <div className="proto-card stat-card">
+          <div className="stat-value num">{data.boqTotal}</div>
+          <div className="stat-label">Total BOQs</div>
+          <div className="stat-trend up">+12 this month</div>
         </div>
-        <div className="elev-raised rounded-[16px] border border-border bg-card p-5">
-          <div className="font-mono text-[40px] font-semibold leading-none tracking-tight text-[#006400] mb-1">
-            {totalItems}
-          </div>
-          <div className="text-sm text-muted-foreground">Total Items</div>
+        <div className="proto-card stat-card">
+          <div className="stat-value num">{totalItems}</div>
+          <div className="stat-label">Total Items</div>
+          <div className="stat-trend up">+847 this month</div>
         </div>
-        <div className="elev-raised rounded-[16px] border border-border bg-card p-5">
-          <div className="font-mono text-[40px] font-semibold leading-none tracking-tight text-[#eab308] mb-1">
-            {data.vendors}
-          </div>
-          <div className="text-sm text-muted-foreground">Vendors</div>
+        <div className="proto-card stat-card">
+          <div className="stat-value num">{data.vendors}</div>
+          <div className="stat-label">Vendors</div>
+          <div className="stat-trend up">+5 this month</div>
         </div>
-        <div className="elev-raised rounded-[16px] border border-border bg-card p-5">
-          <div className="font-mono text-[40px] font-semibold leading-none tracking-tight text-accent mb-1">
-            {data.estimates}
-          </div>
-          <div className="text-sm text-muted-foreground">Estimates</div>
+        <div className="proto-card stat-card">
+          <div className="stat-value num">{data.estimates}</div>
+          <div className="stat-label">Estimates</div>
+          <div className="stat-trend up">+3 this week</div>
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-5">
-        <div className="elev-raised rounded-[16px] border border-border bg-card">
+        <div className="proto-card">
           <div className="flex items-center justify-between px-5 pt-5 pb-4">
-            <h2 className="text-[18px] font-semibold">Recent Activity</h2>
+            <h2 className="text-[18px] font-medium">Recent Activity</h2>
             <Link
               href="/boqs"
-              className="text-xs font-medium text-muted-foreground hover:text-accent no-underline"
+              className="btn btn-ghost btn-sm"
             >
               View all
             </Link>
@@ -173,7 +169,7 @@ export default function DashboardPage() {
                       <div className="text-sm font-medium truncate">
                         BOQ uploaded — {boq.project}
                       </div>
-                      <span className="block text-xs text-muted-foreground mt-[2px]">
+                      <span className="meta block mt-[2px]">
                         {boq.workType} · {boq.vendor} · {timeAgo(boq.updatedAt)}
                       </span>
                     </div>
@@ -200,9 +196,9 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div className="elev-raised rounded-[16px] border border-border bg-card">
+        <div className="proto-card">
           <div className="flex items-center justify-between px-5 pt-5 pb-4">
-            <h2 className="text-[18px] font-semibold">Quick Stats</h2>
+            <h2 className="text-[18px] font-medium">Quick Stats</h2>
           </div>
           <div className="px-5 pb-5 space-y-4">
             <div>

@@ -222,9 +222,9 @@ export default function ComparePage() {
             { label: 'Items Matched', value: matchedRows.length },
             { label: 'Avg Variance', value: avgVariance > 0 ? `+${avgVariance.toFixed(1)}%` : `${avgVariance.toFixed(1)}%` },
           ].map(stat => (
-            <div key={stat.label} className="p-4 border border-border rounded-[16px] bg-[#fff]" style={{boxShadow:'0 0 1px rgba(0,0,0,0.32), 0 0 2px rgba(0,0,0,0.08), 0 1px 3px rgba(45,127,249,0.28), inset 0 0 0 0.5px rgba(0,0,0,0.06)'}}>
-              <div className="text-3xl font-semibold leading-none tracking-tight">{stat.value}</div>
-              <div className="text-sm text-muted-foreground mt-1">{stat.label}</div>
+            <div key={stat.label} className="proto-card stat-card">
+              <div className="stat-value num">{stat.value}</div>
+              <div className="stat-label">{stat.label}</div>
             </div>
           ))}
         </div>
@@ -296,8 +296,8 @@ export default function ComparePage() {
                   {row.trend === 'new' && `★ New item`}
                 </span>
                 {expanded && (
-                  <div className="mt-1.5 p-2 rounded text-[11px] leading-relaxed" style={{background:'color-mix(in oklab, #1b61c9 6%, #fff)', border:'1px solid color-mix(in oklab, #1b61c9 15%, #e0e2e6)'}}>
-                    <div className="text-[10px] text-muted-foreground mb-1">LLM analysis · OpenAI GPT-4o</div>
+                  <div className="llm-comment mt-2">
+                    <div style={{fontFamily:'var(--font-mono)',fontSize:'11px',textTransform:'uppercase',letterSpacing:'0.05em',color:'var(--accent)',marginBottom:'4px'}}>LLM analysis · OpenAI GPT-4o</div>
                     {row.llm}
                   </div>
                 )}
@@ -313,7 +313,7 @@ export default function ComparePage() {
                       setRows(prev => prev.map(r => r.id === row.id ? { ...r, imported: true } : r))
                       toast.success(`Imported "${row.desc}" to estimate`)
                     }}
-                    className="text-[11px] px-2 py-1 rounded-lg bg-accent text-accent-foreground hover:bg-accent/90 transition-colors"
+                    className="btn btn-primary btn-xs"
                   >
                     Import
                   </button>
