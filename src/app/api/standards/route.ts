@@ -58,6 +58,7 @@ export async function POST(request: NextRequest) {
       unit,
       category: category || '',
       aliases: aliases || [],
+      sourceItems: [],
       sourceBoqCount: 0,
     }
 
