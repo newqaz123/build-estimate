@@ -13,6 +13,10 @@ export interface BoqItem {
   type: 'unit' | 'lump_sum' | 'job'
   stdStatus: 'matched' | 'unmatched' | 'pending'
   stdMatch?: string
+  stdId?: string
+  stdConfidence?: 'exact' | 'fuzzy' | 'llm' | 'manual'
+  sourceDesc?: string
+  sourceUnit?: string
 }
 
 export interface Boq {

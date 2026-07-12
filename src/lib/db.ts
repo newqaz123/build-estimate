@@ -2,6 +2,13 @@ import { getDb as _getDb } from './firebase-admin'
 export const getDb = _getDb
 import type { WhereFilterOp } from 'firebase-admin/firestore'
 
+export async function runTransaction<T>(
+  work: (transaction: FirebaseFirestore.Transaction, db: FirebaseFirestore.Firestore) => Promise<T>,
+): Promise<T> {
+  const db = getDb()
+  return db.runTransaction((transaction) => work(transaction, db))
+}
+
 export async function getCollection<T>(collection: string): Promise<T[]> {
   const db = getDb()
   const snap = await db.collection(collection).get()

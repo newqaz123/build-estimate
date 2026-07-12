@@ -8,6 +8,7 @@ export interface EstimateItem {
   source: 'imported' | 'manual' | 'adjustment'
   boqId?: string
   boqItemCode?: string
+  stdId?: string
 }
 
 export interface Estimate {
