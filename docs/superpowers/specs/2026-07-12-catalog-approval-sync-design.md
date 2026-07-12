@@ -16,6 +16,7 @@ Make `/catalog` the shared standard-item registry for BOQ standardization and es
 - Global-sync confirmation when one shared catalog item affects multiple BOQ rows.
 - Selecting catalog items in `/estimator`.
 - AI estimate suggestions that prefer existing catalog IDs.
+- An editable estimate-builder AI prompt in Settings.
 - Snapshot-stable estimate rows.
 
 ### Out of scope
@@ -131,7 +132,18 @@ Estimate rows keep their current display fields as a snapshot and add `stdId?: s
 - Add a “From Standard Catalog” entry point that searches the same active catalog records.
 - A selected entry is copied into the estimate as a snapshot with `stdId`.
 - Existing AI chat suggestions include catalog IDs when a suitable standard exists; accepting a suggestion creates the same snapshot-stable estimate row.
+- The chat’s system behavior is controlled by the editable Estimate Builder prompt in Settings.
 - Manual estimate rows remain supported and do not require a catalog link.
+
+### Settings — Estimate Builder prompt
+
+Add a third prompt under the existing Prompt Settings section:
+
+- Label: **Estimate Builder prompt**.
+- Purpose text: “Controls how AI helps build estimates from a blank project.”
+- Editable multiline textarea with token estimate, Save, and Reset to default controls matching the existing analysis and standardization prompt cards.
+- The default prompt instructs the assistant to ask concise project-scoping questions, prefer active Standard Catalog entries, return `stdId` for existing matches, never invent catalog IDs, and clearly mark any proposed manual/new item.
+- Saving updates the workspace `prompts` document and future estimate-chat requests; it does not rewrite existing estimate rows or previous chat messages.
 
 ## API and persistence design
 
@@ -146,6 +158,8 @@ Keep the existing authenticated standards and BOQ APIs, adding focused mutations
 
 The Firestore helper layer gets a small transaction helper. The server validates authentication, record existence, section/index/code identity, and all required text fields before committing. A failed transaction returns a clear error and leaves both catalog and BOQ unchanged.
 
+Extend `PromptSettings` with `estimatePrompt: string`. The settings GET endpoint supplies the default when older workspaces do not have it, and the settings PUT validator accepts and persists it alongside `analysisPrompt` and `stdPrompt`. The estimate AI route reads the saved prompt at request time, so changes take effect without redeploying.
+
 ## Matching and AI behavior
 
 Use a shared pure matching helper for both the modal and server-side validation:
@@ -159,6 +173,8 @@ Use a shared pure matching helper for both the modal and server-side validation:
 
 The LLM is advisory only. It receives the current item and active catalog entries, returns candidate IDs with confidence and a short reason, and never writes data directly. A human must select a candidate or create a new item.
 
+The estimate-builder prompt is also advisory: the model may ask questions and suggest catalog-backed or manual rows, but only explicit user actions create estimate rows. The model must not fabricate `stdId` values or mutate the catalog.
+
 ## Error handling
 
 - Catalog/API loading failures show retryable inline errors.
@@ -171,7 +187,7 @@ The LLM is advisory only. It receives the current item and active catalog entrie
 ## Verification
 
 - Unit tests cover normalization, unit compatibility, fuzzy ranking, and legacy records without `stdId`.
+- Settings tests cover defaulting, validation, persistence, and reset behavior for `estimatePrompt`.
 - API tests cover match-existing, create-new, catalog edit propagation, BOQ edit propagation, archive behavior, and transaction failure.
-- UI verification covers catalog tab filtering, match modal fuzzy search, AI suggestion selection, create-new flow, global-sync confirmation, and estimate snapshot stability.
+- UI verification covers catalog tab filtering, match modal fuzzy search, AI suggestion selection, create-new flow, global-sync confirmation, estimate prompt editing, AI prompt usage, and estimate snapshot stability.
 - Run the project lint/build checks and a browser smoke test for `/catalog`, `/boqs/[id]`, and `/estimator`.
-
