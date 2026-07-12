@@ -1,15 +1,11 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select"
-import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardAction } from "@/components/ui/card"
-import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
-import { Loader2, Plus, Pencil, Trash2 } from "lucide-react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Loader2, Pencil, Plus, Trash2 } from "lucide-react"
 import { toast } from "sonner"
-import type { WorkspaceSettings, LlmSettings, DoclingSettings, FuzzySettings, PromptSettings, Vendor } from "@/lib/settings-schema"
+import { DEFAULT_ESTIMATE_PROMPT } from "@/lib/prompt-defaults"
+import type { DoclingSettings, FuzzySettings, LlmSettings, PromptSettings, Vendor, WorkspaceSettings } from "@/lib/settings-schema"
 
 const LLM_PROVIDERS = [
   { value: "openai", label: "OpenAI" },
@@ -17,72 +13,100 @@ const LLM_PROVIDERS = [
   { value: "google", label: "Google Gemini" },
   { value: "openrouter", label: "OpenRouter" },
 ] as const
-
 const SPECIALTIES = ["Structural", "MEP", "Finishing", "Full Scope"]
 
 const DEFAULT_ANALYSIS_PROMPT = `You are a construction cost estimation assistant. Analyse the provided BOQ/quotations data and return structured JSON with the following fields for each item:
 - item_code: The item reference code
-- description: Item description 
+- description: Item description
 - quantity: Quantity from the document
 - unit: Unit of measure
 - rate: Unit rate in THB
-- total: Total amount (qty \u00d7 rate)
+- total: Total amount (qty × rate)
 - trend: "below", "at", "above", or "new" compared to historical averages
 - analysis: Brief commentary explaining the pricing context, considering both quantity and rate`
 
 const DEFAULT_STD_PROMPT = `You are a construction BOQ standardization assistant. Given a list of raw items and a reference catalog, standardize each item:
 1. If the item matches an existing catalog entry (by description + unit), return the catalog entry ID
 2. If no match exists, suggest a standardized description and unit following these conventions:
-   - Use clear format: "Material \u2014 spec/location/dimension"
-   - Units: m\u00b3, m\u00b2, m, ton, ea, set, kg, LS
-   - Group similar items (e.g. "Reinforcement bar SD40 \u2014 12mm")
+   - Use clear format: "Material — spec/location/dimension"
+   - Units: m³, m², m, ton, ea, set, kg, LS
+   - Group similar items (e.g. "Reinforcement bar SD40 — 12mm")
 3. Do NOT create a duplicate if a matching entry already exists
 Return JSON array: [{itemIndex, matchedStdId, suggestedDesc, suggestedUnit, confidence: "high"|"medium"|"low", reason}]`
 
-const DEFAULT_UNIT_MAP = `{
-  "m2": "m\u00b2",
-  "m3": "m\u00b3",
-  "sqm": "m\u00b2",
-  "sq.m.": "m\u00b2",
-  "cbm": "m\u00b3",
-  "cu.m.": "m\u00b3",
-  "kg": "kg",
-  "kgs": "kg",
-  "tonne": "ton",
-  "tons": "ton",
-  "each": "set",
-  "ea": "set",
-  "nos": "set",
-  "no.": "set",
-  "lin.m": "m",
-  "lm": "m",
-  "r.m": "m"
-}`
+const DEFAULT_UNIT_MAP = JSON.stringify({ m2: "m²", m3: "m³", sqm: "m²", "sq.m.": "m²", cbm: "m³", "cu.m.": "m³", kg: "kg", kgs: "kg", tonne: "ton", tons: "ton", each: "set", ea: "set", nos: "set", "no.": "set", "lin.m": "m", lm: "m", "r.m": "m" }, null, 2)
+const DEFAULT_NORMALIZE_RULES = JSON.stringify([["structural concrete", "concrete"], ["reinforcement bar", "rebar"], ["\\bconc\\.", "concrete"], ["\\d+mm\\b", "$& dia."], ["\\bformwork\\b", "formwork"], ["\\bmobilisation\\b", "mobilization"], ["\\bdemobilisation\\b", "demobilization"], ["\\s+", " "]], null, 2)
 
-const DEFAULT_NORMALIZE_RULES = `[
-  ["structural concrete", "concrete"],
-  ["reinforcement bar", "rebar"],
-  ["\\\\bconc\\\\.", "concrete"],
-  ["\\\\d+mm\\\\b", "$& dia."],
-  ["\\\\bformwork\\\\b", "formwork"],
-  ["\\\\bmobilisation\\\\b", "mobilization"],
-  ["\\\\bdemobilisation\\\\b", "demobilization"],
-  ["\\\\s+", " "]
-]`
+type Section = "ai" | "processing" | "vendors" | "prompts" | "account"
+type DirtyState = { ai: boolean; docling: boolean; fuzzy: boolean; vendors: boolean; prompts: boolean }
+const CLEAN: DirtyState = { ai: false, docling: false, fuzzy: false, vendors: false, prompts: false }
+
+function tokenEstimate(value: string) {
+  return Math.round(value.trim().split(/\s+/).filter(Boolean).length * 1.3)
+}
+
+function validHttpUrl(value: string) {
+  try {
+    const url = new URL(value)
+    return url.protocol === "http:" || url.protocol === "https:"
+  } catch {
+    return false
+  }
+}
+
+async function responseError(response: Response, fallback: string) {
+  try {
+    const body = await response.json() as { error?: string }
+    return body.error || fallback
+  } catch {
+    return fallback
+  }
+}
 
 export default function SettingsPage() {
-  const [llmProvider, setLlmProvider] = useState("openai")
-  const [apiKey, setApiKey] = useState("")
+  const [activeSection, setActiveSection] = useState<Section>("ai")
+  const [loadingSettings, setLoadingSettings] = useState(true)
+  const [settingsLoadError, setSettingsLoadError] = useState("")
+  const [dirty, setDirty] = useState<DirtyState>(CLEAN)
+  const dirtyRef = useRef(dirty)
+  const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const mountedRef = useRef(true)
+  const vendorRefreshRef = useRef<{ controller: AbortController | null; sequence: number }>({ controller: null, sequence: 0 })
+  const settingsRefreshRef = useRef<{ controller: AbortController | null; sequence: number }>({ controller: null, sequence: 0 })
+  const deletingVendorRef = useRef(false)
+  const savedAnalysisRef = useRef(DEFAULT_ANALYSIS_PROMPT)
+  const savedStdRef = useRef(DEFAULT_STD_PROMPT)
+  const savedLlmRef = useRef({ provider: "openai" as LlmSettings["provider"], model: "gpt-4o", endpoint: "" })
+  const savedDoclingRef = useRef("http://localhost:5001")
+  const savedFuzzyRef = useRef({ unitMap: DEFAULT_UNIT_MAP, normalizeRules: DEFAULT_NORMALIZE_RULES })
+  const vendorFormBaselineRef = useRef({ name: "", contact: "", specialty: "Structural" })
+  const llmCurrentRef = useRef({ provider: "openai" as LlmSettings["provider"], model: "gpt-4o", endpoint: "" })
+  const doclingCurrentRef = useRef("http://localhost:5001")
+  const fuzzyCurrentRef = useRef({ unitMap: DEFAULT_UNIT_MAP, normalizeRules: DEFAULT_NORMALIZE_RULES })
+  const analysisCurrentRef = useRef(DEFAULT_ANALYSIS_PROMPT)
+  const stdCurrentRef = useRef(DEFAULT_STD_PROMPT)
+
+  const [llmProvider, setLlmProvider] = useState<LlmSettings["provider"]>("openai")
   const [llmModel, setLlmModel] = useState("gpt-4o")
   const [llmEndpoint, setLlmEndpoint] = useState("")
   const [savingLlm, setSavingLlm] = useState(false)
+  const [testingLlm, setTestingLlm] = useState(false)
+  const [llmStatus, setLlmStatus] = useState("")
+  const llmTestUnavailableReason = llmEndpoint.trim()
+    ? "Custom endpoint testing is not supported by the current server runtime."
+    : !["openai", "openrouter"].includes(llmProvider)
+      ? `${LLM_PROVIDERS.find((provider) => provider.value === llmProvider)?.label || llmProvider} testing is not supported by the current server runtime.`
+      : ""
 
   const [doclingEndpoint, setDoclingEndpoint] = useState("http://localhost:5001")
+  const [savingDocling, setSavingDocling] = useState(false)
   const [testingDocling, setTestingDocling] = useState(false)
+  const [doclingStatus, setDoclingStatus] = useState("")
 
   const [unitMap, setUnitMap] = useState(DEFAULT_UNIT_MAP)
   const [normalizeRules, setNormalizeRules] = useState(DEFAULT_NORMALIZE_RULES)
   const [savingFuzzy, setSavingFuzzy] = useState(false)
+  const [fuzzyTestResult, setFuzzyTestResult] = useState("")
 
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [loadingVendors, setLoadingVendors] = useState(true)
@@ -93,633 +117,328 @@ export default function SettingsPage() {
   const [vendorSpecialty, setVendorSpecialty] = useState("Structural")
   const [savingVendor, setSavingVendor] = useState(false)
   const [deletingVendorId, setDeletingVendorId] = useState<string | null>(null)
+  const [deletingVendorBusyId, setDeletingVendorBusyId] = useState<string | null>(null)
 
   const [analysisPrompt, setAnalysisPrompt] = useState(DEFAULT_ANALYSIS_PROMPT)
   const [stdPrompt, setStdPrompt] = useState(DEFAULT_STD_PROMPT)
-  const [savingPrompts, setSavingPrompts] = useState(false)
+  const [savingAnalysisPrompt, setSavingAnalysisPrompt] = useState(false)
+  const [savingStdPrompt, setSavingStdPrompt] = useState(false)
+  const savedEstimateRef = useRef(DEFAULT_ESTIMATE_PROMPT)
+  const analysisTokenEstimate = tokenEstimate(analysisPrompt)
+  const stdTokenEstimate = tokenEstimate(stdPrompt)
+  const settingsReady = !loadingSettings && !settingsLoadError
 
-  const tokenEstimate = Math.round((analysisPrompt.trim().split(/\s+/).filter(Boolean).length || 0) * 1.3)
+  const markDirty = (section: keyof DirtyState, value = true) => {
+    const next = { ...dirtyRef.current, [section]: value }
+    dirtyRef.current = next
+    setDirty(next)
+  }
 
-  const fetchSettings = useCallback(async () => {
+  const fetchVendors = useCallback(async () => {
+    if (!mountedRef.current) return
+    vendorRefreshRef.current.controller?.abort()
+    const controller = new AbortController()
+    const sequence = vendorRefreshRef.current.sequence + 1
+    vendorRefreshRef.current = { controller, sequence }
+    setLoadingVendors(true)
     try {
-      const res = await fetch("/api/settings")
-      if (!res.ok) throw new Error("Failed to fetch settings")
-      const data: WorkspaceSettings = await res.json()
-      if (data.llm) {
-        setLlmProvider(data.llm.provider)
-        setLlmModel(data.llm.model || "gpt-4o")
-        setLlmEndpoint(data.llm.endpoint || "")
-      }
-      if (data.docling) {
-        setDoclingEndpoint(data.docling.endpoint || "http://localhost:5001")
-      }
-      if (data.fuzzy) {
-        setUnitMap(JSON.stringify(data.fuzzy.unitMap, null, 2))
-        setNormalizeRules(JSON.stringify(data.fuzzy.normalizeRules, null, 2))
-      }
-      if (data.prompts) {
-        setAnalysisPrompt(data.prompts.analysisPrompt || DEFAULT_ANALYSIS_PROMPT)
-        setStdPrompt(data.prompts.stdPrompt || DEFAULT_STD_PROMPT)
-      }
-    } catch {
-      toast.error("Failed to load settings")
+      const response = await fetch("/api/vendors", { signal: controller.signal })
+      if (!response.ok) throw new Error(await responseError(response, "Failed to fetch vendors"))
+      const data = await response.json() as Vendor[]
+      if (mountedRef.current && vendorRefreshRef.current.sequence === sequence) setVendors(data)
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return
+      toast.error(error instanceof Error ? error.message : "Failed to load vendors")
+    } finally {
+      if (mountedRef.current && vendorRefreshRef.current.sequence === sequence) setLoadingVendors(false)
     }
   }, [])
 
-  const fetchVendors = useCallback(async () => {
-    setLoadingVendors(true)
+  const fetchSettings = useCallback(async () => {
+    if (!mountedRef.current) return
+    settingsRefreshRef.current.controller?.abort()
+    const controller = new AbortController()
+    const sequence = settingsRefreshRef.current.sequence + 1
+    settingsRefreshRef.current = { controller, sequence }
+    setLoadingSettings(true)
+    setSettingsLoadError("")
     try {
-      const res = await fetch("/api/vendors")
-      if (!res.ok) throw new Error("Failed to fetch vendors")
-      const data: Vendor[] = await res.json()
-      setVendors(data)
-    } catch {
-      toast.error("Failed to load vendors")
-      setVendors([])
+      const response = await fetch("/api/settings", { signal: controller.signal })
+      if (!response.ok) throw new Error(await responseError(response, "Failed to fetch settings"))
+      const data = await response.json() as WorkspaceSettings
+      if (!mountedRef.current || settingsRefreshRef.current.sequence !== sequence) return
+      if (!dirtyRef.current.ai && data.llm) {
+        const nextLlm = { provider: data.llm.provider, model: data.llm.model || "gpt-4o", endpoint: data.llm.endpoint || "" }
+        setLlmProvider(nextLlm.provider); setLlmModel(nextLlm.model); setLlmEndpoint(nextLlm.endpoint)
+        llmCurrentRef.current = nextLlm; savedLlmRef.current = nextLlm
+      }
+      if (!dirtyRef.current.docling && data.docling) {
+        const endpoint = data.docling.endpoint || "http://localhost:5001"
+        setDoclingEndpoint(endpoint); doclingCurrentRef.current = endpoint; savedDoclingRef.current = endpoint
+      }
+      if (!dirtyRef.current.fuzzy && data.fuzzy) {
+        const nextUnitMap = JSON.stringify(data.fuzzy.unitMap, null, 2)
+        const nextNormalizeRules = JSON.stringify(data.fuzzy.normalizeRules, null, 2)
+        setUnitMap(nextUnitMap); setNormalizeRules(nextNormalizeRules)
+        fuzzyCurrentRef.current = { unitMap: nextUnitMap, normalizeRules: nextNormalizeRules }
+        savedFuzzyRef.current = { unitMap: nextUnitMap, normalizeRules: nextNormalizeRules }
+      }
+      if (!dirtyRef.current.prompts && data.prompts) {
+        const analysis = data.prompts.analysisPrompt || DEFAULT_ANALYSIS_PROMPT
+        const standardization = data.prompts.stdPrompt || DEFAULT_STD_PROMPT
+        const estimate = data.prompts.estimatePrompt || DEFAULT_ESTIMATE_PROMPT
+        setAnalysisPrompt(analysis); setStdPrompt(standardization)
+        analysisCurrentRef.current = analysis; stdCurrentRef.current = standardization
+        savedAnalysisRef.current = analysis; savedStdRef.current = standardization
+        savedEstimateRef.current = estimate
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return
+      const message = error instanceof Error ? error.message : "Failed to load settings"
+      if (mountedRef.current && settingsRefreshRef.current.sequence === sequence) {
+        setSettingsLoadError(message)
+        toast.error(message)
+      }
     } finally {
-      setLoadingVendors(false)
+      if (mountedRef.current && settingsRefreshRef.current.sequence === sequence) setLoadingSettings(false)
     }
   }, [])
 
   useEffect(() => {
-    fetchSettings()
-    fetchVendors()
+    mountedRef.current = true
+    void Promise.resolve().then(() => fetchSettings())
+    void Promise.resolve().then(() => fetchVendors())
+    return () => {
+      mountedRef.current = false
+      settingsRefreshRef.current.controller?.abort()
+      vendorRefreshRef.current.controller?.abort()
+      if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current)
+    }
   }, [fetchSettings, fetchVendors])
 
+  const saveSection = async (section: "llm" | "docling" | "fuzzy" | "prompts", data: LlmSettings | DoclingSettings | FuzzySettings | PromptSettings) => {
+    if (!settingsReady) throw new Error("Reload workspace settings before making changes")
+    const response = await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ section, data }) })
+    if (!response.ok) throw new Error(await responseError(response, `Failed to save ${section} settings`))
+  }
+
   const handleSaveLlm = async () => {
+    if (!llmModel.trim()) return toast.error("Model is required")
+    if (llmEndpoint.trim() && !validHttpUrl(llmEndpoint.trim())) return toast.error("Custom endpoint must be a valid HTTP or HTTPS URL")
+    const snapshot = { provider: llmProvider, model: llmModel.trim(), endpoint: llmEndpoint.trim() }
     setSavingLlm(true)
     try {
-      const data: LlmSettings = {
-        provider: llmProvider as LlmSettings["provider"],
-        model: llmModel,
-        ...(llmEndpoint ? { endpoint: llmEndpoint } : {}),
-      }
-      const res = await fetch("/api/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ section: "llm", data }),
-      })
-      if (!res.ok) throw new Error("Failed to save")
+      await saveSection("llm", { provider: snapshot.provider, model: snapshot.model, ...(snapshot.endpoint ? { endpoint: snapshot.endpoint } : {}) })
+      savedLlmRef.current = snapshot
+      const current = llmCurrentRef.current
+      markDirty("ai", current.provider !== snapshot.provider || current.model.trim() !== snapshot.model || current.endpoint.trim() !== snapshot.endpoint)
       toast.success("LLM settings saved")
-    } catch {
-      toast.error("Failed to save LLM settings")
-    } finally {
-      setSavingLlm(false)
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Failed to save LLM settings") }
+    finally { setSavingLlm(false) }
+  }
+
+  const handleTestLlm = async () => {
+    if (llmTestUnavailableReason) {
+      setLlmStatus(llmTestUnavailableReason)
+      return
     }
+    setTestingLlm(true); setLlmStatus("Testing connection…")
+    const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 10000)
+    try {
+      const response = await fetch("/api/llm/verify", { method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal, body: JSON.stringify({ provider: llmProvider, model: llmModel, messages: [{ role: "user", content: "Reply with OK." }] }) })
+      if (!response.ok) throw new Error(await responseError(response, "LLM connection failed"))
+      const data = await response.json() as { provider?: string; model?: string }
+      setLlmStatus(`Connected${data.provider ? ` · ${data.provider} ${data.model || ""}` : ""}`); toast.success("LLM connection successful")
+    } catch (error) {
+      const message = error instanceof DOMException && error.name === "AbortError" ? "LLM connection timed out" : error instanceof Error ? error.message : "LLM connection failed"
+      setLlmStatus(message); toast.error(message)
+    } finally { clearTimeout(timeout); setTestingLlm(false) }
+  }
+
+  const handleSaveDocling = async () => {
+    if (!doclingEndpoint.trim()) return toast.error("Docling sidecar URL is required")
+    if (!validHttpUrl(doclingEndpoint.trim())) return toast.error("Docling sidecar URL must use HTTP or HTTPS")
+    const snapshot = doclingEndpoint.trim()
+    setSavingDocling(true)
+    try { await saveSection("docling", { endpoint: snapshot }); savedDoclingRef.current = snapshot; markDirty("docling", doclingCurrentRef.current.trim() !== snapshot); toast.success("Docling settings saved") }
+    catch (error) { toast.error(error instanceof Error ? error.message : "Failed to save Docling settings") }
+    finally { setSavingDocling(false) }
   }
 
   const handleTestDocling = async () => {
-    setTestingDocling(true)
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 5000)
+    setTestingDocling(true); setDoclingStatus("Testing connection…")
+    const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 5000)
     try {
-      const res = await fetch(doclingEndpoint, { method: "HEAD", signal: controller.signal })
-      if (res.ok) {
-        toast.success("Docling sidecar is reachable")
-      } else {
-        toast.error("Sidecar returned error")
-      }
-    } catch {
-      toast.error("Docling sidecar not reachable")
-    } finally {
-      clearTimeout(timeout)
-      setTestingDocling(false)
-    }
+      const response = await fetch(doclingEndpoint, { method: "HEAD", signal: controller.signal })
+      if (!response.ok) throw new Error(`Sidecar returned ${response.status}`)
+      setDoclingStatus("Connected"); toast.success("Docling sidecar is reachable")
+    } catch (error) {
+      const message = error instanceof DOMException && error.name === "AbortError" ? "Connection timed out" : error instanceof Error ? error.message : "Docling sidecar not reachable"
+      setDoclingStatus(message); toast.error(message)
+    } finally { clearTimeout(timeout); setTestingDocling(false) }
+  }
+
+  const parseFuzzyRules = () => {
+    const parsedUnitMap = JSON.parse(unitMap) as unknown
+    const parsedNormalizeRules = JSON.parse(normalizeRules) as unknown
+    if (!parsedUnitMap || Array.isArray(parsedUnitMap) || typeof parsedUnitMap !== "object") throw new Error("Unit map must be a JSON object")
+    if (!Array.isArray(parsedNormalizeRules) || !parsedNormalizeRules.every((rule) => Array.isArray(rule) && rule.length === 2 && rule.every((part) => typeof part === "string"))) throw new Error("Normalisation rules must be [find, replace] string pairs")
+    return { unitMap: parsedUnitMap as Record<string, string>, normalizeRules: parsedNormalizeRules as [string, string][] }
   }
 
   const handleSaveFuzzy = async () => {
+    let data: FuzzySettings
+    try { data = parseFuzzyRules() } catch (error) { toast.error(`Invalid JSON — ${error instanceof Error ? error.message : "unknown error"}`); return }
+    const snapshot = { unitMap, normalizeRules }
     setSavingFuzzy(true)
     try {
-      const parsedUnitMap = JSON.parse(unitMap) as Record<string, string>
-      const parsedNormalizeRules = JSON.parse(normalizeRules) as [string, string][]
-      const res = await fetch("/api/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          section: "fuzzy",
-          data: { unitMap: parsedUnitMap, normalizeRules: parsedNormalizeRules } as FuzzySettings,
-        }),
-      })
-      if (!res.ok) throw new Error("Failed to save")
+      await saveSection("fuzzy", data)
+      savedFuzzyRef.current = snapshot
+      const current = fuzzyCurrentRef.current
+      markDirty("fuzzy", current.unitMap !== snapshot.unitMap || current.normalizeRules !== snapshot.normalizeRules)
       toast.success("Fuzzy matching rules saved")
-    } catch (e) {
-      toast.error(`Invalid JSON \u2014 ${e instanceof Error ? e.message : "unknown error"}`)
-    } finally {
-      setSavingFuzzy(false)
     }
+    catch (error) { toast.error(error instanceof Error ? error.message : "Failed to save fuzzy matching rules") }
+    finally { setSavingFuzzy(false) }
   }
 
-  const openAddVendor = () => {
-    setEditingVendor(null)
-    setVendorName("")
-    setVendorContact("")
-    setVendorSpecialty("Structural")
-    setVendorDialogOpen(true)
+  const handleTestFuzzy = () => {
+    let data: FuzzySettings
+    try { data = parseFuzzyRules() } catch (error) { toast.error(`Invalid JSON — ${error instanceof Error ? error.message : "unknown error"}`); return }
+    const sample = window.prompt("Enter a description to test matching:", "Structural concrete C32/40 (columns)")
+    if (!sample) return
+    try {
+      const normalized = data.normalizeRules.reduce((value, [find, replacement]) => value.replace(new RegExp(find, "gi"), replacement), sample.toLowerCase()).replace(/\s+/g, " ").trim()
+      setFuzzyTestResult(`Normalised: “${normalized}”`)
+    } catch (error) { toast.error(`Invalid matching rule — ${error instanceof Error ? error.message : "unknown error"}`) }
   }
 
-  const openEditVendor = (vendor: Vendor) => {
-    setEditingVendor(vendor)
-    setVendorName(vendor.name)
-    setVendorContact(vendor.contact)
-    setVendorSpecialty(vendor.specialty)
-    setVendorDialogOpen(true)
+  const openAddVendor = () => { const baseline = { name: "", contact: "", specialty: "Structural" }; vendorFormBaselineRef.current = baseline; setEditingVendor(null); setVendorName(baseline.name); setVendorContact(baseline.contact); setVendorSpecialty(baseline.specialty); markDirty("vendors", false); setVendorDialogOpen(true) }
+  const openEditVendor = (vendor: Vendor) => { const baseline = { name: vendor.name, contact: vendor.contact, specialty: vendor.specialty }; vendorFormBaselineRef.current = baseline; setEditingVendor(vendor); setVendorName(baseline.name); setVendorContact(baseline.contact); setVendorSpecialty(baseline.specialty); markDirty("vendors", false); setVendorDialogOpen(true) }
+  const closeVendorDialog = () => {
+    if (!savingVendor) {
+      setVendorDialogOpen(false)
+      markDirty("vendors", false)
+    }
   }
 
   const handleSaveVendor = async () => {
-    if (!vendorName.trim()) {
-      toast.error("Vendor name is required")
-      return
-    }
+    if (!vendorName.trim()) return toast.error("Vendor name is required")
     setSavingVendor(true)
     try {
-      if (editingVendor) {
-        const res = await fetch(`/api/vendors/${editingVendor.id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: vendorName.trim(),
-            contact: vendorContact.trim(),
-            specialty: vendorSpecialty,
-          }),
-        })
-        if (!res.ok) throw new Error("Failed to update")
-        toast.success("Vendor updated")
-      } else {
-        const res = await fetch("/api/vendors", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: vendorName.trim(),
-            contact: vendorContact.trim(),
-            specialty: vendorSpecialty,
-          }),
-        })
-        if (!res.ok) throw new Error("Failed to create")
-        toast.success("Vendor added")
-      }
-      setVendorDialogOpen(false)
+      const response = await fetch(editingVendor ? `/api/vendors/${editingVendor.id}` : "/api/vendors", { method: editingVendor ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: vendorName.trim(), contact: vendorContact.trim(), specialty: vendorSpecialty }) })
+      if (!response.ok) throw new Error(await responseError(response, editingVendor ? "Failed to update vendor" : "Failed to add vendor"))
+      if (mountedRef.current) { setVendorDialogOpen(false); markDirty("vendors", false); toast.success(editingVendor ? "Vendor updated" : "Vendor added") }
       await fetchVendors()
-    } catch {
-      toast.error(editingVendor ? "Failed to update vendor" : "Failed to add vendor")
-    } finally {
-      setSavingVendor(false)
-    }
+    } catch (error) { if (mountedRef.current) toast.error(error instanceof Error ? error.message : editingVendor ? "Failed to update vendor" : "Failed to add vendor") }
+    finally { if (mountedRef.current) setSavingVendor(false) }
   }
 
   const handleDeleteVendor = async (vendor: Vendor) => {
-    if (deletingVendorId === vendor.id) {
-      setDeletingVendorId(null)
-      try {
-        const res = await fetch(`/api/vendors/${vendor.id}`, { method: "DELETE" })
-        if (!res.ok) throw new Error("Failed to delete")
-        toast.success(`Removed ${vendor.name}`)
-        await fetchVendors()
-      } catch {
-        toast.error("Failed to delete vendor")
-      }
-    } else {
-      setDeletingVendorId(vendor.id)
-      toast.error(`Click again to confirm removal of ${vendor.name}`)
-      setTimeout(() => setDeletingVendorId(null), 4000)
-    }
-  }
-
-  const handleSavePrompts = async () => {
-    if (!analysisPrompt.trim()) {
-      toast.error("Analysis prompt cannot be empty")
+    if (deletingVendorRef.current || savingVendor) return
+    if (deletingVendorId !== vendor.id) {
+      if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current)
+      setDeletingVendorId(vendor.id); toast.error(`Click again to confirm removal of ${vendor.name}`)
+      deleteTimerRef.current = setTimeout(() => { setDeletingVendorId(null); deleteTimerRef.current = null }, 4000)
       return
     }
-    setSavingPrompts(true)
+    if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current)
+    deleteTimerRef.current = null
+    deletingVendorRef.current = true
+    setDeletingVendorId(null)
+    setDeletingVendorBusyId(vendor.id)
     try {
-      const res = await fetch("/api/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          section: "prompts",
-          data: { analysisPrompt, stdPrompt } as PromptSettings,
-        }),
-      })
-      if (!res.ok) throw new Error("Failed to save")
-      toast.success("Prompts saved")
-    } catch {
-      toast.error("Failed to save prompts")
-    } finally {
-      setSavingPrompts(false)
+      const response = await fetch(`/api/vendors/${vendor.id}`, { method: "DELETE" })
+      if (!response.ok) throw new Error(await responseError(response, "Failed to delete vendor"))
+      if (mountedRef.current) toast.success(`Removed ${vendor.name}`)
+      await fetchVendors()
+    } catch (error) { if (mountedRef.current) toast.error(error instanceof Error ? error.message : "Failed to delete vendor") }
+    finally {
+      deletingVendorRef.current = false
+      if (mountedRef.current) setDeletingVendorBusyId(null)
     }
   }
 
+  const savePrompt = async (kind: "analysis" | "standardization") => {
+    const value = kind === "analysis" ? analysisPrompt : stdPrompt
+    if (!value.trim()) return toast.error(`${kind === "analysis" ? "Analysis" : "Standardization"} prompt cannot be empty`)
+    if (value.length > 20_000) return toast.error("Prompt cannot exceed 20000 characters")
+    const setSaving = kind === "analysis" ? setSavingAnalysisPrompt : setSavingStdPrompt
+    setSaving(true)
+    const data: PromptSettings = kind === "analysis"
+      ? { analysisPrompt: value, stdPrompt: savedStdRef.current, estimatePrompt: savedEstimateRef.current }
+      : { analysisPrompt: savedAnalysisRef.current, stdPrompt: value, estimatePrompt: savedEstimateRef.current }
+    try {
+      await saveSection("prompts", data)
+      if (kind === "analysis") savedAnalysisRef.current = value; else savedStdRef.current = value
+      const analysisIsDirty = analysisCurrentRef.current !== savedAnalysisRef.current
+      const standardizationIsDirty = stdCurrentRef.current !== savedStdRef.current
+      markDirty("prompts", analysisIsDirty || standardizationIsDirty)
+      toast.success(`${kind === "analysis" ? "Analysis" : "Standardization"} prompt saved`)
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Failed to save prompt") }
+    finally { setSaving(false) }
+  }
+
+  const navigateTo = (section: Section) => {
+    setActiveSection(section)
+    document.getElementById(`settings-${section}`)?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }
+
+  const updateAnalysisPrompt = (value: string) => {
+    setAnalysisPrompt(value); analysisCurrentRef.current = value
+    markDirty("prompts", value !== savedAnalysisRef.current || stdCurrentRef.current !== savedStdRef.current)
+  }
+  const updateStdPrompt = (value: string) => {
+    setStdPrompt(value); stdCurrentRef.current = value
+    markDirty("prompts", analysisCurrentRef.current !== savedAnalysisRef.current || value !== savedStdRef.current)
+  }
+  const updateVendorDraft = (next: { name: string; contact: string; specialty: string }) => {
+    setVendorName(next.name); setVendorContact(next.contact); setVendorSpecialty(next.specialty)
+    markDirty("vendors", JSON.stringify(next) !== JSON.stringify(vendorFormBaselineRef.current))
+  }
+
+  const navItems: { id: Section; label: string; dirtyKey?: keyof DirtyState }[] = [
+    { id: "ai", label: "AI & models", dirtyKey: "ai" }, { id: "processing", label: "Document processing" }, { id: "vendors", label: "Vendors", dirtyKey: "vendors" }, { id: "prompts", label: "Prompts", dirtyKey: "prompts" }, { id: "account", label: "Account" },
+  ]
+
   return (
-    <div data-od-id="settings-page">
-      <div className="grid grid-cols-2 gap-5 items-start">
-        {/* Left column */}
-        <div className="space-y-5">
-          {/* LLM Provider */}
-          <Card data-od-id="llm-settings">
-            <CardHeader>
-              <CardTitle>LLM Provider</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                <div>
-                  <label className="text-xs font-medium mb-1 block">Provider</label>
-                  <Select value={llmProvider} onValueChange={(v) => v && setLlmProvider(v)}>
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {LLM_PROVIDERS.map((p) => (
-                        <SelectItem key={p.value} value={p.value}>
-                          {p.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <label className="text-xs font-medium mb-1 block">API Key</label>
-                  <Input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="sk-..."
-                  />
-                  <p className="text-[10px] text-muted-foreground mt-1">
-                    Stored as environment variable. Never exposed to the client.
-                  </p>
-                </div>
-                <div>
-                  <label className="text-xs font-medium mb-1 block">Model</label>
-                  <Input
-                    value={llmModel}
-                    onChange={(e) => setLlmModel(e.target.value)}
-                    placeholder="e.g. gpt-4o, claude-sonnet-4, gemini-2.5-pro"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium mb-1 block">Custom Endpoint (optional)</label>
-                  <Input
-                    value={llmEndpoint}
-                    onChange={(e) => setLlmEndpoint(e.target.value)}
-                    placeholder="https://api.openai.com/v1"
-                  />
-                  <p className="text-[10px] text-muted-foreground mt-1">
-                    Override the default API endpoint for self-hosted proxies.
-                  </p>
-                </div>
-                <div className="flex gap-2">
-                  <Button size="sm" variant="secondary" onClick={handleSaveLlm} disabled={savingLlm}>
-                    {savingLlm && <Loader2 className="w-3 h-3 animate-spin" />}
-                    Save Changes
-                  </Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+    <div className="settings-grid" data-od-id="settings-page" aria-busy={loadingSettings}>
+      <nav className="settings-nav" aria-label="Settings sections">
+        <p className="settings-nav-label">Workspace settings</p>
+        {navItems.map((item) => {
+          const itemIsDirty = item.id === "processing" ? dirty.docling || dirty.fuzzy : item.dirtyKey ? dirty[item.dirtyKey] : false
+          return <button key={item.id} type="button" className={activeSection === item.id ? "active" : ""} aria-current={activeSection === item.id ? "location" : undefined} onClick={() => navigateTo(item.id)}>{item.label}{itemIsDirty && <span className="settings-unsaved" aria-label="Unsaved changes">Unsaved</span>}</button>
+        })}
+      </nav>
 
-          {/* Docling Sidecar */}
-          <Card data-od-id="docling-settings">
-            <CardHeader>
-              <CardTitle>Docling Sidecar</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                <div>
-                  <label className="text-xs font-medium mb-1 block">Sidecar URL</label>
-                  <Input
-                    value={doclingEndpoint}
-                    onChange={(e) => setDoclingEndpoint(e.target.value)}
-                    placeholder="http://localhost:8000"
-                  />
-                  <p className="text-[10px] text-muted-foreground mt-1">
-                    FastAPI server running Docling for PDF parsing.
-                  </p>
-                </div>
-                <Button size="sm" variant="secondary" onClick={handleTestDocling} disabled={testingDocling}>
-                  {testingDocling && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
-                  Test Connection
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+      <div className="settings-content">
+        {loadingSettings && <div className="settings-loading" role="status"><Loader2 className="proto-spinner" aria-hidden="true" /> Loading workspace settings…</div>}
+        {!loadingSettings && settingsLoadError && <div className="settings-load-error" role="alert"><div><strong>Workspace settings unavailable</strong><p>The values below are examples only and cannot be changed until persisted settings load successfully.</p></div><button type="button" className="btn btn-secondary btn-sm" onClick={() => void fetchSettings()}>Retry</button></div>}
 
-          {/* Catalog Fuzzy Rules */}
-          <Card data-od-id="fuzzy-rules-settings">
-            <CardHeader>
-              <CardTitle>Catalog Fuzzy Rules</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground mb-3">
-                These rules control how incoming BOQ items are fuzzy-matched to standard catalog entries during Pass 2.
-                Edits take effect on the next upload.
-              </p>
-              <div className="space-y-3">
-                <div>
-                  <label className="text-xs font-medium mb-1 block">
-                    Unit equivalence map{" "}
-                    <span className="text-muted-foreground">(JSON object: key &rarr; canonical unit)</span>
-                  </label>
-                  <textarea
-                    className="w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-xs font-mono transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 resize-y"
-                    rows={7}
-                    value={unitMap}
-                    onChange={(e) => setUnitMap(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium mb-1 block">
-                    Description normalisation rules{" "}
-                    <span className="text-muted-foreground">
-                      (JSON array of [find, replace] pairs, applied in order)
-                    </span>
-                  </label>
-                  <textarea
-                    className="w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-xs font-mono transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 resize-y"
-                    rows={7}
-                    value={normalizeRules}
-                    onChange={(e) => setNormalizeRules(e.target.value)}
-                  />
-                </div>
-                <Button size="sm" onClick={handleSaveFuzzy} disabled={savingFuzzy}>
-                  {savingFuzzy && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
-                  Save Rules
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        <section id="settings-ai" className={`proto-card settings-section${settingsReady ? "" : " settings-configuration-locked"}`} data-od-id="llm-settings" inert={!settingsReady ? true : undefined}>
+          <header className="settings-section-header"><div><h2>LLM provider</h2><p>Configure the model used for verification, comparisons, and suggestions.</p></div>{dirty.ai && <span className="settings-dirty">Unsaved changes</span>}</header>
+          <div className="settings-section-body settings-form-grid">
+            <div className="proto-field"><label htmlFor="llm-provider">Provider</label><select id="llm-provider" className="proto-select" value={llmProvider} onChange={(event) => { const provider = event.target.value as LlmSettings["provider"]; const next = { ...llmCurrentRef.current, provider }; setLlmProvider(provider); llmCurrentRef.current = next; markDirty("ai", JSON.stringify(next) !== JSON.stringify(savedLlmRef.current)) }}>{LLM_PROVIDERS.map((provider) => <option key={provider.value} value={provider.value}>{provider.label}</option>)}</select></div>
+            <div className="proto-field"><label htmlFor="llm-model">Model</label><input id="llm-model" className="proto-input" maxLength={200} value={llmModel} onChange={(event) => { const model = event.target.value; const next = { ...llmCurrentRef.current, model }; setLlmModel(model); llmCurrentRef.current = next; markDirty("ai", JSON.stringify(next) !== JSON.stringify(savedLlmRef.current)) }} placeholder="e.g. gpt-4o" /></div>
+            <div className="proto-field settings-field-wide"><label htmlFor="llm-endpoint">Custom endpoint <span className="meta">(optional)</span></label><input id="llm-endpoint" className="proto-input" type="url" maxLength={2048} value={llmEndpoint} onChange={(event) => { const endpoint = event.target.value; const next = { ...llmCurrentRef.current, endpoint }; setLlmEndpoint(endpoint); llmCurrentRef.current = next; markDirty("ai", JSON.stringify(next) !== JSON.stringify(savedLlmRef.current)) }} placeholder="https://api.openai.com/v1" /><p className="settings-help">The current server runtime can test OpenAI and OpenRouter with their default endpoints. Custom endpoint testing is not supported.</p></div>
+            <div className="proto-field settings-field-wide"><label htmlFor="llm-api-key">API key</label><input id="llm-api-key" className="proto-input" type="password" value="server-environment" readOnly aria-readonly="true" /><p className="settings-help">API keys are read-only here and must be configured securely in the server environment.</p></div>
+            <div className="settings-actions settings-field-wide"><button className="btn btn-primary btn-sm" onClick={handleSaveLlm} disabled={savingLlm}>{savingLlm && <Loader2 className="proto-spinner" aria-hidden="true" />}Save changes</button><button className="btn btn-secondary btn-sm" onClick={handleTestLlm} disabled={testingLlm || Boolean(llmTestUnavailableReason)} title={llmTestUnavailableReason || undefined}>{testingLlm && <Loader2 className="proto-spinner" aria-hidden="true" />}Test connection</button><span className="settings-inline-status" role="status" aria-live="polite">{llmStatus || llmTestUnavailableReason}</span></div>
+          </div>
+        </section>
 
-        {/* Right column */}
-        <div className="space-y-5">
-          {/* Vendors */}
-          <Card data-od-id="vendor-settings">
-            <CardHeader>
-              <CardTitle>Vendors</CardTitle>
-              <CardAction>
-                <Button size="sm" onClick={openAddVendor}>
-                  <Plus className="w-3 h-3" />
-                  Add Vendor
-                </Button>
-              </CardAction>
-            </CardHeader>
-            <CardContent className="p-0">
-              {loadingVendors ? (
-                <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
-                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                  Loading&hellip;
-                </div>
-              ) : (
-                <>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Vendor Name</TableHead>
-                        <TableHead>Specialty</TableHead>
-                        <TableHead className="text-right">Linked BOQs</TableHead>
-                        <TableHead>Last Used</TableHead>
-                        <TableHead className="w-[100px]">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {vendors.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
-                            No vendors yet
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        vendors.map((v) => (
-                          <TableRow key={v.id}>
-                            <TableCell>
-                              <div className="font-medium">{v.name}</div>
-                              {v.contact && (
-                                <div className="text-xs text-muted-foreground">{v.contact}</div>
-                              )}
-                            </TableCell>
-                            <TableCell className="text-xs">{v.specialty}</TableCell>
-                            <TableCell className="text-right font-mono text-xs">{v.linkedBoqCount}</TableCell>
-                            <TableCell className="text-xs text-muted-foreground">
-                              {v.lastUsed ? new Date(v.lastUsed).toLocaleDateString() : "\u2014"}
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-1">
-                                <Button size="xs" variant="ghost" onClick={() => openEditVendor(v)}>
-                                  <Pencil className="w-3 h-3" />
-                                </Button>
-                                <Button
-                                  size="xs"
-                                  variant="ghost"
-                                  onClick={() => handleDeleteVendor(v)}
-                                >
-                                  <Trash2 className="w-3 h-3 text-destructive" />
-                                </Button>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
-                  <div className="border-t border-border px-4 py-3">
-                    <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
-                      <svg
-                        viewBox="0 0 16 16"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.5"
-                        className="w-3 h-3 shrink-0"
-                      >
-                        <circle cx="8" cy="8" r="6.5" />
-                        <line x1="8" y1="5" x2="8" y2="9" />
-                        <line x1="8" y1="11" x2="8.01" y2="11" />
-                      </svg>
-                      Renaming a vendor here updates the name across all linked BOQs and historical data.
-                    </p>
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
+        <section id="settings-processing" className={`settings-section-group${settingsReady ? "" : " settings-configuration-locked"}`} inert={!settingsReady ? true : undefined}>
+          <article className="proto-card settings-section" data-od-id="docling-settings"><header className="settings-section-header"><div><h2>Docling sidecar</h2><p>PDF parsing service used during BOQ upload.</p></div>{dirty.docling && <span className="settings-dirty">Unsaved changes</span>}</header><div className="settings-section-body"><div className="proto-field"><label htmlFor="docling-endpoint">Sidecar URL</label><input id="docling-endpoint" className="proto-input" type="url" maxLength={2048} value={doclingEndpoint} onChange={(event) => { const endpoint = event.target.value; setDoclingEndpoint(endpoint); doclingCurrentRef.current = endpoint; markDirty("docling", endpoint !== savedDoclingRef.current) }} placeholder="http://localhost:5001" /><p className="settings-help">FastAPI server running Docling for PDF parsing.</p></div><div className="settings-actions"><button className="btn btn-primary btn-sm" onClick={handleSaveDocling} disabled={savingDocling}>{savingDocling && <Loader2 className="proto-spinner" aria-hidden="true" />}Save endpoint</button><button className="btn btn-secondary btn-sm" onClick={handleTestDocling} disabled={testingDocling}>{testingDocling && <Loader2 className="proto-spinner" aria-hidden="true" />}Test connection</button><span className="settings-inline-status" role="status" aria-live="polite">{doclingStatus}</span></div></div></article>
+          <article className="proto-card settings-section" data-od-id="fuzzy-rules-settings"><header className="settings-section-header"><div><h2>Catalog fuzzy rules</h2><p>Rules applied when incoming BOQ items are matched to the standard catalog.</p></div>{dirty.fuzzy && <span className="settings-dirty">Unsaved changes</span>}</header><div className="settings-section-body"><div className="proto-field"><label htmlFor="fuzzy-unit-map">Unit equivalence map <span className="meta">(JSON object)</span></label><textarea id="fuzzy-unit-map" className="proto-textarea settings-code" rows={7} value={unitMap} onChange={(event) => { const nextUnitMap = event.target.value; const next = { ...fuzzyCurrentRef.current, unitMap: nextUnitMap }; setUnitMap(nextUnitMap); fuzzyCurrentRef.current = next; markDirty("fuzzy", JSON.stringify(next) !== JSON.stringify(savedFuzzyRef.current)) }} /></div><div className="proto-field"><label htmlFor="fuzzy-normalize-rules">Description normalisation rules <span className="meta">([find, replace] pairs)</span></label><textarea id="fuzzy-normalize-rules" className="proto-textarea settings-code" rows={7} value={normalizeRules} onChange={(event) => { const nextNormalizeRules = event.target.value; const next = { ...fuzzyCurrentRef.current, normalizeRules: nextNormalizeRules }; setNormalizeRules(nextNormalizeRules); fuzzyCurrentRef.current = next; markDirty("fuzzy", JSON.stringify(next) !== JSON.stringify(savedFuzzyRef.current)) }} /></div><div className="settings-actions"><button className="btn btn-primary btn-sm" onClick={handleSaveFuzzy} disabled={savingFuzzy}>{savingFuzzy && <Loader2 className="proto-spinner" aria-hidden="true" />}Save rules</button><button className="btn btn-secondary btn-sm" onClick={handleTestFuzzy}>Test match</button><span className="settings-inline-status" role="status" aria-live="polite">{fuzzyTestResult}</span></div></div></article>
+        </section>
 
-          {/* LLM Analysis Prompt */}
-          <Card data-od-id="llm-prompt-settings">
-            <CardHeader>
-              <CardTitle>LLM Analysis Prompt</CardTitle>
-              <CardDescription>
-                Customise how the LLM evaluates pricing across all analysis features
-              </CardDescription>
-              <CardAction>
-                <span className="text-xs text-muted-foreground whitespace-nowrap">
-                  ~{tokenEstimate} tokens
-                </span>
-              </CardAction>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                <div>
-                  <label className="text-xs font-medium mb-1 block">System prompt</label>
-                  <textarea
-                    className="w-full min-h-[140px] min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-xs transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 resize-y leading-relaxed"
-                    value={analysisPrompt}
-                    onChange={(e) => setAnalysisPrompt(e.target.value)}
-                  />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="flex gap-2">
-                    <Button size="sm" onClick={handleSavePrompts} disabled={savingPrompts}>
-                      {savingPrompts && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
-                      Save Prompt
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => setAnalysisPrompt(DEFAULT_ANALYSIS_PROMPT)}
-                    >
-                      Reset to Default
-                    </Button>
-                  </div>
-                  <span className="text-[10px] text-muted-foreground">
-                    Applies to: BOQ verification &middot; Quotation comparison &middot; Item suggestions
-                    &middot; Standardization
-                  </span>
-                </div>
-                <div className="border-t border-border pt-3">
-                  <label className="text-xs font-medium mb-1 block">
-                    Standardization prompt{" "}
-                    <span className="text-muted-foreground">
-                      (used during Pass 3 &mdash; LLM suggestion for unmatched items)
-                    </span>
-                  </label>
-                  <textarea
-                    className="w-full min-h-[100px] min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-xs font-mono transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 resize-y leading-relaxed"
-                    value={stdPrompt}
-                    onChange={(e) => setStdPrompt(e.target.value)}
-                  />
-                  <div className="flex items-center justify-between mt-2">
-                    <div className="flex gap-2">
-                      <Button size="sm" onClick={handleSavePrompts} disabled={savingPrompts}>
-                        {savingPrompts && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
-                        Save Std Prompt
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setStdPrompt(DEFAULT_STD_PROMPT)}
-                      >
-                        Reset to Default
-                      </Button>
-                    </div>
-                    <span className="text-[10px] text-muted-foreground">
-                      Stored as <code className="text-[10px] bg-muted px-1 rounded">be_stdPrompt</code>
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+        <section id="settings-vendors" className="proto-card settings-section" data-od-id="vendor-settings"><header className="settings-section-header"><div><h2>Vendors</h2><p>Maintain contractor contacts used across BOQs and estimates.</p></div><button className="btn btn-primary btn-sm" onClick={openAddVendor} disabled={savingVendor || deletingVendorBusyId !== null}><Plus aria-hidden="true" />Add vendor</button></header><div className="settings-table-wrap" tabIndex={0} aria-label="Vendors table, horizontally scrollable"><table className="data-table"><thead><tr><th>Vendor name</th><th>Specialty</th><th className="num-col">Linked BOQs</th><th>Last used</th><th>Actions</th></tr></thead><tbody>{loadingVendors ? <tr><td colSpan={5}><div className="settings-row-status" role="status"><Loader2 className="proto-spinner" aria-hidden="true" />Loading vendors…</div></td></tr> : vendors.length === 0 ? <tr><td colSpan={5}><div className="settings-row-status">No vendors yet. Add one to begin.</div></td></tr> : vendors.map((vendor) => <tr key={vendor.id}><td><strong>{vendor.name}</strong>{vendor.contact && <span className="meta settings-vendor-contact">{vendor.contact}</span>}</td><td>{vendor.specialty}</td><td className="num-col">{vendor.linkedBoqCount}</td><td>{vendor.lastUsed ? new Date(vendor.lastUsed).toLocaleDateString() : "—"}</td><td><div className="settings-row-actions"><button className="btn btn-ghost btn-sm" disabled={savingVendor || deletingVendorBusyId !== null} onClick={() => openEditVendor(vendor)} aria-label={`Edit ${vendor.name}`}><Pencil aria-hidden="true" />Edit</button><button className="btn btn-outline-danger btn-sm" disabled={savingVendor || deletingVendorBusyId !== null} onClick={() => void handleDeleteVendor(vendor)} aria-label={`${deletingVendorId === vendor.id ? "Confirm removal of" : "Remove"} ${vendor.name}`}><Trash2 aria-hidden="true" />{deletingVendorBusyId === vendor.id ? "Removing…" : deletingVendorId === vendor.id ? "Confirm" : "Remove"}</button></div></td></tr>)}</tbody></table></div><p className="settings-table-note">Renaming a vendor updates the name across all linked BOQs and historical data.</p></section>
 
-          {/* Account */}
-          <Card data-od-id="account-settings">
-            <CardHeader>
-              <CardTitle>Account</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                <div>
-                  <label className="text-xs font-medium mb-1 block">Name</label>
-                  <Input
-                    value="Construction Consultant"
-                    readOnly
-                    className="opacity-60"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium mb-1 block">Email</label>
-                  <Input
-                    value="admin@buildestimate.app"
-                    readOnly
-                    className="opacity-60"
-                  />
-                </div>
-                <hr className="border-border my-2" />
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => toast.success("Password changed \u2014 stored as AUTH_SECRET")}
-                >
-                  Change Password
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        <section id="settings-prompts" role="group" aria-label="Prompt settings" className={`settings-section-group${settingsReady ? "" : " settings-configuration-locked"}`} aria-disabled={!settingsReady} inert={!settingsReady ? true : undefined}><article className="proto-card settings-section" data-od-id="llm-prompt-settings"><header className="settings-section-header"><div><h2>LLM analysis prompt</h2><p>Controls how pricing is evaluated across analysis features.</p></div><span className="meta">~{analysisTokenEstimate} tokens</span></header><div className="settings-section-body"><div className="proto-field"><label htmlFor="analysis-prompt">System prompt</label><textarea id="analysis-prompt" className="proto-textarea settings-prompt" maxLength={20000} value={analysisPrompt} onChange={(event) => updateAnalysisPrompt(event.target.value)} /></div><div className="settings-actions"><button className="btn btn-primary btn-sm" onClick={() => void savePrompt("analysis")} disabled={savingAnalysisPrompt || savingStdPrompt}>{savingAnalysisPrompt && <Loader2 className="proto-spinner" aria-hidden="true" />}Save analysis prompt</button><button className="btn btn-ghost btn-sm" onClick={() => updateAnalysisPrompt(DEFAULT_ANALYSIS_PROMPT)}>Reset to default</button></div></div></article><article className="proto-card settings-section"><header className="settings-section-header"><div><h2>Standardization prompt</h2><p>Used during Pass 3 for unmatched-item suggestions.</p></div><span className="meta">~{stdTokenEstimate} tokens</span></header><div className="settings-section-body"><div className="proto-field"><label htmlFor="standardization-prompt">System prompt</label><textarea id="standardization-prompt" className="proto-textarea settings-prompt settings-code" maxLength={20000} value={stdPrompt} onChange={(event) => updateStdPrompt(event.target.value)} /></div><div className="settings-actions"><button className="btn btn-primary btn-sm" onClick={() => void savePrompt("standardization")} disabled={savingStdPrompt || savingAnalysisPrompt}>{savingStdPrompt && <Loader2 className="proto-spinner" aria-hidden="true" />}Save standardization prompt</button><button className="btn btn-ghost btn-sm" onClick={() => updateStdPrompt(DEFAULT_STD_PROMPT)}>Reset to default</button></div></div></article></section>
+
+        <section id="settings-account" className="proto-card settings-section" data-od-id="account-settings"><header className="settings-section-header"><div><h2>Account</h2><p>Identity values are managed by authentication configuration.</p></div></header><div className="settings-section-body settings-form-grid"><div className="proto-field"><label htmlFor="account-name">Name</label><input id="account-name" className="proto-input" value="Construction Consultant" readOnly /></div><div className="proto-field"><label htmlFor="account-email">Email</label><input id="account-email" className="proto-input" type="email" value="admin@buildestimate.app" readOnly /></div><div className="settings-field-wide"><button className="btn btn-secondary btn-sm" type="button" disabled>Change password</button><p className="settings-help">Password changes are not available in this prototype. Update authentication credentials in the server environment.</p></div></div></section>
       </div>
 
-      {/* Add / Edit Vendor Dialog */}
-      <Dialog open={vendorDialogOpen} onOpenChange={setVendorDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{editingVendor ? "Edit Vendor" : "Add Vendor"}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div>
-              <label className="text-xs font-medium mb-1 block">Vendor Name</label>
-              <Input
-                value={vendorName}
-                onChange={(e) => setVendorName(e.target.value)}
-                placeholder="e.g. Bangkok Construction Co."
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium mb-1 block">Contact Info</label>
-              <Input
-                value={vendorContact}
-                onChange={(e) => setVendorContact(e.target.value)}
-                placeholder="email or phone"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium mb-1 block">Specialty</label>
-              <Select value={vendorSpecialty} onValueChange={(v) => v && setVendorSpecialty(v)}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {SPECIALTIES.map((s) => (
-                    <SelectItem key={s} value={s}>
-                      {s}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            {editingVendor && (
-              <div className="p-2.5 bg-amber-50 dark:bg-amber-950/20 rounded-lg text-[11px] text-amber-800 dark:text-amber-300 flex items-start gap-1.5">
-                <svg
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  className="w-3 h-3 shrink-0 mt-0.5"
-                >
-                  <circle cx="8" cy="8" r="6.5" />
-                  <line x1="8" y1="5" x2="8" y2="9" />
-                  <line x1="8" y1="11" x2="8.01" y2="11" />
-                </svg>
-                <span>
-                  Renaming this vendor will update the name across{" "}
-                  <strong>{editingVendor.linkedBoqCount}</strong> linked BOQs.
-                </span>
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button onClick={handleSaveVendor} disabled={savingVendor}>
-              {savingVendor && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
-              {editingVendor ? "Save Changes" : "Add Vendor"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <Dialog open={vendorDialogOpen} onOpenChange={(open) => { if (!open) closeVendorDialog(); else setVendorDialogOpen(true) }}><DialogContent className="settings-vendor-modal" data-od-id="add-vendor-modal" aria-busy={savingVendor}><DialogHeader><DialogTitle>{editingVendor ? "Edit vendor" : "Add vendor"}</DialogTitle></DialogHeader><div className="settings-modal-fields"><div className="proto-field"><label htmlFor="vendor-name">Vendor name</label><input id="vendor-name" className="proto-input" value={vendorName} disabled={savingVendor} onChange={(event) => updateVendorDraft({ name: event.target.value, contact: vendorContact, specialty: vendorSpecialty })} placeholder="e.g. Bangkok Construction Co." /></div><div className="proto-field"><label htmlFor="vendor-contact">Contact info</label><input id="vendor-contact" className="proto-input" value={vendorContact} disabled={savingVendor} onChange={(event) => updateVendorDraft({ name: vendorName, contact: event.target.value, specialty: vendorSpecialty })} placeholder="email or phone" /></div><div className="proto-field"><label htmlFor="vendor-specialty">Specialty</label><select id="vendor-specialty" className="proto-select" value={vendorSpecialty} disabled={savingVendor} onChange={(event) => updateVendorDraft({ name: vendorName, contact: vendorContact, specialty: event.target.value })}>{SPECIALTIES.map((specialty) => <option key={specialty}>{specialty}</option>)}</select></div>{editingVendor && <p className="settings-warning">Renaming this vendor updates <strong>{editingVendor.linkedBoqCount}</strong> linked BOQs.</p>}</div><DialogFooter><button className="btn btn-secondary" onClick={closeVendorDialog} disabled={savingVendor}>Cancel</button><button className="btn btn-primary" onClick={() => void handleSaveVendor()} disabled={savingVendor}>{savingVendor && <Loader2 className="proto-spinner" aria-hidden="true" />}{savingVendor ? "Saving…" : editingVendor ? "Save changes" : "Add vendor"}</button></DialogFooter></DialogContent></Dialog>
     </div>
   )
 }
