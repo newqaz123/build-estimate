@@ -3,6 +3,14 @@ import { auth } from '@/lib/auth'
 import { queryCollection, getDocument, createDocumentWithId } from '@/lib/db'
 import type { StandardEntry } from '@/lib/standard-schema'
 
+function normalizeStandardEntry(entry: StandardEntry): StandardEntry {
+  return {
+    ...entry,
+    aliases: entry.aliases ?? [],
+    sourceItems: entry.sourceItems ?? [],
+  }
+}
+
 export async function GET(request: NextRequest) {
   const session = await auth()
   if (!session?.user) {
@@ -18,7 +26,7 @@ export async function GET(request: NextRequest) {
       orderDirection: 'asc',
     })
 
-    let standards = docs
+    let standards = docs.map(normalizeStandardEntry)
     if (search) {
       standards = standards.filter(
         (s) => s.description.toLowerCase().includes(search) || s.aliases?.some(a => a.toLowerCase().includes(search))

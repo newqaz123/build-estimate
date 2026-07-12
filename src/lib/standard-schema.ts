@@ -11,7 +11,7 @@ export interface StandardEntry {
   unit: string
   category?: string
   aliases: string[]
-  sourceItems: StandardSourceItem[]
+  sourceItems?: StandardSourceItem[]
   sourceBoqCount: number
   lastMatched?: string
   archivedAt?: string
