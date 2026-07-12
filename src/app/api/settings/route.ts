@@ -1,9 +1,58 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { getDocument, setDocument } from '@/lib/db'
+import { decodeNormalizeRules } from '@/lib/settings-storage'
+import { withPromptDefaults } from '@/lib/prompt-defaults'
 import type { DoclingSettings, FuzzySettings, LlmSettings, PromptSettings, WorkspaceSettings } from '@/lib/settings-schema'
 
 const SETTINGS_ID = 'workspace'
+const MAX_ENDPOINT_LENGTH = 2048
+const MAX_PROMPT_LENGTH = 20_000
+const PROVIDERS = new Set(['openai', 'anthropic', 'google', 'openrouter'])
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, keys: string[]) {
+  return Object.keys(value).every((key) => keys.includes(key))
+}
+
+function isBoundedString(value: unknown, max: number, allowBlank = false): value is string {
+  return typeof value === 'string' && value.length <= max && (allowBlank || value.trim().length > 0)
+}
+
+function isHttpUrl(value: unknown, optional = false) {
+  if (optional && (value === undefined || value === '')) return true
+  if (!isBoundedString(value, MAX_ENDPOINT_LENGTH)) return false
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function validateSection(section: unknown, data: unknown): { valid: true; data: LlmSettings | DoclingSettings | FuzzySettings | PromptSettings } | { valid: false; error: string } {
+  if (!isPlainRecord(data)) return { valid: false, error: 'Settings data must be an object' }
+  if (section === 'llm') {
+    if (!hasOnlyKeys(data, ['provider', 'model', 'endpoint']) || !PROVIDERS.has(String(data.provider)) || !isBoundedString(data.model, 200) || !isHttpUrl(data.endpoint, true)) return { valid: false, error: 'Invalid LLM settings' }
+    return { valid: true, data: data as unknown as LlmSettings }
+  }
+  if (section === 'docling') {
+    if (!hasOnlyKeys(data, ['endpoint']) || !isHttpUrl(data.endpoint)) return { valid: false, error: 'Invalid Docling endpoint' }
+    return { valid: true, data: data as unknown as DoclingSettings }
+  }
+  if (section === 'fuzzy') {
+    if (!hasOnlyKeys(data, ['unitMap', 'normalizeRules']) || !isPlainRecord(data.unitMap) || Object.keys(data.unitMap).length > 200 || !Object.entries(data.unitMap).every(([key, value]) => key.length > 0 && key.length <= 100 && isBoundedString(value, 100)) || !Array.isArray(data.normalizeRules) || data.normalizeRules.length > 200 || !data.normalizeRules.every((rule) => Array.isArray(rule) && rule.length === 2 && rule.every((part) => isBoundedString(part, 500, true)))) return { valid: false, error: 'Invalid fuzzy matching rules' }
+    return { valid: true, data: data as unknown as FuzzySettings }
+  }
+  if (section === 'prompts') {
+    if (!hasOnlyKeys(data, ['analysisPrompt', 'stdPrompt', 'estimatePrompt']) || !isBoundedString(data.analysisPrompt, MAX_PROMPT_LENGTH) || !isBoundedString(data.stdPrompt, MAX_PROMPT_LENGTH) || !isBoundedString(data.estimatePrompt, MAX_PROMPT_LENGTH)) return { valid: false, error: 'Prompts must be nonblank and no longer than 20000 characters' }
+    return { valid: true, data: data as unknown as PromptSettings }
+  }
+  return { valid: false, error: 'Invalid section' }
+}
 
 const DEFAULT_SETTINGS: WorkspaceSettings = {
   llm: { provider: 'openai', model: 'gpt-4o' },
@@ -12,10 +61,42 @@ const DEFAULT_SETTINGS: WorkspaceSettings = {
     unitMap: { LS: 'L/S', SQFT: 'sq ft', SQM: 'sq m' },
     normalizeRules: [['\\bsq\\.?\\s*ft\\b', 'sq ft'], ['\\bsq\\.?\\s*m\\b', 'sq m']],
   },
-  prompts: {
-    analysisPrompt: 'Analyze the parsed BOQ items for consistency and accuracy:',
-    stdPrompt: 'Translate the following parsed BOQ items to standard descriptions:',
-  },
+  prompts: withPromptDefaults(),
+}
+
+type StoredWorkspaceSettings = Omit<WorkspaceSettings, 'fuzzy'> & {
+  fuzzy?: Omit<FuzzySettings, 'normalizeRules'> & { normalizeRules?: unknown }
+  prompts?: Partial<PromptSettings>
+}
+
+function toStoredSettings(settings: WorkspaceSettings): StoredWorkspaceSettings {
+  return {
+    ...settings,
+    fuzzy: settings.fuzzy
+      ? {
+          ...settings.fuzzy,
+          // Firestore rejects arrays nested directly inside another array.
+          normalizeRules: settings.fuzzy.normalizeRules.map(([find, replace]) => ({ find, replace })),
+        }
+      : undefined,
+  }
+}
+
+function fromStoredSettings(settings: StoredWorkspaceSettings): WorkspaceSettings {
+  return {
+    ...DEFAULT_SETTINGS,
+    ...settings,
+    prompts: withPromptDefaults(settings.prompts),
+    fuzzy: settings.fuzzy
+      ? {
+          ...settings.fuzzy,
+          normalizeRules: decodeNormalizeRules(
+            settings.fuzzy.normalizeRules,
+            DEFAULT_SETTINGS.fuzzy.normalizeRules,
+          ),
+        }
+      : DEFAULT_SETTINGS.fuzzy,
+  }
 }
 
 export async function GET() {
@@ -25,12 +106,12 @@ export async function GET() {
   }
 
   try {
-    const existing = await getDocument<WorkspaceSettings>('settings', SETTINGS_ID)
+    const existing = await getDocument<StoredWorkspaceSettings>('settings', SETTINGS_ID)
     if (!existing) {
-      await setDocument('settings', SETTINGS_ID, DEFAULT_SETTINGS as unknown as Record<string, unknown>, false)
+      await setDocument('settings', SETTINGS_ID, toStoredSettings(DEFAULT_SETTINGS) as unknown as Record<string, unknown>, false)
       return NextResponse.json(DEFAULT_SETTINGS)
     }
-    return NextResponse.json({ ...DEFAULT_SETTINGS, ...existing })
+    return NextResponse.json(fromStoredSettings(existing))
   } catch (error) {
     console.error('Error fetching settings:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -44,21 +125,21 @@ export async function PUT(request: NextRequest) {
   }
 
   try {
-    const body = await request.json()
-    const { section, data } = body as { section: 'llm' | 'docling' | 'fuzzy' | 'prompts'; data: LlmSettings | DoclingSettings | FuzzySettings | PromptSettings }
-
-    if (!section || !data) {
-      return NextResponse.json({ error: 'Missing section or data' }, { status: 400 })
-    }
-
-    const validSections = ['llm', 'docling', 'fuzzy', 'prompts']
-    if (!validSections.includes(section)) {
-      return NextResponse.json({ error: 'Invalid section' }, { status: 400 })
-    }
-
-    await setDocument('settings', SETTINGS_ID, { [section]: data })
+    const body: unknown = await request.json()
+    if (!isPlainRecord(body) || !hasOnlyKeys(body, ['section', 'data'])) return NextResponse.json({ error: 'Malformed settings request' }, { status: 400 })
+    const result = validateSection(body.section, body.data)
+    if (!result.valid) return NextResponse.json({ error: result.error }, { status: 400 })
+    const section = body.section as 'llm' | 'docling' | 'fuzzy' | 'prompts'
+    const persistedData = section === 'fuzzy'
+      ? {
+          ...(result.data as FuzzySettings),
+          normalizeRules: (result.data as FuzzySettings).normalizeRules.map(([find, replace]) => ({ find, replace })),
+        }
+      : result.data
+    await setDocument('settings', SETTINGS_ID, { [section]: persistedData })
     return NextResponse.json({ success: true })
   } catch (error) {
+    if (error instanceof SyntaxError) return NextResponse.json({ error: 'Malformed JSON request' }, { status: 400 })
     console.error('Error updating settings:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }

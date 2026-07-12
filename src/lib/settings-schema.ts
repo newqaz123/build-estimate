@@ -16,6 +16,7 @@ export interface FuzzySettings {
 export interface PromptSettings {
   analysisPrompt: string
   stdPrompt: string
+  estimatePrompt: string
 }
 
 export interface Vendor {
