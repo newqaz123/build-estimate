@@ -9,6 +9,10 @@ function computeTotals(sections: Boq['sections']) {
   return { totalItems, grandTotal }
 }
 
+export function parseBoqListLimit(limit: string | null): number {
+  return Math.min(1000, Math.max(1, parseInt(limit || '10', 10)))
+}
+
 export async function GET(request: NextRequest) {
   const session = await auth()
   if (!session?.user) {
@@ -21,19 +25,24 @@ export async function GET(request: NextRequest) {
     const status = searchParams.get('status')
     const workType = searchParams.get('workType')
     const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10))
-    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '10', 10)))
+    const limit = parseBoqListLimit(searchParams.get('limit'))
 
     const where: { field: string; op: FirebaseFirestore.WhereFilterOp; value: unknown }[] = []
     if (status) where.push({ field: 'status', op: '==', value: status })
     if (workType) where.push({ field: 'workType', op: '==', value: workType })
 
     const { docs } = await queryCollection<Boq>('boqs', {
-      orderByField: 'updatedAt',
-      orderDirection: 'desc',
+      // Firestore requires a separate composite index for every equality filter
+      // combined with this order. Sort filtered results in memory so every valid
+      // status/work-type filter can also return an empty result without a 500.
+      orderByField: where.length === 0 ? 'updatedAt' : undefined,
+      orderDirection: where.length === 0 ? 'desc' : undefined,
       where: where.length > 0 ? where : undefined,
     })
 
-    let boqs = docs
+    let boqs = where.length > 0
+      ? docs.toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      : docs
     if (search) {
       boqs = boqs.filter(
         (b) => b.project.toLowerCase().includes(search) || b.vendor.toLowerCase().includes(search)
