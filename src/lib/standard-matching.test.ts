@@ -63,6 +63,23 @@ test('keeps compatible results ahead of incompatible ones when both exist', () =
   assert.ok(result.indexOf(incompatible[0]) > result.indexOf(compatible[compatible.length - 1]))
 })
 
+test('keeps meaningful fuzzy matches ahead of unrelated same-unit candidates', () => {
+  const result = rankCatalogMatches(
+    'Slab formwork',
+    'm2',
+    [
+      { id: 'std-related', description: 'Slab formwork installation', unit: 'ton', aliases: [] },
+      { id: 'std-unrelated', description: 'Office cleaning', unit: 'm²', aliases: [] },
+    ],
+    { m2: 'm²' },
+  )
+
+  assert.equal(result[0].id, 'std-related')
+  assert.equal(result[0].unitCompatible, false)
+  assert.ok(result[0].score > result[1].score)
+  assert.equal(result[1].id, 'std-unrelated')
+})
+
 test('sorts deterministically by score then description when scores tie', () => {
   const tieCatalog = [
     { id: 'std-b', description: 'Beta item', unit: 'ton', aliases: ['beta variant'] },

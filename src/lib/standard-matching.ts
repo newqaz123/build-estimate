@@ -101,6 +101,10 @@ function scoreCandidate(searchText: string, candidateText: string, aliases: stri
     bestOverlap = Math.max(bestOverlap, tokenOverlapScore(searchTokens, tokenize(candidate)))
   }
 
+  if (bestOverlap === 0) {
+    return { score: 0, reason: 'fuzzy' }
+  }
+
   return { score: 100 + bestOverlap, reason: 'fuzzy' }
 }
 
@@ -118,7 +122,7 @@ export function rankCatalogMatches(
     const normalizedAliases = uniqueNormalized(entry.aliases)
     const unitCompatible = unitsCompatible(unit, entry.unit, unitMap)
     const { score: baseScore, reason } = scoreCandidate(searchText, normalizedDescription, normalizedAliases)
-    const score = baseScore + (unitCompatible ? 1000 : 0)
+    const score = baseScore > 0 && unitCompatible ? baseScore + 1000 : baseScore
 
     return {
       id: entry.id,
