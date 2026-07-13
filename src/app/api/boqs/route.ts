@@ -10,7 +10,13 @@ function computeTotals(sections: Boq['sections']) {
 }
 
 export function parseBoqListLimit(limit: string | null): number {
-  return Math.min(1000, Math.max(1, parseInt(limit || '10', 10)))
+  const parsed = Number.parseInt(limit ?? '', 10)
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 10
+  }
+
+  return Math.min(1000, parsed)
 }
 
 export async function GET(request: NextRequest) {

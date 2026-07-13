@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { parseBoqListLimit } from '../boqs/route'
-import { computeBoqStdStatus, itemMatchesStandardCanonically, updateLinkedBoqsForStandard } from './[id]/route'
+import { computeBoqStdStatus, hasLinkedEstimateItems, itemMatchesStandardCanonically, updateLinkedBoqsForStandard } from './[id]/route'
 import {
   applyStandardToBoqItem,
   mergeStandardSourceItems,
@@ -322,8 +322,72 @@ test('itemMatchesStandardCanonically detects legacy canonical links', () => {
   )
 })
 
-test('parseBoqListLimit keeps the existing default but allows the catalog page max of 1000', () => {
+test('hasLinkedEstimateItems protects standards referenced by estimate rows', () => {
+  assert.equal(
+    hasLinkedEstimateItems(
+      [
+        {
+          id: 'est-1',
+          name: 'Estimate',
+          date: '2026-07-13',
+          items: [
+            {
+              code: 'A-1',
+              desc: 'Ready-mix concrete',
+              unit: 'm³',
+              qty: 1,
+              rate: 100,
+              total: 100,
+              source: 'imported',
+              stdId: 'std-1',
+            },
+          ],
+          totalAmount: 100,
+          status: 'draft',
+          createdAt: '2026-07-13T00:00:00.000Z',
+          updatedAt: '2026-07-13T00:00:00.000Z',
+        },
+      ],
+      'std-1',
+    ),
+    true,
+  )
+
+  assert.equal(
+    hasLinkedEstimateItems(
+      [
+        {
+          id: 'est-1',
+          name: 'Estimate',
+          date: '2026-07-13',
+          items: [
+            {
+              code: 'A-1',
+              desc: 'Ready-mix concrete',
+              unit: 'm³',
+              qty: 1,
+              rate: 100,
+              total: 100,
+              source: 'imported',
+              stdId: 'std-2',
+            },
+          ],
+          totalAmount: 100,
+          status: 'draft',
+          createdAt: '2026-07-13T00:00:00.000Z',
+          updatedAt: '2026-07-13T00:00:00.000Z',
+        },
+      ],
+      'std-1',
+    ),
+    false,
+  )
+})
+
+test('parseBoqListLimit keeps the existing default and safely clamps valid inputs', () => {
   assert.equal(parseBoqListLimit(null), 10)
   assert.equal(parseBoqListLimit('1000'), 1000)
   assert.equal(parseBoqListLimit('1500'), 1000)
+  assert.equal(parseBoqListLimit('abc'), 10)
+  assert.equal(parseBoqListLimit('0'), 10)
 })

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { runTransaction } from '@/lib/db'
 import type { Boq, BoqItem } from '@/lib/boq-schema'
+import type { Estimate } from '@/lib/estimate-schema'
 import type { StandardEntry } from '@/lib/standard-schema'
 import { applyStandardToBoqItem, normalizeStandardEntry } from '../route'
 
@@ -20,6 +21,10 @@ export function computeBoqStdStatus(sections: Boq['sections']): Boq['stdStatus']
 
 export function itemMatchesStandardCanonically(item: BoqItem, standard: StandardEntry): boolean {
   return normalizeText(item.desc) === normalizeText(standard.description) && normalizeText(item.unit) === normalizeText(standard.unit)
+}
+
+export function hasLinkedEstimateItems(estimates: Estimate[], standardId: string): boolean {
+  return estimates.some((estimate) => estimate.items.some((item) => item.stdId === standardId))
 }
 
 function itemLinksToStandard(item: BoqItem, standard: StandardEntry, previousStandard?: StandardEntry): boolean {
@@ -174,14 +179,18 @@ export async function DELETE(
 
       const standard = normalizeStandardEntry({ id: standardSnap.id, ...standardSnap.data() } as StandardEntry)
       const boqsSnap = await transaction.get(db.collection('boqs'))
-      const hasLinkedItems = boqsSnap.docs.some((doc) => {
+      const hasLinkedBoqItems = boqsSnap.docs.some((doc) => {
         const boq = { id: doc.id, ...doc.data() } as Boq
         return boq.sections.some((section) =>
           section.items.some((item) => item.stdId === id || itemMatchesStandardCanonically(item, standard)),
         )
       })
 
-      if (hasLinkedItems) {
+      const estimatesSnap = await transaction.get(db.collection('estimates'))
+      const estimates = estimatesSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as Estimate)
+      const hasLinkedEstimateRows = hasLinkedEstimateItems(estimates, id)
+
+      if (hasLinkedBoqItems || hasLinkedEstimateRows) {
         transaction.update(standardRef, { archivedAt: updatedAt, updatedAt })
         return { success: true, archived: true, deleted: false }
       }
