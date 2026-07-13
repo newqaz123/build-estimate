@@ -221,6 +221,79 @@ test('updateLinkedBoqsForStandard updates linked items and preserves original so
   assert.equal(boqs[0]?.sections[0]?.items[0]?.sourceUnit, 'm3')
 })
 
+test('updateLinkedBoqsForStandard preserves legacy links across a rename and stamps stdId for delete detection', () => {
+  const previousStandard = {
+    id: 'std-1',
+    description: 'Old canonical',
+    unit: 'm3',
+    aliases: ['concrete'],
+    sourceItems: [],
+    sourceBoqCount: 1,
+    createdAt: '2026-07-13T00:00:00.000Z',
+    updatedAt: '2026-07-13T00:00:00.000Z',
+  }
+
+  const { boqs, affectedItems } = updateLinkedBoqsForStandard(
+    [
+      {
+        id: 'boq-1',
+        project: 'Tower',
+        vendor: 'Vendor',
+        workType: 'Structural',
+        date: '2026-07-13',
+        totalItems: 1,
+        grandTotal: 100,
+        status: 'active',
+        stdStatus: 'partial',
+        createdAt: '2026-07-13T00:00:00.000Z',
+        updatedAt: '2026-07-13T00:00:00.000Z',
+        sections: [
+          {
+            header: 'Concrete',
+            items: [
+              {
+                code: 'A-1',
+                desc: 'Old canonical',
+                unit: 'm3',
+                qty: 1,
+                rate: 100,
+                total: 100,
+                type: 'unit',
+                stdStatus: 'matched',
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    {
+      ...previousStandard,
+      description: 'New canonical',
+      unit: 'm³',
+    },
+    previousStandard,
+  )
+
+  const updatedItem = boqs[0]?.sections[0]?.items[0]
+  assert.equal(affectedItems, 1)
+  assert.equal(updatedItem?.stdId, 'std-1')
+  assert.equal(updatedItem?.desc, 'New canonical')
+  assert.equal(updatedItem?.unit, 'm³')
+  assert.equal(updatedItem?.sourceDesc, 'Old canonical')
+  assert.equal(updatedItem?.sourceUnit, 'm3')
+  assert.equal(
+    itemMatchesStandardCanonically(
+      updatedItem!,
+      {
+        ...previousStandard,
+        description: 'New canonical',
+        unit: 'm³',
+      },
+    ),
+    true,
+  )
+})
+
 test('itemMatchesStandardCanonically detects legacy canonical links', () => {
   assert.equal(
     itemMatchesStandardCanonically(

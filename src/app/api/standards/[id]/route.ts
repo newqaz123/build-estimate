@@ -22,7 +22,19 @@ export function itemMatchesStandardCanonically(item: BoqItem, standard: Standard
   return normalizeText(item.desc) === normalizeText(standard.description) && normalizeText(item.unit) === normalizeText(standard.unit)
 }
 
-export function updateLinkedBoqsForStandard(boqs: Boq[], standard: StandardEntry): { boqs: Boq[]; affectedItems: number } {
+function itemLinksToStandard(item: BoqItem, standard: StandardEntry, previousStandard?: StandardEntry): boolean {
+  return (
+    item.stdId === standard.id ||
+    itemMatchesStandardCanonically(item, standard) ||
+    (previousStandard ? itemMatchesStandardCanonically(item, previousStandard) : false)
+  )
+}
+
+export function updateLinkedBoqsForStandard(
+  boqs: Boq[],
+  standard: StandardEntry,
+  previousStandard?: StandardEntry,
+): { boqs: Boq[]; affectedItems: number } {
   let affectedItems = 0
 
   const updatedBoqs = boqs.map((boq) => {
@@ -30,7 +42,7 @@ export function updateLinkedBoqsForStandard(boqs: Boq[], standard: StandardEntry
     const sections = boq.sections.map((section) => {
       let sectionChanged = false
       const items = section.items.map((item) => {
-        if (item.stdId !== standard.id) {
+        if (!itemLinksToStandard(item, standard, previousStandard)) {
           return item
         }
 
@@ -106,7 +118,7 @@ export async function PUT(
       const boqsQuery = db.collection('boqs')
       const boqsSnap = await transaction.get(boqsQuery)
       const boqs = boqsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as Boq)
-      const { boqs: updatedBoqs, affectedItems } = updateLinkedBoqsForStandard(boqs, updatedStandard)
+      const { boqs: updatedBoqs, affectedItems } = updateLinkedBoqsForStandard(boqs, updatedStandard, existing)
 
       transaction.update(standardRef, {
         description: updatedStandard.description,
