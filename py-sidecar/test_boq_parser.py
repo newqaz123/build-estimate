@@ -1,5 +1,9 @@
 import re
+import sys
 import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from boq_parser import extract_boq_document, extract_boq_sections, parse_number
 
@@ -107,6 +111,33 @@ class BoqParserTest(unittest.TestCase):
         ]
 
         self.assertEqual(extract_boq_document([{"page": 1, "rows": rows}], "")["sections"], [])
+
+    def test_common_summary_label_variants_are_excluded(self):
+        for label in ("SUB-TOTAL", "LESS DISCOUNT", "ADD VAT 7%"):
+            with self.subTest(label=label):
+                rows = [
+                    ["DESCRIPTION", "AMOUNT"],
+                    [label, "7,000.00"],
+                ]
+
+                self.assertEqual(extract_boq_document([{"page": 1, "rows": rows}], "")["sections"], [])
+
+    def test_detects_header_after_three_title_and_scope_rows(self):
+        rows = [
+            ["EASTERN GROUP E.T.G. CO., LTD"],
+            ["QUOTATION NO.: ETG.2026/AYT074"],
+            ["ON-OFF VALVE INSTALLATION WORK FOR BDN PROCESS"],
+            ["ITEM", "DESCRIPTION", "UNIT", "Q'TY", "RATE", "AMOUNT"],
+            ["1", "Install on-off valve", "set", "2", "1,500", "3,000"],
+        ]
+
+        sections = extract_boq_document([{"page": 1, "rows": rows}], "")["sections"]
+        self.assertTrue(sections)
+        item = sections[0]["items"][0]
+
+        self.assertEqual((item["desc"], item["unit"], item["qty"], item["rate"], item["total"]),
+                         ("Install on-off valve", "set", 2.0, 1500.0, 3000.0))
+        self.assertEqual(item["sourceRef"]["row"], 5)
 
     def test_parse_number_handles_currency_and_parenthesized_negatives(self):
         self.assertEqual(parse_number("฿ 1,234.50"), 1234.5)

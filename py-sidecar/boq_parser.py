@@ -13,7 +13,8 @@ HEADER_ALIASES = {
     "total": ("amount", "total", "total amount", "extended amount", "value"),
 }
 TOTAL_ROW = re.compile(
-    r"^(?:sub\s*total|grand\s+total|total|vat(?:\s*\d+(?:\.\d+)?\s*%)?|discount|"
+    r"^(?:sub[\s-]*total|grand[\s-]+total|total|(?:add\s+)?vat(?:\s*\d+(?:\.\d+)?\s*%)?|"
+    r"(?:less\s+)?discount|"
     r"carried\s+forward|brought\s+forward)(?=\s|$|\b)",
     re.I,
 )
@@ -127,36 +128,21 @@ def _columns_from_headers(headers: list[str]) -> dict[str, int]:
     return columns
 
 
-def _column_map(header: list[Any]) -> dict[str, int]:
-    return _columns_from_headers([normalize_header(value) for value in header])
-
-
-def _find_header(rows: list[list[Any]]) -> tuple[int, dict[str, int]] | None:
-    best: tuple[int, dict[str, int]] | None = None
-    for index, row in enumerate(rows[:8]):
-        columns = _column_map(row)
-        if "desc" not in columns:
-            continue
-        score = len(columns)
-        if score >= 3 and (best is None or score > len(best[1])):
-            best = (index, columns)
-    return best
-
-
 def _find_document_header(rows: list[list[Any]]) -> tuple[int, dict[str, int]] | None:
     best: tuple[int, dict[str, int]] | None = None
-    for count in range(1, min(3, len(rows)) + 1):
-        columns = _columns_from_headers(flatten_headers(rows[:count]))
-        if "desc" not in columns:
-            continue
-        has_costs = any(
-            key in columns
-            for key in ("rate", "total", "amount", "material_rate", "material_total", "labour_rate", "labour_total")
-        )
-        if not has_costs:
-            continue
-        if best is None or len(columns) > len(best[1]):
-            best = (count, columns)
+    for start in range(min(8, len(rows))):
+        for count in range(1, min(3, len(rows) - start) + 1):
+            columns = _columns_from_headers(flatten_headers(rows[start:start + count]))
+            if "desc" not in columns:
+                continue
+            has_costs = any(
+                key in columns
+                for key in ("rate", "total", "amount", "material_rate", "material_total", "labour_rate", "labour_total")
+            )
+            if not has_costs:
+                continue
+            if best is None or len(columns) > len(best[1]):
+                best = (start + count, columns)
     return best
 
 
@@ -220,14 +206,10 @@ def _component_values(row: list[Any], columns: dict[str, int], name: str) -> dic
     return {"present": present, "qty": qty, "unit": unit, "rate": rate, "total": total}
 
 
-def normalize_cost_row(
-    row: list[Any],
-    columns: dict[str, int],
-    source_ref: dict[str, int] | None = None,
-) -> list[dict[str, Any]]:
+def _cost_specs(row: list[Any], columns: dict[str, int]) -> tuple[str, str, list[dict[str, Any]]]:
     description = _cell(row, columns, "desc")
     if not description:
-        return []
+        return "", "", []
     source_code = _cell(row, columns, "code")
 
     material = _component_values(row, columns, "material")
@@ -242,29 +224,25 @@ def normalize_cost_row(
         )
         if same_qty_unit:
             total = source_amount or material["total"] + labour["total"]
-            item = _make_item(
-                description,
-                "combined",
-                material["qty"],
-                material["unit"],
-                material["rate"] + labour["rate"],
-                total,
-                source_ref,
-            )
-            item["sourceCosts"] = {"material": material, "labour": labour}
-            return _attach_source_code([item], source_code)
-        return _attach_source_code([
-            _make_item(description, "material", material["qty"], material["unit"], material["rate"], material["total"], source_ref),
-            _make_item(description, "labour", labour["qty"], labour["unit"], labour["rate"], labour["total"], source_ref),
-        ], source_code)
+            return description, source_code, [{
+                "component": "combined",
+                "qty": material["qty"],
+                "unit": material["unit"],
+                "rate": material["rate"] + labour["rate"],
+                "total": total,
+                "sourceCosts": {"material": material, "labour": labour},
+            }]
+        return description, source_code, [
+            {"component": "material", **{key: material[key] for key in ("qty", "unit", "rate", "total")}},
+            {"component": "labour", **{key: labour[key] for key in ("qty", "unit", "rate", "total")}},
+        ]
 
     if material["present"] or labour["present"]:
         name = "material" if material["present"] else "labour"
         component = material if material["present"] else labour
-        return _attach_source_code(
-            [_make_item(description, name, component["qty"], component["unit"], component["rate"], component["total"], source_ref)],
-            source_code,
-        )
+        return description, source_code, [
+            {"component": name, **{key: component[key] for key in ("qty", "unit", "rate", "total")}},
+        ]
 
     unit = _cell(row, columns, "unit")
     qty = parse_number(_cell(row, columns, "qty"))
@@ -278,18 +256,39 @@ def normalize_cost_row(
         if not rate and qty and total:
             rate = total / qty
         if qty and unit and (rate or total):
-            return _attach_source_code(
-                [_make_item(description, "combined", qty, unit, rate, total, source_ref)],
-                source_code,
-            )
+            return description, source_code, [{
+                "component": "combined", "qty": qty, "unit": unit, "rate": rate, "total": total,
+            }]
 
     amount = source_amount or (parse_number(total_text) if _has_number(total_text) else 0.0)
     if amount:
-        return _attach_source_code(
-            [_make_item(description, "lump_sum", 1.0, "L/S", amount, amount, source_ref)],
-            source_code,
+        return description, source_code, [{
+            "component": "lump_sum", "qty": 1.0, "unit": "L/S", "rate": amount, "total": amount,
+        }]
+    return description, source_code, []
+
+
+def normalize_cost_row(
+    row: list[Any],
+    columns: dict[str, int],
+    source_ref: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
+    description, source_code, specs = _cost_specs(row, columns)
+    items: list[dict[str, Any]] = []
+    for spec in specs:
+        item = _make_item(
+            description,
+            spec["component"],
+            spec["qty"],
+            spec["unit"],
+            spec["rate"],
+            spec["total"],
+            source_ref,
         )
-    return []
+        if "sourceCosts" in spec:
+            item["sourceCosts"] = spec["sourceCosts"]
+        items.append(item)
+    return _attach_source_code(items, source_code)
 
 
 def classify_row(row: list[Any], columns: dict[str, int]) -> str:
@@ -303,7 +302,7 @@ def classify_row(row: list[Any], columns: dict[str, int]) -> str:
         return "total"
     if DETAIL_ROW.match(description):
         return "detail"
-    if normalize_cost_row(row, columns):
+    if _cost_specs(row, columns)[2]:
         return "item"
     source_code = _cell(row, columns, "code")
     if description and (
