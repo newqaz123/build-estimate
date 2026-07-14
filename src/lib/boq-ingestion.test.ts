@@ -187,6 +187,22 @@ test('local verification reports a source document total mismatch outside 0.01 t
   assert.equal(result.issues[0].severity, 'blocking')
 })
 
+test('local verification blocks a BOQ with no line items', () => {
+  const result = verifyBoqLocally(makeBoq({ sections: [], totalItems: 0, grandTotal: 0, sourceTotal: 0 }))
+
+  assert.deepEqual(result.issues.map((issue) => issue.code), ['items_missing'])
+  assert.equal(result.issues[0].severity, 'blocking')
+  assert.equal(result.hasBlockingIssues, true)
+})
+
+test('local verification reports a persisted grand total mismatch outside 0.01 tolerance', () => {
+  const result = verifyBoqLocally(makeBoq({ grandTotal: 299.98 }))
+
+  assert.deepEqual(result.issues.map((issue) => issue.code), ['grand_total_mismatch'])
+  assert.equal(result.issues[0].severity, 'blocking')
+  assert.equal(result.hasBlockingIssues, true)
+})
+
 test('local verification blocks missing metadata and unclassified work type', () => {
   const result = verifyBoqLocally(makeBoq({ vendor: ' ', project: '', date: '', workType: 'Unclassified' }))
 

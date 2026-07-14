@@ -70,8 +70,10 @@ export interface DoclingResultV2 {
 
 export type VerificationIssueCode =
   | 'metadata_missing'
+  | 'items_missing'
   | 'invalid_number'
   | 'line_total_mismatch'
+  | 'grand_total_mismatch'
   | 'document_total_mismatch'
 
 export interface VerificationIssue {
@@ -313,13 +315,17 @@ export function verifyBoqLocally(
     issue(issues, 'metadata_missing', 'blocking', 'workType must be classified before approval')
   }
 
+  let persistedGrandTotal: number | undefined
   if (typeof candidate.grandTotal !== 'number' || !Number.isFinite(candidate.grandTotal)) {
     issue(issues, 'invalid_number', 'blocking', 'grandTotal must be a finite number')
   } else if (candidate.grandTotal < 0) {
     issue(issues, 'invalid_number', 'blocking', 'grandTotal cannot be negative')
+  } else {
+    persistedGrandTotal = candidate.grandTotal
   }
 
   let itemTotalSum = 0
+  let itemCount = 0
   let allItemTotalsValid = true
   const sections = Array.isArray(candidate.sections) ? candidate.sections : []
   if (!Array.isArray(candidate.sections)) {
@@ -336,6 +342,7 @@ export function verifyBoqLocally(
     }
 
     items.forEach((item, itemIndex) => {
+      itemCount += 1
       const row = isRecord(item) ? item : {}
       const location = {
         sectionIndex,
@@ -376,6 +383,17 @@ export function verifyBoqLocally(
       }
     })
   })
+
+  if (itemCount === 0) {
+    issue(issues, 'items_missing', 'blocking', 'At least one BOQ line item is required')
+  }
+  if (
+    persistedGrandTotal !== undefined
+    && allItemTotalsValid
+    && Math.abs(itemTotalSum - persistedGrandTotal) > TOLERANCE
+  ) {
+    issue(issues, 'grand_total_mismatch', 'blocking', 'Persisted grand total does not match normalized line-item totals')
+  }
 
   if (candidate.sourceTotal !== undefined) {
     if (typeof candidate.sourceTotal !== 'number' || !Number.isFinite(candidate.sourceTotal)) {
