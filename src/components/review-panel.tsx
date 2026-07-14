@@ -13,7 +13,7 @@ import {
 import { StandardizationReview } from "./standardization-review"
 import { X, Eye, Check, Loader2 } from "lucide-react"
 import { toast } from "sonner"
-import type { Boq, BoqItem } from "@/lib/boq-schema"
+import type { Boq, BoqItem, WorkType } from "@/lib/boq-schema"
 
 interface ReviewPanelProps {
   boq: Boq
@@ -38,7 +38,7 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
   const [items, setItems] = useState<BoqItem[]>(() => boq.sections.flatMap((s) => s.items))
   const [vendor, setVendor] = useState(boq.vendor)
   const [project, setProject] = useState(boq.project)
-  const [workType, setWorkType] = useState<"Structural" | "MEP" | "Finishing">(boq.workType)
+  const [workType, setWorkType] = useState<WorkType>(boq.workType)
   const [date, setDate] = useState(boq.date)
   const [verifyLoading, setVerifyLoading] = useState(false)
   const [approveLoading, setApproveLoading] = useState(false)
@@ -274,7 +274,7 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
                 <Select
                   value={workType}
                   onValueChange={(v) =>
-                    setWorkType(v as "Structural" | "MEP" | "Finishing")
+                    setWorkType(v as WorkType)
                   }
                 >
                   <SelectTrigger>

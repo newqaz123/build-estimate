@@ -243,7 +243,7 @@ export function buildDraftBoq(
     header: section.header,
     items: section.items.map((item): BoqItem => ({
       id: item.id,
-      ...(typeof item.code === 'string' ? { code: item.code } : {}),
+      code: item.code ?? '',
       desc: item.desc,
       unit: item.unit,
       qty: item.qty,
@@ -302,7 +302,7 @@ export function verifyBoqLocally(
   boq: Pick<Boq, 'vendor' | 'project' | 'workType' | 'date' | 'sections' | 'grandTotal' | 'sourceTotal'>,
 ): VerificationResult {
   const issues: VerificationIssue[] = []
-  const candidate = isRecord(boq) ? boq : {}
+  const candidate: Record<string, unknown> = isRecord(boq) ? boq : {}
 
   for (const field of ['vendor', 'project', 'date'] as const) {
     if (typeof candidate[field] !== 'string' || candidate[field].trim() === '') {

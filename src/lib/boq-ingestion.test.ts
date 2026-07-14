@@ -57,6 +57,7 @@ function makeBoq(overrides: Partial<Boq> = {}): Boq {
       header: 'Concrete Works',
       items: [{
         id: 'item-1',
+        code: '',
         desc: 'Concrete',
         unit: 'm3',
         qty: 3,
@@ -135,6 +136,7 @@ test('buildDraftBoq builds an unclassified draft from extracted values without s
   payload.metadata.project.value = ''
   payload.metadata.date.value = ''
   payload.metadata.workType.value = 'Unclassified'
+  delete (payload.sections[0].items[0] as Partial<typeof payload.sections[0]['items'][0]>).code
   const parsed = parseDoclingResult(payload)
 
   const draft = buildDraftBoq('boq-22', 'boqs/boq-22/source.pdf', parsed)
@@ -155,6 +157,7 @@ test('buildDraftBoq builds an unclassified draft from extracted values without s
   assert.deepEqual(draft.extractionWarnings, payload.warnings)
   assert.deepEqual(draft.metadataConfidence, { vendor: 0.95, project: 0.9, date: 0.85, workType: 0.8 })
   assert.equal(draft.sections[0].items[0].id, 'sidecar-item-1')
+  assert.equal(draft.sections[0].items[0].code, '')
   assert.equal(draft.sections[0].items[0].stdStatus, 'unmatched')
   assert.equal(draft.sections[0].items[0].costComponent, 'combined')
   assert.deepEqual(draft.sections[0].items[0].sourceRef, { page: 1, table: 1, row: 2 })
@@ -166,7 +169,7 @@ test('local verification reports a line arithmetic mismatch', () => {
     sourceTotal: 250,
     sections: [{
       header: 'Concrete Works',
-      items: [{ desc: 'Concrete', unit: 'm3', qty: 3, rate: 100, total: 250, type: 'unit', stdStatus: 'unmatched' }],
+      items: [{ code: '', desc: 'Concrete', unit: 'm3', qty: 3, rate: 100, total: 250, type: 'unit', stdStatus: 'unmatched' }],
     }],
   })
 
@@ -196,14 +199,15 @@ test('local verification blocks missing metadata and unclassified work type', ()
 test('local verification returns structured issues for malformed, non-finite, negative, and suspicious zero rows', () => {
   const malformed = { desc: null, unit: null, qty: Number.NaN, rate: -5, total: 0 }
   const suspiciousZero = { desc: 'Allowance', unit: 'L/S', qty: 0, rate: 0, total: 0 }
+  const malformedSections = [{ header: 'Review', items: [malformed, suspiciousZero] }] as unknown as Boq['sections']
   const boq = makeBoq({
     grandTotal: 0,
     sourceTotal: 0,
-    sections: [{ header: 'Review', items: [malformed, suspiciousZero] }],
+    sections: malformedSections,
   })
 
-  assert.doesNotThrow(() => verifyBoqLocally(boq as unknown as Boq))
-  const result = verifyBoqLocally(boq as unknown as Boq)
+  assert.doesNotThrow(() => verifyBoqLocally(boq))
+  const result = verifyBoqLocally(boq)
   const numericIssues = result.issues.filter((issue) => issue.code === 'invalid_number')
 
   assert.ok(numericIssues.some((issue) => issue.severity === 'blocking' && /finite/i.test(issue.message)))
@@ -218,7 +222,7 @@ test('local verification accepts a correct BOQ and arithmetic within 0.01 tolera
     sourceTotal: 300,
     sections: [{
       header: 'Concrete Works',
-      items: [{ desc: 'Concrete', unit: 'm3', qty: 3, rate: 100, total: 300.009, type: 'unit', stdStatus: 'unmatched' }],
+      items: [{ code: '', desc: 'Concrete', unit: 'm3', qty: 3, rate: 100, total: 300.009, type: 'unit', stdStatus: 'unmatched' }],
     }],
   })
 

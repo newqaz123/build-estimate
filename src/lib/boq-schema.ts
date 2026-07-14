@@ -39,7 +39,7 @@ export interface BoqMetadataConfidence {
 
 export interface BoqItem {
   id?: string
-  code?: string
+  code: string
   desc: string
   unit: string
   qty: number
