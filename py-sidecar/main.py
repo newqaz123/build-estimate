@@ -1,7 +1,12 @@
-from fastapi import FastAPI, UploadFile, File
+from functools import lru_cache
+from io import BytesIO
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Optional
+from fastapi.concurrency import run_in_threadpool
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel
+
+from boq_parser import extract_boq_document
 
 app = FastAPI(title="Docling Sidecar", version="0.1.0")
 
@@ -13,42 +18,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MOCK_SECTIONS = [
-    {
-        "header": "B.1 Concrete Works",
-        "items": [
-            {"code": "B.1.1", "desc": "Structural concrete grade 30", "unit": "m3", "qty": 120.0, "rate": 4500.0, "total": 540000.0, "type": "qty"},
-            {"code": "B.1.2", "desc": "Reinforcement steel bar", "unit": "kg", "qty": 8500.0, "rate": 85.0, "total": 722500.0, "type": "qty"},
-            {"code": "B.1.3", "desc": "Formwork to slab", "unit": "m2", "qty": 450.0, "rate": 320.0, "total": 144000.0, "type": "qty"},
-        ],
-    },
-    {
-        "header": "B.2 Rebar Works",
-        "items": [
-            {"code": "B.2.1", "desc": "Rebar grade 40", "unit": "kg", "qty": 12000.0, "rate": 78.0, "total": 936000.0, "type": "qty"},
-            {"code": "B.2.2", "desc": "Rebar grade 60", "unit": "kg", "qty": 5400.0, "rate": 92.0, "total": 496800.0, "type": "qty"},
-            {"code": "B.2.3", "desc": "Stirrups fabrication", "unit": "pcs", "qty": 2800.0, "rate": 45.0, "total": 126000.0, "type": "qty"},
-        ],
-    },
-    {
-        "header": "B.3 Formwork",
-        "items": [
-            {"code": "B.3.1", "desc": "Formwork to column", "unit": "m2", "qty": 180.0, "rate": 380.0, "total": 68400.0, "type": "qty"},
-            {"code": "B.3.2", "desc": "Formwork to beam", "unit": "m2", "qty": 320.0, "rate": 350.0, "total": 112000.0, "type": "qty"},
-            {"code": "B.3.3", "desc": "Formwork to wall", "unit": "m2", "qty": 260.0, "rate": 360.0, "total": 93600.0, "type": "qty"},
-        ],
-    },
-]
-
-
 class Item(BaseModel):
-    code: str
+    id: str
+    code: Optional[str] = None
     desc: str
     unit: str
     qty: float
     rate: float
     total: float
-    type: str
+    type: Literal["unit", "lump_sum"]
+    costComponent: Literal["material", "labour", "combined", "lump_sum"]
+    sourceRef: Dict[str, int]
+    sourceCosts: Optional[Dict[str, Any]] = None
 
 
 class Section(BaseModel):
@@ -56,22 +37,106 @@ class Section(BaseModel):
     items: List[Item]
 
 
+class MetadataField(BaseModel):
+    value: str
+    confidence: float
+    source: str
+
+
+class Metadata(BaseModel):
+    vendor: MetadataField
+    project: MetadataField
+    date: MetadataField
+    workType: MetadataField
+
+
+class RawTable(BaseModel):
+    page: int
+    table: int
+    rows: List[List[Any]]
+
+
+class ExtractionWarning(BaseModel):
+    code: str
+    message: str
+    sourceRef: Optional[Dict[str, int]] = None
+
+
 class ParseResponse(BaseModel):
-    sections: List[Section]
-    totalItems: int
+    contractVersion: Literal[2] = 2
     documentName: str
+    pageCount: int
+    documentText: str
+    tables: List[RawTable]
+    sections: List[Section]
+    metadata: Metadata
+    warnings: List[ExtractionWarning]
+    sourceTotal: Optional[float] = None
+    totalItems: int
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    try:
+        import docling  # noqa: F401
+        return {"status": "ok", "parser": "docling"}
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Docling is not installed")
+
+
+@lru_cache(maxsize=1)
+def get_converter():
+    from docling.document_converter import DocumentConverter
+
+    return DocumentConverter()
+
+
+def build_parse_response(filename: str, document: Any) -> ParseResponse:
+    document_text = document.export_to_text(page_break_placeholder="\n\f\n")
+    tables: list[dict[str, Any]] = []
+    for index, table in enumerate(document.tables, start=1):
+        frame = table.export_to_dataframe(doc=document).fillna("")
+        page = table.prov[0].page_no if table.prov else 1
+        tables.append({
+            "page": page,
+            "table": index,
+            "rows": [list(frame.columns), *frame.values.tolist()],
+        })
+    normalized = extract_boq_document(tables, document_text)
+    total_items = sum(len(section["items"]) for section in normalized["sections"])
+    return ParseResponse(
+        contractVersion=2,
+        documentName=filename,
+        pageCount=len(document.pages),
+        documentText=document_text,
+        tables=tables,
+        totalItems=total_items,
+        **normalized,
+    )
+
+
+def convert_pdf(filename: str, content: bytes):
+    from docling.datamodel.base_models import DocumentStream
+
+    source = DocumentStream(name=filename, stream=BytesIO(content))
+    result = get_converter().convert(source, max_num_pages=500, max_file_size=20 * 1024 * 1024)
+    return build_parse_response(filename, result.document)
 
 
 @app.post("/parse", response_model=ParseResponse)
 async def parse_pdf(file: UploadFile = File(...)):
-    total_items = sum(len(s["items"]) for s in MOCK_SECTIONS)
-    return ParseResponse(
-        sections=[Section(**s) for s in MOCK_SECTIONS],
-        totalItems=total_items,
-        documentName=file.filename or "document.pdf",
-    )
+    filename = file.filename or "document.pdf"
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    content = await file.read()
+    if not content or len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="PDF must be between 1 byte and 20 MB")
+    try:
+        response = await run_in_threadpool(convert_pdf, filename, content)
+    except ImportError as error:
+        raise HTTPException(status_code=503, detail="Docling is not installed") from error
+    except Exception as error:
+        raise HTTPException(status_code=422, detail=f"Docling could not parse this PDF: {error}") from error
+    if not response.sections:
+        raise HTTPException(status_code=422, detail="No BOQ line-item tables were found in this PDF")
+    return response

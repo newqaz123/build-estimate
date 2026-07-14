@@ -5,10 +5,87 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from boq_parser import extract_boq_document, extract_boq_sections, parse_number
+from boq_parser import extract_boq_document, extract_boq_sections, extract_metadata, parse_number
 
 
 class BoqParserTest(unittest.TestCase):
+    def test_extracts_eastern_group_metadata(self):
+        text = """EASTERN GROUP E.T.G. CO., LTD
+QUOTATION NO.: ETG.2026/AYT074
+DATE: 4 June 2026
+ON-OFF VALVE INSTALLATION WORK FOR BDN PROCESS"""
+
+        metadata = extract_metadata(text, ["ON-OFF VALVE INSTALLATION WORK FOR BDN PROCESS"])
+
+        self.assertEqual(metadata["vendor"]["value"], "EASTERN GROUP E.T.G. CO., LTD")
+        self.assertEqual(metadata["project"]["value"], "ON-OFF VALVE INSTALLATION WORK FOR BDN PROCESS")
+        self.assertEqual(metadata["date"]["value"], "2026-06-04")
+        self.assertEqual(metadata["workType"]["value"], "MEP")
+        for field in ("vendor", "project", "date", "workType"):
+            self.assertEqual(set(metadata[field]), {"value", "confidence", "source"})
+
+    def test_prefers_labeled_contractor_project_and_doc_date(self):
+        text = """TO: SIAM SUGAR COMPANY LIMITED
+CONTRACTOR: SURASAK ENGINEERING CO., LTD.
+Project: Sugar Dissolving Building
+Doc. Date: 18/06/2026
+Install submersible pump"""
+
+        metadata = extract_metadata(text, ["Install submersible pump"])
+
+        self.assertEqual(metadata["vendor"]["value"], "SURASAK ENGINEERING CO., LTD.")
+        self.assertEqual(metadata["project"]["value"], "Sugar Dissolving Building")
+        self.assertEqual(metadata["date"]["value"], "2026-06-18")
+        self.assertEqual(metadata["workType"]["value"], "MEP")
+
+    def test_extracts_subject_and_two_digit_date_without_using_customer_as_vendor(self):
+        text = """N.P. CIVIL CONSTRUCTION CO., LTD.
+Customer: Eastern Industrial Estate
+Subject: Slab concrete and steel grating works
+DATE: 7/6/26"""
+
+        metadata = extract_metadata(text, [])
+
+        self.assertEqual(metadata["vendor"]["value"], "N.P. CIVIL CONSTRUCTION CO., LTD.")
+        self.assertEqual(metadata["project"]["value"], "Slab concrete and steel grating works")
+        self.assertEqual(metadata["date"]["value"], "2026-06-07")
+        self.assertEqual(metadata["workType"]["value"], "Structural")
+
+    def test_unlabeled_seller_header_skips_to_line_without_colon(self):
+        text = """TO SIAM SUGAR COMPANY LIMITED
+EASTERN GROUP E.T.G. CO., LTD
+Subject: Electrical installation"""
+
+        metadata = extract_metadata(text, [])
+
+        self.assertEqual(metadata["vendor"]["value"], "EASTERN GROUP E.T.G. CO., LTD")
+
+    def test_unknown_work_type_is_unclassified_with_low_confidence(self):
+        metadata = extract_metadata("CONTRACTOR: Example Co.\nProject: General preliminaries", [])
+
+        self.assertEqual(metadata["workType"]["value"], "Unclassified")
+        self.assertLess(metadata["workType"]["confidence"], 0.5)
+
+    def test_document_result_includes_metadata_warnings_and_pre_vat_source_total(self):
+        rows = [
+            ["ITEM", "DESCRIPTION", "UNIT", "Q'TY", "RATE", "AMOUNT"],
+            ["A", "A. Piping Works", "", "", "", ""],
+            ["1", "Install valve", "set", "2", "100", "200"],
+            ["2", "Provisional electrical allowance", "", "", "TBC", ""],
+            ["", "SUB TOTAL", "", "", "", "200"],
+            ["", "VAT 7%", "", "", "", "14"],
+            ["", "GRAND TOTAL", "", "", "", "214"],
+        ]
+        text = "CONTRACTOR: Example MEP Co., Ltd.\nProject: Valve installation\nDATE: 04/06/2026"
+
+        result = extract_boq_document([{"page": 3, "rows": rows}], text)
+
+        self.assertTrue({"metadata", "sourceTotal", "warnings"}.issubset(result))
+        self.assertEqual(result["metadata"]["project"]["value"], "Valve installation")
+        self.assertEqual(result["sourceTotal"], 200.0)
+        self.assertEqual(result["warnings"][0]["code"], "unparsed_row")
+        self.assertEqual(result["warnings"][0]["sourceRef"], {"page": 3, "table": 1, "row": 4})
+
     def test_splits_distinct_material_and_labour_components(self):
         rows = [
             ["NO.", "DESCRIPTION", "MATERIAL COST", "", "", "LABOUR COST", "", "", "AMOUNT"],
@@ -86,6 +163,19 @@ class BoqParserTest(unittest.TestCase):
         self.assertEqual(
             (item["unit"], item["qty"], item["rate"], item["total"], item["type"], item["costComponent"]),
             ("L/S", 1.0, 25000.0, 25000.0, "lump_sum", "lump_sum"),
+        )
+
+    def test_surasak_amount_only_quote_becomes_lump_sum(self):
+        rows = [
+            ["No.", "Description", "Amount"],
+            ["1", "Install submersible pump at sugar dissolving building.", "258,000.00"],
+        ]
+
+        item = extract_boq_document([{"page": 1, "rows": rows}], "")["sections"][0]["items"][0]
+
+        self.assertEqual(
+            (item["unit"], item["qty"], item["rate"], item["total"], item["type"]),
+            ("L/S", 1.0, 258000.0, 258000.0, "lump_sum"),
         )
 
     def test_ambiguous_unpriced_rows_do_not_become_items(self):
@@ -167,6 +257,70 @@ class BoqParserTest(unittest.TestCase):
         ]]
 
         self.assertEqual(extract_boq_sections(tables), [])
+
+
+class SidecarContractTest(unittest.TestCase):
+    def test_builds_versioned_response_from_docling_v2_exports(self):
+        try:
+            import main
+        except ModuleNotFoundError as error:
+            if error.name in {"fastapi", "pydantic", "multipart"}:
+                self.skipTest(f"optional sidecar dependency is unavailable: {error.name}")
+            raise
+        build_parse_response = getattr(main, "build_parse_response", None)
+        self.assertIsNotNone(build_parse_response, "build_parse_response must be implemented")
+
+        class Values:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def tolist(self):
+                return self._rows
+
+        class Frame:
+            columns = ["Description", "Amount"]
+            values = Values([["Install valve", "2,500.00"]])
+
+            def fillna(self, _value):
+                return self
+
+        class Provenance:
+            page_no = 2
+
+        class Table:
+            prov = [Provenance()]
+
+            def __init__(self):
+                self.exported_with = None
+
+            def export_to_dataframe(self, doc):
+                self.exported_with = doc
+                return Frame()
+
+        class Document:
+            def __init__(self):
+                self.tables = [Table()]
+                self.pages = {1: object(), 2: object()}
+                self.placeholder = None
+
+            def export_to_text(self, page_break_placeholder):
+                self.placeholder = page_break_placeholder
+                return "CONTRACTOR: Example Co., Ltd.\nProject: Valve work\nDATE: 4 June 2026\n\f\nPage 2"
+
+        document = Document()
+        response = build_parse_response("quote.pdf", document)
+        payload = response.model_dump() if hasattr(response, "model_dump") else response.dict()
+
+        self.assertEqual(document.placeholder, "\n\f\n")
+        self.assertIs(document.tables[0].exported_with, document)
+        self.assertEqual(payload["contractVersion"], 2)
+        self.assertEqual(payload["documentName"], "quote.pdf")
+        self.assertEqual(payload["pageCount"], 2)
+        self.assertEqual(payload["tables"][0]["page"], 2)
+        self.assertEqual(payload["tables"][0]["table"], 1)
+        self.assertEqual(payload["tables"][0]["rows"][1], ["Install valve", "2,500.00"])
+        self.assertEqual(payload["metadata"]["workType"]["value"], "MEP")
+        self.assertEqual(payload["totalItems"], 1)
 
 
 if __name__ == "__main__":

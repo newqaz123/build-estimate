@@ -1,6 +1,7 @@
 import math
 import re
 import uuid
+from datetime import datetime
 from typing import Any, Iterable
 
 
@@ -20,6 +21,20 @@ TOTAL_ROW = re.compile(
 )
 AMOUNT_IN_WORDS = re.compile(r"\bbaht\s*:?.*\bonly\b", re.I)
 DETAIL_ROW = re.compile(r"^(?:detail|note|remark)s?\b", re.I)
+SUBTOTAL_ROW = re.compile(r"^sub[\s-]*total\b", re.I)
+LABELED_VALUE = re.compile(r"^\s*([^:\n]+?)\s*:\s*(.*?)\s*$")
+RECIPIENT_LABELS = {"to", "owner", "customer", "client", "attention", "attn"}
+MONTHS = {
+    "january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3,
+    "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7,
+    "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9,
+    "october": 10, "oct": 10, "november": 11, "nov": 11, "december": 12, "dec": 12,
+}
+WORK_TYPE_KEYWORDS = (
+    ("MEP", re.compile(r"\b(?:pump|pipe|piping|valve|mechanical|electrical)\b", re.I)),
+    ("Structural", re.compile(r"\b(?:concrete|civil|steel|earthwork|slab|grating)\b", re.I)),
+    ("Finishing", re.compile(r"\b(?:paint|tile|ceiling|finish|finishing)\b", re.I)),
+)
 
 
 def clean_cell(value: Any) -> str:
@@ -56,6 +71,119 @@ def parse_qty_unit(value: Any) -> tuple[float, str]:
     if not match:
         return parse_number(text), ""
     return parse_number(match.group(1)), clean_cell(match.group(2))
+
+
+def _metadata_value(value: str, confidence: float, source: str) -> dict[str, Any]:
+    return {"value": value, "confidence": confidence, "source": source}
+
+
+def _labeled_lines(document_text: str) -> dict[str, tuple[str, str]]:
+    values: dict[str, tuple[str, str]] = {}
+    for raw_line in document_text.splitlines():
+        match = LABELED_VALUE.match(raw_line)
+        if not match or not clean_cell(match.group(2)):
+            continue
+        label = normalize_header(match.group(1))
+        values.setdefault(label, (clean_cell(match.group(2)), clean_cell(raw_line)))
+    return values
+
+
+def _normalize_date(value: str, document_text: str) -> str:
+    text = clean_cell(value).strip(".,")
+    numeric = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{2}|\d{4})\b", text)
+    if numeric:
+        day, month, raw_year = (int(part) for part in numeric.groups())
+        if len(numeric.group(3)) == 2:
+            context_year = re.search(r"\b(?:19|20)\d{2}\b", document_text)
+            century = int(context_year.group(0)) // 100 * 100 if context_year else 2000
+            year = century + raw_year
+        else:
+            year = raw_year
+        try:
+            return datetime(year, month, day).date().isoformat()
+        except ValueError:
+            return ""
+
+    english = re.search(
+        r"\b(\d{1,2})\s+([A-Za-z]+)\s*,?\s*(\d{2}|\d{4})\b",
+        text,
+        re.I,
+    )
+    month_first = re.search(
+        r"\b([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?\s*,?\s*(\d{2}|\d{4})\b",
+        text,
+        re.I,
+    )
+    if english:
+        day, month_name, raw_year_text = english.groups()
+    elif month_first:
+        month_name, day, raw_year_text = month_first.groups()
+    else:
+        return ""
+    month = MONTHS.get(month_name.lower())
+    if not month:
+        return ""
+    raw_year = int(raw_year_text)
+    year = raw_year if len(raw_year_text) == 4 else 2000 + raw_year
+    try:
+        return datetime(year, month, int(day)).date().isoformat()
+    except ValueError:
+        return ""
+
+
+def extract_metadata(document_text: str, section_headers: Iterable[str]) -> dict[str, dict[str, Any]]:
+    """Extract reviewable quotation metadata using deterministic, label-first rules."""
+    lines = [clean_cell(line) for line in document_text.splitlines() if clean_cell(line)]
+    labels = _labeled_lines(document_text)
+    headers = [clean_cell(header) for header in section_headers if clean_cell(header)]
+
+    vendor = _metadata_value("", 0.0, "not found")
+    for label in ("contractor", "seller"):
+        if label in labels:
+            value, source = labels[label]
+            vendor = _metadata_value(value, 0.98, source)
+            break
+    else:
+        for line in lines:
+            label_match = LABELED_VALUE.match(line)
+            first_word = normalize_header(line).split(" ", 1)[0]
+            if first_word in RECIPIENT_LABELS or (
+                label_match and normalize_header(label_match.group(1)) in RECIPIENT_LABELS
+            ):
+                continue
+            if re.search(r"\b(?:co\.?\s*,?\s*ltd\.?|company\s+limited|group)\b", line, re.I):
+                vendor = _metadata_value(line, 0.82, "seller header")
+                break
+
+    project = _metadata_value("", 0.0, "not found")
+    for label in ("project", "subject"):
+        if label in labels:
+            value, source = labels[label]
+            project = _metadata_value(value, 0.98, source)
+            break
+    else:
+        if headers:
+            project = _metadata_value(headers[0], 0.78, "section heading")
+
+    date = _metadata_value("", 0.0, "not found")
+    for label in ("doc date", "date"):
+        if label not in labels:
+            continue
+        value, source = labels[label]
+        normalized = _normalize_date(value, document_text)
+        if normalized:
+            date = _metadata_value(normalized, 0.98, source)
+            break
+
+    classification_text = "\n".join([document_text, *headers])
+    work_type = _metadata_value("Unclassified", 0.2, "no matching work keywords")
+    for value, pattern in WORK_TYPE_KEYWORDS:
+        match = pattern.search(classification_text)
+        if match:
+            work_type = _metadata_value(value, 0.9, f"keyword: {match.group(0)}")
+            break
+
+    return {"vendor": vendor, "project": project, "date": date, "workType": work_type}
 
 
 def flatten_headers(rows: list[list[Any]]) -> list[str]:
@@ -315,8 +443,9 @@ def classify_row(row: list[Any], columns: dict[str, int]) -> str:
 
 
 def extract_boq_document(tables: Iterable[dict[str, Any]], document_text: str) -> dict[str, Any]:
-    del document_text
     sections: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    source_total: float | None = None
     for table_index, table in enumerate(tables, start=1):
         page = int(table.get("page") or 1)
         rows = [list(row) for row in table.get("rows", [])]
@@ -335,16 +464,36 @@ def extract_boq_document(tables: Iterable[dict[str, Any]], document_text: str) -
 
         for zero_based_row, row in enumerate(rows[header_count:], start=header_count):
             row_class = classify_row(row, columns)
+            source_ref = {"page": page, "table": table_index, "row": zero_based_row + 1}
             if row_class == "section":
                 flush_section()
                 current_header = _cell(row, columns, "desc")
                 continue
+            if row_class == "total" and SUBTOTAL_ROW.match(_cell(row, columns, "desc")):
+                total_text = _cell(row, columns, "total") or _cell(row, columns, "amount")
+                if _has_number(total_text):
+                    source_total = parse_number(total_text)
+                continue
+            if row_class == "unpriced" and _cell(row, columns, "desc"):
+                warnings.append({
+                    "code": "unparsed_row",
+                    "message": f"Could not normalize row: {_cell(row, columns, 'desc')}",
+                    "sourceRef": source_ref,
+                })
             if row_class != "item":
                 continue
-            source_ref = {"page": page, "table": table_index, "row": zero_based_row + 1}
             current_items.extend(normalize_cost_row(row, columns, source_ref))
         flush_section()
-    return {"sections": sections}
+    section_headers = [
+        section["header"] for section in sections
+        if not section["header"].startswith("Parsed Table ")
+    ]
+    return {
+        "sections": sections,
+        "metadata": extract_metadata(document_text, section_headers),
+        "warnings": warnings,
+        "sourceTotal": source_total,
+    }
 
 
 def extract_boq_sections(tables: Iterable[list[list[Any]]]) -> list[dict[str, Any]]:
