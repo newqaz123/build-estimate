@@ -13,8 +13,8 @@ HEADER_ALIASES = {
     "total": ("amount", "total", "total amount", "extended amount", "value"),
 }
 TOTAL_ROW = re.compile(
-    r"^(?:sub\s*total|grand\s+total|total|vat(?:\s+\d+(?:\.\d+)?\s*%)?|discount|"
-    r"carried\s+forward|brought\s+forward)\b",
+    r"^(?:sub\s*total|grand\s+total|total|vat(?:\s*\d+(?:\.\d+)?\s*%)?|discount|"
+    r"carried\s+forward|brought\s+forward)(?=\s|$|\b)",
     re.I,
 )
 AMOUNT_IN_WORDS = re.compile(r"\bbaht\s*:?.*\bonly\b", re.I)

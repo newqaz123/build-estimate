@@ -100,6 +100,14 @@ class BoqParserTest(unittest.TestCase):
 
         self.assertEqual(extract_boq_document([{"page": 1, "rows": rows}], "")["sections"], [])
 
+    def test_compact_vat_summary_row_is_excluded(self):
+        rows = [
+            ["DESCRIPTION", "AMOUNT"],
+            ["VAT7%", "7,000.00"],
+        ]
+
+        self.assertEqual(extract_boq_document([{"page": 1, "rows": rows}], "")["sections"], [])
+
     def test_parse_number_handles_currency_and_parenthesized_negatives(self):
         self.assertEqual(parse_number("฿ 1,234.50"), 1234.5)
         self.assertEqual(parse_number("(250.00)"), -250.0)
