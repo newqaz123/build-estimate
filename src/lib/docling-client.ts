@@ -68,22 +68,24 @@ function safeDetail(value: unknown): string | null {
   return detail ? detail.slice(0, 300) : null
 }
 
-function isPublicRejection(detail: string): boolean {
-  return /^Only PDF\b/i.test(detail)
-    || /^(?:PDF |File )?size\b/i.test(detail)
-    || /^PDF (?:must be|is too|exceeds)\b.*(?:bytes?|MB)\b/i.test(detail)
-    || /^No BOQ rows\b/i.test(detail)
-}
-
-async function rejectedMessage(response: Response): Promise<string> {
+async function documentRejectionMessage(response: Response): Promise<string | null> {
+  if (response.status !== 400 && response.status !== 422) return null
   try {
     const body = await response.json() as { detail?: unknown; error?: unknown }
     const detail = safeDetail(body.detail) ?? safeDetail(body.error)
-    if (detail && isPublicRejection(detail)) return `Docling rejected the PDF: ${detail}`
+    if (!detail) return null
+    if (/^Only PDF\b/i.test(detail)) return 'Only PDF files are supported'
+    if (
+      /^(?:PDF |File )?size\b/i.test(detail)
+      || /^PDF (?:must be|is too|exceeds)\b.*(?:bytes?|MB)\b/i.test(detail)
+    ) {
+      return 'PDF must be between 1 byte and 20 MB'
+    }
+    if (/^No BOQ rows\b/i.test(detail)) return 'No BOQ line-item tables were found'
   } catch {
-    // Non-JSON and non-allowlisted details are never reflected to callers.
+    // Non-JSON details are never reflected to callers.
   }
-  return 'Docling rejected the PDF'
+  return null
 }
 
 export async function parsePdfWithDocling(
@@ -110,7 +112,10 @@ export async function parsePdfWithDocling(
       redirect: 'error',
     })
     if (response.status >= 400 && response.status < 500) {
-      throw new DoclingClientError('rejected', await rejectedMessage(response))
+      const message = await documentRejectionMessage(response)
+      if (message) throw new DoclingClientError('rejected', message)
+      console.error('Docling upstream request failed', { status: response.status })
+      throw new DoclingClientError('upstream', 'Docling failed while processing the PDF')
     }
     if (!response.ok) {
       console.error('Docling upstream request failed', { status: response.status })

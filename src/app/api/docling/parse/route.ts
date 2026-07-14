@@ -29,12 +29,20 @@ export function createDoclingParseHandler(dependencies: DoclingParseHandlerDepen
       return invalidPdfResponse()
     }
 
+    let endpoint: string
     try {
-      const endpoint = (await dependencies.getEndpoint()).trim() || DEFAULT_DOCLING_ENDPOINT
+      endpoint = (await dependencies.getEndpoint()).trim() || DEFAULT_DOCLING_ENDPOINT
+    } catch {
+      console.error('Docling settings lookup failed')
+      return Response.json({ error: 'Docling configuration is temporarily unavailable.' }, { status: 503 })
+    }
+
+    try {
       return Response.json(await dependencies.parsePdf(file, endpoint, request.signal))
     } catch (error) {
       if (error instanceof DoclingClientError) return doclingErrorResponse(error)
-      return Response.json({ error: 'Invalid upload request' }, { status: 400 })
+      console.error('Docling proxy request failed')
+      return Response.json({ error: 'Docling could not process the PDF. Try again.' }, { status: 502 })
     }
   }
 }

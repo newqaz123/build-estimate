@@ -145,28 +145,56 @@ test('parsePdfWithDocling sends exact multipart bytes without caching or redirec
   }
 })
 
-test('Docling 4xx exposes only allowlisted document rejection messages', async () => {
+test('Docling known document 400 and 422 responses become exact canned messages', async () => {
   const originalFetch = globalThis.fetch
   try {
-    for (const detail of ['Only PDF files are supported', 'PDF size exceeds 20 MB', 'No BOQ rows found']) {
-      globalThis.fetch = async () => Response.json({ detail }, { status: 422 })
+    const cases = [
+      [400, 'Only PDF files are supported /srv/secret.pdf', 'Only PDF files are supported'],
+      [422, 'PDF size exceeds 20 MB; path=/private/upload', 'PDF must be between 1 byte and 20 MB'],
+      [422, 'No BOQ rows found; token=secret', 'No BOQ line-item tables were found'],
+    ] as const
+    for (const [status, detail, expected] of cases) {
+      globalThis.fetch = async () => Response.json({ detail }, { status })
       await assert.rejects(
         () => parsePdfWithDocling(pdfFile(), 'http://localhost:5001'),
         (error) => error instanceof DoclingClientError
           && error.kind === 'rejected'
-          && error.message.includes(detail),
+          && error.message === expected
+          && !error.message.includes('secret')
+          && !error.message.includes('/private'),
       )
     }
-    globalThis.fetch = async () => Response.json({ detail: 'Parser failed at /srv/secrets/key.json token=abc' }, { status: 422 })
-    await assert.rejects(
-      () => parsePdfWithDocling(pdfFile(), 'http://localhost:5001'),
-      (error) => error instanceof DoclingClientError
-        && error.kind === 'rejected'
-        && !error.message.includes('/srv')
-        && !error.message.includes('token'),
-    )
   } finally {
     globalThis.fetch = originalFetch
+  }
+})
+
+test('Docling auth, rate-limit, and unknown 4xx responses are generic upstream failures', async () => {
+  const originalFetch = globalThis.fetch
+  const originalConsoleError = console.error
+  console.error = () => undefined
+  try {
+    for (const [status, detail] of [
+      [401, 'Only PDF files are supported secret=auth'],
+      [403, 'Forbidden /private/policy'],
+      [429, 'Rate limited token=secret'],
+      [418, 'Unexpected client failure /srv/app'],
+      [400, 'Parser failed at /srv/secrets/key.json'],
+      [422, 'Unknown document problem token=abc'],
+    ] as const) {
+      globalThis.fetch = async () => Response.json({ detail }, { status })
+      await assert.rejects(
+        () => parsePdfWithDocling(pdfFile(), 'http://localhost:5001'),
+        (error) => error instanceof DoclingClientError
+          && error.kind === 'upstream'
+          && !error.message.includes(detail)
+          && !error.message.includes('secret')
+          && !error.message.includes('/srv'),
+      )
+    }
+  } finally {
+    globalThis.fetch = originalFetch
+    console.error = originalConsoleError
   }
 })
 
@@ -467,6 +495,46 @@ test('import and proxy handlers share safe Docling category mapping', async () =
       assert.equal(body.includes('/private/path'), false)
       if (kind === 'rejected') assert.equal(body.includes('Only PDF'), true)
     }
+  }
+})
+
+test('handler mapper never reflects a suffixed rejected message', async () => {
+  const proxyHandler = createDoclingParseHandler({
+    authenticate: async () => ({ user: {} }),
+    getEndpoint: async () => 'http://localhost:5001',
+    parsePdf: async () => {
+      throw new DoclingClientError('rejected', 'Only PDF files are supported /private/secret.pdf')
+    },
+  })
+  const response = await proxyHandler(new Request('http://localhost/api', {
+    method: 'POST',
+    body: pdfForm(pdfFile()),
+  }))
+  assert.equal(response.status, 422)
+  const body = await response.text()
+  assert.equal(body.includes('/private'), false)
+  assert.equal(body.includes('secret'), false)
+})
+
+test('proxy settings lookup failure is generic infrastructure failure, not invalid upload', async () => {
+  const originalConsoleError = console.error
+  console.error = () => undefined
+  const handler = createDoclingParseHandler({
+    authenticate: async () => ({ user: {} }),
+    getEndpoint: async () => { throw new Error('Firestore credentials /private/key.json') },
+    parsePdf: async () => validDoclingPayload(),
+  })
+  try {
+    const response = await handler(new Request('http://localhost/api', {
+      method: 'POST',
+      body: pdfForm(pdfFile()),
+    }))
+    assert.equal(response.status, 503)
+    const body = await response.text()
+    assert.equal(body.includes('Invalid upload'), false)
+    assert.equal(body.includes('/private'), false)
+  } finally {
+    console.error = originalConsoleError
   }
 })
 

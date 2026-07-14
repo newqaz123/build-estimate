@@ -27,7 +27,15 @@ export function doclingErrorResponse(error: DoclingClientError): Response {
     case 'timeout':
       return Response.json({ error: 'Docling parsing timed out. Try the import again.' }, { status: 504 })
     case 'rejected':
-      return Response.json({ error: error.message }, { status: 422 })
+      return Response.json({
+        error: [
+          'Only PDF files are supported',
+          'PDF must be between 1 byte and 20 MB',
+          'No BOQ line-item tables were found',
+        ].includes(error.message)
+          ? error.message
+          : 'The PDF could not be parsed.',
+      }, { status: 422 })
     case 'unreachable':
       return Response.json(
         { error: 'Docling is unreachable. Check the Docling endpoint in Settings and try again.' },
