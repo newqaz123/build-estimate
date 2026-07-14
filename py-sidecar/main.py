@@ -1,14 +1,18 @@
+import logging
 from functools import lru_cache
 from io import BytesIO
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
-from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel
+from typing import Annotated, Any, List, Literal, Optional
+from pydantic import BaseModel, Field, FiniteFloat, PositiveInt
 
 from boq_parser import extract_boq_document
 
 app = FastAPI(title="Docling Sidecar", version="0.1.0")
+logger = logging.getLogger("docling_sidecar")
+
+Confidence = Annotated[FiniteFloat, Field(ge=0.0, le=1.0)]
 
 app.add_middleware(
     CORSMiddleware,
@@ -18,18 +22,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+class SourceRef(BaseModel):
+    page: PositiveInt
+    table: PositiveInt
+    row: PositiveInt
+
+
+class SourceCost(BaseModel):
+    present: bool
+    qty: FiniteFloat
+    unit: str
+    rate: FiniteFloat
+    total: FiniteFloat
+
+
+class SourceCosts(BaseModel):
+    material: SourceCost
+    labour: SourceCost
+
+
 class Item(BaseModel):
     id: str
     code: Optional[str] = None
     desc: str
     unit: str
-    qty: float
-    rate: float
-    total: float
+    qty: FiniteFloat
+    rate: FiniteFloat
+    total: FiniteFloat
     type: Literal["unit", "lump_sum"]
     costComponent: Literal["material", "labour", "combined", "lump_sum"]
-    sourceRef: Dict[str, int]
-    sourceCosts: Optional[Dict[str, Any]] = None
+    sourceRef: SourceRef
+    sourceCosts: Optional[SourceCosts] = None
 
 
 class Section(BaseModel):
@@ -39,15 +62,19 @@ class Section(BaseModel):
 
 class MetadataField(BaseModel):
     value: str
-    confidence: float
+    confidence: Confidence
     source: str
+
+
+class WorkTypeMetadataField(MetadataField):
+    value: Literal["MEP", "Structural", "Finishing", "Unclassified"]
 
 
 class Metadata(BaseModel):
     vendor: MetadataField
     project: MetadataField
     date: MetadataField
-    workType: MetadataField
+    workType: WorkTypeMetadataField
 
 
 class RawTable(BaseModel):
@@ -59,7 +86,7 @@ class RawTable(BaseModel):
 class ExtractionWarning(BaseModel):
     code: str
     message: str
-    sourceRef: Optional[Dict[str, int]] = None
+    sourceRef: Optional[SourceRef] = None
 
 
 class ParseResponse(BaseModel):
@@ -71,7 +98,7 @@ class ParseResponse(BaseModel):
     sections: List[Section]
     metadata: Metadata
     warnings: List[ExtractionWarning]
-    sourceTotal: Optional[float] = None
+    sourceTotal: Optional[FiniteFloat] = None
     totalItems: int
 
 
@@ -136,7 +163,8 @@ async def parse_pdf(file: UploadFile = File(...)):
     except ImportError as error:
         raise HTTPException(status_code=503, detail="Docling is not installed") from error
     except Exception as error:
-        raise HTTPException(status_code=422, detail=f"Docling could not parse this PDF: {error}") from error
+        logger.exception("Docling conversion failed for %s", filename)
+        raise HTTPException(status_code=422, detail="Docling could not parse this PDF") from error
     if not response.sections:
         raise HTTPException(status_code=422, detail="No BOQ line-item tables were found in this PDF")
     return response

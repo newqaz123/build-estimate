@@ -33,7 +33,7 @@ MONTHS = {
 WORK_TYPE_KEYWORDS = (
     ("MEP", re.compile(r"\b(?:pump|pipe|piping|valve|mechanical|electrical)\b", re.I)),
     ("Structural", re.compile(r"\b(?:concrete|civil|steel|earthwork|slab|grating)\b", re.I)),
-    ("Finishing", re.compile(r"\b(?:paint|tile|ceiling|finish|finishing)\b", re.I)),
+    ("Finishing", re.compile(r"\b(?:paint|painting|tile|ceiling|finish|finishing)\b", re.I)),
 )
 
 
@@ -131,11 +131,28 @@ def _normalize_date(value: str, document_text: str) -> str:
         return ""
 
 
-def extract_metadata(document_text: str, section_headers: Iterable[str]) -> dict[str, dict[str, Any]]:
+def _classify_work_type(text: str) -> tuple[str, str] | None:
+    matches: list[tuple[int, str, str]] = []
+    for value, pattern in WORK_TYPE_KEYWORDS:
+        match = pattern.search(text)
+        if match:
+            matches.append((match.start(), value, match.group(0)))
+    if not matches:
+        return None
+    _, value, keyword = min(matches)
+    return value, keyword
+
+
+def extract_metadata(
+    document_text: str,
+    section_headers: Iterable[str],
+    item_descriptions: Iterable[str] = (),
+) -> dict[str, dict[str, Any]]:
     """Extract reviewable quotation metadata using deterministic, label-first rules."""
     lines = [clean_cell(line) for line in document_text.splitlines() if clean_cell(line)]
     labels = _labeled_lines(document_text)
     headers = [clean_cell(header) for header in section_headers if clean_cell(header)]
+    descriptions = [clean_cell(description) for description in item_descriptions if clean_cell(description)]
 
     vendor = _metadata_value("", 0.0, "not found")
     for label in ("contractor", "seller"):
@@ -164,6 +181,8 @@ def extract_metadata(document_text: str, section_headers: Iterable[str]) -> dict
     else:
         if headers:
             project = _metadata_value(headers[0], 0.78, "section heading")
+        elif len(descriptions) == 1:
+            project = _metadata_value(descriptions[0], 0.72, "sole priced item")
 
     date = _metadata_value("", 0.0, "not found")
     for label in ("doc date", "date"):
@@ -175,13 +194,13 @@ def extract_metadata(document_text: str, section_headers: Iterable[str]) -> dict
             date = _metadata_value(normalized, 0.98, source)
             break
 
-    classification_text = "\n".join([document_text, *headers])
     work_type = _metadata_value("Unclassified", 0.2, "no matching work keywords")
-    for value, pattern in WORK_TYPE_KEYWORDS:
-        match = pattern.search(classification_text)
-        if match:
-            work_type = _metadata_value(value, 0.9, f"keyword: {match.group(0)}")
-            break
+    classified = _classify_work_type(project["value"])
+    if classified is None:
+        classified = _classify_work_type("\n".join([*headers, *descriptions]))
+    if classified:
+        value, keyword = classified
+        work_type = _metadata_value(value, 0.9, f"keyword: {keyword}")
 
     return {"vendor": vendor, "project": project, "date": date, "workType": work_type}
 
@@ -442,10 +461,33 @@ def classify_row(row: list[Any], columns: dict[str, int]) -> str:
     return "unpriced"
 
 
+def _select_source_total(
+    sections: Iterable[dict[str, Any]],
+    candidates: Iterable[tuple[str, float]],
+) -> float | None:
+    candidate_list = list(candidates)
+    if not candidate_list:
+        return None
+    normalized_total = math.fsum(
+        item["total"]
+        for section in sections
+        for item in section["items"]
+    )
+    subtotals = [value for kind, value in candidate_list if kind == "subtotal"]
+    ranked: list[float] = [
+        value for kind, value in candidate_list if kind == "pre_vat"
+    ]
+    if len(subtotals) > 1:
+        ranked.append(math.fsum(subtotals))
+    ranked.extend(subtotals)
+    ranked.extend(value for kind, value in candidate_list if kind == "final")
+    return min(enumerate(ranked), key=lambda candidate: (abs(candidate[1] - normalized_total), candidate[0]))[1]
+
+
 def extract_boq_document(tables: Iterable[dict[str, Any]], document_text: str) -> dict[str, Any]:
     sections: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
-    source_total: float | None = None
+    total_candidates: list[tuple[str, float]] = []
     for table_index, table in enumerate(tables, start=1):
         page = int(table.get("page") or 1)
         rows = [list(row) for row in table.get("rows", [])]
@@ -469,10 +511,20 @@ def extract_boq_document(tables: Iterable[dict[str, Any]], document_text: str) -
                 flush_section()
                 current_header = _cell(row, columns, "desc")
                 continue
-            if row_class == "total" and SUBTOTAL_ROW.match(_cell(row, columns, "desc")):
+            if row_class == "total":
+                total_label = _cell(row, columns, "desc")
                 total_text = _cell(row, columns, "total") or _cell(row, columns, "amount")
-                if _has_number(total_text):
-                    source_total = parse_number(total_text)
+                is_pre_vat = bool(re.search(r"before\s+vat|pre[\s-]*vat", total_label, re.I))
+                if _has_number(total_text) and not re.search(
+                    r"\b(?:discount|carried|brought)\b", total_label, re.I
+                ) and (is_pre_vat or not re.search(r"\bvat\b", total_label, re.I)):
+                    if is_pre_vat:
+                        kind = "pre_vat"
+                    elif SUBTOTAL_ROW.match(total_label):
+                        kind = "subtotal"
+                    else:
+                        kind = "final"
+                    total_candidates.append((kind, parse_number(total_text)))
                 continue
             if row_class == "unpriced" and _cell(row, columns, "desc"):
                 warnings.append({
@@ -488,11 +540,12 @@ def extract_boq_document(tables: Iterable[dict[str, Any]], document_text: str) -
         section["header"] for section in sections
         if not section["header"].startswith("Parsed Table ")
     ]
+    item_descriptions = [item["desc"] for section in sections for item in section["items"]]
     return {
         "sections": sections,
-        "metadata": extract_metadata(document_text, section_headers),
+        "metadata": extract_metadata(document_text, section_headers, item_descriptions),
         "warnings": warnings,
-        "sourceTotal": source_total,
+        "sourceTotal": _select_source_total(sections, total_candidates),
     }
 
 

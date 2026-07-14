@@ -1,7 +1,10 @@
+import asyncio
+import math
 import re
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -66,6 +69,14 @@ Subject: Electrical installation"""
         self.assertEqual(metadata["workType"]["value"], "Unclassified")
         self.assertLess(metadata["workType"]["confidence"], 0.5)
 
+    def test_work_type_uses_subject_instead_of_contractor_boilerplate(self):
+        metadata = extract_metadata(
+            "CONTRACTOR: N.P. CIVIL CONSTRUCTION CO., LTD.\nSubject: Interior painting",
+            [],
+        )
+
+        self.assertEqual(metadata["workType"]["value"], "Finishing")
+
     def test_document_result_includes_metadata_warnings_and_pre_vat_source_total(self):
         rows = [
             ["ITEM", "DESCRIPTION", "UNIT", "Q'TY", "RATE", "AMOUNT"],
@@ -85,6 +96,43 @@ Subject: Electrical installation"""
         self.assertEqual(result["sourceTotal"], 200.0)
         self.assertEqual(result["warnings"][0]["code"], "unparsed_row")
         self.assertEqual(result["warnings"][0]["sourceRef"], {"page": 3, "table": 1, "row": 4})
+
+    def test_uses_etg_total_before_vat_as_source_total(self):
+        rows = [
+            ["ITEM", "DESCRIPTION", "UNIT", "Q'TY", "RATE", "AMOUNT"],
+            ["1", "Install on-off valve", "set", "2", "1,500", "3,000"],
+            ["", "TOTAL BEFORE VAT", "", "", "", "3,000"],
+            ["", "VAT 7%", "", "", "", "210"],
+            ["", "GRAND TOTAL", "", "", "", "3,210"],
+        ]
+
+        result = extract_boq_document([{"page": 1, "rows": rows}], "EASTERN GROUP E.T.G. CO., LTD")
+
+        self.assertEqual(result["sourceTotal"], 3000.0)
+
+    def test_aggregates_multiple_section_subtotals_to_match_normalized_items(self):
+        tables = [
+            {
+                "page": 1,
+                "rows": [
+                    ["DESCRIPTION", "AMOUNT"],
+                    ["Concrete work", "100.00"],
+                    ["SUB TOTAL", "100.00"],
+                ],
+            },
+            {
+                "page": 2,
+                "rows": [
+                    ["DESCRIPTION", "AMOUNT"],
+                    ["Steel work", "200.00"],
+                    ["SUB TOTAL", "200.00"],
+                ],
+            },
+        ]
+
+        result = extract_boq_document(tables, "")
+
+        self.assertEqual(result["sourceTotal"], 300.0)
 
     def test_splits_distinct_material_and_labour_components(self):
         rows = [
@@ -178,6 +226,19 @@ Subject: Electrical installation"""
             ("L/S", 1.0, 258000.0, 258000.0, "lump_sum"),
         )
 
+    def test_sole_lump_sum_description_is_used_as_project_fallback(self):
+        rows = [
+            ["No.", "Description", "Amount"],
+            ["1", "Install submersible pump at sugar dissolving building.", "258,000.00"],
+        ]
+
+        metadata = extract_boq_document([{"page": 1, "rows": rows}], "SURASAK ENGINEERING")["metadata"]
+
+        self.assertEqual(
+            metadata["project"]["value"],
+            "Install submersible pump at sugar dissolving building.",
+        )
+
     def test_ambiguous_unpriced_rows_do_not_become_items(self):
         rows = [
             ["ITEM", "DESCRIPTION", "UNIT", "Q'TY", "RATE", "AMOUNT"],
@@ -260,13 +321,17 @@ Subject: Electrical installation"""
 
 
 class SidecarContractTest(unittest.TestCase):
-    def test_builds_versioned_response_from_docling_v2_exports(self):
+    def _import_main(self):
         try:
             import main
         except ModuleNotFoundError as error:
             if error.name in {"fastapi", "pydantic", "multipart"}:
                 self.skipTest(f"optional sidecar dependency is unavailable: {error.name}")
             raise
+        return main
+
+    def test_builds_versioned_response_from_docling_v2_exports(self):
+        main = self._import_main()
         build_parse_response = getattr(main, "build_parse_response", None)
         self.assertIsNotNone(build_parse_response, "build_parse_response must be implemented")
 
@@ -321,6 +386,71 @@ class SidecarContractTest(unittest.TestCase):
         self.assertEqual(payload["tables"][0]["rows"][1], ["Install valve", "2,500.00"])
         self.assertEqual(payload["metadata"]["workType"]["value"], "MEP")
         self.assertEqual(payload["totalItems"], 1)
+
+    def test_models_reject_non_finite_numbers_and_invalid_confidence(self):
+        main = self._import_main()
+        item_fields = {
+            "id": "item-1",
+            "desc": "Concrete",
+            "unit": "m3",
+            "rate": 1.0,
+            "total": 1.0,
+            "type": "unit",
+            "costComponent": "combined",
+            "sourceRef": {"page": 1, "table": 1, "row": 2},
+        }
+
+        for invalid in (math.nan, math.inf, -math.inf):
+            with self.subTest(number=invalid):
+                with self.assertRaises(Exception):
+                    main.Item(qty=invalid, **item_fields)
+        for invalid in (-0.1, 1.1, math.inf):
+            with self.subTest(confidence=invalid):
+                with self.assertRaises(Exception):
+                    main.MetadataField(value="value", confidence=invalid, source="test")
+
+    def test_models_reject_unknown_work_type_and_incomplete_source_reference(self):
+        main = self._import_main()
+
+        with self.assertRaises(Exception):
+            main.Metadata(
+                vendor={"value": "Vendor", "confidence": 1, "source": "test"},
+                project={"value": "Project", "confidence": 1, "source": "test"},
+                date={"value": "2026-06-04", "confidence": 1, "source": "test"},
+                workType={"value": "Roofing", "confidence": 1, "source": "test"},
+            )
+        with self.assertRaises(Exception):
+            main.Item(
+                id="item-1",
+                desc="Concrete",
+                unit="m3",
+                qty=1,
+                rate=1,
+                total=1,
+                type="unit",
+                costComponent="combined",
+                sourceRef={"page": 1, "table": 1},
+            )
+
+    def test_parse_error_is_logged_but_not_leaked_to_client(self):
+        main = self._import_main()
+
+        class Upload:
+            filename = "quote.pdf"
+
+            async def read(self):
+                return b"%PDF-1.7"
+
+        async def fail_conversion(*_args):
+            raise RuntimeError("sensitive converter detail")
+
+        with self.assertLogs("docling_sidecar", level="ERROR") as captured:
+            with patch.object(main, "run_in_threadpool", fail_conversion):
+                with self.assertRaises(main.HTTPException) as raised:
+                    asyncio.run(main.parse_pdf(Upload()))
+
+        self.assertEqual(raised.exception.detail, "Docling could not parse this PDF")
+        self.assertIn("sensitive converter detail", "\n".join(captured.output))
 
 
 if __name__ == "__main__":
