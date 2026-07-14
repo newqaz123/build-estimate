@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Repair the BOQ upload and review flow so it shows the uploaded source PDF, extracts trustworthy metadata and line items from real Southeast Asian construction quotations, removes the unhelpful Code field from review, and remains useful when LLM verification is unavailable.
+Repair the BOQ upload and review flow so it shows the uploaded source PDF, extracts trustworthy metadata and line items from real Southeast Asian construction quotations, removes the unhelpful Code and Type fields from review, and remains useful when LLM verification is unavailable.
 
 ## Scope
 
@@ -135,6 +135,8 @@ Extend `BoqItem` with optional ingestion fields:
 
 The legacy `code` property remains optional for approved historical data and downstream compatibility, but it is not generated for new imports or shown in the review interface. Components that currently use code as a React key or mutation locator move to the internal item ID with a compatibility fallback for legacy BOQs.
 
+The legacy `type` property remains internal for backward compatibility and calculations that distinguish unit-priced and lump-sum records. It is derived by the importer and is not shown or editable in the review interface. New review behavior is driven by the visible quantity, unit, rate, and total rather than asking the user to classify a row.
+
 ## Review Interface
 
 The left pane displays the authenticated source PDF without reconstructed content. Loading and preview failures show an inline message with a retry action and the filename.
@@ -142,8 +144,8 @@ The left pane displays the authenticated source PDF without reconstructed conten
 The right pane:
 
 - shows extracted metadata with confidence/warning indicators;
-- removes the Code column;
-- keeps Description, Cost type, Unit, Qty, Rate, Total, and standardization status;
+- removes the Code and Type columns;
+- keeps Description, Unit, Qty, Rate, Total, and standardization status;
 - visually groups material/labour items produced from one source row;
 - keeps numeric editing and recalculates totals consistently;
 - blocks approval when required metadata is missing or a numeric value is invalid;
@@ -205,7 +207,7 @@ Test authentication, PDF validation, storage/parse rollback, sidecar error mappi
 
 ### Component tests
 
-Test that the review panel embeds the BOQ source route, contains no Code column/input, renders confidence and fallback states, blocks invalid approval, retains edits after save failure, and distinguishes LLM verification from local verification.
+Test that the review panel embeds the BOQ source route, contains no Code or Type column/input, renders confidence and fallback states, blocks invalid approval, retains edits after save failure, and distinguishes LLM verification from local verification.
 
 ### Browser verification
 
@@ -222,7 +224,7 @@ The repair is complete when:
 1. The review pane shows the exact uploaded PDF.
 2. All supplied quotation variants produce correct vendor, project, date, and work type or an explicit unclassified warning.
 3. Unit, quantity, rate, and total preserve the source's cost structure without column shifts or synthetic zero rows.
-4. Code is absent from the review UI and new-import workflow.
+4. Code and Type are absent from the review UI and new-import workflow.
 5. LLM failure explains the cause, runs deterministic checks, and leaves the user able to review and approve valid data.
 6. Automated regression tests and browser upload tests pass.
 7. The project knowledge graph is updated after implementation.
