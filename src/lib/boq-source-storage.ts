@@ -20,6 +20,11 @@ export async function loadSourcePdf(path: string): Promise<Buffer> {
   return bytes
 }
 
+export async function sourcePdfExists(path: string): Promise<boolean> {
+  const [exists] = await getStorageBucket().file(path).exists()
+  return exists
+}
+
 export function isSourceObjectNotFound(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 404
 }

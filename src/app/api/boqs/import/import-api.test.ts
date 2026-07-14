@@ -2,14 +2,22 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import type { Boq } from '@/lib/boq-schema'
+import type { DoclingResultV2 } from '@/lib/boq-ingestion'
+import {
+  importPdfAtomically,
+  type ImportServiceDependencies,
+} from '@/lib/boq-import-service'
+import { requireSinglePdf } from '@/lib/boq-import-request'
+import { boqSourcePath, isSourceObjectNotFound } from '@/lib/boq-source-storage'
 import {
   DoclingClientError,
   buildDoclingParseUrl,
+  getAllowedDoclingOrigins,
   parsePdfWithDocling,
 } from '@/lib/docling-client'
-import type { DoclingResultV2 } from '@/lib/boq-ingestion'
-import { boqSourcePath, isSourceObjectNotFound } from '@/lib/boq-source-storage'
-import { importPdfAtomically, requireSinglePdf } from './route'
+import { createImportHandler } from './route'
+import { createDoclingParseHandler } from '../../docling/parse/route'
 
 function validDoclingPayload(): DoclingResultV2 {
   return {
@@ -43,223 +51,465 @@ function validDoclingPayload(): DoclingResultV2 {
   }
 }
 
-test('buildDoclingParseUrl accepts only HTTP(S) and appends parse once', () => {
-  assert.equal(buildDoclingParseUrl('http://localhost:5001'), 'http://localhost:5001/parse')
-  assert.equal(buildDoclingParseUrl('https://docling.example/base/'), 'https://docling.example/base/parse')
-  assert.equal(buildDoclingParseUrl('https://docling.example/base/parse/'), 'https://docling.example/base/parse')
-  assert.throws(() => buildDoclingParseUrl('file:///tmp/docling'), /HTTP or HTTPS/)
+function pdfForm(...files: File[]): FormData {
+  const form = new FormData()
+  for (const file of files) form.append('file', file)
+  return form
+}
+
+function pdfFile(bytes: BlobPart[] = ['pdf']): File {
+  return new File(bytes, 'source.pdf', { type: 'application/pdf' })
+}
+
+function draftBoq(id = 'boq-1'): Boq {
+  return {
+    id,
+    project: '',
+    vendor: '',
+    workType: 'Unclassified',
+    date: '',
+    totalItems: 1,
+    grandTotal: 250,
+    status: 'draft',
+    stdStatus: 'none',
+    sections: [],
+    sourceStoragePath: `boqs/${id}/source.pdf`,
+    createdAt: '2026-07-14T00:00:00.000Z',
+    updatedAt: '2026-07-14T00:00:00.000Z',
+  }
+}
+
+function serviceDependencies(
+  overrides: Partial<ImportServiceDependencies> = {},
+): ImportServiceDependencies {
+  return {
+    getWorkspaceSettings: async () => null,
+    saveSourcePdf: async () => undefined,
+    sourcePdfExists: async () => true,
+    parsePdfWithDocling: async () => validDoclingPayload(),
+    createDocumentWithId: async () => undefined,
+    getBoq: async () => null,
+    deleteSourcePdf: async () => undefined,
+    ...overrides,
+  }
+}
+
+test('Docling URL policy permits localhost plus configured origins and targets one parse path', () => {
+  const allowed = getAllowedDoclingOrigins(' https://docling.example:8443,https://second.example ')
+  assert.deepEqual(allowed, new Set([
+    'http://localhost:5001',
+    'https://docling.example:8443',
+    'https://second.example',
+  ]))
+  assert.equal(buildDoclingParseUrl('http://localhost:5001/base/parse/'), 'http://localhost:5001/base/parse')
+  assert.equal(
+    buildDoclingParseUrl('https://docling.example:8443/base/', allowed),
+    'https://docling.example:8443/base/parse',
+  )
 })
 
-test('parsePdfWithDocling sends the PDF without caching and validates the response', async () => {
+test('Docling URL policy rejects arbitrary, private, and link-local origins', () => {
+  for (const endpoint of [
+    'https://attacker.example/parse',
+    'http://10.0.0.8:5001',
+    'http://169.254.169.254/latest/meta-data',
+    'http://127.0.0.1:5001',
+    'file:///tmp/docling',
+  ]) {
+    assert.throws(
+      () => buildDoclingParseUrl(endpoint),
+      (error) => error instanceof DoclingClientError && error.kind === 'unreachable',
+    )
+  }
+})
+
+test('parsePdfWithDocling sends exact multipart bytes without caching or redirects', async () => {
   const originalFetch = globalThis.fetch
   let request: { input: string | URL | Request; init?: RequestInit } | undefined
   globalThis.fetch = async (input, init) => {
     request = { input, init }
     return Response.json(validDoclingPayload())
   }
-
   try {
-    const file = new File([new Uint8Array([1, 2, 3])], 'bid.pdf', { type: 'application/pdf' })
-    const parsed = await parsePdfWithDocling(file, 'http://localhost:5001/')
-
+    const parsed = await parsePdfWithDocling(pdfFile([new Uint8Array([1, 2, 3])]), ' http://localhost:5001/ ')
     assert.equal(parsed.documentName, 'bid.pdf')
     assert.equal(request?.input, 'http://localhost:5001/parse')
     assert.equal(request?.init?.method, 'POST')
     assert.equal(request?.init?.cache, 'no-store')
-    assert.ok(request?.init?.body instanceof FormData)
+    assert.equal(request?.init?.redirect, 'error')
     const uploaded = (request?.init?.body as FormData).get('file')
     assert.ok(uploaded instanceof File)
-    assert.equal(uploaded.name, file.name)
     assert.deepEqual(Array.from(new Uint8Array(await uploaded.arrayBuffer())), [1, 2, 3])
-    assert.ok(request?.init?.signal instanceof AbortSignal)
   } finally {
     globalThis.fetch = originalFetch
   }
 })
 
-test('parsePdfWithDocling categorizes rejected and invalid upstream responses safely', async () => {
+test('Docling 4xx exposes only allowlisted document rejection messages', async () => {
   const originalFetch = globalThis.fetch
   try {
-    globalThis.fetch = async () => Response.json({ detail: 'PDF is encrypted', stack: 'secret' }, { status: 422 })
+    for (const detail of ['Only PDF files are supported', 'PDF size exceeds 20 MB', 'No BOQ rows found']) {
+      globalThis.fetch = async () => Response.json({ detail }, { status: 422 })
+      await assert.rejects(
+        () => parsePdfWithDocling(pdfFile(), 'http://localhost:5001'),
+        (error) => error instanceof DoclingClientError
+          && error.kind === 'rejected'
+          && error.message.includes(detail),
+      )
+    }
+    globalThis.fetch = async () => Response.json({ detail: 'Parser failed at /srv/secrets/key.json token=abc' }, { status: 422 })
     await assert.rejects(
-      () => parsePdfWithDocling(new File(['pdf'], 'bid.pdf'), 'http://localhost:5001'),
+      () => parsePdfWithDocling(pdfFile(), 'http://localhost:5001'),
       (error) => error instanceof DoclingClientError
         && error.kind === 'rejected'
-        && error.message.includes('PDF is encrypted')
-        && !error.message.includes('secret'),
-    )
-
-    globalThis.fetch = async () => Response.json({ arbitrary: 'internal detail' })
-    await assert.rejects(
-      () => parsePdfWithDocling(new File(['pdf'], 'bid.pdf'), 'http://localhost:5001'),
-      (error) => error instanceof DoclingClientError
-        && error.kind === 'invalid_response'
-        && !error.message.includes('internal detail'),
+        && !error.message.includes('/srv')
+        && !error.message.includes('token'),
     )
   } finally {
     globalThis.fetch = originalFetch
   }
 })
 
-test('parsePdfWithDocling categorizes aborts as timeout and network failures as unreachable', async () => {
+test('Docling 5xx is upstream without reflecting secrets or paths', async () => {
+  const originalFetch = globalThis.fetch
+  const originalConsoleError = console.error
+  const logged: unknown[][] = []
+  console.error = (...values: unknown[]) => { logged.push(values) }
+  globalThis.fetch = async () => Response.json(
+    { detail: 'AWS_SECRET=abc failed at /private/service.py' },
+    { status: 503 },
+  )
+  try {
+    await assert.rejects(
+      () => parsePdfWithDocling(pdfFile(), 'http://localhost:5001'),
+      (error) => error instanceof DoclingClientError
+        && error.kind === 'upstream'
+        && !error.message.includes('AWS_SECRET')
+        && !error.message.includes('/private'),
+    )
+    assert.equal(JSON.stringify(logged).includes('AWS_SECRET'), false)
+  } finally {
+    globalThis.fetch = originalFetch
+    console.error = originalConsoleError
+  }
+})
+
+test('request cancellation is distinct from timeout', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (_input, init) => {
+    await new Promise<void>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
+    })
+    throw new Error('unreachable')
+  }
+  try {
+    const controller = new AbortController()
+    const pending = parsePdfWithDocling(pdfFile(), 'http://localhost:5001', controller.signal)
+    controller.abort()
+    await assert.rejects(
+      pending,
+      (error) => error instanceof DoclingClientError && error.kind === 'cancelled',
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('internal Docling deadline aborts fetch as timeout', async (context) => {
+  const originalFetch = globalThis.fetch
+  context.mock.timers.enable({ apis: ['setTimeout'] })
+  globalThis.fetch = async (_input, init) => {
+    await new Promise<void>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
+    })
+    throw new Error('unreachable')
+  }
+  try {
+    const pending = parsePdfWithDocling(pdfFile(), 'http://localhost:5001')
+    context.mock.timers.tick(180_000)
+    await assert.rejects(
+      pending,
+      (error) => error instanceof DoclingClientError && error.kind === 'timeout',
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+    context.mock.timers.reset()
+  }
+})
+
+test('network failures and invalid successful responses remain generic', async () => {
   const originalFetch = globalThis.fetch
   try {
-    globalThis.fetch = async (_input, init) => {
-      await new Promise<void>((_resolve, reject) => {
-        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
-      })
-      throw new Error('unreachable')
-    }
-    const controller = new AbortController()
-    const pending = parsePdfWithDocling(new File(['pdf'], 'bid.pdf'), 'http://localhost:5001', controller.signal)
-    controller.abort()
-    await assert.rejects(pending, (error) => error instanceof DoclingClientError && error.kind === 'timeout')
-
-    globalThis.fetch = async () => { throw new TypeError('connect ECONNREFUSED with private details') }
+    globalThis.fetch = async () => { throw new TypeError('ECONNREFUSED secret-host') }
     await assert.rejects(
-      () => parsePdfWithDocling(new File(['pdf'], 'bid.pdf'), 'http://localhost:5001'),
+      () => parsePdfWithDocling(pdfFile(), 'http://localhost:5001'),
       (error) => error instanceof DoclingClientError
         && error.kind === 'unreachable'
-        && !error.message.includes('ECONNREFUSED'),
+        && !error.message.includes('secret-host'),
+    )
+    globalThis.fetch = async () => Response.json({ secret: '/private/schema' })
+    await assert.rejects(
+      () => parsePdfWithDocling(pdfFile(), 'http://localhost:5001'),
+      (error) => error instanceof DoclingClientError
+        && error.kind === 'invalid_response'
+        && !error.message.includes('/private'),
     )
   } finally {
     globalThis.fetch = originalFetch
   }
 })
 
-test('source PDFs use the immutable BOQ source path', () => {
-  assert.equal(boqSourcePath('0de99762-e891-4f68-9722-cf85ab353869'), 'boqs/0de99762-e891-4f68-9722-cf85ab353869/source.pdf')
+test('shared upload validation requires one matching MIME and extension', () => {
+  const pdf = pdfFile()
+  assert.equal(requireSinglePdf(pdfForm(pdf)).name, 'source.pdf')
+  assert.throws(() => requireSinglePdf(pdfForm(pdf, pdf)), /one PDF/i)
+  assert.throws(() => requireSinglePdf(pdfForm(new File(['x'], 'source.txt', { type: 'application/pdf' }))), /one PDF/i)
+  assert.throws(() => requireSinglePdf(pdfForm(new File(['x'], 'source.pdf', { type: 'text/plain' }))), /one PDF/i)
+  assert.throws(() => requireSinglePdf(pdfForm(new File([], 'source.pdf', { type: 'application/pdf' }))), /one PDF/i)
+})
+
+test('source helpers use immutable path and only object-not-found', () => {
+  assert.equal(boqSourcePath('boq-1'), 'boqs/boq-1/source.pdf')
   assert.equal(isSourceObjectNotFound({ code: 404 }), true)
   assert.equal(isSourceObjectNotFound({ code: 500 }), false)
-  assert.equal(isSourceObjectNotFound(new Error('not found')), false)
 })
 
-test('requireSinglePdf accepts exactly one 1..20 MB PDF with matching extension and type', () => {
-  const valid = new FormData()
-  const pdf = new File(['pdf'], 'source.PDF', { type: 'application/pdf' })
-  valid.append('file', pdf)
-  assert.equal(requireSinglePdf(valid), valid.get('file'))
-
-  const multiple = new FormData()
-  multiple.append('file', pdf)
-  multiple.append('file', pdf)
-  assert.throws(() => requireSinglePdf(multiple), /one PDF/i)
-
-  for (const invalid of [
-    new File([], 'source.pdf', { type: 'application/pdf' }),
-    new File(['pdf'], 'source.txt', { type: 'application/pdf' }),
-    new File(['pdf'], 'source.pdf', { type: 'text/plain' }),
-  ]) {
-    const form = new FormData()
-    form.append('file', invalid)
-    assert.throws(() => requireSinglePdf(form), /one PDF/i)
-  }
-})
-
-test('atomic import saves exact bytes, parses, and persists the draft', async () => {
+test('atomic import saves exact bytes, propagates signal, and persists a draft', async () => {
   const calls: string[] = []
   let savedBytes: Uint8Array | undefined
   let persisted: Record<string, unknown> | undefined
-  const file = new File([new Uint8Array([37, 80, 68, 70])], 'source.pdf', { type: 'application/pdf' })
-
-  const draft = await importPdfAtomically(file, '0de99762-e891-4f68-9722-cf85ab353869', {
-    getWorkspaceSettings: async () => ({ docling: { endpoint: 'https://docling.example' } }),
-    saveSourcePdf: async (_path, bytes) => { calls.push('save'); savedBytes = bytes },
-    parsePdfWithDocling: async (_file, endpoint) => {
-      calls.push(`parse:${endpoint}`)
-      return validDoclingPayload()
-    },
-    createDocumentWithId: async (collection, _id, data) => {
-      calls.push(`persist:${collection}`)
-      persisted = data
-    },
-    deleteSourcePdf: async () => { calls.push('delete') },
-  })
-
-  assert.deepEqual(Array.from(savedBytes ?? []), [37, 80, 68, 70])
-  assert.deepEqual(calls, ['save', 'parse:https://docling.example', 'persist:boqs'])
-  assert.equal(draft.status, 'draft')
-  assert.equal(draft.sourceStoragePath, 'boqs/0de99762-e891-4f68-9722-cf85ab353869/source.pdf')
-  assert.equal(persisted?.sourceStoragePath, draft.sourceStoragePath)
-  assert.equal(draft.vendor, '')
-  assert.equal(draft.date, '')
-  assert.equal(draft.workType, 'Unclassified')
-})
-
-test('atomic import rolls back its source when parsing or persistence fails', async () => {
-  for (const failAt of ['parse', 'persist'] as const) {
-    const calls: string[] = []
-    await assert.rejects(() => importPdfAtomically(
-      new File(['pdf'], 'source.pdf', { type: 'application/pdf' }),
-      '0de99762-e891-4f68-9722-cf85ab353869',
-      {
-        getWorkspaceSettings: async () => null,
-        saveSourcePdf: async () => { calls.push('save') },
-        parsePdfWithDocling: async () => {
-          calls.push('parse')
-          if (failAt === 'parse') throw new DoclingClientError('rejected', 'Docling rejected the PDF: unreadable document')
-          return validDoclingPayload()
-        },
-        createDocumentWithId: async () => {
-          calls.push('persist')
-          if (failAt === 'persist') throw new Error('Firestore unavailable')
-        },
-        deleteSourcePdf: async () => { calls.push('delete') },
+  const controller = new AbortController()
+  const draft = await importPdfAtomically(
+    pdfFile([new Uint8Array([37, 80, 68, 70])]),
+    'boq-1',
+    serviceDependencies({
+      getWorkspaceSettings: async () => ({ docling: { endpoint: ' http://localhost:5001 ' } }),
+      saveSourcePdf: async (_path, bytes) => { calls.push('save'); savedBytes = bytes },
+      parsePdfWithDocling: async (_file, endpoint, signal) => {
+        calls.push(`parse:${endpoint}`)
+        assert.equal(signal, controller.signal)
+        return validDoclingPayload()
       },
-    ))
-    assert.equal(calls.at(-1), 'delete')
-  }
+      createDocumentWithId: async (_collection, _id, data) => { calls.push('persist'); persisted = data },
+    }),
+    controller.signal,
+  )
+  assert.deepEqual(Array.from(savedBytes ?? []), [37, 80, 68, 70])
+  assert.deepEqual(calls, ['save', 'parse:http://localhost:5001', 'persist'])
+  assert.equal(draft.status, 'draft')
+  assert.equal(persisted?.sourceStoragePath, 'boqs/boq-1/source.pdf')
 })
 
-test('atomic rollback ignores only object-not-found deletion failures', async () => {
-  const parseError = new DoclingClientError('rejected', 'Docling rejected the PDF')
-  const baseDependencies = {
-    getWorkspaceSettings: async () => null,
-    saveSourcePdf: async () => undefined,
-    parsePdfWithDocling: async () => { throw parseError },
-    createDocumentWithId: async () => undefined,
-  }
-  const file = new File(['pdf'], 'source.pdf', { type: 'application/pdf' })
+test('storage commit-then-reject reconciles existence and continues import', async () => {
+  const calls: string[] = []
+  const result = await importPdfAtomically(pdfFile(), 'boq-1', serviceDependencies({
+    saveSourcePdf: async () => { calls.push('save'); throw new Error('deadline after commit') },
+    sourcePdfExists: async () => { calls.push('exists'); return true },
+    parsePdfWithDocling: async () => { calls.push('parse'); return validDoclingPayload() },
+    createDocumentWithId: async () => { calls.push('persist') },
+    deleteSourcePdf: async () => { calls.push('delete') },
+  }))
+  assert.equal(result.status, 'draft')
+  assert.deepEqual(calls, ['save', 'exists', 'parse', 'persist'])
+})
 
+test('storage rejection with confirmed absence fails without parsing or deletion', async () => {
+  const calls: string[] = []
+  const storageError = new Error('storage rejected')
   await assert.rejects(
-    () => importPdfAtomically(file, crypto.randomUUID(), {
-      ...baseDependencies,
-      deleteSourcePdf: async () => { throw { code: 404 } },
-    }),
-    (error) => error === parseError,
-  )
-
-  const storageError = { code: 500 }
-  await assert.rejects(
-    () => importPdfAtomically(file, crypto.randomUUID(), {
-      ...baseDependencies,
-      deleteSourcePdf: async () => { throw storageError },
-    }),
+    () => importPdfAtomically(pdfFile(), 'boq-1', serviceDependencies({
+      saveSourcePdf: async () => { calls.push('save'); throw storageError },
+      sourcePdfExists: async () => { calls.push('exists'); return false },
+      parsePdfWithDocling: async () => { calls.push('parse'); return validDoclingPayload() },
+      deleteSourcePdf: async () => { calls.push('delete') },
+    })),
     (error) => error === storageError,
   )
+  assert.deepEqual(calls, ['save', 'exists'])
 })
 
-test('import route authenticates and wires storage, parsing, persistence, and rollback', () => {
-  const routeSource = readFileSync(fileURLToPath(new URL('./route.ts', import.meta.url)), 'utf8')
-  assert.match(routeSource, /await auth\(\)/)
-  assert.match(routeSource, /request\.formData\(\)/)
-  assert.match(routeSource, /saveSourcePdf/)
-  assert.match(routeSource, /parsePdfWithDocling/)
-  assert.match(routeSource, /createDocumentWithId/)
-  assert.match(routeSource, /deleteSourcePdf/)
+test('Firestore commit-then-reject returns stored draft and preserves source', async () => {
+  const calls: string[] = []
+  const stored = draftBoq('boq-1')
+  const result = await importPdfAtomically(pdfFile(), 'boq-1', serviceDependencies({
+    createDocumentWithId: async () => { calls.push('persist'); throw new Error('deadline after commit') },
+    getBoq: async () => { calls.push('get'); return stored },
+    deleteSourcePdf: async () => { calls.push('delete') },
+  }))
+  assert.equal(result, stored)
+  assert.deepEqual(calls, ['persist', 'get'])
 })
 
-test('source storage is private, non-resumable, and ignores only object-not-found deletion errors', () => {
+test('Firestore rejection deletes source only after confirming draft absence', async () => {
+  const calls: string[] = []
+  const persistenceError = new Error('Firestore rejected')
+  await assert.rejects(
+    () => importPdfAtomically(pdfFile(), 'boq-1', serviceDependencies({
+      createDocumentWithId: async () => { calls.push('persist'); throw persistenceError },
+      getBoq: async () => { calls.push('get'); return null },
+      deleteSourcePdf: async () => { calls.push('delete') },
+    })),
+    (error) => error === persistenceError,
+  )
+  assert.deepEqual(calls, ['persist', 'get', 'delete'])
+})
+
+test('Firestore reconciliation failure preserves source because outcome is unknown', async () => {
+  const calls: string[] = []
+  const readError = new Error('Firestore read unavailable')
+  await assert.rejects(
+    () => importPdfAtomically(pdfFile(), 'boq-1', serviceDependencies({
+      createDocumentWithId: async () => { calls.push('persist'); throw new Error('ambiguous write') },
+      getBoq: async () => { calls.push('get'); throw readError },
+      deleteSourcePdf: async () => { calls.push('delete') },
+    })),
+    (error) => error === readError,
+  )
+  assert.deepEqual(calls, ['persist', 'get'])
+})
+
+test('cancellation after parsing rolls back source and prevents persistence', async () => {
+  const calls: string[] = []
+  const controller = new AbortController()
+  await assert.rejects(
+    () => importPdfAtomically(pdfFile(), 'boq-1', serviceDependencies({
+      parsePdfWithDocling: async () => { calls.push('parse'); controller.abort(); return validDoclingPayload() },
+      createDocumentWithId: async () => { calls.push('persist') },
+      deleteSourcePdf: async () => { calls.push('delete') },
+    }), controller.signal),
+    (error) => error instanceof DoclingClientError && error.kind === 'cancelled',
+  )
+  assert.deepEqual(calls, ['parse', 'delete'])
+})
+
+test('rollback ignores object-not-found but surfaces other deletion failures', async () => {
+  const parseError = new DoclingClientError('rejected', 'Docling rejected the PDF')
+  await assert.rejects(
+    () => importPdfAtomically(pdfFile(), 'boq-1', serviceDependencies({
+      parsePdfWithDocling: async () => { throw parseError },
+      deleteSourcePdf: async () => { throw { code: 404 } },
+    })),
+    (error) => error === parseError,
+  )
+  const rollbackError = { code: 500 }
+  await assert.rejects(
+    () => importPdfAtomically(pdfFile(), 'boq-1', serviceDependencies({
+      parsePdfWithDocling: async () => { throw parseError },
+      deleteSourcePdf: async () => { throw rollbackError },
+    })),
+    (error) => error === rollbackError,
+  )
+})
+
+test('import and proxy handlers authenticate before reading multipart', async () => {
+  const importHandler = createImportHandler({
+    authenticate: async () => null,
+    createId: () => 'boq-1',
+    importPdf: async () => draftBoq(),
+  })
+  const proxyHandler = createDoclingParseHandler({
+    authenticate: async () => null,
+    getEndpoint: async () => 'http://localhost:5001',
+    parsePdf: async () => validDoclingPayload(),
+  })
+  const request = new Request('http://localhost/api', { method: 'POST', body: 'not multipart' })
+  assert.equal((await importHandler(request)).status, 401)
+  assert.equal((await proxyHandler(request)).status, 401)
+})
+
+test('import and proxy handlers share invalid multipart and duplicate behavior', async () => {
+  const importHandler = createImportHandler({
+    authenticate: async () => ({ user: {} }),
+    createId: () => 'boq-1',
+    importPdf: async () => draftBoq(),
+  })
+  const proxyHandler = createDoclingParseHandler({
+    authenticate: async () => ({ user: {} }),
+    getEndpoint: async () => 'http://localhost:5001',
+    parsePdf: async () => validDoclingPayload(),
+  })
+  for (const makeRequest of [
+    () => new Request('http://localhost/api', { method: 'POST', body: '{}' }),
+    () => new Request('http://localhost/api', { method: 'POST', body: pdfForm(pdfFile(), pdfFile()) }),
+  ]) {
+    assert.equal((await importHandler(makeRequest())).status, 400)
+    assert.equal((await proxyHandler(makeRequest())).status, 400)
+  }
+})
+
+test('import and proxy handlers share safe Docling category mapping', async () => {
+  const categories = [
+    ['cancelled', 499],
+    ['timeout', 504],
+    ['rejected', 422],
+    ['unreachable', 502],
+    ['upstream', 502],
+    ['invalid_response', 502],
+  ] as const
+  for (const [kind, status] of categories) {
+    const error = new DoclingClientError(kind, kind === 'rejected' ? 'Only PDF files are supported' : 'secret /private/path')
+    const importHandler = createImportHandler({
+      authenticate: async () => ({ user: {} }),
+      createId: () => 'boq-1',
+      importPdf: async () => { throw error },
+    })
+    const proxyHandler = createDoclingParseHandler({
+      authenticate: async () => ({ user: {} }),
+      getEndpoint: async () => 'http://localhost:5001',
+      parsePdf: async () => { throw error },
+    })
+    for (const response of [
+      await importHandler(new Request('http://localhost/api', { method: 'POST', body: pdfForm(pdfFile()) })),
+      await proxyHandler(new Request('http://localhost/api', { method: 'POST', body: pdfForm(pdfFile()) })),
+    ]) {
+      assert.equal(response.status, status)
+      const body = await response.text()
+      assert.equal(body.includes('/private/path'), false)
+      if (kind === 'rejected') assert.equal(body.includes('Only PDF'), true)
+    }
+  }
+})
+
+test('handlers propagate request.signal and successful import returns 201', async () => {
+  const controller = new AbortController()
+  let importSignal: AbortSignal | undefined
+  let proxySignal: AbortSignal | undefined
+  const importHandler = createImportHandler({
+    authenticate: async () => ({ user: {} }),
+    createId: () => 'boq-1',
+    importPdf: async (_file, _id, signal) => { importSignal = signal; return draftBoq() },
+  })
+  const proxyHandler = createDoclingParseHandler({
+    authenticate: async () => ({ user: {} }),
+    getEndpoint: async () => ' http://localhost:5001 ',
+    parsePdf: async (_file, endpoint, signal) => {
+      proxySignal = signal
+      assert.equal(endpoint, 'http://localhost:5001')
+      return validDoclingPayload()
+    },
+  })
+  const importRequest = new Request('http://localhost/api', {
+    method: 'POST',
+    body: pdfForm(pdfFile()),
+    signal: controller.signal,
+  })
+  const proxyRequest = new Request('http://localhost/api', {
+    method: 'POST',
+    body: pdfForm(pdfFile()),
+    signal: controller.signal,
+  })
+  const importResponse = await importHandler(importRequest)
+  const proxyResponse = await proxyHandler(proxyRequest)
+  assert.equal(importResponse.status, 201)
+  assert.equal(proxyResponse.status, 200)
+  assert.equal(importSignal, importRequest.signal)
+  assert.equal(proxySignal, proxyRequest.signal)
+})
+
+test('storage adapter stays private, non-resumable, and supports existence checks', () => {
   const source = readFileSync(fileURLToPath(new URL('../../../../lib/boq-source-storage.ts', import.meta.url)), 'utf8')
   assert.match(source, /resumable:\s*false/)
   assert.match(source, /contentType:\s*['"]application\/pdf['"]/) 
   assert.match(source, /private,\s*max-age=0/)
-  assert.match(source, /code\s*===\s*404/)
-  assert.match(source, /file\(path\)\.delete\(\)/)
-})
-
-test('parse proxy reuses the shared Docling client', () => {
-  const source = readFileSync(fileURLToPath(new URL('../../docling/parse/route.ts', import.meta.url)), 'utf8')
-  assert.match(source, /from ['"]@\/lib\/docling-client['"]/) 
-  assert.match(source, /parsePdfWithDocling/)
+  assert.match(source, /\.exists\(\)/)
 })
