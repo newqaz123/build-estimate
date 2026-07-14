@@ -110,7 +110,7 @@ Subject: Electrical installation"""
 
         self.assertEqual(result["sourceTotal"], 3000.0)
 
-    def test_aggregates_multiple_section_subtotals_to_match_normalized_items(self):
+    def test_aggregates_multiple_section_subtotals(self):
         tables = [
             {
                 "page": 1,
@@ -126,6 +126,59 @@ Subject: Electrical installation"""
                     ["DESCRIPTION", "AMOUNT"],
                     ["Steel work", "200.00"],
                     ["SUB TOTAL", "200.00"],
+                ],
+            },
+        ]
+
+        result = extract_boq_document(tables, "")
+
+        self.assertEqual(result["sourceTotal"], 300.0)
+
+    def test_source_total_preserves_subtotals_when_one_section_item_is_unparsed(self):
+        tables = [
+            {
+                "page": 1,
+                "rows": [
+                    ["ITEM", "DESCRIPTION", "UNIT", "Q'TY", "MATERIAL", "TOTAL", "LABOUR", "TOTAL", "AMOUNT"],
+                    ["1", "Unparsed priced concrete work", "", "", "100.00", "", "", "", ""],
+                    ["", "SUB TOTAL", "", "", "", "", "", "", "100.00"],
+                ],
+            },
+            {
+                "page": 2,
+                "rows": [
+                    ["DESCRIPTION", "AMOUNT"],
+                    ["Steel work", "200.00"],
+                    ["SUB TOTAL", "200.00"],
+                ],
+            },
+        ]
+
+        result = extract_boq_document(tables, "")
+
+        self.assertEqual(
+            sum(item["total"] for section in result["sections"] for item in section["items"]),
+            200.0,
+        )
+        self.assertEqual(result["sourceTotal"], 300.0)
+
+    def test_final_overall_subtotal_is_not_double_counted(self):
+        tables = [
+            {
+                "page": 1,
+                "rows": [
+                    ["ITEM", "DESCRIPTION", "UNIT", "Q'TY", "MATERIAL", "TOTAL", "LABOUR", "TOTAL", "AMOUNT"],
+                    ["1", "Unparsed priced concrete work", "", "", "100.00", "", "", "", ""],
+                    ["", "SUB TOTAL", "", "", "", "", "", "", "100.00"],
+                ],
+            },
+            {
+                "page": 2,
+                "rows": [
+                    ["DESCRIPTION", "AMOUNT"],
+                    ["Steel work", "200.00"],
+                    ["SUB TOTAL", "200.00"],
+                    ["SUB TOTAL", "300.00"],
                 ],
             },
         ]

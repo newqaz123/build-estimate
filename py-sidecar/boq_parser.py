@@ -462,26 +462,21 @@ def classify_row(row: list[Any], columns: dict[str, int]) -> str:
 
 
 def _select_source_total(
-    sections: Iterable[dict[str, Any]],
     candidates: Iterable[tuple[str, float]],
 ) -> float | None:
     candidate_list = list(candidates)
     if not candidate_list:
         return None
-    normalized_total = math.fsum(
-        item["total"]
-        for section in sections
-        for item in section["items"]
-    )
     subtotals = [value for kind, value in candidate_list if kind == "subtotal"]
-    ranked: list[float] = [
-        value for kind, value in candidate_list if kind == "pre_vat"
-    ]
-    if len(subtotals) > 1:
-        ranked.append(math.fsum(subtotals))
-    ranked.extend(subtotals)
-    ranked.extend(value for kind, value in candidate_list if kind == "final")
-    return min(enumerate(ranked), key=lambda candidate: (abs(candidate[1] - normalized_total), candidate[0]))[1]
+    if subtotals:
+        preceding_total = math.fsum(subtotals[:-1])
+        if len(subtotals) > 1 and math.isclose(
+            subtotals[-1], preceding_total, rel_tol=1e-9, abs_tol=0.05
+        ):
+            return subtotals[-1]
+        return math.fsum(subtotals)
+    pre_vat_totals = [value for kind, value in candidate_list if kind == "pre_vat"]
+    return pre_vat_totals[-1] if pre_vat_totals else None
 
 
 def extract_boq_document(tables: Iterable[dict[str, Any]], document_text: str) -> dict[str, Any]:
@@ -514,7 +509,12 @@ def extract_boq_document(tables: Iterable[dict[str, Any]], document_text: str) -
             if row_class == "total":
                 total_label = _cell(row, columns, "desc")
                 total_text = _cell(row, columns, "total") or _cell(row, columns, "amount")
-                is_pre_vat = bool(re.search(r"before\s+vat|pre[\s-]*vat", total_label, re.I))
+                is_pre_vat = bool(re.search(
+                    r"before\s+vat|pre[\s-]*vat|"
+                    r"exclud(?:e|es|ed|ing)\s+(?:of\s+)?vat|excl\.?\s*vat|vat\s+excluded",
+                    total_label,
+                    re.I,
+                ))
                 if _has_number(total_text) and not re.search(
                     r"\b(?:discount|carried|brought)\b", total_label, re.I
                 ) and (is_pre_vat or not re.search(r"\bvat\b", total_label, re.I)):
@@ -523,7 +523,7 @@ def extract_boq_document(tables: Iterable[dict[str, Any]], document_text: str) -
                     elif SUBTOTAL_ROW.match(total_label):
                         kind = "subtotal"
                     else:
-                        kind = "final"
+                        continue
                     total_candidates.append((kind, parse_number(total_text)))
                 continue
             if row_class == "unpriced" and _cell(row, columns, "desc"):
@@ -545,7 +545,7 @@ def extract_boq_document(tables: Iterable[dict[str, Any]], document_text: str) -
         "sections": sections,
         "metadata": extract_metadata(document_text, section_headers, item_descriptions),
         "warnings": warnings,
-        "sourceTotal": _select_source_total(sections, total_candidates),
+        "sourceTotal": _select_source_total(total_candidates),
     }
 
 
