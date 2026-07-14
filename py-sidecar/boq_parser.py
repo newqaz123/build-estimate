@@ -462,27 +462,33 @@ def classify_row(row: list[Any], columns: dict[str, int]) -> str:
 
 
 def _select_source_total(
-    candidates: Iterable[tuple[str, float]],
+    candidates: Iterable[tuple[str, float, bool]],
 ) -> float | None:
     candidate_list = list(candidates)
     if not candidate_list:
         return None
-    subtotals = [value for kind, value in candidate_list if kind == "subtotal"]
+    subtotals = [
+        (value, is_trailing) for kind, value, is_trailing in candidate_list
+        if kind == "subtotal"
+    ]
     if subtotals:
-        preceding_total = math.fsum(subtotals[:-1])
-        if len(subtotals) > 1 and math.isclose(
-            subtotals[-1], preceding_total, rel_tol=1e-9, abs_tol=0.05
+        preceding_total = math.fsum(value for value, _ in subtotals[:-1])
+        final_value, final_is_trailing = subtotals[-1]
+        if len(subtotals) > 1 and final_is_trailing and math.isclose(
+            final_value, preceding_total, rel_tol=1e-9, abs_tol=0.05
         ):
-            return subtotals[-1]
-        return math.fsum(subtotals)
-    pre_vat_totals = [value for kind, value in candidate_list if kind == "pre_vat"]
+            return final_value
+        return math.fsum(value for value, _ in subtotals)
+    pre_vat_totals = [
+        value for kind, value, _ in candidate_list if kind == "pre_vat"
+    ]
     return pre_vat_totals[-1] if pre_vat_totals else None
 
 
 def extract_boq_document(tables: Iterable[dict[str, Any]], document_text: str) -> dict[str, Any]:
     sections: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
-    total_candidates: list[tuple[str, float]] = []
+    total_candidates: list[tuple[str, float, bool]] = []
     for table_index, table in enumerate(tables, start=1):
         page = int(table.get("page") or 1)
         rows = [list(row) for row in table.get("rows", [])]
@@ -492,6 +498,8 @@ def extract_boq_document(tables: Iterable[dict[str, Any]], document_text: str) -
         header_count, columns = detected
         current_header = f"Parsed Table {table_index}"
         current_items: list[dict[str, Any]] = []
+        previous_subtotal_in_table = False
+        boundary_since_subtotal = False
 
         def flush_section() -> None:
             nonlocal current_items
@@ -503,6 +511,7 @@ def extract_boq_document(tables: Iterable[dict[str, Any]], document_text: str) -
             row_class = classify_row(row, columns)
             source_ref = {"page": page, "table": table_index, "row": zero_based_row + 1}
             if row_class == "section":
+                boundary_since_subtotal = True
                 flush_section()
                 current_header = _cell(row, columns, "desc")
                 continue
@@ -524,7 +533,15 @@ def extract_boq_document(tables: Iterable[dict[str, Any]], document_text: str) -
                         kind = "subtotal"
                     else:
                         continue
-                    total_candidates.append((kind, parse_number(total_text)))
+                    is_trailing = (
+                        kind == "subtotal"
+                        and previous_subtotal_in_table
+                        and not boundary_since_subtotal
+                    )
+                    total_candidates.append((kind, parse_number(total_text), is_trailing))
+                    if kind == "subtotal":
+                        previous_subtotal_in_table = True
+                        boundary_since_subtotal = False
                 continue
             if row_class == "unpriced" and _cell(row, columns, "desc"):
                 warnings.append({
@@ -533,7 +550,16 @@ def extract_boq_document(tables: Iterable[dict[str, Any]], document_text: str) -
                     "sourceRef": source_ref,
                 })
             if row_class != "item":
+                if row_class == "unpriced" and any(
+                    _has_number(_cell(row, columns, field))
+                    for field in (
+                        "rate", "total", "amount", "material_rate", "material_total",
+                        "labour_rate", "labour_total",
+                    )
+                ):
+                    boundary_since_subtotal = True
                 continue
+            boundary_since_subtotal = True
             current_items.extend(normalize_cost_row(row, columns, source_ref))
         flush_section()
     section_headers = [

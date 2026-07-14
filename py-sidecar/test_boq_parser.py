@@ -187,6 +187,21 @@ Subject: Electrical installation"""
 
         self.assertEqual(result["sourceTotal"], 300.0)
 
+    def test_equal_independent_section_subtotals_are_aggregated(self):
+        rows = [
+            ["ITEM", "DESCRIPTION", "UNIT", "Q'TY", "RATE", "AMOUNT"],
+            ["A", "SECTION A", "", "", "", ""],
+            ["1", "Concrete work", "L/S", "1", "100.00", "100.00"],
+            ["", "SUB TOTAL", "", "", "", "100.00"],
+            ["B", "SECTION B", "", "", "", ""],
+            ["2", "Steel work", "L/S", "1", "100.00", "100.00"],
+            ["", "SUB TOTAL", "", "", "", "100.00"],
+        ]
+
+        result = extract_boq_document([{"page": 1, "rows": rows}], "")
+
+        self.assertEqual(result["sourceTotal"], 200.0)
+
     def test_splits_distinct_material_and_labour_components(self):
         rows = [
             ["NO.", "DESCRIPTION", "MATERIAL COST", "", "", "LABOUR COST", "", "", "AMOUNT"],
