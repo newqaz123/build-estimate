@@ -577,7 +577,7 @@ test('handlers propagate request.signal and successful import returns 201', asyn
 test('storage adapter stays private, non-resumable, and supports existence checks', () => {
   const source = readFileSync(fileURLToPath(new URL('../../../../lib/boq-source-storage.ts', import.meta.url)), 'utf8')
   assert.match(source, /resumable:\s*false/)
-  assert.match(source, /contentType:\s*['"]application\/pdf['"]/) 
+  assert.match(source, /contentType:\s*['"]application\/pdf['"]/)
   assert.match(source, /private,\s*max-age=0/)
   assert.match(source, /\.exists\(\)/)
 })
