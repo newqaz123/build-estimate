@@ -248,7 +248,11 @@ def _columns_from_headers(headers: list[str]) -> dict[str, int]:
         for name in ("material", "labour")
     }
     for name, indexes in component_groups.items():
-        if len(indexes) not in (3, 4) or indexes != list(range(indexes[0], indexes[-1] + 1)):
+        if (
+            len(indexes) not in (3, 4)
+            or indexes != list(range(indexes[0], indexes[-1] + 1))
+            or not all(re.search(fr"\b{name}\s+cost\b", normalize_header(headers[index])) for index in indexes)
+        ):
             continue
         columns[f"{name}_qty"] = indexes[0]
         if len(indexes) == 4:
@@ -626,9 +630,12 @@ def extract_boq_document(tables: Iterable[dict[str, Any]], document_text: str) -
                         and previous_subtotal_in_table
                         and not boundary_since_subtotal
                     )
-                    total_candidates.append((kind, parse_number(total_text), is_trailing))
+                    candidate_value = parse_number(total_text)
                     if kind == "discount":
-                        discount_sources.append((parse_number(total_text), source_ref))
+                        candidate_value = abs(candidate_value)
+                    total_candidates.append((kind, candidate_value, is_trailing))
+                    if kind == "discount":
+                        discount_sources.append((candidate_value, source_ref))
                     if kind == "subtotal":
                         previous_subtotal_in_table = True
                         boundary_since_subtotal = False

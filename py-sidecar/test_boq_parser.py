@@ -323,6 +323,19 @@ This price excluded vat 7%"""
             ],
         )
 
+    def test_bare_material_specification_column_does_not_override_shared_quantity(self):
+        rows = [
+            ["Description", "Qty", "Unit", "Material", "Material Unit Price", "Material Total"],
+            ["Concrete", "10", "m2", "C30", "100", "1,000"],
+        ]
+
+        item = extract_boq_document([{"page": 1, "rows": rows}], "")["sections"][0]["items"][0]
+
+        self.assertEqual(
+            (item["desc"], item["unit"], item["qty"], item["rate"], item["total"], item["costComponent"]),
+            ("Concrete", "m2", 10.0, 100.0, 1000.0, "material"),
+        )
+
     def test_repeated_description_with_distinct_pricing_is_not_a_section(self):
         rows = [
             ["NO.", "DESCRIPTION", "MATERIAL COST", "MATERIAL COST", "MATERIAL COST", "MATERIAL COST", "LABOUR COST", "LABOUR COST", "LABOUR COST", "AMOUNT"],
@@ -352,7 +365,7 @@ This price excluded vat 7%"""
             ["SUB TOTAL", "SUB TOTAL", "SUB TOTAL", "SUB TOTAL", "", "", "", "", "231,440.00", ""],
             ["OVERHEAD & PROFIT", "OVERHEAD & PROFIT", "OVERHEAD & PROFIT", "OVERHEAD & PROFIT", "", "", "", "", "46,288.00", ""],
             ["TOTAL", "TOTAL", "TOTAL", "TOTAL", "", "", "", "", "277,728.00", ""],
-            ["DISCOUNT", "DISCOUNT", "DISCOUNT", "DISCOUNT", "", "", "", "", "728.00", ""],
+            ["DISCOUNT", "DISCOUNT", "DISCOUNT", "DISCOUNT", "", "", "", "", "(728.00)", ""],
             ["GRAND TOTAL ( Exclude Vat. )", "GRAND TOTAL ( Exclude Vat. )", "GRAND TOTAL ( Exclude Vat. )", "GRAND TOTAL ( Exclude Vat. )", "", "", "", "", "277,000.00", ""],
         ]
         text = """No. : NP2C/AJI-AYT/GENERAL/202607003
