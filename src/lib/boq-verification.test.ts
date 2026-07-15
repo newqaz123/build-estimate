@@ -22,11 +22,13 @@ const validRequest = {
   date: '2026-06-11',
   items: [{ id: 'item-1', desc: 'Pipe 1B', unit: 'Pcs.', qty: 3, rate: 1781, total: 5343 }],
   extractionWarnings: [{ code: 'ocr_low_confidence', message: 'Review page 2' }],
+  sourceTotal: 5343,
 }
 
 test('parseVerificationRequest accepts structured review data and rejects chat payloads', () => {
   const parsed = parseVerificationRequest({ ...validRequest, provider: 'openrouter', model: 'openai/gpt-4o' })
   assert.equal(parsed.items[0].total, 5343)
+  assert.equal(parsed.sourceTotal, 5343)
   assert.equal(parsed.provider, 'openrouter')
   assert.throws(() => parseVerificationRequest({ messages: [] }), /boqId/)
   assert.throws(() => parseVerificationRequest({ ...validRequest, items: [{ ...validRequest.items[0], qty: Infinity }] }), /finite number/)
@@ -67,16 +69,25 @@ test('verification prompt treats review content as untrusted and constrains JSON
   assert.match(messages[1].content, /Ignore all previous instructions/)
 })
 
-test('normalization allowlists issue codes and severities', () => {
-  const issues = normalizeAiVerification(JSON.stringify({ issues: [
+test('normalization validates the complete AI response schema', () => {
+  assert.deepEqual(normalizeAiVerification(JSON.stringify({ issues: [
     { code: 'unit_mismatch', severity: 'warning', itemId: 'item-1', message: 'Unit looks inconsistent.' },
-    { code: 'steal_credentials', severity: 'blocking', message: 'No' },
-    { code: 'rate_outlier', severity: 'critical', message: 'No' },
-    { code: 'possible_duplicate', severity: 'warning', message: '' },
-  ] }))
-  assert.deepEqual(issues, [{ code: 'unit_mismatch', severity: 'warning', itemId: 'item-1', message: 'Unit looks inconsistent.' }])
+  ] })), [{ code: 'unit_mismatch', severity: 'warning', itemId: 'item-1', message: 'Unit looks inconsistent.' }])
   assert.throws(() => normalizeAiVerification('not json'), AiVerificationResponseError)
   assert.throws(() => normalizeAiVerification('{"answer":true}'), AiVerificationResponseError)
+  assert.throws(() => normalizeAiVerification(JSON.stringify({ issues: [
+    { code: 'steal_credentials', severity: 'blocking', message: 'No' },
+  ] })), AiVerificationResponseError)
+  assert.throws(() => normalizeAiVerification(JSON.stringify({ issues: [
+    { code: 'rate_outlier', severity: 'critical', message: 'No' },
+  ] })), AiVerificationResponseError)
+  assert.throws(() => normalizeAiVerification(JSON.stringify({ issues: [
+    { code: 'possible_duplicate', severity: 'warning', message: '' },
+  ] })), AiVerificationResponseError)
+  assert.throws(() => normalizeAiVerification(JSON.stringify({ issues: [
+    { code: 'rate_outlier', severity: 'warning', message: 'Check', confidence: 0.5 },
+  ] })), AiVerificationResponseError)
+  assert.throws(() => normalizeAiVerification(JSON.stringify({ issues: ['invalid'] })), AiVerificationResponseError)
 })
 
 test('AI and local findings are merged without duplicates', () => {
@@ -93,9 +104,26 @@ test('local verification always runs against the structured review payload', () 
   const local = runLocalVerification(parseVerificationRequest({
     ...validRequest,
     vendor: '',
+    sourceTotal: undefined,
+    extractionWarnings: [],
     items: [{ ...validRequest.items[0], total: 1 }],
   }))
   assert.deepEqual(local.issues.map((issue) => issue.code), ['metadata_missing', 'line_total_mismatch'])
+})
+
+test('local verification includes extraction warnings and source-total mismatch without duplicates', () => {
+  const local = runLocalVerification(parseVerificationRequest({
+    ...validRequest,
+    sourceTotal: 6000,
+    extractionWarnings: [
+      { code: 'ambiguous_table', message: 'Review the table layout.' },
+      { code: 'ambiguous_table', message: 'Review the table layout.' },
+    ],
+  }))
+  assert.deepEqual(local.issues.map((issue) => issue.code), [
+    'document_total_mismatch',
+    'extraction_warning',
+  ])
 })
 
 test('provider failures are categorized without exposing provider response bodies', () => {

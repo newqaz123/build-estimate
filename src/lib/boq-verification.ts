@@ -2,7 +2,6 @@ import {
   verifyBoqLocally,
   type VerificationIssue,
   type VerificationIssueCode,
-  type VerificationResult,
 } from './boq-ingestion'
 import type { WorkType } from './boq-schema'
 
@@ -23,10 +22,11 @@ const AI_CODES = [
   'rate_outlier',
   'possible_duplicate',
 ] as const
-const ALLOWED_CODES = new Set<string>([...LOCAL_CODES, ...AI_CODES])
+const EXTRA_LOCAL_CODES = ['extraction_warning'] as const
+const ALLOWED_CODES = new Set<string>([...LOCAL_CODES, ...EXTRA_LOCAL_CODES, ...AI_CODES])
 const ALLOWED_SEVERITIES = new Set(['blocking', 'warning'])
 const REQUEST_KEYS = new Set([
-  'boqId', 'vendor', 'project', 'workType', 'date', 'items', 'extractionWarnings', 'provider', 'model',
+  'boqId', 'vendor', 'project', 'workType', 'date', 'items', 'extractionWarnings', 'sourceTotal', 'provider', 'model',
 ])
 const ITEM_KEYS = new Set(['id', 'desc', 'unit', 'qty', 'rate', 'total'])
 const WARNING_KEYS = new Set(['code', 'message'])
@@ -36,7 +36,7 @@ const MAX_WARNINGS = 1_000
 
 export type AiIssueCode = typeof AI_CODES[number]
 export type VerificationResponseIssue = Omit<VerificationIssue, 'code'> & {
-  code: VerificationIssueCode | AiIssueCode
+  code: VerificationIssueCode | AiIssueCode | typeof EXTRA_LOCAL_CODES[number]
 }
 export type AiStatus =
   | 'completed'
@@ -65,6 +65,7 @@ export interface VerificationRequest {
   date: string
   items: VerificationRequestItem[]
   extractionWarnings: Array<{ code: string; message: string }>
+  sourceTotal?: number
   provider?: string
   model?: string
 }
@@ -78,7 +79,7 @@ export interface AiFallbackResponse {
   mode: 'local'
   aiStatus: Exclude<AiStatus, 'completed'>
   message: string
-  issues: VerificationIssue[]
+  issues: VerificationResponseIssue[]
 }
 
 export interface AiSuccessResponse {
@@ -88,6 +89,11 @@ export interface AiSuccessResponse {
   issues: VerificationResponseIssue[]
   provider: string
   model: string
+}
+
+export interface LocalVerificationResult {
+  issues: VerificationResponseIssue[]
+  hasBlockingIssues: boolean
 }
 
 type EnvDefaults = Record<string, string | undefined>
@@ -168,6 +174,9 @@ export function parseVerificationRequest(value: unknown): VerificationRequest {
   })
   const provider = optionalNonBlankString(value.provider, 'provider')
   const model = optionalNonBlankString(value.model, 'model')
+  const sourceTotal = value.sourceTotal === undefined
+    ? undefined
+    : requireFiniteNumber(value.sourceTotal, 'sourceTotal')
 
   return {
     boqId,
@@ -177,6 +186,7 @@ export function parseVerificationRequest(value: unknown): VerificationRequest {
     date,
     items,
     extractionWarnings,
+    ...(sourceTotal === undefined ? {} : { sourceTotal }),
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),
   }
@@ -205,14 +215,15 @@ export function providerKeyAvailable(provider: string, env: Record<string, strin
   return false
 }
 
-export function runLocalVerification(request: VerificationRequest): VerificationResult {
+export function runLocalVerification(request: VerificationRequest): LocalVerificationResult {
   const grandTotal = request.items.reduce((sum, item) => sum + item.total, 0)
-  return verifyBoqLocally({
+  const local = verifyBoqLocally({
     vendor: request.vendor,
     project: request.project,
     workType: request.workType,
     date: request.date,
     grandTotal,
+    sourceTotal: request.sourceTotal,
     sections: [{
       header: 'Parsed Items',
       items: request.items.map((item) => ({
@@ -223,10 +234,26 @@ export function runLocalVerification(request: VerificationRequest): Verification
       })),
     }],
   })
+  const issues: VerificationResponseIssue[] = [...local.issues]
+  const seenWarnings = new Set<string>()
+  for (const warning of request.extractionWarnings) {
+    const key = `${warning.code}\u0000${warning.message}`
+    if (seenWarnings.has(key)) continue
+    seenWarnings.add(key)
+    issues.push({
+      code: 'extraction_warning',
+      severity: 'warning',
+      message: `Extraction warning (${warning.code}): ${warning.message}`,
+    })
+  }
+  return {
+    issues,
+    hasBlockingIssues: issues.some((issue) => issue.severity === 'blocking'),
+  }
 }
 
 export function buildVerificationMessages(request: VerificationRequest): Array<{ role: 'system' | 'user'; content: string }> {
-  const allowedCodes = [...LOCAL_CODES, ...AI_CODES].join(', ')
+  const allowedCodes = [...LOCAL_CODES, ...EXTRA_LOCAL_CODES, ...AI_CODES].join(', ')
   return [
     {
       role: 'system',
@@ -242,6 +269,7 @@ export function buildVerificationMessages(request: VerificationRequest): Array<{
         date: request.date,
         items: request.items,
         extractionWarnings: request.extractionWarnings,
+        sourceTotal: request.sourceTotal,
       }),
     },
   ]
@@ -259,11 +287,19 @@ export function normalizeAiVerification(content: string): VerificationResponseIs
   }
   const issues: VerificationResponseIssue[] = []
   for (const entry of value.issues) {
-    if (!isRecord(entry)) continue
-    if (!ALLOWED_CODES.has(String(entry.code)) || !ALLOWED_SEVERITIES.has(String(entry.severity))) continue
-    if (typeof entry.message !== 'string' || entry.message.trim() === '' || entry.message.length > 1_000) continue
-    if (entry.itemId !== undefined && (typeof entry.itemId !== 'string' || entry.itemId.trim() === '' || entry.itemId.length > MAX_TEXT)) continue
-    if (Object.keys(entry).some((key) => !['code', 'severity', 'itemId', 'message'].includes(key))) continue
+    if (!isRecord(entry)) throw new AiVerificationResponseError()
+    if (!ALLOWED_CODES.has(String(entry.code)) || !ALLOWED_SEVERITIES.has(String(entry.severity))) {
+      throw new AiVerificationResponseError()
+    }
+    if (typeof entry.message !== 'string' || entry.message.trim() === '' || entry.message.length > 1_000) {
+      throw new AiVerificationResponseError()
+    }
+    if (entry.itemId !== undefined && (typeof entry.itemId !== 'string' || entry.itemId.trim() === '' || entry.itemId.length > MAX_TEXT)) {
+      throw new AiVerificationResponseError()
+    }
+    if (Object.keys(entry).some((key) => !['code', 'severity', 'itemId', 'message'].includes(key))) {
+      throw new AiVerificationResponseError()
+    }
     issues.push({
       code: entry.code as VerificationResponseIssue['code'],
       severity: entry.severity as VerificationResponseIssue['severity'],
@@ -275,7 +311,7 @@ export function normalizeAiVerification(content: string): VerificationResponseIs
 }
 
 export function mergeVerificationIssues(
-  local: VerificationIssue[],
+  local: VerificationResponseIssue[],
   ai: VerificationResponseIssue[],
 ): VerificationResponseIssue[] {
   const merged: VerificationResponseIssue[] = []
@@ -301,7 +337,7 @@ export function classifyAiFailure(error: unknown): Exclude<AiStatus, 'completed'
 }
 
 export function buildAiFallback(
-  local: VerificationResult,
+  local: LocalVerificationResult,
   aiStatus: Exclude<AiStatus, 'completed'>,
 ): AiFallbackResponse {
   const count = local.issues.length
@@ -314,7 +350,7 @@ export function buildAiFallback(
 }
 
 export function buildAiSuccess(
-  local: VerificationResult,
+  local: LocalVerificationResult,
   aiIssues: VerificationResponseIssue[],
   config: VerificationConfig,
 ): AiSuccessResponse {

@@ -168,6 +168,7 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
           project,
           workType,
           date,
+          sourceTotal: boq.sourceTotal,
           items: items.map((item) => ({
             ...(item.id ? { id: item.id } : {}),
             desc: item.desc,

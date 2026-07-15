@@ -68,6 +68,7 @@ test('review exposes only normalized editable fields and derived approval blocke
 test('review distinguishes completed AI verification from actionable local fallback', () => {
   assert.match(reviewSource, /boqId: boq\.id/)
   assert.match(reviewSource, /extractionWarnings:/)
+  assert.match(reviewSource, /sourceTotal: boq\.sourceTotal/)
   assert.match(reviewSource, /response\.json\(\)/)
   assert.match(reviewSource, /mode === "ai"/)
   assert.match(reviewSource, /Verified with AI/)
