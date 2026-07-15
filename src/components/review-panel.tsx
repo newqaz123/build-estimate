@@ -14,7 +14,12 @@ import { StandardizationReview } from "./standardization-review"
 import { Check, Eye, ExternalLink, Loader2, TriangleAlert, X } from "lucide-react"
 import { toast } from "sonner"
 import type { Boq, BoqItem, WorkType } from "@/lib/boq-schema"
-import type { VerificationResponseIssue } from "@/lib/boq-verification"
+import {
+  parseVerificationApiResponse,
+  type AiFallbackResponse,
+  type AiSuccessResponse,
+  type VerificationResponseIssue,
+} from "@/lib/boq-verification"
 import {
   buildReviewFingerprint,
   buildReviewVerification,
@@ -29,21 +34,7 @@ interface ReviewPanelProps {
   onApproved: () => void
 }
 
-interface VerificationApiResponse {
-  mode: "ai" | "local"
-  aiStatus: string
-  message: string
-  issues: VerificationResponseIssue[]
-}
-
-function isVerificationResponse(value: unknown): value is VerificationApiResponse {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false
-  const candidate = value as Record<string, unknown>
-  return (candidate.mode === "ai" || candidate.mode === "local")
-    && typeof candidate.aiStatus === "string"
-    && typeof candidate.message === "string"
-    && Array.isArray(candidate.issues)
-}
+type VerificationApiResponse = AiSuccessResponse | AiFallbackResponse
 
 async function readError(response: Response, fallback: string): Promise<string> {
   try {
@@ -63,6 +54,14 @@ function confidenceLabel(value: number | undefined): string | null {
 function sourceRowKey(item: BoqItem): string | null {
   const ref = item.sourceRef
   return ref ? `${ref.page}:${ref.table}:${ref.row}` : null
+}
+
+function verificationIssueTarget(issue: VerificationResponseIssue, items: BoqItem[]): string | null {
+  const index = issue.itemId
+    ? items.findIndex((item) => item.id === issue.itemId)
+    : typeof issue.itemIndex === "number" ? issue.itemIndex : -1
+  if (index >= 0 && items[index]) return `Item ${index + 1}: ${items[index].desc}`
+  return issue.itemId ? `Item ID: ${issue.itemId}` : null
 }
 
 export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
@@ -183,10 +182,11 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
           })),
         }),
       })
-      const payload: unknown = await response.json().catch(() => null)
-      if (!isVerificationResponse(payload)) {
-        const error = typeof payload === "object" && payload !== null && "error" in payload
-          ? (payload as { error?: unknown }).error
+      const rawPayload: unknown = await response.json().catch(() => null)
+      const payload = parseVerificationApiResponse(rawPayload)
+      if (!payload) {
+        const error = typeof rawPayload === "object" && rawPayload !== null && "error" in rawPayload
+          ? (rawPayload as { error?: unknown }).error
           : null
         throw new Error(typeof error === "string" ? error : "Verification failed")
       }
@@ -392,6 +392,18 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
               <div className="review-warning-list review-local-warnings" role="status">
                 <strong>{verificationResult.message}</strong>
                 <span>{verificationResult.issues.length} verification {verificationResult.issues.length === 1 ? "issue" : "issues"}</span>
+                <ul aria-label="Verification findings">
+                  {verificationResult.issues.map((issue, index) => {
+                    const target = verificationIssueTarget(issue, items)
+                    return (
+                      <li key={`${issue.code}-${issue.itemId ?? issue.itemIndex ?? "document"}-${index}`}>
+                        <span className={`review-verification-severity ${issue.severity}`}>{issue.severity}</span>
+                        <span>{issue.message}</span>
+                        {target ? <small>{target}</small> : null}
+                      </li>
+                    )
+                  })}
+                </ul>
               </div>
             ) : null}
 

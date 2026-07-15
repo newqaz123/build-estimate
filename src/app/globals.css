@@ -1020,6 +1020,12 @@
 .review-field-label small { color: var(--accent); font-size: 10px; font-weight: 500; white-space: nowrap; }
 .review-warning-list, .review-blockers, .review-save-error { display: grid; gap: var(--space-1); margin-bottom: var(--space-3); padding: var(--space-3); border: 1px solid color-mix(in oklab, #b88a00 28%, var(--border)); border-radius: var(--radius-sm); background: color-mix(in oklab, #eab308 8%, var(--surface)); color: var(--muted-text); font-size: 11px; }
 .review-warning-list strong, .review-blockers strong { color: var(--fg-2); font-size: 12px; }
+.review-local-warnings ul { display: grid; gap: var(--space-2); margin: var(--space-1) 0 0; padding: 0; list-style: none; }
+.review-local-warnings li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px var(--space-2); align-items: start; }
+.review-local-warnings li small { grid-column: 2; color: var(--muted-text); }
+.review-verification-severity { display: inline-flex; padding: 1px 6px; border-radius: var(--radius-pill); font-size: 9px; font-weight: 700; line-height: 1.6; text-transform: uppercase; }
+.review-verification-severity.warning { background: color-mix(in oklab, #eab308 14%, transparent); color: #8a6500; }
+.review-verification-severity.blocking { background: color-mix(in oklab, #dc2626 12%, transparent); color: #b91c1c; }
 .review-blockers ul { margin: 0; padding-left: var(--space-4); }
 .review-save-error { border-color: color-mix(in oklab, #dc2626 30%, var(--border)); background: color-mix(in oklab, #dc2626 7%, var(--surface)); color: #b91c1c; }
 .review-items-heading, .review-verification-row, .review-actions { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }

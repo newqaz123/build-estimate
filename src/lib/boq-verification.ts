@@ -30,9 +30,18 @@ const REQUEST_KEYS = new Set([
 ])
 const ITEM_KEYS = new Set(['id', 'desc', 'unit', 'qty', 'rate', 'total'])
 const WARNING_KEYS = new Set(['code', 'message'])
-const MAX_TEXT = 10_000
-const MAX_ITEMS = 5_000
-const MAX_WARNINGS = 1_000
+const MAX_ID = 200
+const MAX_METADATA = 500
+const MAX_DESCRIPTION = 2_000
+const MAX_UNIT = 100
+const MAX_WARNING_CODE = 100
+const MAX_WARNING_MESSAGE = 1_000
+const MAX_PROVIDER = 50
+const MAX_MODEL = 200
+const MAX_ITEMS = 500
+const MAX_WARNINGS = 100
+const MAX_AGGREGATE_TEXT = 250_000
+const MAX_PROMPT_CHARS = 300_000
 
 export type AiIssueCode = typeof AI_CODES[number]
 export type VerificationResponseIssue = Omit<VerificationIssue, 'code'> & {
@@ -115,16 +124,16 @@ function hasOnlyKeys(value: Record<string, unknown>, keys: Set<string>): boolean
   return Object.keys(value).every((key) => keys.has(key))
 }
 
-function requireString(value: unknown, path: string, allowBlank = true): string {
-  if (typeof value !== 'string' || value.length > MAX_TEXT || (!allowBlank && value.trim() === '')) {
+function requireString(value: unknown, path: string, max: number, allowBlank = true): string {
+  if (typeof value !== 'string' || value.length > max || (!allowBlank && value.trim() === '')) {
     throw new VerificationRequestError(`${path} must be a${allowBlank ? '' : ' non-empty'} string`)
   }
   return value
 }
 
-function optionalNonBlankString(value: unknown, path: string): string | undefined {
+function optionalNonBlankString(value: unknown, path: string, max: number): string | undefined {
   if (value === undefined) return undefined
-  return requireString(value, path, false).trim()
+  return requireString(value, path, max, false).trim()
 }
 
 function requireFiniteNumber(value: unknown, path: string): number {
@@ -136,11 +145,11 @@ function requireFiniteNumber(value: unknown, path: string): number {
 
 export function parseVerificationRequest(value: unknown): VerificationRequest {
   if (!isRecord(value)) throw new VerificationRequestError('request must be an object')
-  const boqId = requireString(value.boqId, 'boqId', false)
+  const boqId = requireString(value.boqId, 'boqId', MAX_ID, false)
   if (!hasOnlyKeys(value, REQUEST_KEYS)) throw new VerificationRequestError('request contains unsupported fields')
-  const vendor = requireString(value.vendor, 'vendor')
-  const project = requireString(value.project, 'project')
-  const date = requireString(value.date, 'date')
+  const vendor = requireString(value.vendor, 'vendor', MAX_METADATA)
+  const project = requireString(value.project, 'project', MAX_METADATA)
+  const date = requireString(value.date, 'date', 50)
   if (typeof value.workType !== 'string' || !WORK_TYPES.includes(value.workType as WorkType)) {
     throw new VerificationRequestError(`workType must be one of ${WORK_TYPES.join(', ')}`)
   }
@@ -152,9 +161,9 @@ export function parseVerificationRequest(value: unknown): VerificationRequest {
       throw new VerificationRequestError(`items[${index}] must be a structured item`)
     }
     return {
-      ...(entry.id === undefined ? {} : { id: requireString(entry.id, `items[${index}].id`, false) }),
-      desc: requireString(entry.desc, `items[${index}].desc`),
-      unit: requireString(entry.unit, `items[${index}].unit`),
+      ...(entry.id === undefined ? {} : { id: requireString(entry.id, `items[${index}].id`, MAX_ID, false) }),
+      desc: requireString(entry.desc, `items[${index}].desc`, MAX_DESCRIPTION),
+      unit: requireString(entry.unit, `items[${index}].unit`, MAX_UNIT),
       qty: requireFiniteNumber(entry.qty, `items[${index}].qty`),
       rate: requireFiniteNumber(entry.rate, `items[${index}].rate`),
       total: requireFiniteNumber(entry.total, `items[${index}].total`),
@@ -168,15 +177,23 @@ export function parseVerificationRequest(value: unknown): VerificationRequest {
       throw new VerificationRequestError(`extractionWarnings[${index}] must be a structured warning`)
     }
     return {
-      code: requireString(entry.code, `extractionWarnings[${index}].code`, false),
-      message: requireString(entry.message, `extractionWarnings[${index}].message`, false),
+      code: requireString(entry.code, `extractionWarnings[${index}].code`, MAX_WARNING_CODE, false),
+      message: requireString(entry.message, `extractionWarnings[${index}].message`, MAX_WARNING_MESSAGE, false),
     }
   })
-  const provider = optionalNonBlankString(value.provider, 'provider')
-  const model = optionalNonBlankString(value.model, 'model')
+  const provider = optionalNonBlankString(value.provider, 'provider', MAX_PROVIDER)
+  const model = optionalNonBlankString(value.model, 'model', MAX_MODEL)
   const sourceTotal = value.sourceTotal === undefined
     ? undefined
     : requireFiniteNumber(value.sourceTotal, 'sourceTotal')
+
+  const aggregateText = boqId.length + vendor.length + project.length + date.length
+    + (provider?.length ?? 0) + (model?.length ?? 0)
+    + items.reduce((sum, item) => sum + (item.id?.length ?? 0) + item.desc.length + item.unit.length, 0)
+    + extractionWarnings.reduce((sum, warning) => sum + warning.code.length + warning.message.length, 0)
+  if (aggregateText > MAX_AGGREGATE_TEXT) {
+    throw new VerificationRequestError('verification payload is too large')
+  }
 
   return {
     boqId,
@@ -254,6 +271,19 @@ export function runLocalVerification(request: VerificationRequest): LocalVerific
 
 export function buildVerificationMessages(request: VerificationRequest): Array<{ role: 'system' | 'user'; content: string }> {
   const allowedCodes = [...LOCAL_CODES, ...EXTRA_LOCAL_CODES, ...AI_CODES].join(', ')
+  const userContent = JSON.stringify({
+    boqId: request.boqId,
+    vendor: request.vendor,
+    project: request.project,
+    workType: request.workType,
+    date: request.date,
+    items: request.items,
+    extractionWarnings: request.extractionWarnings,
+    sourceTotal: request.sourceTotal,
+  })
+  if (userContent.length > MAX_PROMPT_CHARS) {
+    throw new VerificationRequestError('verification prompt is too large')
+  }
   return [
     {
       role: 'system',
@@ -261,16 +291,7 @@ export function buildVerificationMessages(request: VerificationRequest): Array<{
     },
     {
       role: 'user',
-      content: JSON.stringify({
-        boqId: request.boqId,
-        vendor: request.vendor,
-        project: request.project,
-        workType: request.workType,
-        date: request.date,
-        items: request.items,
-        extractionWarnings: request.extractionWarnings,
-        sourceTotal: request.sourceTotal,
-      }),
+      content: userContent,
     },
   ]
 }
@@ -294,7 +315,7 @@ export function normalizeAiVerification(content: string): VerificationResponseIs
     if (typeof entry.message !== 'string' || entry.message.trim() === '' || entry.message.length > 1_000) {
       throw new AiVerificationResponseError()
     }
-    if (entry.itemId !== undefined && (typeof entry.itemId !== 'string' || entry.itemId.trim() === '' || entry.itemId.length > MAX_TEXT)) {
+    if (entry.itemId !== undefined && (typeof entry.itemId !== 'string' || entry.itemId.trim() === '' || entry.itemId.length > MAX_ID)) {
       throw new AiVerificationResponseError()
     }
     if (Object.keys(entry).some((key) => !['code', 'severity', 'itemId', 'message'].includes(key))) {
@@ -310,16 +331,81 @@ export function normalizeAiVerification(content: string): VerificationResponseIs
   return issues
 }
 
+function parseClientIssue(value: unknown): VerificationResponseIssue | null {
+  if (!isRecord(value) || Object.keys(value).some((key) => ![
+    'code', 'severity', 'message', 'itemId', 'sectionIndex', 'itemIndex',
+  ].includes(key))) return null
+  if (!ALLOWED_CODES.has(String(value.code)) || !ALLOWED_SEVERITIES.has(String(value.severity))) return null
+  if (typeof value.message !== 'string' || value.message.trim() === '' || value.message.length > 1_000) return null
+  if (value.itemId !== undefined && (
+    typeof value.itemId !== 'string' || value.itemId.trim() === '' || value.itemId.length > MAX_ID
+  )) return null
+  for (const key of ['sectionIndex', 'itemIndex'] as const) {
+    if (value[key] !== undefined && (
+      typeof value[key] !== 'number' || !Number.isInteger(value[key]) || value[key] < 0
+    )) return null
+  }
+  return {
+    code: value.code as VerificationResponseIssue['code'],
+    severity: value.severity as VerificationResponseIssue['severity'],
+    message: value.message,
+    ...(typeof value.itemId === 'string' ? { itemId: value.itemId } : {}),
+    ...(typeof value.sectionIndex === 'number' ? { sectionIndex: value.sectionIndex } : {}),
+    ...(typeof value.itemIndex === 'number' ? { itemIndex: value.itemIndex } : {}),
+  }
+}
+
+export function parseVerificationApiResponse(value: unknown): AiSuccessResponse | AiFallbackResponse | null {
+  if (!isRecord(value) || typeof value.message !== 'string' || value.message.trim() === '' || value.message.length > 2_000) {
+    return null
+  }
+  if (!Array.isArray(value.issues) || value.issues.length > 3_000) return null
+  const issues = value.issues.map(parseClientIssue)
+  if (issues.some((issue) => issue === null)) return null
+
+  if (value.mode === 'ai') {
+    if (!hasOnlyKeys(value, new Set(['mode', 'aiStatus', 'message', 'issues', 'provider', 'model']))) return null
+    if (value.aiStatus !== 'completed') return null
+    if (typeof value.provider !== 'string' || value.provider.trim() === '' || value.provider.length > MAX_PROVIDER) return null
+    if (typeof value.model !== 'string' || value.model.trim() === '' || value.model.length > MAX_MODEL) return null
+    return { ...value, issues: issues as VerificationResponseIssue[] } as AiSuccessResponse
+  }
+
+  const localStatuses = new Set<AiStatus>([
+    'provider_not_configured', 'unsupported_provider', 'unauthorized', 'rate_limited',
+    'timeout', 'malformed_response', 'provider_failure',
+  ])
+  if (value.mode !== 'local' || typeof value.aiStatus !== 'string' || !localStatuses.has(value.aiStatus as AiStatus)) return null
+  if (!hasOnlyKeys(value, new Set(['mode', 'aiStatus', 'message', 'issues']))) return null
+  return { ...value, issues: issues as VerificationResponseIssue[] } as AiFallbackResponse
+}
+
 export function mergeVerificationIssues(
   local: VerificationResponseIssue[],
   ai: VerificationResponseIssue[],
 ): VerificationResponseIssue[] {
   const merged: VerificationResponseIssue[] = []
-  const seen = new Set<string>()
-  for (const issue of [...local, ...ai]) {
-    const key = JSON.stringify([issue.code, issue.severity, issue.itemId ?? null, issue.message.trim().toLowerCase()])
-    if (seen.has(key)) continue
-    seen.add(key)
+  const authorityKey = (issue: VerificationResponseIssue) => JSON.stringify([
+    issue.code,
+    issue.itemId ?? null,
+    issue.sectionIndex ?? null,
+    issue.itemIndex ?? null,
+  ])
+  const localAuthorities = new Set<string>()
+  const exactLocal = new Set<string>()
+  for (const issue of local) {
+    const authority = authorityKey(issue)
+    const exact = `${authority}\u0000${issue.severity}\u0000${issue.message}`
+    if (exactLocal.has(exact)) continue
+    exactLocal.add(exact)
+    localAuthorities.add(authority)
+    merged.push(issue)
+  }
+  const seenAi = new Set<string>()
+  for (const issue of ai) {
+    const authority = authorityKey(issue)
+    if (localAuthorities.has(authority) || seenAi.has(authority)) continue
+    seenAi.add(authority)
     merged.push(issue)
   }
   return merged

@@ -9,6 +9,7 @@ import {
   mergeVerificationIssues,
   normalizeAiVerification,
   parseVerificationRequest,
+  parseVerificationApiResponse,
   providerKeyAvailable,
   resolveVerificationConfig,
   runLocalVerification,
@@ -33,6 +34,22 @@ test('parseVerificationRequest accepts structured review data and rejects chat p
   assert.throws(() => parseVerificationRequest({ messages: [] }), /boqId/)
   assert.throws(() => parseVerificationRequest({ ...validRequest, items: [{ ...validRequest.items[0], qty: Infinity }] }), /finite number/)
   assert.throws(() => parseVerificationRequest({ ...validRequest, workType: 'Plumbing' }), /workType/)
+})
+
+test('request validation enforces practical field, collection, and aggregate limits', () => {
+  assert.throws(() => parseVerificationRequest({ ...validRequest, vendor: 'v'.repeat(501) }), /vendor/)
+  assert.throws(() => parseVerificationRequest({
+    ...validRequest,
+    items: Array.from({ length: 501 }, (_, index) => ({ ...validRequest.items[0], id: `item-${index}` })),
+  }), /at most 500/)
+  assert.throws(() => parseVerificationRequest({
+    ...validRequest,
+    items: Array.from({ length: 200 }, (_, index) => ({
+      ...validRequest.items[0],
+      id: `item-${index}`,
+      desc: 'd'.repeat(1_500),
+    })),
+  }), /payload is too large/)
 })
 
 test('provider and model precedence is request override, saved setting, then environment default', () => {
@@ -100,6 +117,31 @@ test('AI and local findings are merged without duplicates', () => {
   assert.equal(merged[1].code, 'description_unclear')
 })
 
+test('local findings are authoritative when AI paraphrases the same code and item location', () => {
+  const local = [
+    { code: 'line_total_mismatch' as const, severity: 'blocking' as const, itemId: 'item-1', message: 'Line total does not match quantity multiplied by rate' },
+    { code: 'metadata_missing' as const, severity: 'blocking' as const, message: 'vendor is required' },
+    { code: 'metadata_missing' as const, severity: 'blocking' as const, message: 'project is required' },
+  ]
+  const merged = mergeVerificationIssues(local, [
+    { code: 'line_total_mismatch', severity: 'warning', itemId: 'item-1', message: 'Math seems wrong.' },
+    { code: 'metadata_missing', severity: 'warning', message: 'Metadata may be absent.' },
+  ])
+  assert.deepEqual(merged, local)
+})
+
+test('client response parser requires mode-specific status and fully valid findings', () => {
+  const ai = {
+    mode: 'ai', aiStatus: 'completed', message: 'Done', provider: 'openai', model: 'gpt-4o',
+    issues: [{ code: 'rate_outlier', severity: 'warning', itemId: 'item-1', message: 'Check rate.' }],
+  }
+  assert.deepEqual(parseVerificationApiResponse(ai), ai)
+  assert.equal(parseVerificationApiResponse({ ...ai, aiStatus: 'timeout' }), null)
+  assert.equal(parseVerificationApiResponse({ ...ai, issues: [{ code: 'unknown', severity: 'warning', message: 'No' }] }), null)
+  assert.equal(parseVerificationApiResponse({ mode: 'local', aiStatus: 'completed', message: 'No', issues: [] }), null)
+  assert.equal(parseVerificationApiResponse({ mode: 'local', aiStatus: 'timeout', message: 'Local', issues: [], extra: true }), null)
+})
+
 test('local verification always runs against the structured review payload', () => {
   const local = runLocalVerification(parseVerificationRequest({
     ...validRequest,
@@ -150,11 +192,10 @@ test('fallback is HTTP-safe, actionable, and preserves local findings', () => {
   })
 })
 
-test('verification route runs local checks before settings/provider work and returns fallbacks as 200 responses', () => {
+test('verification route delegates to the behavior-tested executor and logs categories only', () => {
   const route = readFileSync(new URL('../app/api/llm/verify/route.ts', import.meta.url), 'utf8')
-  assert.ok(route.indexOf('runLocalVerification(review)') < route.indexOf("getDocument<WorkspaceSettings>('settings', 'workspace')"))
-  assert.match(route, /providerKeyAvailable\(config\.provider, process\.env\)/)
-  assert.match(route, /return NextResponse\.json\(buildAiFallback\(local, status\)\)/)
+  assert.match(route, /executeVerification\(body,/)
+  assert.match(route, /timeoutMs: VERIFY_TIMEOUT_MS/)
   assert.match(route, /console\.warn\('BOQ AI verification fallback', \{ category \}\)/)
   assert.doesNotMatch(route, /console\.(?:log|error)\([^\n]*(?:review|body|error)/i)
 })

@@ -1,7 +1,8 @@
 export async function callLLM(
   messages: { role: string; content: string }[],
   provider?: string,
-  model?: string
+  model?: string,
+  signal?: AbortSignal,
 ): Promise<{ content: string; provider: string; model: string }> {
   const activeProvider = provider || process.env.LLM_PROVIDER || 'openai'
   const activeModel = model || process.env.LLM_MODEL || (activeProvider === 'openrouter' ? 'openai/gpt-4o' : 'gpt-4o')
@@ -13,6 +14,7 @@ export async function callLLM(
         'Content-Type': 'application/json',
         Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
       },
+      signal,
       body: JSON.stringify({ model: activeModel, messages }),
     })
     if (!res.ok) throw new Error(`OpenRouter API error: ${res.status} ${res.statusText}`)
@@ -26,6 +28,7 @@ export async function callLLM(
       'Content-Type': 'application/json',
       Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
     },
+    signal,
     body: JSON.stringify({ model: activeModel, messages }),
   })
   if (!res.ok) throw new Error(`OpenAI API error: ${res.status} ${res.statusText}`)

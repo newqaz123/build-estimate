@@ -74,6 +74,10 @@ test('review distinguishes completed AI verification from actionable local fallb
   assert.match(reviewSource, /Verified with AI/)
   assert.match(reviewSource, /Retry AI verification/)
   assert.match(reviewSource, /verificationResult\.issues\.length/)
+  assert.match(reviewSource, /<ul[^>]+aria-label="Verification findings"/)
+  assert.match(reviewSource, /issue\.severity/)
+  assert.match(reviewSource, /verificationIssueTarget/)
+  assert.match(reviewSource, /parseVerificationApiResponse/)
   assert.doesNotMatch(reviewSource, /messages:\s*\[/)
 })
 
