@@ -386,13 +386,6 @@ def _make_item(
     }
 
 
-def _attach_source_code(items: list[dict[str, Any]], code: str) -> list[dict[str, Any]]:
-    if code:
-        for item in items:
-            item["code"] = code
-    return items
-
-
 def _component_values(row: list[Any], columns: dict[str, int], name: str) -> dict[str, Any]:
     qty_text = _cell(row, columns, f"{name}_qty")
     if qty_text:
@@ -414,11 +407,10 @@ def _component_values(row: list[Any], columns: dict[str, int], name: str) -> dic
     return {"present": present, "qty": qty, "unit": unit, "rate": rate, "total": total}
 
 
-def _cost_specs(row: list[Any], columns: dict[str, int]) -> tuple[str, str, list[dict[str, Any]]]:
+def _cost_specs(row: list[Any], columns: dict[str, int]) -> tuple[str, list[dict[str, Any]]]:
     description = _cell(row, columns, "desc")
     if not description:
-        return "", "", []
-    source_code = _cell(row, columns, "code")
+        return "", []
 
     material = _component_values(row, columns, "material")
     labour = _component_values(row, columns, "labour")
@@ -432,7 +424,7 @@ def _cost_specs(row: list[Any], columns: dict[str, int]) -> tuple[str, str, list
         )
         if same_qty_unit:
             total = source_amount or material["total"] + labour["total"]
-            return description, source_code, [{
+            return description, [{
                 "component": "combined",
                 "qty": material["qty"],
                 "unit": material["unit"],
@@ -440,7 +432,7 @@ def _cost_specs(row: list[Any], columns: dict[str, int]) -> tuple[str, str, list
                 "total": total,
                 "sourceCosts": {"material": material, "labour": labour},
             }]
-        return description, source_code, [
+        return description, [
             {"component": "material", **{key: material[key] for key in ("qty", "unit", "rate", "total")}},
             {"component": "labour", **{key: labour[key] for key in ("qty", "unit", "rate", "total")}},
         ]
@@ -448,7 +440,7 @@ def _cost_specs(row: list[Any], columns: dict[str, int]) -> tuple[str, str, list
     if material["present"] or labour["present"]:
         name = "material" if material["present"] else "labour"
         component = material if material["present"] else labour
-        return description, source_code, [
+        return description, [
             {"component": name, **{key: component[key] for key in ("qty", "unit", "rate", "total")}},
         ]
 
@@ -464,16 +456,16 @@ def _cost_specs(row: list[Any], columns: dict[str, int]) -> tuple[str, str, list
         if not rate and qty and total:
             rate = total / qty
         if qty and unit and (rate or total):
-            return description, source_code, [{
+            return description, [{
                 "component": "combined", "qty": qty, "unit": unit, "rate": rate, "total": total,
             }]
 
     amount = source_amount or (parse_number(total_text) if _has_number(total_text) else 0.0)
     if amount:
-        return description, source_code, [{
+        return description, [{
             "component": "lump_sum", "qty": 1.0, "unit": "L/S", "rate": amount, "total": amount,
         }]
-    return description, source_code, []
+    return description, []
 
 
 def normalize_cost_row(
@@ -481,7 +473,7 @@ def normalize_cost_row(
     columns: dict[str, int],
     source_ref: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
-    description, source_code, specs = _cost_specs(row, columns)
+    description, specs = _cost_specs(row, columns)
     items: list[dict[str, Any]] = []
     for spec in specs:
         item = _make_item(
@@ -496,7 +488,7 @@ def normalize_cost_row(
         if "sourceCosts" in spec:
             item["sourceCosts"] = spec["sourceCosts"]
         items.append(item)
-    return _attach_source_code(items, source_code)
+    return items
 
 
 def classify_row(row: list[Any], columns: dict[str, int]) -> str:
@@ -524,7 +516,7 @@ def classify_row(row: list[Any], columns: dict[str, int]) -> str:
     )
     if description and mostly_uppercase and repeated_description and not distinct_pricing:
         return "section"
-    if _cost_specs(row, columns)[2]:
+    if _cost_specs(row, columns)[1]:
         return "item"
     source_code = _cell(row, columns, "code")
     if description and (

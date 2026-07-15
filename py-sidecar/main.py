@@ -43,7 +43,6 @@ class SourceCosts(BaseModel):
 
 class Item(BaseModel):
     id: str
-    code: Optional[str] = None
     desc: str
     unit: str
     qty: FiniteFloat

@@ -32,7 +32,6 @@ export interface DoclingMetadata {
 
 export interface DoclingItem {
   id: string
-  code?: string | null
   desc: string
   unit: string
   qty: number
@@ -233,7 +232,18 @@ export function parseDoclingResult(value: unknown): DoclingResultV2 {
   }
   requireNonNegativeInteger(result.totalItems, 'totalItems')
 
-  return result as unknown as DoclingResultV2
+  // Contract v2 deliberately treats printed row numbers/codes as source-only
+  // information. SourceRef is the stable identity for new imports. Strip a
+  // code sent by an older sidecar during a rolling deployment so it cannot be
+  // persisted or cause CSV to expose the retired Code column.
+  return {
+    ...result,
+    sections: (result.sections as Array<Record<string, unknown>>).map((section) => ({
+      ...section,
+      items: (section.items as Array<Record<string, unknown>>).map((item) =>
+        Object.fromEntries(Object.entries(item).filter(([key]) => key !== 'code'))),
+    })),
+  } as unknown as DoclingResultV2
 }
 
 export function buildDraftBoq(
@@ -245,7 +255,6 @@ export function buildDraftBoq(
     header: section.header,
     items: section.items.map((item): BoqItem => ({
       id: item.id,
-      code: item.code ?? '',
       desc: item.desc,
       unit: item.unit,
       qty: item.qty,
@@ -256,7 +265,7 @@ export function buildDraftBoq(
       sourceRef: item.sourceRef,
       ...(item.sourceCosts ? { sourceCosts: item.sourceCosts } : {}),
       stdStatus: 'unmatched',
-    })),
+    }) as BoqItem),
   }))
   const items = sections.flatMap((section) => section.items)
   const metadataConfidence: BoqMetadataConfidence = {

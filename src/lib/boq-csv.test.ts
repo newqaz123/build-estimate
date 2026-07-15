@@ -26,13 +26,13 @@ function boqWith(items: Array<Partial<BoqItem>>): Boq {
   }
 }
 
-test('code-less runtime items export without a Code column or exception', () => {
+test('new code-less imports export without a Code column or exception', () => {
   const csv = buildBoqCsv(boqWith([{}]))
   assert.equal(csv.split('\n')[0], '"Description","Unit","Qty","Rate","Total"')
   assert.doesNotMatch(csv, /Code/)
 })
 
-test('legacy codes add the Code column and preserve blank sibling cells', () => {
+test('historical stored BOQs retain the legacy Code column and blank sibling cells', () => {
   const csv = buildBoqCsv(boqWith([{ code: 'A-1' }, { desc: 'Labour' }]))
   const lines = csv.split('\n')
   assert.equal(lines[0], '"Code","Description","Unit","Qty","Rate","Total"')

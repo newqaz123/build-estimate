@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { buildDraftBoq, parseDoclingResult, verifyBoqLocally } from './boq-ingestion'
+import { buildBoqCsv } from './boq-csv'
 import type { Boq } from './boq-schema'
 
 function validPayload() {
@@ -14,7 +16,6 @@ function validPayload() {
       header: 'Concrete Works',
       items: [{
         id: 'sidecar-item-1',
-        code: 'C-01',
         desc: 'Concrete',
         unit: 'm3',
         qty: 3,
@@ -77,13 +78,39 @@ test('parseDoclingResult accepts contract version 2 and preserves source fields'
   const payload = validPayload()
   const parsed = parseDoclingResult(payload)
 
-  assert.equal(parsed, payload)
+  assert.notEqual(parsed, payload)
   assert.deepEqual(parsed.tables, payload.tables)
   assert.deepEqual(parsed.metadata, payload.metadata)
   assert.deepEqual(parsed.warnings, payload.warnings)
   assert.deepEqual(parsed.sections[0].items[0].sourceRef, { page: 1, table: 1, row: 2 })
   assert.deepEqual(parsed.sections[0].items[0].sourceCosts, payload.sections[0].items[0].sourceCosts)
   assert.equal(parsed.sections[0].items[0].costComponent, 'combined')
+})
+
+test('version 2 ignores source row codes so new imports cannot persist or export Code', () => {
+  const payload = validPayload()
+  Object.assign(payload.sections[0].items[0], { code: 'C-01' })
+
+  const parsed = parseDoclingResult(payload)
+  const draft = buildDraftBoq('boq-new', 'boqs/boq-new/source.pdf', parsed)
+  const item = draft.sections[0].items[0] as unknown as Record<string, unknown>
+
+  assert.equal(Object.hasOwn(parsed.sections[0].items[0], 'code'), false)
+  assert.equal(Object.hasOwn(item, 'code'), false)
+  assert.doesNotMatch(buildBoqCsv(draft as Boq), /Code/)
+})
+
+test('real ayt001 contract artifact cannot reintroduce source row codes', () => {
+  const payload = JSON.parse(readFileSync('test-artifacts/docling-e2e/ayt001-final-docling.json', 'utf8'))
+  assert.ok(payload.sections.some((section: { items: Array<{ code?: string }> }) =>
+    section.items.some((item) => item.code)))
+
+  const parsed = parseDoclingResult(payload)
+  const draft = buildDraftBoq('boq-ayt001', 'boqs/boq-ayt001/source.pdf', parsed)
+
+  assert.ok(parsed.sections.flatMap((section) => section.items).every((item) => !Object.hasOwn(item, 'code')))
+  assert.ok(draft.sections.flatMap((section) => section.items).every((item) => !Object.hasOwn(item, 'code')))
+  assert.doesNotMatch(buildBoqCsv(draft as Boq).split('\n')[0], /Code/)
 })
 
 test('parseDoclingResult rejects unsupported versions and missing metadata or provenance', () => {
@@ -136,7 +163,6 @@ test('buildDraftBoq builds an unclassified draft from extracted values without s
   payload.metadata.project.value = ''
   payload.metadata.date.value = ''
   payload.metadata.workType.value = 'Unclassified'
-  delete (payload.sections[0].items[0] as Partial<typeof payload.sections[0]['items'][0]>).code
   const parsed = parseDoclingResult(payload)
 
   const draft = buildDraftBoq('boq-22', 'boqs/boq-22/source.pdf', parsed)
@@ -157,7 +183,7 @@ test('buildDraftBoq builds an unclassified draft from extracted values without s
   assert.deepEqual(draft.extractionWarnings, payload.warnings)
   assert.deepEqual(draft.metadataConfidence, { vendor: 0.95, project: 0.9, date: 0.85, workType: 0.8 })
   assert.equal(draft.sections[0].items[0].id, 'sidecar-item-1')
-  assert.equal(draft.sections[0].items[0].code, '')
+  assert.equal(Object.hasOwn(draft.sections[0].items[0], 'code'), false)
   assert.equal(draft.sections[0].items[0].stdStatus, 'unmatched')
   assert.equal(draft.sections[0].items[0].costComponent, 'combined')
   assert.deepEqual(draft.sections[0].items[0].sourceRef, { page: 1, table: 1, row: 2 })

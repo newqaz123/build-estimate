@@ -546,11 +546,23 @@ PROJECT : Slab Concrete Biomass
         sections = extract_boq_sections(tables)
 
         self.assertEqual(len(sections), 1)
-        self.assertEqual(sections[0]["items"][0]["code"], "A.1")
+        self.assertNotIn("code", sections[0]["items"][0])
         self.assertEqual(sections[0]["items"][0]["desc"], "Ready-mix concrete C30")
         self.assertEqual(sections[0]["items"][0]["qty"], 12.5)
         self.assertEqual(sections[0]["items"][0]["rate"], 4000.0)
         self.assertEqual(sections[0]["items"][1]["total"], 102000.0)
+
+    def test_ayt001_style_source_numbers_are_provenance_only(self):
+        rows = [
+            ["ITEM", "DESCRIPTION", "MATERIAL", "", "", "LABOUR", "", "", "AMOUNT"],
+            ["", "", "UNIT", "Q'TY", "RATE", "UNIT", "Q'TY", "RATE", ""],
+            ["1", "PIPE 1B BS1 L=6000", "Pcs.", "3", "1,781", "Pcs.", "3", "250", "6,093"],
+        ]
+
+        item = extract_boq_document([{"page": 1, "rows": rows}], "")["sections"][0]["items"][0]
+
+        self.assertNotIn("code", item)
+        self.assertEqual(item["sourceRef"], {"page": 1, "table": 1, "row": 3})
 
     def test_skips_totals_and_rejects_documents_without_boq_rows(self):
         tables = [[
@@ -627,6 +639,25 @@ class SidecarContractTest(unittest.TestCase):
         self.assertEqual(payload["tables"][0]["rows"][1], ["Install valve", "2,500.00"])
         self.assertEqual(payload["metadata"]["workType"]["value"], "MEP")
         self.assertEqual(payload["totalItems"], 1)
+        self.assertTrue(all("code" not in item for section in payload["sections"] for item in section["items"]))
+
+    def test_versioned_item_contract_drops_legacy_source_code(self):
+        main = self._import_main()
+        item = main.Item(
+            id="item-1",
+            code="A.1",
+            desc="Concrete",
+            unit="m3",
+            qty=1,
+            rate=100,
+            total=100,
+            type="unit",
+            costComponent="combined",
+            sourceRef={"page": 1, "table": 1, "row": 2},
+        )
+        payload = item.model_dump() if hasattr(item, "model_dump") else item.dict()
+
+        self.assertNotIn("code", payload)
 
     def test_models_reject_non_finite_numbers_and_invalid_confidence(self):
         main = self._import_main()
