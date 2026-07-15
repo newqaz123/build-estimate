@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, useRef } from "react"
 import Link from "next/link"
 import { Upload as UploadIcon } from "lucide-react"
 import { toast } from "sonner"
@@ -10,9 +10,36 @@ import type { Boq } from "@/lib/boq-schema"
 import { ProtoBadge } from "@/components/proto-badge"
 import { ProtoFilterChip } from "@/components/proto-filter-chip"
 import { ProtoDataTable } from "@/components/proto-data-table"
+import { ProtoPagination } from "@/components/proto-pagination"
 
 const typeFilters = ["All", "Structural", "MEP", "Finishing"] as const
 const statusFilters = ["Draft", "Active", "Review", "Approved", "Parsed"] as const
+
+function csvCell(value: string | number): string {
+  return `"${String(value).replace(/"/g, '""')}"`
+}
+
+function exportBoqCsv(boq: Boq): void {
+  const items = boq.sections.flatMap((section) => section.items)
+  const includeCode = items.some((item) => item.code.trim().length > 0)
+  const headers = [...(includeCode ? ["Code"] : []), "Description", "Unit", "Qty", "Rate", "Total"]
+  const rows = items.map((item) => [
+    ...(includeCode ? [item.code] : []),
+    item.desc,
+    item.unit,
+    item.qty,
+    item.rate,
+    item.total,
+  ])
+  const csv = [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n")
+  const blob = new Blob([csv], { type: "text/csv" })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement("a")
+  anchor.href = url
+  anchor.download = `${boq.project.replace(/\s+/g, "-")}.csv`
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
 
 export default function BoqsPage() {
   const [boqs, setBoqs] = useState<Boq[]>([])
@@ -20,13 +47,19 @@ export default function BoqsPage() {
   const [page, setPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [search, setSearch] = useState("")
   const [activeFilter, setActiveFilter] = useState<string>("All")
   const [uploadOpen, setUploadOpen] = useState(false)
   const [reviewBoq, setReviewBoq] = useState<Boq | null>(null)
+  const requestControllerRef = useRef<AbortController | null>(null)
 
   const fetchBoqs = useCallback(async () => {
+    requestControllerRef.current?.abort()
+    const controller = new AbortController()
+    requestControllerRef.current = controller
     setLoading(true)
+    setLoadError(false)
     try {
       const params = new URLSearchParams({ page: String(page), limit: "10" })
       if (search) params.set("search", search)
@@ -37,21 +70,35 @@ export default function BoqsPage() {
       if (statusFilters.includes(f)) params.set("status", f)
       else if (typeFilters.includes(f)) params.set("workType", f.charAt(0).toUpperCase() + f.slice(1))
 
-      const res = await fetch(`/api/boqs?${params}`)
+      const res = await fetch(`/api/boqs?${params}`, { signal: controller.signal })
       if (!res.ok) throw new Error("Failed to fetch")
       const data = await res.json()
       setBoqs(data.boqs || [])
       setTotal(data.total || 0)
       setTotalPages(data.totalPages || 1)
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") return
+      setBoqs([])
+      setLoadError(true)
       toast.error("Failed to load BOQs")
     } finally {
-      setLoading(false)
+      if (controller === requestControllerRef.current) {
+        requestControllerRef.current = null
+        setLoading(false)
+      }
     }
   }, [page, search, activeFilter])
 
   useEffect(() => {
-    fetchBoqs()
+    let active = true
+    void Promise.resolve().then(() => {
+      if (active) void fetchBoqs()
+    })
+    return () => {
+      active = false
+      requestControllerRef.current?.abort()
+      requestControllerRef.current = null
+    }
   }, [fetchBoqs])
 
   const handleUploadComplete = (boq: Boq) => {
@@ -82,16 +129,18 @@ export default function BoqsPage() {
       </div>
 
       <div
-        className="flex items-center justify-between mb-4 gap-4"
+        className="proto-toolbar"
         data-od-id="toolbar"
       >
-        <div className="flex items-center gap-3 flex-1">
+        <div className="proto-toolbar-left">
           <div className="search-wrap">
+            <label htmlFor="boqSearch" className="sr-only">Search BOQs</label>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
               <circle cx="11" cy="11" r="8" />
               <line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
             <input
+              id="boqSearch"
               className="proto-input"
               type="text"
               placeholder="Search BOQs…"
@@ -102,7 +151,7 @@ export default function BoqsPage() {
               }}
             />
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="filter-group" aria-label="Filter BOQs">
             {typeFilters.map(f => (
               <ProtoFilterChip key={f} active={activeFilter === f} label={f} onClick={() => { setActiveFilter(f); setPage(1) }} />
             ))}
@@ -112,15 +161,17 @@ export default function BoqsPage() {
             ))}
           </div>
         </div>
-        <button onClick={() => setUploadOpen(true)} className="btn btn-primary btn-sm">
-          <UploadIcon className="w-4 h-4" />
-          Upload BOQ
-        </button>
+        <div className="proto-toolbar-right">
+          <button type="button" onClick={() => setUploadOpen(true)} className="btn btn-primary btn-sm">
+            <UploadIcon className="w-4 h-4" />
+            Upload BOQ
+          </button>
+        </div>
       </div>
 
       {loading && (
         <div
-          className="flex items-center justify-center h-64 text-sm text-muted-foreground"
+          className="proto-loading-state"
           data-od-id="loading-state"
         >
           <div className="flex items-center gap-2">
@@ -130,9 +181,17 @@ export default function BoqsPage() {
         </div>
       )}
 
-      {!loading && boqs.length === 0 && (
+      {!loading && loadError && (
+        <div className="proto-empty-state proto-error-state" role="alert" data-od-id="error-state">
+          <h3>Couldn’t load BOQs</h3>
+          <p>Check your connection, then try loading the list again.</p>
+          <button type="button" className="btn btn-secondary" onClick={() => void fetchBoqs()}>Retry</button>
+        </div>
+      )}
+
+      {!loading && !loadError && boqs.length === 0 && (
         <div
-          className="flex flex-col items-center justify-center h-64 gap-3 text-muted-foreground"
+          className="proto-empty-state"
           data-od-id="empty-state"
         >
           <svg
@@ -149,11 +208,11 @@ export default function BoqsPage() {
           </svg>
           <h3 className="text-sm font-medium">No BOQs yet</h3>
           <p className="text-sm">Upload your first Bill of Quantities PDF to get started.</p>
-          <button onClick={() => setUploadOpen(true)} className="btn btn-primary">Upload BOQ</button>
+          <button type="button" onClick={() => setUploadOpen(true)} className="btn btn-primary">Upload BOQ</button>
         </div>
       )}
 
-      {!loading && boqs.length > 0 && (
+      {!loading && !loadError && boqs.length > 0 && (
         <>
           <ProtoDataTable
             headers={[
@@ -168,53 +227,22 @@ export default function BoqsPage() {
               { label: 'Actions', className: 'text-right whitespace-nowrap' },
             ]}
             footer={
-              <div className="flex items-center justify-between px-4 py-3 text-sm text-muted-foreground border-t border-border">
-                <span>Showing {(page - 1) * 10 + 1}–{Math.min(page * 10, total)} of {total}</span>
-                <div className="flex gap-0.5">
-                  <button
-                    onClick={() => setPage(Math.max(1, page - 1))}
-                    disabled={page <= 1}
-                    className="w-7 h-7 grid place-items-center rounded-md border border-transparent hover:bg-muted disabled:opacity-30 disabled:cursor-default transition-colors"
-                  >
-                    ‹
-                  </button>
-                  {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
-                    const p = i + 1
-                    return (
-                      <button
-                        key={p}
-                        onClick={() => setPage(p)}
-                        className={`w-7 h-7 grid place-items-center rounded-md text-sm transition-colors ${
-                          p === page ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'
-                        }`}
-                      >
-                        {p}
-                      </button>
-                    )
-                  })}
-                  {totalPages > 7 && <span className="w-7 h-7 grid place-items-center text-sm">…</span>}
-                  <button
-                    onClick={() => setPage(Math.min(totalPages, page + 1))}
-                    disabled={page >= totalPages}
-                    className="w-7 h-7 grid place-items-center rounded-md border border-transparent hover:bg-muted disabled:opacity-30 disabled:cursor-default transition-colors"
-                  >
-                    ›
-                  </button>
-                </div>
-              </div>
+              <ProtoPagination page={page} totalPages={totalPages} total={total} limit={10} onPageChange={setPage} />
             }
+            ariaLabel="Bills of Quantities"
+            dataOdId="boq-table"
           >
             {boqs.map(boq => {
               const std = computeStdStats(boq)
               return (
                 <tr key={boq.id} data-boq-id={boq.id}>
-                  <td><Link href={`/boqs/${boq.id}`} className="font-medium text-foreground hover:text-accent no-underline">{boq.project}</Link></td>
-                  <td className="text-muted-foreground">{boq.vendor}</td>
+                  <td className="boq-name-cell"><Link href={`/boqs/${boq.id}`} className="boq-cell-truncate font-medium text-foreground hover:text-accent no-underline" title={boq.project}>{boq.project}</Link></td>
+                  <td className="boq-name-cell text-muted-foreground"><span className="boq-cell-truncate" title={boq.vendor}>{boq.vendor}</span></td>
                   <td>{boq.workType}</td>
                   <td className="text-muted-foreground">{boq.date}</td>
                   <td className="num-col">{boq.totalItems}</td>
                   <td className="num-col">{formatCurrency(boq.grandTotal)}</td>
-                  <td><ProtoBadge status={boq.status as any} /></td>
+                  <td><ProtoBadge status={boq.status} /></td>
                   <td>
                     <div className="flex items-center gap-2">
                       <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: std.color }} />
@@ -227,16 +255,7 @@ export default function BoqsPage() {
                   <td className="text-right whitespace-nowrap">
                     <Link href={`/boqs/${boq.id}`} className="btn btn-ghost btn-xs">View</Link>
                     <button
-                      onClick={() => {
-                        const csv = boq.sections.flatMap(s => s.items).map(i => `${i.code},"${i.desc}",${i.unit},${i.qty},${i.rate},${i.total}`).join('\n')
-                        const blob = new Blob([`Code,Description,Unit,Qty,Rate,Total\n${csv}`], { type: 'text/csv' })
-                        const url = URL.createObjectURL(blob)
-                        const a = document.createElement('a')
-                        a.href = url
-                        a.download = `${boq.project.replace(/\s+/g, '-')}.csv`
-                        a.click()
-                        URL.revokeObjectURL(url)
-                      }}
+                      onClick={() => exportBoqCsv(boq)}
                       className="btn btn-ghost btn-xs"
                     >
                       Download

@@ -21,15 +21,16 @@ interface UploadModalProps {
   onUploadComplete: (boq: Boq) => void
 }
 
-const MOCK_PARSED_ITEMS = [
-  { code: "B.1.1", desc: "Structural concrete C32/40 (columns)", unit: "m³", qty: 120, rate: 3850, total: 462000, type: "unit" as const },
-  { code: "B.1.2", desc: "Structural concrete C25/30 (slabs)", unit: "m³", qty: 240, rate: 3450, total: 828000, type: "unit" as const },
-  { code: "B.1.3", desc: "Reinforcement bar SD40 — 16mm", unit: "ton", qty: 18.5, rate: 28500, total: 527250, type: "unit" as const },
-  { code: "B.1.4", desc: "Reinforcement bar SD40 — 12mm", unit: "ton", qty: 12.2, rate: 29000, total: 353800, type: "unit" as const },
-  { code: "B.1.5", desc: "Formwork — column", unit: "m²", qty: 520, rate: 680, total: 353600, type: "unit" as const },
-  { code: "B.1.6", desc: "Formwork — slab", unit: "m²", qty: 980, rate: 590, total: 578200, type: "unit" as const },
-  { code: "B.2.1", desc: "Structural steel frame — main beams", unit: "ton", qty: 8.4, rate: 42000, total: 352800, type: "unit" as const },
-]
+async function readError(response: Response, fallback: string): Promise<string> {
+  try {
+    const body = await response.json() as { error?: unknown; detail?: unknown }
+    if (typeof body.error === "string") return body.error
+    if (typeof body.detail === "string") return body.detail
+  } catch {
+    // Keep the user-facing fallback when an upstream service returns non-JSON.
+  }
+  return fallback
+}
 
 export function UploadModal({ open, onOpenChange, onUploadComplete }: UploadModalProps) {
   const [file, setFile] = useState<File | null>(null)
@@ -56,92 +57,101 @@ export function UploadModal({ open, onOpenChange, onUploadComplete }: UploadModa
     }
     setUploading(true)
     try {
-      const items = MOCK_PARSED_ITEMS.map((item) => ({
-        ...item,
-        stdStatus: "unmatched" as const,
-      }))
-
-      const body = {
-        project: "Untitled BOQ",
-        vendor: "Unknown Vendor",
-        workType: "Structural" as const,
-        date: new Date().toISOString().slice(0, 10),
-        sections: [{ header: "Parsed Items", items }],
+      const formData = new FormData()
+      formData.append("file", file)
+      const response = await fetch("/api/boqs/import", {
+        method: "POST",
+        body: formData,
+      })
+      if (!response.ok) {
+        throw new Error(await readError(response, "The BOQ could not be imported. Try again."))
       }
 
-      const res = await fetch("/api/boqs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      })
-
-      if (!res.ok) throw new Error("Failed to create BOQ")
-
-      const boq = await res.json()
-      toast.success("BOQ parsed successfully")
+      const boq = await response.json() as Boq
+      toast.success("BOQ imported successfully")
       onUploadComplete(boq)
       onOpenChange(false)
       setFile(null)
       setNotes("")
-    } catch {
-      toast.error("Upload failed")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Upload failed")
     } finally {
       setUploading(false)
     }
   }
 
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen && uploading) return
+    onOpenChange(nextOpen)
+  }
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[520px]" data-od-id="upload-modal">
-        <DialogHeader>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent
+        className="modal upload-modal max-w-[520px]"
+        data-od-id="upload-modal"
+        showCloseButton={!uploading}
+      >
+        <DialogHeader className="modal-header">
           <DialogTitle>Upload BOQ</DialogTitle>
           <DialogDescription>
             Drop a BOQ PDF. Docling extracts all line items — you fill in the metadata (vendor, project, work type) during review.
           </DialogDescription>
         </DialogHeader>
 
-        <div
-          {...getRootProps()}
-          data-od-id="drop-zone"
-          className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
-            isDragActive ? "border-accent bg-accent/5" : "border-border hover:border-muted-foreground"
-          }`}
-        >
-          <input {...getInputProps()} />
-          {file ? (
-            <>
-              <FileText className="w-8 h-8 mx-auto mb-2 text-accent" />
-              <p className="text-sm font-medium">{file.name}</p>
-              <p className="text-xs text-muted-foreground">{(file.size / 1024).toFixed(0)} KB</p>
-            </>
-          ) : (
-            <>
-              <Upload className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
-              <p className="text-sm">Drop your BOQ PDF here, or click to browse</p>
-              <p className="text-xs text-muted-foreground mt-1">PDF files only · Max 20 MB</p>
-            </>
+        <div className="modal-body upload-modal-body">
+          <div
+            {...getRootProps({
+              role: "button",
+              "aria-label": file ? `Selected PDF: ${file.name}` : "Choose a BOQ PDF to upload",
+              "aria-disabled": uploading,
+            })}
+            data-od-id="drop-zone"
+            className={`drop-zone ${isDragActive ? "dragover" : ""} ${uploading ? "is-disabled" : ""}`}
+          >
+            <input {...getInputProps()} disabled={uploading} />
+            {file ? (
+              <>
+                <FileText />
+                <p className="drop-zone-title">{file.name}</p>
+                <p className="drop-zone-meta">{(file.size / 1024).toFixed(0)} KB</p>
+              </>
+            ) : (
+              <>
+                <Upload />
+                <p className="drop-zone-title">Drop your BOQ PDF here, or click to browse</p>
+                <p className="drop-zone-meta">PDF files only · Max 20 MB</p>
+              </>
+            )}
+          </div>
+
+          <div className="upload-notes-field">
+            <label htmlFor="boqNotes">Notes (optional)</label>
+            <textarea
+              id="boqNotes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Any notes about this BOQ…"
+              className="proto-input"
+              disabled={uploading}
+            />
+          </div>
+
+          {uploading && (
+            <div className="upload-progress" role="status" aria-live="polite">
+              <div className="proto-spinner" aria-hidden="true" />
+              <div><strong>Parsing BOQ…</strong><span>Uploading the PDF and extracting line items with Docling.</span></div>
+            </div>
           )}
         </div>
 
-        <div className="space-y-1">
-          <label htmlFor="boqNotes" className="text-xs text-muted-foreground">
-            Notes (optional)
-          </label>
-          <textarea
-            id="boqNotes"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Any notes about this BOQ…"
-            className="w-full min-h-[48px] rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-          />
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+        <DialogFooter className="modal-footer">
+          <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={uploading}>
             Cancel
           </Button>
           <Button onClick={handleUpload} disabled={!file || uploading}>
-            {uploading ? "Parsing..." : "Upload & Parse"}
+            {uploading && <span className="proto-spinner upload-button-spinner" aria-hidden="true" />}
+            {uploading ? "Parsing…" : "Upload & Parse"}
           </Button>
         </DialogFooter>
       </DialogContent>

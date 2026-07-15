@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useId, useState, useEffect, useCallback, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { ChevronRight, ChevronDown } from "lucide-react"
 import { toast } from "sonner"
@@ -18,9 +18,25 @@ function normalizeDesc(desc: string): string {
 
 export function StandardizationReview({ items, onItemsChange }: StandardizationReviewProps) {
   const [open, setOpen] = useState(false)
+  const panelId = useId()
   const [standards, setStandards] = useState<StandardEntry[]>([])
   const [llmRunning, setLlmRunning] = useState(false)
-  const [ran, setRan] = useState(false)
+  const ranRef = useRef(false)
+  const itemsRef = useRef(items)
+  const mountedRef = useRef(true)
+  const llmControllerRef = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      llmControllerRef.current?.abort()
+    }
+  }, [])
+
+  useEffect(() => {
+    itemsRef.current = items
+  }, [items])
 
   useEffect(() => {
     fetch("/api/standards")
@@ -58,12 +74,12 @@ export function StandardizationReview({ items, onItemsChange }: StandardizationR
   )
 
   useEffect(() => {
-    if (standards.length > 0 && !ran) {
-      setRan(true)
+    if (standards.length > 0 && !ranRef.current) {
+      ranRef.current = true
       const updated = runStandardization(items)
       onItemsChange(updated)
     }
-  }, [standards, ran, items, runStandardization, onItemsChange])
+  }, [standards, items, runStandardization, onItemsChange])
 
   const matched = items.filter((i) => i.stdStatus === "matched").length
   const pending = items.filter((i) => i.stdStatus === "pending").length
@@ -84,26 +100,34 @@ export function StandardizationReview({ items, onItemsChange }: StandardizationR
   }
 
   const runLLM = async () => {
-    const unmatchedItems = items.filter((i) => i.stdStatus === "unmatched")
+    const unmatchedItems = items
+      .map((item, originalIndex) => ({ item, originalIndex }))
+      .filter(({ item }) => item.stdStatus === "unmatched")
     if (unmatchedItems.length === 0) {
       toast.info("No unmatched items")
       return
     }
+    llmControllerRef.current?.abort()
+    const controller = new AbortController()
+    llmControllerRef.current = controller
     setLlmRunning(true)
     try {
       const catalog = standards.map((s) => `${s.description} (${s.unit})`).join("\n")
       const prompt = `Standard catalog:\n${catalog}\n\nMatch these items:\n${unmatchedItems
-        .map((i, idx) => `${idx + 1}. "${i.desc}" unit: ${i.unit}`)
+        .map(({ item }, idx) => `${idx + 1}. "${item.desc}" unit: ${item.unit}`)
         .join("\n")}\n\nReturn JSON array: [{index: number, stdDescription: string}]`
 
       const res = await fetch("/api/llm/standardize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: [{ role: "user", content: prompt }] }),
+        signal: controller.signal,
       })
 
+      if (!mountedRef.current || controller.signal.aborted || llmControllerRef.current !== controller) return
       if (!res.ok) throw new Error("LLM call failed")
       const result = await res.json()
+      if (!mountedRef.current || controller.signal.aborted || llmControllerRef.current !== controller) return
       const text = result.content || result.text || "[]"
       let suggestions: { index: number; stdDescription: string }[]
       try {
@@ -113,14 +137,16 @@ export function StandardizationReview({ items, onItemsChange }: StandardizationR
       }
 
       if (!Array.isArray(suggestions)) {
+        if (!mountedRef.current || llmControllerRef.current !== controller) return
         toast.error("LLM returned unexpected format")
         return
       }
 
-      const updated = [...items]
+      const updated = [...itemsRef.current]
       suggestions.forEach((s) => {
-        const idx = s.index - 1
-        if (idx >= 0 && idx < updated.length) {
+        const unmatched = unmatchedItems[s.index - 1]
+        if (unmatched && updated[unmatched.originalIndex]) {
+          const idx = unmatched.originalIndex
           const st = standards.find((st) => st.description === s.stdDescription)
           if (st) {
             updated[idx] = { ...updated[idx], stdStatus: "pending" as const, stdMatch: st.description }
@@ -128,12 +154,18 @@ export function StandardizationReview({ items, onItemsChange }: StandardizationR
         }
       })
 
+      if (!mountedRef.current || controller.signal.aborted || llmControllerRef.current !== controller) return
       onItemsChange(updated)
       toast.success("LLM suggestions applied")
-    } catch {
+    } catch (error) {
+      if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return
+      if (!mountedRef.current || llmControllerRef.current !== controller) return
       toast.error("LLM standardization failed")
     } finally {
-      setLlmRunning(false)
+      if (mountedRef.current && llmControllerRef.current === controller) {
+        llmControllerRef.current = null
+        setLlmRunning(false)
+      }
     }
   }
 
@@ -162,6 +194,8 @@ export function StandardizationReview({ items, onItemsChange }: StandardizationR
       <button
         onClick={() => setOpen(!open)}
         className="flex items-center justify-between w-full mb-2 text-left"
+        aria-expanded={open}
+        aria-controls={panelId}
       >
         <span className="text-sm font-medium flex items-center gap-1.5">
           {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
@@ -189,15 +223,14 @@ export function StandardizationReview({ items, onItemsChange }: StandardizationR
       </div>
 
       {open && (
-        <>
+        <div id={panelId}>
           <div className="space-y-1.5 max-h-[300px] overflow-y-auto mb-3">
             {items.map((item, idx) => (
               <div
-                key={idx}
+                key={item.id ?? `${normalizeDesc(item.desc)}-${item.unit}-${idx}`}
                 className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/30 text-xs"
               >
                 {showStdBadge(item)}
-                <span className="font-mono text-muted-foreground">{item.code}</span>
                 <span className="flex-1 truncate">{item.desc}</span>
                 <span className="text-muted-foreground">{item.unit}</span>
                 {item.stdMatch && item.stdMatch !== item.desc && (
@@ -215,7 +248,7 @@ export function StandardizationReview({ items, onItemsChange }: StandardizationR
               {llmRunning ? "Running..." : "Run LLM on Unmatched"}
             </Button>
           </div>
-        </>
+        </div>
       )}
     </div>
   )
