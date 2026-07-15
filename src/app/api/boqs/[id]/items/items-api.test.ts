@@ -239,7 +239,7 @@ test('approval builds and verifies the candidate while recomputing section total
 
 test('approval rejects every blocking local verification category with structured details', async (t) => {
   const cases: [string, Partial<Boq>, Record<string, unknown>][] = [
-    ['unclassified', { workType: 'Unclassified' }, { status: 'approved' }],
+    ['unclassified', {}, { status: 'approved', workType: 'Unclassified' }],
     ['blank vendor', { vendor: ' ' }, { status: 'approved' }],
     ['blank project', { project: '' }, { status: 'approved' }],
     ['blank date', { date: '' }, { status: 'approved' }],
@@ -258,22 +258,27 @@ test('approval rejects every blocking local verification category with structure
       }), detailContext)
       const body = await response.json()
       assert.equal(response.status, 400)
-      assert.equal(typeof body.error, 'string')
+      assert.equal(body.error, 'Resolve required BOQ fields before approval')
       assert.equal(body.verification.hasBlockingIssues, true)
       assert.equal(harness.updates.length, 0)
     })
   }
 })
 
-test('non-approval updates may retain verification warnings and unclassified work', async () => {
-  const harness = detailHarness(detailBoq({ workType: 'Unclassified' }))
+test('draft updates may explicitly save Unclassified work and retain verification warnings', async () => {
+  const harness = detailHarness()
   const response = await harness.handlers.PUT(new Request('http://localhost/api/boqs/boq-1', {
     method: 'PUT',
-    body: JSON.stringify({ status: 'draft', sections: [{ header: 'Allowance', items: [item({ qty: 0, rate: 0, total: 0 })] }] }),
+    body: JSON.stringify({
+      status: 'draft',
+      workType: 'Unclassified',
+      sections: [{ header: 'Allowance', items: [item({ qty: 0, rate: 0, total: 0 })] }],
+    }),
   }), detailContext)
 
   assert.equal(response.status, 200)
   assert.equal(harness.updates.length, 1)
+  assert.equal(harness.updates[0]?.workType, 'Unclassified')
 })
 
 test('DELETE removes source before Firestore and preserves Firestore when source deletion fails', async (t) => {

@@ -72,7 +72,7 @@ export function createBoqDetailHandlers(dependencies: BoqDetailDependencies) {
       if (body.vendor !== undefined) updates.vendor = body.vendor
       if (body.vendorId !== undefined) updates.vendorId = body.vendorId
       if (body.workType !== undefined) {
-        if (!['Structural', 'MEP', 'Finishing'].includes(body.workType)) {
+        if (!['Structural', 'MEP', 'Finishing', 'Unclassified'].includes(body.workType)) {
           return Response.json({ error: 'workType must be Structural, MEP, or Finishing' }, { status: 400 })
         }
         updates.workType = body.workType
@@ -95,7 +95,10 @@ export function createBoqDetailHandlers(dependencies: BoqDetailDependencies) {
       const candidate = { ...existing, ...updates } as Boq
       const verification = verifyBoqLocally(candidate)
       if (candidate.status === 'approved' && verification.hasBlockingIssues) {
-        return Response.json({ error: 'BOQ cannot be approved', verification }, { status: 400 })
+        return Response.json(
+          { error: 'Resolve required BOQ fields before approval', verification },
+          { status: 400 },
+        )
       }
 
       await dependencies.updateBoq(id, updates)
