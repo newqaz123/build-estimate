@@ -62,7 +62,9 @@ export function mergeStandardSourceItems(
     (entry) =>
       entry.boqId === sourceItem.boqId &&
       entry.sectionIndex === sourceItem.sectionIndex &&
-      entry.itemCode === sourceItem.itemCode &&
+      (sourceItem.itemId
+        ? entry.itemId === sourceItem.itemId
+        : !entry.itemId && entry.itemCode === sourceItem.itemCode) &&
       entry.sourceDescription === sourceItem.sourceDescription,
   )
 

@@ -1,7 +1,8 @@
 export interface StandardSourceItem {
   boqId: string
   sectionIndex: number
-  itemCode: string
+  itemId?: string
+  itemCode?: string
   sourceDescription: string
 }
 

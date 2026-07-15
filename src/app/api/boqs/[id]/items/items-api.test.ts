@@ -186,3 +186,62 @@ test('standard link impact counts scanned direct links and legacy provenance row
 
   assert.deepEqual(impact, { affectedLinkCount: 2, affectedBoqCount: 2 })
 })
+
+test('code-less imported items update by internal ID', () => {
+  const result = applyBoqItemUpdates(
+    [boq('boq-1', [item({ id: 'item-1', code: undefined })])],
+    [],
+    'boq-1',
+    [{ sectionIndex: 0, items: [{ itemId: 'item-1', qty: 7, rate: 3 }] }],
+  )
+
+  assert.equal(result.boqs[0]?.sections[0]?.items[0]?.total, 21)
+})
+
+test('duplicate legacy codes are ambiguous while an internal ID selects one item', () => {
+  const duplicateItems = [
+    item({ id: 'item-1', code: 'DUP', desc: 'First' }),
+    item({ id: 'item-2', code: 'DUP', desc: 'Second' }),
+  ]
+
+  assert.throws(
+    () => applyBoqItemUpdates(
+      [boq('boq-1', duplicateItems)],
+      [],
+      'boq-1',
+      [{ sectionIndex: 0, items: [{ itemCode: 'DUP', desc: 'Wrong' }] }],
+    ),
+    /ambiguous/i,
+  )
+
+  const result = applyBoqItemUpdates(
+    [boq('boq-1', duplicateItems)],
+    [],
+    'boq-1',
+    [{ sectionIndex: 0, items: [{ itemId: 'item-2', itemCode: 'DUP', desc: 'Selected' }] }],
+  )
+  assert.equal(result.boqs[0]?.sections[0]?.items[0]?.desc, 'First')
+  assert.equal(result.boqs[0]?.sections[0]?.items[1]?.desc, 'Selected')
+})
+
+test('request validation requires one non-empty item identity', () => {
+  for (const payload of [
+    { sectionIndex: 0, items: [{ desc: 'Missing' }] },
+    { sectionIndex: 0, items: [{ itemId: '' }] },
+    { sectionIndex: 0, items: [{ itemId: null }] },
+  ]) {
+    assert.throws(() => parseUpdateGroups(payload), /identity|itemId/i)
+  }
+})
+
+test('link impact counts code-less linked items distinctly by internal ID', () => {
+  const impact = countBoqStandardLinks(
+    [boq('boq-1', [
+      item({ id: 'item-1', code: undefined, stdId: 'std-1' }),
+      item({ id: 'item-2', code: undefined, stdId: 'std-1' }),
+    ])],
+    standard(),
+  )
+
+  assert.deepEqual(impact, { affectedLinkCount: 2, affectedBoqCount: 1 })
+})

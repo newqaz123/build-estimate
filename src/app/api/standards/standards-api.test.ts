@@ -139,6 +139,30 @@ test('mergeStandardSourceItems deduplicates and recomputes sourceBoqCount', () =
   assert.equal(deduped.sourceBoqCount, 2)
 })
 
+test('mergeStandardSourceItems preserves and deduplicates code-less internal IDs distinctly', () => {
+  const base = {
+    id: 'std-1',
+    description: 'Pump',
+    unit: 'ea',
+    aliases: [],
+    sourceItems: [],
+    sourceBoqCount: 0,
+    createdAt: '2026-07-13T00:00:00.000Z',
+    updatedAt: '2026-07-13T00:00:00.000Z',
+  }
+  const first = mergeStandardSourceItems(base, {
+    boqId: 'boq-1', sectionIndex: 0, itemId: 'item-1', sourceDescription: 'Pump one',
+  }, '2026-07-13T01:00:00.000Z')
+  const second = mergeStandardSourceItems(first, {
+    boqId: 'boq-1', sectionIndex: 0, itemId: 'item-2', sourceDescription: 'Pump two',
+  }, '2026-07-13T02:00:00.000Z')
+  const duplicate = mergeStandardSourceItems(second, {
+    boqId: 'boq-1', sectionIndex: 0, itemId: 'item-2', sourceDescription: 'Pump two',
+  }, '2026-07-13T03:00:00.000Z')
+
+  assert.deepEqual(duplicate.sourceItems?.map((source) => source.itemId), ['item-1', 'item-2'])
+})
+
 test('computeBoqStdStatus returns none, partial, and complete based on matched items', () => {
   assert.equal(computeBoqStdStatus([{ header: 'Empty', items: [] }]), 'none')
   assert.equal(

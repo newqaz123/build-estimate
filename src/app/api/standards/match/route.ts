@@ -3,6 +3,11 @@ import { auth } from '@/lib/auth'
 import { runTransaction } from '@/lib/db'
 import type { Boq, BoqItem } from '@/lib/boq-schema'
 import type { StandardEntry, StandardSourceItem } from '@/lib/standard-schema'
+import {
+  getBoqItemRequestIdentity,
+  parseBoqItemRequestIdentity,
+  resolveBoqItemIdentity,
+} from '@/lib/boq-item-identity'
 import { computeBoqStdStatus } from '../[id]/route'
 import { applyStandardToBoqItem, mergeStandardSourceItems, normalizeStandardEntry } from '../route'
 
@@ -11,7 +16,8 @@ type MatchConfidence = NonNullable<BoqItem['stdConfidence']>
 type ExistingStandardPayload = {
   boqId: string
   sectionIndex: number
-  itemCode: string
+  itemId?: string
+  itemCode?: string
   standardId: string
   confidence: MatchConfidence
 }
@@ -19,7 +25,8 @@ type ExistingStandardPayload = {
 type NewStandardPayload = {
   boqId: string
   sectionIndex: number
-  itemCode: string
+  itemId?: string
+  itemCode?: string
   newStandard: {
     description: string
     unit: string
@@ -54,12 +61,12 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json() as Record<string, unknown>
     const boqId = trimString(body.boqId)
-    const itemCode = trimString(body.itemCode)
+    const itemIdentity = parseBoqItemRequestIdentity(body)
     const sectionIndex = typeof body.sectionIndex === 'number' ? body.sectionIndex : Number.NaN
     const confidence = body.confidence
 
-    if (!boqId || !itemCode || !Number.isInteger(sectionIndex) || sectionIndex < 0 || !isConfidence(confidence)) {
-      return NextResponse.json({ error: 'boqId, sectionIndex, itemCode, and confidence are required' }, { status: 400 })
+    if (!boqId || !itemIdentity || !Number.isInteger(sectionIndex) || sectionIndex < 0 || !isConfidence(confidence)) {
+      return NextResponse.json({ error: 'boqId, sectionIndex, itemId or itemCode, and confidence are required' }, { status: 400 })
     }
 
     const now = new Date().toISOString()
@@ -83,16 +90,21 @@ export async function POST(request: NextRequest) {
         return { error: 'Section not found' as const, status: 400 }
       }
 
-      const itemIndex = section.items.findIndex((candidate) => candidate.code === itemCode)
-      if (itemIndex < 0) {
+      const resolution = resolveBoqItemIdentity(section.items, itemIdentity)
+      if (resolution.status === 'ambiguous') {
+        return { error: 'BOQ item identity is ambiguous' as const, status: 400 }
+      }
+      if (resolution.status !== 'found') {
         return { error: 'BOQ item not found' as const, status: 400 }
       }
+      const itemIndex = resolution.index
 
       const currentItem = section.items[itemIndex]!
+      const resolvedIdentity = getBoqItemRequestIdentity(currentItem)
       const sourceItem: StandardSourceItem = {
         boqId,
         sectionIndex,
-        itemCode,
+        ...resolvedIdentity,
         sourceDescription: currentItem.sourceDesc ?? currentItem.desc,
       }
 
