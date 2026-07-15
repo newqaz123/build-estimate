@@ -11,27 +11,13 @@ import { ProtoBadge } from "@/components/proto-badge"
 import { ProtoFilterChip } from "@/components/proto-filter-chip"
 import { ProtoDataTable } from "@/components/proto-data-table"
 import { ProtoPagination } from "@/components/proto-pagination"
+import { buildBoqCsv } from "@/lib/boq-csv"
 
 const typeFilters = ["All", "Structural", "MEP", "Finishing"] as const
 const statusFilters = ["Draft", "Active", "Review", "Approved", "Parsed"] as const
 
-function csvCell(value: string | number): string {
-  return `"${String(value).replace(/"/g, '""')}"`
-}
-
 function exportBoqCsv(boq: Boq): void {
-  const items = boq.sections.flatMap((section) => section.items)
-  const includeCode = items.some((item) => item.code.trim().length > 0)
-  const headers = [...(includeCode ? ["Code"] : []), "Description", "Unit", "Qty", "Rate", "Total"]
-  const rows = items.map((item) => [
-    ...(includeCode ? [item.code] : []),
-    item.desc,
-    item.unit,
-    item.qty,
-    item.rate,
-    item.total,
-  ])
-  const csv = [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n")
+  const csv = buildBoqCsv(boq)
   const blob = new Blob([csv], { type: "text/csv" })
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement("a")

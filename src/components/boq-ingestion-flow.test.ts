@@ -55,11 +55,11 @@ test('review embeds the authenticated source PDF and does not manufacture source
 test('review exposes only normalized editable fields and derived approval blockers', () => {
   assert.doesNotMatch(reviewSource, />Code<|Code for item/)
   assert.doesNotMatch(reviewSource, />Type<|Type for item/)
-  assert.match(reviewSource, /verifyBoqLocally/)
+  assert.match(reviewSource, /buildReviewVerification/)
   assert.match(reviewSource, /useMemo/)
   assert.match(reviewSource, /value="Unclassified"/)
   assert.match(reviewSource, /verification\.hasBlockingIssues/)
-  assert.match(reviewSource, /item\.id \?\?/)
+  assert.match(reviewSource, /key=\{reviewItemKey\(boq\.id, item, idx\)\}/)
 })
 
 test('standardization review hides legacy item codes while retaining normalized matching', () => {
@@ -68,9 +68,15 @@ test('standardization review hides legacy item codes while retaining normalized 
   assert.match(standardizationSource, /s\.unit\.toLowerCase\(\) === itemUnit/)
 })
 
-test('BOQ list CSV includes the legacy Code column only when at least one code exists', () => {
-  assert.match(boqsPageSource, /const includeCode = items\.some/)
-  assert.match(boqsPageSource, /includeCode \? \["Code"\] : \[\]/)
+test('BOQ list uses the shared behavior-tested CSV builder', () => {
+  assert.match(boqsPageSource, /buildBoqCsv\(boq\)/)
+})
+
+test('a failed review save reports the safe error without resetting edited items', () => {
+  const approveSource = reviewSource.slice(reviewSource.indexOf('const handleApprove'))
+  const catchBlock = approveSource.match(/catch \(error\) \{([\s\S]*?)\} finally \{/)?.[1] ?? ''
+  assert.match(catchBlock, /setSaveError\(message\)/)
+  assert.doesNotMatch(catchBlock, /setItems|setVendor|setProject|setWorkType|setDate/)
 })
 
 test('BOQ detail supplies match context so an unmatched item can be added to the catalog', () => {

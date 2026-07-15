@@ -13,8 +13,13 @@ import {
 import { StandardizationReview } from "./standardization-review"
 import { Check, Eye, ExternalLink, Loader2, TriangleAlert, X } from "lucide-react"
 import { toast } from "sonner"
-import { verifyBoqLocally } from "@/lib/boq-ingestion"
 import type { Boq, BoqItem, WorkType } from "@/lib/boq-schema"
+import {
+  buildReviewVerification,
+  reviewItemKey,
+  updateReviewItem,
+  type ReviewItemField,
+} from "@/lib/boq-review-state"
 
 interface ReviewPanelProps {
   boq: Boq
@@ -65,15 +70,13 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
     }
     return counts
   }, [items])
-  const verification = useMemo(() => verifyBoqLocally({
+  const verification = useMemo(() => buildReviewVerification(boq, {
     vendor,
     project,
     workType,
     date,
-    sections: [{ header: "Parsed Items", items }],
-    grandTotal,
-    sourceTotal: boq.sourceTotal,
-  }), [boq.sourceTotal, date, grandTotal, items, project, vendor, workType])
+    items,
+  }), [boq, date, items, project, vendor, workType])
   const blockingIssues = verification.issues.filter((issue) => issue.severity === "blocking")
   const busy = verifyLoading || approveLoading
 
@@ -115,14 +118,9 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
     return () => window.removeEventListener("keydown", handleKeyDown)
   }, [busy, onClose])
 
-  const handleItemChange = useCallback((idx: number, field: keyof BoqItem, value: string | number) => {
+  const handleItemChange = useCallback((idx: number, field: ReviewItemField, value: string | number) => {
     setSaveError(null)
-    setItems((current) => current.map((item, itemIndex) => {
-      if (itemIndex !== idx) return item
-      const next = { ...item, [field]: value }
-      if (field === "qty" || field === "rate") next.total = next.qty * next.rate
-      return next
-    }))
+    setItems((current) => updateReviewItem(current, idx, field, value))
   }, [])
 
   const handleVerify = async () => {
@@ -275,7 +273,7 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
                     const rowKey = sourceRowKey(item)
                     const showComponent = Boolean(rowKey && (sourceRowCounts.get(rowKey) ?? 0) > 1 && item.costComponent)
                     return (
-                      <tr key={item.id ?? `${rowKey ?? "row"}-${item.desc}-${item.unit}-${idx}`} data-ri={idx}>
+                      <tr key={reviewItemKey(boq.id, item, idx)} data-ri={idx}>
                         <td>
                           <Input aria-label={`Description for item ${idx + 1}`} value={item.desc} onChange={(event) => handleItemChange(idx, "desc", event.target.value)} />
                           {showComponent ? <span className="review-component-badge">{item.costComponent}</span> : null}
