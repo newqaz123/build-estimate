@@ -1,6 +1,11 @@
 import { NextRequest } from 'next/server'
 import { auth } from '@/lib/auth'
-import { deleteSourcePdf, isSourceObjectNotFound } from '@/lib/boq-source-storage'
+import {
+  deleteSourcePdf,
+  isSourceObjectNotFound,
+  loadSourcePdf,
+  saveSourcePdf,
+} from '@/lib/boq-source-storage'
 import { verifyBoqLocally } from '@/lib/boq-ingestion'
 import { getDocument, updateDocument, deleteDocument } from '@/lib/db'
 import type { Boq } from '@/lib/boq-schema'
@@ -12,7 +17,10 @@ interface BoqDetailDependencies {
   getBoq(id: string): Promise<Boq | null>
   updateBoq(id: string, updates: Record<string, unknown>): Promise<void>
   deleteBoq(id: string): Promise<void>
+  loadSource(path: string): Promise<Buffer>
   deleteSource(path: string): Promise<void>
+  saveSource(path: string, bytes: Uint8Array): Promise<void>
+  logError(message: string, error: unknown): void
 }
 
 function computeTotals(sections: unknown) {
@@ -73,7 +81,10 @@ export function createBoqDetailHandlers(dependencies: BoqDetailDependencies) {
       if (body.vendorId !== undefined) updates.vendorId = body.vendorId
       if (body.workType !== undefined) {
         if (!['Structural', 'MEP', 'Finishing', 'Unclassified'].includes(body.workType)) {
-          return Response.json({ error: 'workType must be Structural, MEP, or Finishing' }, { status: 400 })
+          return Response.json(
+            { error: 'workType must be Structural, MEP, Finishing, or Unclassified' },
+            { status: 400 },
+          )
         }
         updates.workType = body.workType
       }
@@ -119,24 +130,53 @@ export function createBoqDetailHandlers(dependencies: BoqDetailDependencies) {
       const existing = await dependencies.getBoq(id)
       if (!existing) return Response.json({ error: 'BOQ not found' }, { status: 404 })
 
-      if (existing.sourceStoragePath) {
+      let cachedSource: Buffer | null = null
+      const sourcePath = existing.sourceStoragePath
+      if (sourcePath) {
         try {
-          await dependencies.deleteSource(existing.sourceStoragePath)
+          cachedSource = await dependencies.loadSource(sourcePath)
         } catch (error) {
           if (!isSourceObjectNotFound(error)) {
-            console.error('Error deleting BOQ source:', error)
+            dependencies.logError('Error caching BOQ source before deletion:', error)
             return Response.json(
               { error: 'The BOQ source could not be deleted. The BOQ was not deleted.' },
               { status: 500 },
             )
           }
         }
+
+        if (cachedSource) {
+          try {
+            await dependencies.deleteSource(sourcePath)
+          } catch (error) {
+            if (!isSourceObjectNotFound(error)) {
+              dependencies.logError('Error deleting BOQ source:', error)
+              return Response.json(
+                { error: 'The BOQ source could not be deleted. The BOQ was not deleted.' },
+                { status: 500 },
+              )
+            }
+          }
+        }
       }
 
-      await dependencies.deleteBoq(id)
+      try {
+        await dependencies.deleteBoq(id)
+      } catch (error) {
+        if (sourcePath && cachedSource) {
+          try {
+            await dependencies.saveSource(sourcePath, cachedSource)
+          } catch (restoreError) {
+            dependencies.logError('Error restoring BOQ source after Firestore deletion failure:', restoreError)
+          }
+        }
+        dependencies.logError('Error deleting BOQ:', error)
+        return Response.json({ error: 'Internal server error' }, { status: 500 })
+      }
+
       return Response.json({ success: true })
     } catch (error) {
-      console.error('Error deleting BOQ:', error)
+      dependencies.logError('Error deleting BOQ:', error)
       return Response.json({ error: 'Internal server error' }, { status: 500 })
     }
   }
@@ -149,7 +189,10 @@ const handlers = createBoqDetailHandlers({
   getBoq: (id) => getDocument<Boq>('boqs', id),
   updateBoq: (id, updates) => updateDocument('boqs', id, updates),
   deleteBoq: (id) => deleteDocument('boqs', id),
+  loadSource: loadSourcePdf,
   deleteSource: deleteSourcePdf,
+  saveSource: saveSourcePdf,
+  logError: (message, error) => { console.error(message, error) },
 })
 
 export async function GET(request: NextRequest, context: RouteContext) {

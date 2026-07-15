@@ -14,7 +14,11 @@ interface SourceHandlerDependencies {
 }
 
 function encodedFilename(filename: string): string {
-  return encodeURIComponent(filename).replace(/[!'()*]/g, (character) =>
+  const unicodeSafe = Array.from(filename, (character) => {
+    const code = character.charCodeAt(0)
+    return character.length === 1 && code >= 0xD800 && code <= 0xDFFF ? '\uFFFD' : character
+  }).join('')
+  return encodeURIComponent(unicodeSafe).replace(/[!'()*]/g, (character) =>
     `%${character.charCodeAt(0).toString(16).toUpperCase()}`)
 }
 
