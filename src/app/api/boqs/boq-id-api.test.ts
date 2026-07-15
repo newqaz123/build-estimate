@@ -2,8 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import type { Boq, BoqItem } from '@/lib/boq-schema'
-import { createBoqDetailHandlers } from './[id]/route'
-import { createSourceHandler } from './[id]/source/route'
+import { createBoqDetailHandlers } from './[id]/handler'
+import { createSourceHandler } from './[id]/source/handler'
 
 function sourceBoq(overrides: Partial<Boq> = {}): Boq {
   return {

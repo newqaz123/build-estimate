@@ -16,8 +16,8 @@ import {
   getAllowedDoclingOrigins,
   parsePdfWithDocling,
 } from '@/lib/docling-client'
-import { createImportHandler } from './route'
-import { createDoclingParseHandler } from '../../docling/parse/route'
+import { createImportHandler } from './handler'
+import { createDoclingParseHandler } from '../../docling/parse/handler'
 
 function validDoclingPayload(): DoclingResultV2 {
   return {

@@ -26,9 +26,13 @@ test('BOQ upload uses the atomic multipart import API and consumes its returned 
 
 test('atomic BOQ import route accepts multipart input without a browser-side sidecar upload', () => {
   const routeUrl = new URL('../app/api/boqs/import/route.ts', import.meta.url)
+  const handlerUrl = new URL('../app/api/boqs/import/handler.ts', import.meta.url)
   assert.equal(existsSync(routeUrl), true)
+  assert.equal(existsSync(handlerUrl), true)
   const routeSource = readFileSync(routeUrl, 'utf8')
-  assert.match(routeSource, /await request\.formData\(\)/)
+  const handlerSource = readFileSync(handlerUrl, 'utf8')
+  assert.match(routeSource, /createImportHandler/)
+  assert.match(handlerSource, /await request\.formData\(\)/)
   assert.doesNotMatch(uploadSource, /sidecarForm\.append/)
 })
 
