@@ -10,6 +10,7 @@ import { toast } from "sonner"
 import { ChevronLeft, Search, Sparkles, Save, FileDown } from "lucide-react"
 import { ProtoBadge } from "@/components/proto-badge"
 import type { Boq, BoqItem } from "@/lib/boq-schema"
+import { getBoqItemIdentityKey, getBoqItemRequestIdentity } from "@/lib/boq-item-identity"
 
 type EditsMap = Record<string, Record<string, string | number | undefined>>
 
@@ -63,6 +64,8 @@ export default function BoqDetailPage() {
   const [catalogMatchTarget, setCatalogMatchTarget] = useState<{
     si: number
     ii: number
+    itemId?: string
+    itemCode?: string
     desc: string
     unit: string
   } | null>(null)
@@ -187,6 +190,7 @@ export default function BoqDetailPage() {
     setCatalogMatchTarget({
       si,
       ii,
+      ...getBoqItemRequestIdentity(item),
       desc: (edited?.desc as string) || item.desc,
       unit: (edited?.unit as string) || item.unit,
     })
@@ -245,7 +249,7 @@ export default function BoqDetailPage() {
       section.items.forEach((item) => {
         rows.push([
           section.header,
-          item.code,
+          item.code ?? "",
           item.desc,
           item.unit || "",
           String(item.qty ?? ""),
@@ -310,7 +314,7 @@ export default function BoqDetailPage() {
               if (search) {
                 const q = search.toLowerCase()
                 const desc = (edited.desc as string) || item.desc
-                const code = (edited.code as string) || item.code
+                const code = (edited.code as string) || item.code || ""
                 if (!desc.toLowerCase().includes(q) && !code.toLowerCase().includes(q)) return false
               }
               return true
@@ -484,7 +488,7 @@ export default function BoqDetailPage() {
 
                       return (
                         <tr
-                          key={`${display.code}-${ii}`}
+                          key={getBoqItemIdentityKey(item) ?? `${si}-${ii}`}
                           data-item-id={key}
                           className={`group border-b border-border last:border-b-0 hover:bg-muted/20 transition-colors ${
                             hasEdits ? "bg-[#eab308]/6" : ""
@@ -684,6 +688,13 @@ export default function BoqDetailPage() {
           itemUnit={catalogMatchTarget.unit}
           onMatch={handleCatalogMatch}
           onClose={() => setCatalogMatchTarget(null)}
+          matchContext={{
+            boqId: id,
+            sectionIndex: catalogMatchTarget.si,
+            ...(catalogMatchTarget.itemId
+              ? { itemId: catalogMatchTarget.itemId }
+              : { itemCode: catalogMatchTarget.itemCode }),
+          }}
         />
       )}
     </div>

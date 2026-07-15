@@ -113,8 +113,12 @@ function matchItems(boqs: Boq[]): MatchedRow[] {
       return match
     })
 
+    const sourceIdentity = items
+      .map((item) => `${item.boqId}:${item.id ?? item.code ?? ''}`)
+      .toSorted()
+      .join('|')
     rows.push({
-      id: "row-" + desc.replace(/[^a-z0-9]/gi, "-").slice(0, 40),
+      id: `row-${encodeURIComponent(sourceIdentity)}`,
       desc,
       unit,
       items: rowItems,

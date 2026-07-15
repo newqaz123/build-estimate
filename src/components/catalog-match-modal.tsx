@@ -7,14 +7,22 @@ import { Button } from "@/components/ui/button"
 import { Search } from "lucide-react"
 import type { StandardEntry } from "@/lib/standard-schema"
 
+interface MatchContext {
+  boqId: string
+  sectionIndex: number
+  itemId?: string
+  itemCode?: string
+}
+
 interface Props {
   itemDesc: string
   itemUnit: string
   onMatch: (standardId: string, standardDesc: string) => void
   onClose: () => void
+  matchContext?: MatchContext
 }
 
-export function CatalogMatchModal({ itemDesc, itemUnit, onMatch, onClose }: Props) {
+export function CatalogMatchModal({ itemDesc, itemUnit, onMatch, onClose, matchContext }: Props) {
   const [open, setOpen] = useState(true)
   const [standards, setStandards] = useState<StandardEntry[]>([])
   const [filtered, setFiltered] = useState<StandardEntry[]>([])
@@ -52,10 +60,18 @@ export function CatalogMatchModal({ itemDesc, itemUnit, onMatch, onClose }: Prop
     setSelected(null)
   }, [search, standards])
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (!selected) return
     const entry = standards.find((s) => s.id === selected)
     if (!entry) return
+    if (matchContext) {
+      const response = await fetch('/api/standards/match', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...matchContext, standardId: entry.id, confidence: 'manual' }),
+      })
+      if (!response.ok) return
+    }
     onMatch(entry.id, entry.description)
     setOpen(false)
   }
@@ -133,7 +149,7 @@ export function CatalogMatchModal({ itemDesc, itemUnit, onMatch, onClose }: Prop
               <Button variant="outline" onClick={handleClose}>
                 Cancel
               </Button>
-              <Button onClick={handleConfirm} disabled={!selected}>
+              <Button onClick={() => void handleConfirm()} disabled={!selected}>
                 Apply Match
               </Button>
             </div>

@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { getDocument, updateDocument } from '@/lib/db'
 import type { Boq, BoqItem } from '@/lib/boq-schema'
+import { parseBoqItemRequestIdentity, resolveBoqItemIdentity } from '@/lib/boq-item-identity'
+
+type BoqItemPatch = Partial<BoqItem> & { itemId?: string; itemCode?: string }
 
 function computeTotals(sections: Boq['sections']) {
   const totalItems = sections.reduce((sum, s) => sum + s.items.length, 0)
@@ -28,7 +31,7 @@ export async function PATCH(
     const body = await request.json()
     const { sectionIndex, items } = body as {
       sectionIndex: number
-      items: Partial<BoqItem>[]
+      items: BoqItemPatch[]
     }
 
     if (sectionIndex === undefined || !Array.isArray(items)) {
@@ -39,11 +42,33 @@ export async function PATCH(
       return NextResponse.json({ error: 'Invalid sectionIndex' }, { status: 400 })
     }
 
+    const updatesByIndex = new Map<number, BoqItemPatch>()
+    for (const update of items) {
+      const identity = parseBoqItemRequestIdentity(update as Record<string, unknown>)
+      if (!identity) {
+        return NextResponse.json({ error: 'Each item update requires a valid itemId or itemCode' }, { status: 400 })
+      }
+      const resolution = resolveBoqItemIdentity(boq.sections[sectionIndex].items, identity)
+      if (resolution.status === 'ambiguous') {
+        return NextResponse.json({ error: 'BOQ item identity is ambiguous' }, { status: 400 })
+      }
+      if (resolution.status !== 'found') {
+        return NextResponse.json({ error: 'BOQ item not found' }, { status: 400 })
+      }
+      if (updatesByIndex.has(resolution.index)) {
+        return NextResponse.json({ error: 'Duplicate BOQ item update' }, { status: 400 })
+      }
+      updatesByIndex.set(resolution.index, update)
+    }
+
     const section = { ...boq.sections[sectionIndex] }
-    section.items = section.items.map((existing) => {
-      const update = items.find((i) => i.code === existing.code)
+    section.items = section.items.map((existing, itemIndex) => {
+      const update = updatesByIndex.get(itemIndex)
       if (!update) return existing
-      return { ...existing, ...update }
+      const changes = { ...update }
+      delete changes.itemId
+      delete changes.itemCode
+      return { ...existing, ...changes }
     })
 
     const updatedSections = [...boq.sections]

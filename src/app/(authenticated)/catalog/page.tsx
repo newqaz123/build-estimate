@@ -9,12 +9,14 @@ import { Search, Plus, Check, X, Pencil, Trash2, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 import type { Boq } from "@/lib/boq-schema"
 import type { StandardEntry } from "@/lib/standard-schema"
+import { getBoqItemIdentityKey, getBoqItemRequestIdentity } from "@/lib/boq-item-identity"
 
 interface ReviewItem {
   boqId: string
   boqProject: string
   sectionIndex: number
-  code: string
+  id?: string
+  code?: string
   desc: string
   unit: string
   stdStatus: string
@@ -64,6 +66,7 @@ export default function CatalogPage() {
                 boqId: boq.id,
                 boqProject: boq.project,
                 sectionIndex: si,
+                id: item.id,
                 code: item.code,
                 desc: item.desc,
                 unit: item.unit,
@@ -90,7 +93,7 @@ export default function CatalogPage() {
   const unmatched = reviewItems.filter((i) => i.stdStatus === "unmatched").length
 
   const handleAccept = async (item: ReviewItem) => {
-    const key = `${item.boqId}-${item.sectionIndex}-${item.code}`
+    const key = `${item.boqId}-${item.sectionIndex}-${getBoqItemIdentityKey(item) ?? "missing"}`
     setAcceptingIds((prev) => new Set(prev).add(key))
     try {
       const res = await fetch(`/api/boqs/${item.boqId}/items`, {
@@ -98,7 +101,7 @@ export default function CatalogPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sectionIndex: item.sectionIndex,
-          items: [{ code: item.code, stdStatus: "matched" }],
+          items: [{ ...getBoqItemRequestIdentity(item), stdStatus: "matched" }],
         }),
       })
       if (!res.ok) throw new Error("Failed to accept")
@@ -116,7 +119,7 @@ export default function CatalogPage() {
   }
 
   const handleReject = async (item: ReviewItem) => {
-    const key = `${item.boqId}-${item.sectionIndex}-${item.code}`
+    const key = `${item.boqId}-${item.sectionIndex}-${getBoqItemIdentityKey(item) ?? "missing"}`
     setAcceptingIds((prev) => new Set(prev).add(key))
     try {
       const res = await fetch(`/api/boqs/${item.boqId}/items`, {
@@ -124,7 +127,7 @@ export default function CatalogPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sectionIndex: item.sectionIndex,
-          items: [{ code: item.code, stdStatus: "unmatched" }],
+          items: [{ ...getBoqItemRequestIdentity(item), stdStatus: "unmatched" }],
         }),
       })
       if (!res.ok) throw new Error("Failed to reject")
@@ -330,7 +333,7 @@ export default function CatalogPage() {
                 ]}
               >
                 {reviewItems.map((item, i) => {
-                  const key = `${item.boqId}-${item.sectionIndex}-${item.code}`
+                  const key = `${item.boqId}-${item.sectionIndex}-${getBoqItemIdentityKey(item) ?? i}`
                   const isAccepting = acceptingIds.has(key)
                   return (
                     <tr key={key} data-od-id={`review-item-${i}`}>
