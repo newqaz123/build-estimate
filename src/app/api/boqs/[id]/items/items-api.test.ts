@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import type { Boq, BoqItem } from '@/lib/boq-schema'
 import type { StandardEntry } from '@/lib/standard-schema'
-import { applyBoqItemUpdates, countBoqStandardLinks, parseUpdateGroups } from './route'
+import { applyBoqItemUpdates, countBoqStandardLinks, parseUpdateGroups } from './item-updates'
 
 const timestamps = {
   createdAt: '2026-07-13T00:00:00.000Z',
