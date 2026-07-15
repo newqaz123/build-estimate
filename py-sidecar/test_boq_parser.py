@@ -220,6 +220,166 @@ Subject: Electrical installation"""
             ],
         )
 
+    def test_normalizes_actual_eastern_four_column_cost_groups_and_header_metadata(self):
+        rows = [
+            [
+                "TO.", "Mr. Somboon AJINOMOTO CO., (THAILAND) LTD.", "", "", "", "",
+                "QUOTATION NO. DATE DELIVERY TO", "", "", "",
+                ": ETG.2026/AYT001_1 : 11 June 2026 : AJINOMOTO E&M",
+            ],
+            [
+                "NO.", "DESCRIPTION", "MATERIAL COST", "MATERIAL COST", "MATERIAL COST",
+                "MATERIAL COST", "LABOUR COST", "LABOUR COST", "LABOUR COST", "LABOUR COST",
+                "AMOUNT",
+            ],
+            [
+                "NO.", "DESCRIPTION", "Q'TY", "Q'TY", "UNIT", "TOTAL", "Q'TY", "Q'TY",
+                "UNIT", "TOTAL", "AMOUNT",
+            ],
+            [
+                "", "PUMPS, POTS AND PIPE INSTALLATION WORK FOR TOC 4200 (MAT' FOR 3 SETs)",
+                "PUMPS, POTS AND PIPE INSTALLATION WORK FOR TOC 4200 (MAT' FOR 3 SETs)",
+                "PUMPS, POTS AND PIPE INSTALLATION WORK FOR TOC 4200 (MAT' FOR 3 SETs)",
+                "PUMPS, POTS AND PIPE INSTALLATION WORK FOR TOC 4200 (MAT' FOR 3 SETs)",
+                "PUMPS, POTS AND PIPE INSTALLATION WORK FOR TOC 4200 (MAT' FOR 3 SETs)",
+                "PUMPS, POTS AND PIPE INSTALLATION WORK FOR TOC 4200 (MAT' FOR 3 SETs)",
+                "PUMPS, POTS AND PIPE INSTALLATION WORK FOR TOC 4200 (MAT' FOR 3 SETs)",
+                "", "", "",
+            ],
+            ["1", "PIPE 1B BS1 L=6000", "3", "Pcs.", "1,781.00", "5,343.00", "", "", "", "", "5,343.00"],
+            ["2", "90 ELBOW 1B BS1", "36", "Pcs.", "41.00", "1,476.00", "72", "Db.", "260.00", "18,720.00", "20,196.00"],
+            ["", "", "", "", "", "", "", "", "SUB TOTAL", "SUB TOTAL", "25,539.00"],
+        ]
+        text = """EASTERN GROUP E.T.G. CO., LTD
+| QUOTATION NO. DATE DELIVERY TO | : ETG.2026/AYT001_1 : 11 June 2026 : AJINOMOTO E&M |
+PUMPS, POTS AND PIPE INSTALLATION WORK FOR TOC 4200 (MAT' FOR 3 SETs)"""
+
+        result = extract_boq_document([{"page": 1, "rows": rows}], text)
+        items = [item for section in result["sections"] for item in section["items"]]
+
+        self.assertEqual(
+            [(item["costComponent"], item["unit"], item["qty"], item["rate"], item["total"]) for item in items],
+            [
+                ("material", "Pcs.", 3.0, 1781.0, 5343.0),
+                ("material", "Pcs.", 36.0, 41.0, 1476.0),
+                ("labour", "Db.", 72.0, 260.0, 18720.0),
+            ],
+        )
+        self.assertEqual(result["metadata"]["project"]["value"], "PUMPS, POTS AND PIPE INSTALLATION WORK FOR TOC 4200 (MAT' FOR 3 SETs)")
+        self.assertEqual(result["metadata"]["date"]["value"], "2026-06-11")
+        self.assertEqual(result["sourceTotal"], 25539.0)
+
+    def test_normalizes_actual_surasak_single_row_cost_header(self):
+        rows = [
+            [
+                "No. Description", "Jeds.Material", "Q'ty.", "Unit.",
+                "Material cost.Unit/Price", "Material cost.Total/Price",
+                "Labour cost.Unit/Price", "Labour cost.Total/Price", "Total Price.",
+            ],
+            ["Modify stage floor", "", "", "", "", "", "", "", ""],
+            ["L-50x50x5t x6000L", "SS400", "1.0", "pcs.", "730.00", "730.00", "", "", "730.00"],
+            ["Fabrication&Installation", "SS400", "1.0", "lot.", "1,500.00", "1,500.00", "12,000.00", "12,000.00", "13,500.00"],
+            ["BallValve 2Bx 10K(Existing)", "", "1.0", "pcs.", "", "", "500.00", "500.00", "500.00"],
+            ["GRAND TOTAL", "", "", "", "", "", "", "", "47,000.00"],
+        ]
+        text = """SURASAK ENGINEERING CO.,LTD.
+Subject : MODIFY STAGE FLOOR & PIPE 4% NaOH FOR GH DISS TANK AT H4 PROCESS.
+Date :15 Jan 2026
+This price excluded vat 7%"""
+
+        result = extract_boq_document([{"page": 2, "rows": rows}], text)
+        items = [item for section in result["sections"] for item in section["items"]]
+
+        self.assertEqual(
+            [(item["desc"], item["unit"], item["qty"], item["rate"], item["total"], item["costComponent"]) for item in items],
+            [
+                ("L-50x50x5t x6000L", "pcs.", 1.0, 730.0, 730.0, "material"),
+                ("Fabrication&Installation", "lot.", 1.0, 13500.0, 13500.0, "combined"),
+                ("BallValve 2Bx 10K(Existing)", "pcs.", 1.0, 500.0, 500.0, "labour"),
+            ],
+        )
+        self.assertEqual(result["metadata"]["project"]["value"], "MODIFY STAGE FLOOR & PIPE 4% NaOH FOR GH DISS TANK AT H4 PROCESS.")
+        self.assertEqual(result["metadata"]["date"]["value"], "2026-01-15")
+        self.assertEqual(result["sourceTotal"], 47000.0)
+
+    def test_infers_blank_shared_unit_header_from_populated_surasak_unit_column(self):
+        rows = [
+            [
+                "Description", "Spac.Material", "Q'ty", "",
+                "Material cost.Unit/Price", "Material cost.Total/Price",
+                "Labour cost.Unit/Price", "Labour cost.Total/Price", "Total Price.",
+            ],
+            ["Pipe3BxSch10", "SUS316L", "1.0", "m.", "1,650.00", "1,650.00", "", "-", "1,650.00"],
+            ["Short PipeNpple 3Bx Sch10", "SUS316L", "1.0", "pcs.", "400.00", "400.00", "300.00", "300.00", "700.00"],
+        ]
+
+        items = extract_boq_document([{"page": 2, "rows": rows}], "")["sections"][0]["items"]
+
+        self.assertEqual(
+            [(item["desc"], item["unit"], item["qty"], item["rate"], item["total"], item["costComponent"]) for item in items],
+            [
+                ("Pipe3BxSch10", "m.", 1.0, 1650.0, 1650.0, "material"),
+                ("Short PipeNpple 3Bx Sch10", "pcs.", 1.0, 700.0, 700.0, "combined"),
+            ],
+        )
+
+    def test_repeated_description_with_distinct_pricing_is_not_a_section(self):
+        rows = [
+            ["NO.", "DESCRIPTION", "MATERIAL COST", "MATERIAL COST", "MATERIAL COST", "MATERIAL COST", "LABOUR COST", "LABOUR COST", "LABOUR COST", "AMOUNT"],
+            ["NO.", "DESCRIPTION", "Q'TY", "Q'TY", "UNIT", "TOTAL", "Q'TY", "UNIT", "TOTAL", "AMOUNT"],
+            ["", "ON-OFF VALVE INSTALLATION WORK FOR BDN PROCESS", "ON-OFF VALVE INSTALLATION WORK FOR BDN PROCESS", "ON-OFF VALVE INSTALLATION WORK FOR BDN PROCESS", "ON-OFF VALVE INSTALLATION WORK FOR BDN PROCESS", "ON-OFF VALVE INSTALLATION WORK FOR BDN PROCESS", "", "", "", ""],
+            ["6", "MANUAL VALVE RELOCATION WORK", "MANUAL VALVE RELOCATION WORK", "MANUAL VALVE RELOCATION WORK", "", "", "4 Lot", "1,500.00", "6,000.00", "6,000.00"],
+        ]
+
+        result = extract_boq_document([{"page": 1, "rows": rows}], "")
+        items = [item for section in result["sections"] for item in section["items"]]
+
+        self.assertEqual(
+            [(item["desc"], item["unit"], item["qty"], item["rate"], item["total"], item["costComponent"]) for item in items],
+            [("MANUAL VALVE RELOCATION WORK", "Lot", 4.0, 1500.0, 6000.0, "labour")],
+        )
+
+    def test_normalizes_actual_np_civil_headers_and_uses_pre_discount_total_for_reconciliation(self):
+        rows = [
+            [
+                "ITEM.ITEM", "DESCRIPTION.DESCRIPTION", "UNIT.UNIT", "Q'TY.Q'TY",
+                "UNIT COST.MATERIAL", "UNIT COST.TOTAL", "UNIT COST.LABOUR",
+                "UNIT COST.TOTAL", "AMOUNT.AMOUNT", "Remark.Remark",
+            ],
+            ["A.1", "Concrete Biomass", "", "", "", "", "", "", "", "Slab"],
+            ["", "Clearing Scarp & Adjust Leveling", "m2.", "61.00", "-", "-", "350.00", "21,350.00", "21,350.00", ""],
+            ["", "Crushed stone & Compaction ( 150 mm )", "m2.", "61.00", "192.00", "11,712.00", "98.00", "5,978.00", "17,690.00", ""],
+            ["SUB TOTAL", "SUB TOTAL", "SUB TOTAL", "SUB TOTAL", "", "", "", "", "231,440.00", ""],
+            ["OVERHEAD & PROFIT", "OVERHEAD & PROFIT", "OVERHEAD & PROFIT", "OVERHEAD & PROFIT", "", "", "", "", "46,288.00", ""],
+            ["TOTAL", "TOTAL", "TOTAL", "TOTAL", "", "", "", "", "277,728.00", ""],
+            ["DISCOUNT", "DISCOUNT", "DISCOUNT", "DISCOUNT", "", "", "", "", "728.00", ""],
+            ["GRAND TOTAL ( Exclude Vat. )", "GRAND TOTAL ( Exclude Vat. )", "GRAND TOTAL ( Exclude Vat. )", "GRAND TOTAL ( Exclude Vat. )", "", "", "", "", "277,000.00", ""],
+        ]
+        text = """No. : NP2C/AJI-AYT/GENERAL/202607003
+CONTRACTOR : N.P.CIVIL AND CONSTRUCTION CO.,LTD.
+PROJECT : Slab Concrete Biomass
+10/7/26"""
+
+        result = extract_boq_document([{"page": 2, "rows": rows}], text)
+        items = [item for section in result["sections"] for item in section["items"]]
+
+        self.assertEqual(
+            [(item["desc"], item["unit"], item["qty"], item["rate"], item["total"], item["costComponent"]) for item in items],
+            [
+                ("Clearing Scarp & Adjust Leveling", "m2.", 61.0, 350.0, 21350.0, "labour"),
+                ("Crushed stone & Compaction ( 150 mm )", "m2.", 61.0, 290.0, 17690.0, "combined"),
+                ("OVERHEAD & PROFIT", "L/S", 1.0, 46288.0, 46288.0, "lump_sum"),
+            ],
+        )
+        self.assertEqual(result["metadata"]["vendor"]["value"], "N.P.CIVIL AND CONSTRUCTION CO.,LTD.")
+        self.assertEqual(result["metadata"]["project"]["value"], "Slab Concrete Biomass")
+        self.assertEqual(result["metadata"]["date"]["value"], "2026-07-10")
+        self.assertEqual(result["sourceTotal"], 277728.0)
+        discount_warnings = [warning for warning in result["warnings"] if warning["code"] == "source_discount"]
+        self.assertEqual(len(discount_warnings), 1)
+        self.assertIn("728.00", discount_warnings[0]["message"])
+        self.assertIn("277,000.00", discount_warnings[0]["message"])
+
     def test_combines_shared_quantity_material_and_labour_rates(self):
         rows = [
             ["ITEM", "DESCRIPTION", "UNIT", "Q'TY", "MATERIAL", "TOTAL", "LABOUR", "TOTAL", "AMOUNT"],

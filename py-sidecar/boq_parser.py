@@ -46,7 +46,7 @@ def clean_cell(value: Any) -> str:
 
 
 def normalize_header(value: Any) -> str:
-    text = clean_cell(value).lower().replace(".", "")
+    text = clean_cell(value).lower().replace(".", " ")
     return re.sub(r"[^a-z0-9]+", " ", text).strip()
 
 
@@ -193,6 +193,12 @@ def extract_metadata(
         if normalized:
             date = _metadata_value(normalized, 0.98, source)
             break
+    if not date["value"]:
+        for line in lines:
+            normalized = _normalize_date(line, document_text)
+            if normalized:
+                date = _metadata_value(normalized, 0.78, line)
+                break
 
     work_type = _metadata_value("Unclassified", 0.2, "no matching work keywords")
     classified = _classify_work_type(project["value"])
@@ -237,6 +243,20 @@ def _matches_alias(header: str, aliases: tuple[str, ...]) -> bool:
 
 def _columns_from_headers(headers: list[str]) -> dict[str, int]:
     columns: dict[str, int] = {}
+    component_groups = {
+        name: [index for index, header in enumerate(headers) if name in normalize_header(header)]
+        for name in ("material", "labour")
+    }
+    for name, indexes in component_groups.items():
+        if len(indexes) not in (3, 4) or indexes != list(range(indexes[0], indexes[-1] + 1)):
+            continue
+        columns[f"{name}_qty"] = indexes[0]
+        if len(indexes) == 4:
+            columns[f"{name}_unit"] = indexes[1]
+            columns[f"{name}_rate"] = indexes[2]
+        else:
+            columns[f"{name}_rate"] = indexes[1]
+        columns[f"{name}_total"] = indexes[-1]
     last_component = ""
     for index, header in enumerate(headers):
         normalized = normalize_header(header)
@@ -248,12 +268,24 @@ def _columns_from_headers(headers: list[str]) -> dict[str, int]:
                 field = f"{component}_total"
             elif re.search(r"\b(?:qty|q ty|quantity|quant)\b", normalized):
                 field = f"{component}_qty"
+            elif re.search(r"\b(?:rate|price)\b|\bunit\s+cost\b", normalized):
+                field = f"{component}_rate"
+            elif re.search(r"\b(?:unit|uom)\b", normalized):
+                field = f"{component}_unit"
             else:
                 field = f"{component}_rate"
-            columns.setdefault(field, index)
+            if field.endswith("_rate") and re.search(r"\b(?:price|unit\s+cost)\b", normalized):
+                columns[field] = index
+            else:
+                columns.setdefault(field, index)
             last_component = component
             continue
-        if _matches_alias(normalized, HEADER_ALIASES["desc"]):
+        if last_component and re.search(r"\bunit\s+cost\s+total\b", normalized):
+            columns.setdefault(f"{last_component}_total", index)
+            continue
+        if _matches_alias(normalized, HEADER_ALIASES["desc"]) or re.match(
+            r"^(?:no|item)\s+description\b", normalized
+        ):
             columns.setdefault("desc", index)
         elif _matches_alias(normalized, HEADER_ALIASES["code"]):
             columns.setdefault("code", index)
@@ -272,14 +304,33 @@ def _columns_from_headers(headers: list[str]) -> dict[str, int]:
                 last_component = ""
             else:
                 columns.setdefault("total", index)
+    qty_index = columns.get("qty")
+    inferred_unit_index = qty_index + 1 if qty_index is not None else None
+    if (
+        "unit" not in columns
+        and inferred_unit_index is not None
+        and inferred_unit_index < len(headers)
+        and (
+            not normalize_header(headers[inferred_unit_index])
+            or normalize_header(headers[inferred_unit_index]) == normalize_header(headers[qty_index])
+        )
+        and any(
+            index > inferred_unit_index
+            for field, index in columns.items()
+            if field in {"rate", "total", "amount", "material_rate", "material_total", "labour_rate", "labour_total"}
+        )
+    ):
+        columns["unit"] = inferred_unit_index
     return columns
 
 
 def _find_document_header(rows: list[list[Any]]) -> tuple[int, dict[str, int]] | None:
     best: tuple[int, dict[str, int]] | None = None
+    best_score = (-1, -1)
     for start in range(min(8, len(rows))):
         for count in range(1, min(3, len(rows) - start) + 1):
-            columns = _columns_from_headers(flatten_headers(rows[start:start + count]))
+            headers = flatten_headers(rows[start:start + count])
+            columns = _columns_from_headers(headers)
             if "desc" not in columns:
                 continue
             has_costs = any(
@@ -288,8 +339,14 @@ def _find_document_header(rows: list[list[Any]]) -> tuple[int, dict[str, int]] |
             )
             if not has_costs:
                 continue
-            if best is None or len(columns) > len(best[1]):
+            detail_score = sum(bool(re.search(
+                r"\b(?:qty|q ty|quantity|unit|uom|rate|price|total|amount)\b",
+                normalize_header(header),
+            )) for header in headers)
+            score = (len(columns), detail_score)
+            if best is None or score > best_score:
                 best = (start + count, columns)
+                best_score = score
     return best
 
 
@@ -449,11 +506,25 @@ def classify_row(row: list[Any], columns: dict[str, int]) -> str:
         return "total"
     if DETAIL_ROW.match(description):
         return "detail"
+    letters = [character for character in description if character.isalpha()]
+    mostly_uppercase = bool(letters) and sum(character.isupper() for character in letters) / len(letters) >= 0.9
+    repeated_description = sum(clean_cell(cell) == description for cell in row) >= 2
+    distinct_pricing = any(
+        _has_number(value) and clean_cell(value) != description
+        for value in (
+            _cell(row, columns, "rate"), _cell(row, columns, "total"), _cell(row, columns, "amount"),
+            _cell(row, columns, "material_qty"), _cell(row, columns, "material_rate"),
+            _cell(row, columns, "material_total"), _cell(row, columns, "labour_qty"),
+            _cell(row, columns, "labour_rate"), _cell(row, columns, "labour_total"),
+        )
+    )
+    if description and mostly_uppercase and repeated_description and not distinct_pricing:
+        return "section"
     if _cost_specs(row, columns)[2]:
         return "item"
     source_code = _cell(row, columns, "code")
     if description and (
-        (description == description.upper() and re.search(r"[A-Z]", description))
+        mostly_uppercase
         or (source_code.isalpha() and len(source_code) <= 4)
         or re.match(r"^[A-Z]\s*[.)-]\s+", description, re.I)
     ):
@@ -467,6 +538,15 @@ def _select_source_total(
     candidate_list = list(candidates)
     if not candidate_list:
         return None
+    discounts = [value for kind, value, _ in candidate_list if kind == "discount"]
+    pre_discount_totals = [value for kind, value, _ in candidate_list if kind == "pre_discount"]
+    if discounts and pre_discount_totals:
+        return pre_discount_totals[-1]
+    pre_vat_totals = [
+        value for kind, value, _ in candidate_list if kind == "pre_vat"
+    ]
+    if pre_vat_totals:
+        return pre_vat_totals[-1]
     subtotals = [
         (value, is_trailing) for kind, value, is_trailing in candidate_list
         if kind == "subtotal"
@@ -479,16 +559,19 @@ def _select_source_total(
         ):
             return final_value
         return math.fsum(value for value, _ in subtotals)
-    pre_vat_totals = [
-        value for kind, value, _ in candidate_list if kind == "pre_vat"
-    ]
-    return pre_vat_totals[-1] if pre_vat_totals else None
+    return None
 
 
 def extract_boq_document(tables: Iterable[dict[str, Any]], document_text: str) -> dict[str, Any]:
     sections: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
     total_candidates: list[tuple[str, float, bool]] = []
+    discount_sources: list[tuple[float, dict[str, int]]] = []
+    document_excludes_vat = bool(re.search(
+        r"(?:price\s+)?exclud(?:e|es|ed|ing)\s+(?:of\s+)?vat|excl\.?\s*vat|vat\s+excluded",
+        document_text,
+        re.I,
+    ))
     for table_index, table in enumerate(tables, start=1):
         page = int(table.get("page") or 1)
         rows = [list(row) for row in table.get("rows", [])]
@@ -516,21 +599,26 @@ def extract_boq_document(tables: Iterable[dict[str, Any]], document_text: str) -
                 current_header = _cell(row, columns, "desc")
                 continue
             if row_class == "total":
-                total_label = _cell(row, columns, "desc")
+                row_text = " ".join(clean_cell(cell) for cell in row if clean_cell(cell))
+                total_label = _cell(row, columns, "desc") or row_text
                 total_text = _cell(row, columns, "total") or _cell(row, columns, "amount")
                 is_pre_vat = bool(re.search(
                     r"before\s+vat|pre[\s-]*vat|"
                     r"exclud(?:e|es|ed|ing)\s+(?:of\s+)?vat|excl\.?\s*vat|vat\s+excluded",
                     total_label,
                     re.I,
-                ))
+                )) or (document_excludes_vat and bool(re.search(r"grand\s+total", total_label, re.I)))
                 if _has_number(total_text) and not re.search(
-                    r"\b(?:discount|carried|brought)\b", total_label, re.I
+                    r"\b(?:carried|brought)\b", total_label, re.I
                 ) and (is_pre_vat or not re.search(r"\bvat\b", total_label, re.I)):
-                    if is_pre_vat:
+                    if re.search(r"\b(?:less\s+)?discount\b", total_label, re.I):
+                        kind = "discount"
+                    elif is_pre_vat:
                         kind = "pre_vat"
                     elif SUBTOTAL_ROW.match(total_label):
                         kind = "subtotal"
+                    elif re.match(r"^total(?:\s|$)", total_label, re.I):
+                        kind = "pre_discount"
                     else:
                         continue
                     is_trailing = (
@@ -539,6 +627,8 @@ def extract_boq_document(tables: Iterable[dict[str, Any]], document_text: str) -
                         and not boundary_since_subtotal
                     )
                     total_candidates.append((kind, parse_number(total_text), is_trailing))
+                    if kind == "discount":
+                        discount_sources.append((parse_number(total_text), source_ref))
                     if kind == "subtotal":
                         previous_subtotal_in_table = True
                         boundary_since_subtotal = False
@@ -562,6 +652,20 @@ def extract_boq_document(tables: Iterable[dict[str, Any]], document_text: str) -
             boundary_since_subtotal = True
             current_items.extend(normalize_cost_row(row, columns, source_ref))
         flush_section()
+    if discount_sources:
+        pre_discount_totals = [value for kind, value, _ in total_candidates if kind == "pre_discount"]
+        payable_totals = [value for kind, value, _ in total_candidates if kind == "pre_vat"]
+        if pre_discount_totals:
+            discount, source_ref = discount_sources[-1]
+            payable = payable_totals[-1] if payable_totals else pre_discount_totals[-1] - discount
+            warnings.append({
+                "code": "source_discount",
+                "message": (
+                    f"Source discount {discount:,.2f}; item reconciliation uses pre-discount total "
+                    f"{pre_discount_totals[-1]:,.2f}. Payable total is {payable:,.2f}."
+                ),
+                "sourceRef": source_ref,
+            })
     section_headers = [
         section["header"] for section in sections
         if not section["header"].startswith("Parsed Table ")
