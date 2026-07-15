@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  buildReviewFingerprint,
   buildReviewVerification,
   reviewItemKey,
   updateReviewItem,
@@ -47,4 +48,23 @@ test('fallback review keys stay stable when editable description and unit change
   assert.equal(before, 'boq-1-4')
   assert.equal(after, before)
   assert.equal(reviewItemKey('boq-1', item, 4), 'row-1')
+})
+
+test('suspicious zero values remain visible warnings without blocking approval', () => {
+  const result = buildReviewVerification(boq, {
+    vendor: 'Vendor', project: 'Project', workType: 'Structural', date: '2026-07-15',
+    items: [{ ...item, qty: 0, total: 0 }],
+  })
+  assert.equal(result.hasBlockingIssues, false)
+  assert.ok(result.issues.some((issue) => issue.severity === 'warning' && issue.message === 'qty is suspiciously zero'))
+})
+
+test('LLM verification fingerprint changes whenever reviewed metadata or items change', () => {
+  const edits = {
+    vendor: 'Vendor', project: 'Project', workType: 'Structural' as const,
+    date: '2026-07-15', items: [item],
+  }
+  const original = buildReviewFingerprint(edits)
+  assert.notEqual(buildReviewFingerprint({ ...edits, vendor: 'Edited' }), original)
+  assert.notEqual(buildReviewFingerprint({ ...edits, items: [{ ...item, rate: 6, total: 12 }] }), original)
 })

@@ -39,3 +39,18 @@ test('legacy codes add the Code column and preserve blank sibling cells', () => 
   assert.match(lines[1], /^"A-1",/)
   assert.match(lines[2], /^"",/)
 })
+
+test('text cells that could execute as spreadsheet formulas are neutralized before quoting', () => {
+  const csv = buildBoqCsv(boqWith([
+    { code: '=cmd', desc: '+SUM(A1:A2)', unit: '-1', },
+    { code: '@legacy', desc: '\tformula', unit: '\rformula' },
+  ]))
+  const lines = csv.split('\n')
+  assert.match(lines[1], /^"'=cmd","'\+SUM\(A1:A2\)","'-1",/)
+  assert.match(lines[2], /^"'@legacy","'\tformula","'\rformula",/)
+})
+
+test('CSV still escapes embedded quotes after formula neutralization', () => {
+  const csv = buildBoqCsv(boqWith([{ desc: '=say "hello"' }]))
+  assert.match(csv, /"'=say ""hello"""/)
+})

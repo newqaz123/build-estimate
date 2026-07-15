@@ -11,6 +11,16 @@ export interface ReviewEdits {
   items: BoqItem[]
 }
 
+export function buildReviewFingerprint(edits: ReviewEdits): string {
+  return JSON.stringify({
+    vendor: edits.vendor,
+    project: edits.project,
+    workType: edits.workType,
+    date: edits.date,
+    items: edits.items,
+  })
+}
+
 export function updateReviewItem(
   items: BoqItem[],
   index: number,

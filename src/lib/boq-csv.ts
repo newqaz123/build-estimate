@@ -1,7 +1,9 @@
 import type { Boq } from './boq-schema'
 
 function csvCell(value: string | number): string {
-  return `"${String(value).replace(/"/g, '""')}"`
+  const text = String(value)
+  const safe = typeof value === 'string' && /^[=+\-@\t\r]/.test(text) ? `'${text}` : text
+  return `"${safe.replace(/"/g, '""')}"`
 }
 
 export function buildBoqCsv(boq: Pick<Boq, 'sections'>): string {

@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useState } from "react"
-import { useDropzone } from "react-dropzone"
+import { useDropzone, type FileRejection } from "react-dropzone"
 import { toast } from "sonner"
 import {
   Dialog,
@@ -14,6 +14,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Upload, FileText } from "lucide-react"
 import type { Boq } from "@/lib/boq-schema"
+import { uploadRejectionMessage } from "@/lib/boq-upload"
 
 interface UploadModalProps {
   open: boolean
@@ -34,7 +35,6 @@ async function readError(response: Response, fallback: string): Promise<string> 
 
 export function UploadModal({ open, onOpenChange, onUploadComplete }: UploadModalProps) {
   const [file, setFile] = useState<File | null>(null)
-  const [notes, setNotes] = useState("")
   const [uploading, setUploading] = useState(false)
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
@@ -43,8 +43,14 @@ export function UploadModal({ open, onOpenChange, onUploadComplete }: UploadModa
     }
   }, [])
 
+  const onDropRejected = useCallback((rejections: FileRejection[]) => {
+    const errorCodes = rejections.flatMap((rejection) => rejection.errors.map((error) => error.code))
+    toast.error(uploadRejectionMessage(errorCodes))
+  }, [])
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
+    onDropRejected,
     accept: { "application/pdf": [".pdf"] },
     maxSize: 20 * 1024 * 1024,
     multiple: false,
@@ -72,7 +78,6 @@ export function UploadModal({ open, onOpenChange, onUploadComplete }: UploadModa
       onUploadComplete(boq)
       onOpenChange(false)
       setFile(null)
-      setNotes("")
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Upload failed")
     } finally {
@@ -123,18 +128,6 @@ export function UploadModal({ open, onOpenChange, onUploadComplete }: UploadModa
                 <p className="drop-zone-meta">PDF files only · Max 20 MB</p>
               </>
             )}
-          </div>
-
-          <div className="upload-notes-field">
-            <label htmlFor="boqNotes">Notes (optional)</label>
-            <textarea
-              id="boqNotes"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Any notes about this BOQ…"
-              className="proto-input"
-              disabled={uploading}
-            />
           </div>
 
           {uploading && (

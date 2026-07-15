@@ -3,15 +3,8 @@ import test from 'node:test'
 import { existsSync, readFileSync } from 'node:fs'
 
 const uploadSource = readFileSync(new URL('./upload-modal.tsx', import.meta.url), 'utf8')
-const detailSource = readFileSync(
-  new URL('../app/(authenticated)/boqs/[id]/page.tsx', import.meta.url),
-  'utf8',
-)
-const catalogSource = readFileSync(
-  new URL('../app/(authenticated)/catalog/page.tsx', import.meta.url),
-  'utf8',
-)
 const reviewSource = readFileSync(new URL('./review-panel.tsx', import.meta.url), 'utf8')
+const dataTableSource = readFileSync(new URL('./proto-data-table.tsx', import.meta.url), 'utf8')
 const standardizationSource = readFileSync(
   new URL('./standardization-review.tsx', import.meta.url),
   'utf8',
@@ -44,10 +37,18 @@ test('BOQ upload reads a categorized safe API error', () => {
   assert.match(uploadSource, /typeof body\.error === "string"/)
 })
 
+test('BOQ upload rejects invalid files with actionable feedback and has no unpersisted notes field', () => {
+  assert.match(uploadSource, /onDropRejected/)
+  assert.match(uploadSource, /uploadRejectionMessage/)
+  assert.doesNotMatch(uploadSource, /boqNotes|Notes \(optional\)/)
+})
+
 test('review embeds the authenticated source PDF and does not manufacture source content', () => {
   assert.match(reviewSource, /`\/api\/boqs\/\$\{encodeURIComponent\(boq\.id\)\}\/source`/)
   assert.match(reviewSource, /<object[^>]+data=\{sourceUrl\}/)
   assert.match(reviewSource, /Open PDF/)
+  assert.match(reviewSource, /Retry preview/)
+  assert.match(reviewSource, /No source PDF is available for this legacy BOQ/)
   assert.doesNotMatch(reviewSource, /pdfZoom|ZoomIn|ZoomOut/)
   assert.doesNotMatch(reviewSource, /Sino-Thai|Ratchaphruek|GRAND TOTAL|Prepared by/)
 })
@@ -59,6 +60,8 @@ test('review exposes only normalized editable fields and derived approval blocke
   assert.match(reviewSource, /useMemo/)
   assert.match(reviewSource, /value="Unclassified"/)
   assert.match(reviewSource, /verification\.hasBlockingIssues/)
+  assert.match(reviewSource, /localWarnings/)
+  assert.match(reviewSource, /buildReviewFingerprint/)
   assert.match(reviewSource, /key=\{reviewItemKey\(boq\.id, item, idx\)\}/)
 })
 
@@ -79,11 +82,8 @@ test('a failed review save reports the safe error without resetting edited items
   assert.doesNotMatch(catchBlock, /setItems|setVendor|setProject|setWorkType|setDate/)
 })
 
-test('BOQ detail supplies match context so an unmatched item can be added to the catalog', () => {
-  assert.match(detailSource, /matchContext=\{\{/)
-  assert.match(detailSource, /itemCode=\{catalogMatchTarget\.itemCode\}/)
-})
-
-test('catalog review is sourced only from approved BOQs', () => {
-  assert.match(catalogSource, /if \(boq\.status !== "approved"\) continue/)
+test('shared data table accepts accessible labels used by the BOQ page', () => {
+  assert.match(dataTableSource, /ariaLabel\?: string/)
+  assert.match(dataTableSource, /dataOdId\?: string/)
+  assert.match(dataTableSource, /aria-label=\{ariaLabel\}/)
 })

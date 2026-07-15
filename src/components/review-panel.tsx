@@ -15,6 +15,7 @@ import { Check, Eye, ExternalLink, Loader2, TriangleAlert, X } from "lucide-reac
 import { toast } from "sonner"
 import type { Boq, BoqItem, WorkType } from "@/lib/boq-schema"
 import {
+  buildReviewFingerprint,
   buildReviewVerification,
   reviewItemKey,
   updateReviewItem,
@@ -55,13 +56,17 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
   const [date, setDate] = useState(boq.date)
   const [verifyLoading, setVerifyLoading] = useState(false)
   const [approveLoading, setApproveLoading] = useState(false)
-  const [llmVerified, setLlmVerified] = useState(false)
+  const [llmVerifiedFingerprint, setLlmVerifiedFingerprint] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [sourceAttempt, setSourceAttempt] = useState(0)
+  const [sourcePreviewFailed, setSourcePreviewFailed] = useState(false)
   const reviewPanelRef = useRef<HTMLDivElement>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
 
   const grandTotal = useMemo(() => items.reduce((sum, item) => sum + item.total, 0), [items])
-  const sourceUrl = `/api/boqs/${encodeURIComponent(boq.id)}/source`
+  const hasSource = Boolean(boq.sourceStoragePath)
+  const sourceBaseUrl = `/api/boqs/${encodeURIComponent(boq.id)}/source`
+  const sourceUrl = sourceAttempt > 0 ? `${sourceBaseUrl}?retry=${sourceAttempt}` : sourceBaseUrl
   const sourceRowCounts = useMemo(() => {
     const counts = new Map<string, number>()
     for (const item of items) {
@@ -70,14 +75,18 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
     }
     return counts
   }, [items])
-  const verification = useMemo(() => buildReviewVerification(boq, {
+  const reviewEdits = useMemo(() => ({
     vendor,
     project,
     workType,
     date,
     items,
-  }), [boq, date, items, project, vendor, workType])
+  }), [date, items, project, vendor, workType])
+  const reviewFingerprint = useMemo(() => buildReviewFingerprint(reviewEdits), [reviewEdits])
+  const llmVerified = llmVerifiedFingerprint === reviewFingerprint
+  const verification = useMemo(() => buildReviewVerification(boq, reviewEdits), [boq, reviewEdits])
   const blockingIssues = verification.issues.filter((issue) => issue.severity === "blocking")
+  const localWarnings = verification.issues.filter((issue) => issue.severity === "warning")
   const busy = verifyLoading || approveLoading
 
   useEffect(() => {
@@ -139,7 +148,7 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
         }),
       })
       if (!response.ok) throw new Error(await readError(response, "Verification failed"))
-      setLlmVerified(true)
+      setLlmVerifiedFingerprint(reviewFingerprint)
       toast.success("LLM verification complete")
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Verification request failed")
@@ -182,6 +191,10 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
   }
 
   const confidence = boq.metadataConfidence
+  const retrySourcePreview = () => {
+    setSourcePreviewFailed(false)
+    setSourceAttempt((attempt) => attempt + 1)
+  }
 
   return (
     <div className="modal-overlay review-overlay open" data-od-id="review-modal" role="dialog" aria-modal="true" aria-labelledby="review-dialog-title">
@@ -208,14 +221,38 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
               <span className="review-panel-label"><Eye className="w-3.5 h-3.5" />Original BOQ PDF</span>
               <span className="review-source-filename" title={boq.sourceFileName}>{boq.sourceFileName || "source.pdf"}</span>
             </div>
-            <object className="review-pdf-object" data={sourceUrl} type="application/pdf" aria-label={`Source PDF: ${boq.sourceFileName || "source.pdf"}`}>
+            {!hasSource ? (
               <div className="review-pdf-fallback" role="alert">
                 <TriangleAlert aria-hidden="true" />
-                <strong>PDF preview isn’t available in this browser.</strong>
+                <strong>No source PDF is available for this legacy BOQ.</strong>
+                <span>The BOQ was created before source files were retained.</span>
+              </div>
+            ) : sourcePreviewFailed ? (
+              <div className="review-pdf-fallback" role="alert">
+                <TriangleAlert aria-hidden="true" />
+                <strong>The PDF preview could not be loaded.</strong>
                 <span>{boq.sourceFileName || "source.pdf"}</span>
+                <Button type="button" variant="outline" size="sm" onClick={retrySourcePreview}>Retry preview</Button>
                 <a href={sourceUrl} target="_blank" rel="noreferrer">Open PDF <ExternalLink aria-hidden="true" /></a>
               </div>
-            </object>
+            ) : (
+              <object
+                key={sourceAttempt}
+                className="review-pdf-object"
+                data={sourceUrl}
+                type="application/pdf"
+                aria-label={`Source PDF: ${boq.sourceFileName || "source.pdf"}`}
+                onError={() => setSourcePreviewFailed(true)}
+              >
+                <div className="review-pdf-fallback" role="alert">
+                  <TriangleAlert aria-hidden="true" />
+                  <strong>PDF preview isn’t available in this browser.</strong>
+                  <span>{boq.sourceFileName || "source.pdf"}</span>
+                  <Button type="button" variant="outline" size="sm" onClick={retrySourcePreview}>Retry preview</Button>
+                  <a href={sourceUrl} target="_blank" rel="noreferrer">Open PDF <ExternalLink aria-hidden="true" /></a>
+                </div>
+              </object>
+            )}
           </section>
 
           <div className="review-resize-handle" aria-hidden="true"><span /></div>
@@ -292,6 +329,13 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
             </div>
 
             <StandardizationReview items={items} onItemsChange={setItems} />
+
+            {localWarnings.length ? (
+              <div className="review-warning-list review-local-warnings" role="status">
+                <strong>Review recommended</strong>
+                {localWarnings.map((warning, index) => <span key={`${warning.code}-${warning.itemId ?? warning.itemIndex ?? index}`}>{warning.message}</span>)}
+              </div>
+            ) : null}
 
             {blockingIssues.length ? (
               <div className="review-blockers" role="alert">

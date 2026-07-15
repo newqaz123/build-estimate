@@ -93,6 +93,7 @@ test('source GET streams exact private PDF bytes with a safe inline filename and
   assert.equal(loadedPath, 'boqs/boq-1/source.pdf')
   assert.equal(response.headers.get('content-type'), 'application/pdf')
   assert.equal(response.headers.get('cache-control'), 'private, no-store')
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff')
   const disposition = response.headers.get('content-disposition') ?? ''
   assert.match(disposition, /^inline; filename="[\x20-\x7e]+"; filename\*=UTF-8''/)
   assert.doesNotMatch(disposition, /[\r\n]/)

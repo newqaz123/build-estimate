@@ -59,6 +59,7 @@ export function createSourceHandler(dependencies: SourceHandlerDependencies) {
           'Content-Type': 'application/pdf',
           'Content-Disposition': contentDisposition(boq.sourceFileName),
           'Cache-Control': 'private, no-store',
+          'X-Content-Type-Options': 'nosniff',
         },
       })
     } catch (error) {
