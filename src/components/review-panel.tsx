@@ -14,6 +14,7 @@ import { StandardizationReview } from "./standardization-review"
 import { Check, Eye, ExternalLink, Loader2, TriangleAlert, X } from "lucide-react"
 import { toast } from "sonner"
 import type { Boq, BoqItem, WorkType } from "@/lib/boq-schema"
+import type { VerificationResponseIssue } from "@/lib/boq-verification"
 import {
   buildReviewFingerprint,
   buildReviewVerification,
@@ -26,6 +27,22 @@ interface ReviewPanelProps {
   boq: Boq
   onClose: () => void
   onApproved: () => void
+}
+
+interface VerificationApiResponse {
+  mode: "ai" | "local"
+  aiStatus: string
+  message: string
+  issues: VerificationResponseIssue[]
+}
+
+function isVerificationResponse(value: unknown): value is VerificationApiResponse {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false
+  const candidate = value as Record<string, unknown>
+  return (candidate.mode === "ai" || candidate.mode === "local")
+    && typeof candidate.aiStatus === "string"
+    && typeof candidate.message === "string"
+    && Array.isArray(candidate.issues)
 }
 
 async function readError(response: Response, fallback: string): Promise<string> {
@@ -56,7 +73,10 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
   const [date, setDate] = useState(boq.date)
   const [verifyLoading, setVerifyLoading] = useState(false)
   const [approveLoading, setApproveLoading] = useState(false)
-  const [llmVerifiedFingerprint, setLlmVerifiedFingerprint] = useState<string | null>(null)
+  const [verificationState, setVerificationState] = useState<{
+    fingerprint: string
+    result: VerificationApiResponse
+  } | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [sourceAttempt, setSourceAttempt] = useState(0)
   const [sourcePreviewFailed, setSourcePreviewFailed] = useState(false)
@@ -83,7 +103,10 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
     items,
   }), [date, items, project, vendor, workType])
   const reviewFingerprint = useMemo(() => buildReviewFingerprint(reviewEdits), [reviewEdits])
-  const llmVerified = llmVerifiedFingerprint === reviewFingerprint
+  const verificationResult = verificationState?.fingerprint === reviewFingerprint
+    ? verificationState.result
+    : null
+  const llmVerified = verificationResult?.mode === "ai"
   const verification = useMemo(() => buildReviewVerification(boq, reviewEdits), [boq, reviewEdits])
   const blockingIssues = verification.issues.filter((issue) => issue.severity === "blocking")
   const localWarnings = verification.issues.filter((issue) => issue.severity === "warning")
@@ -134,22 +157,41 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
 
   const handleVerify = async () => {
     setVerifyLoading(true)
+    const requestedFingerprint = reviewFingerprint
     try {
       const response = await fetch("/api/llm/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: [{
-            role: "user",
-            content: `Verify these BOQ items are reasonable construction line items:\n${items
-              .map((item) => `${item.desc}, ${item.qty} ${item.unit} @ ${item.rate}`)
-              .join("\n")}`,
-          }],
+          boqId: boq.id,
+          vendor,
+          project,
+          workType,
+          date,
+          items: items.map((item) => ({
+            ...(item.id ? { id: item.id } : {}),
+            desc: item.desc,
+            unit: item.unit,
+            qty: item.qty,
+            rate: item.rate,
+            total: item.total,
+          })),
+          extractionWarnings: (boq.extractionWarnings ?? []).map((warning) => ({
+            code: warning.code,
+            message: warning.message,
+          })),
         }),
       })
-      if (!response.ok) throw new Error(await readError(response, "Verification failed"))
-      setLlmVerifiedFingerprint(reviewFingerprint)
-      toast.success("LLM verification complete")
+      const payload: unknown = await response.json().catch(() => null)
+      if (!isVerificationResponse(payload)) {
+        const error = typeof payload === "object" && payload !== null && "error" in payload
+          ? (payload as { error?: unknown }).error
+          : null
+        throw new Error(typeof error === "string" ? error : "Verification failed")
+      }
+      setVerificationState({ fingerprint: requestedFingerprint, result: payload })
+      if (payload.mode === "ai") toast.success("AI verification complete")
+      else toast.warning(payload.message)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Verification request failed")
     } finally {
@@ -345,11 +387,22 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
             ) : null}
             {saveError ? <div className="review-save-error" role="alert">{saveError}</div> : null}
 
+            {verificationResult ? (
+              <div className="review-warning-list review-local-warnings" role="status">
+                <strong>{verificationResult.message}</strong>
+                <span>{verificationResult.issues.length} verification {verificationResult.issues.length === 1 ? "issue" : "issues"}</span>
+              </div>
+            ) : null}
+
             <div className="review-verification-row">
               <span>Docling parsed <strong>{items.length}</strong> line items</span>
               <Button variant="ghost" size="sm" onClick={handleVerify} disabled={verifyLoading || llmVerified}>
                 {verifyLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : llmVerified ? <Check className="w-3 h-3" /> : null}
-                {llmVerified ? "Verified" : "Verify with LLM"}
+                {llmVerified
+                  ? "Verified with AI"
+                  : verificationResult?.mode === "local"
+                    ? "Retry AI verification"
+                    : "Verify with AI"}
               </Button>
             </div>
             <div className="review-actions">
