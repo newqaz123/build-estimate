@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef, useEffect } from "react"
+import { useId, useState, useRef, useEffect } from "react"
 import { ChevronRight } from "lucide-react"
 
 interface Props {
@@ -12,6 +12,7 @@ interface Props {
 
 export function CollapsibleSection({ title, subtitle, defaultOpen = true, children }: Props) {
   const [open, setOpen] = useState(defaultOpen)
+  const contentId = useId()
   const contentRef = useRef<HTMLDivElement>(null)
   const [height, setHeight] = useState<number | undefined>(open ? undefined : 0)
 
@@ -28,11 +29,13 @@ export function CollapsibleSection({ title, subtitle, defaultOpen = true, childr
   return (
     <div
       data-od-id={`collapsible-section-${title}`}
-      className="elev-raised border border-border rounded-[16px] overflow-hidden"
+      className="section-group"
     >
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-2 w-full px-4 py-3 text-left text-sm font-semibold bg-muted/30 hover:bg-muted/50 transition-colors"
+        className="collapsible-header"
+        aria-expanded={open}
+        aria-controls={contentId}
       >
         <ChevronRight
           className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${
@@ -45,7 +48,10 @@ export function CollapsibleSection({ title, subtitle, defaultOpen = true, childr
         )}
       </button>
       <div
+        id={contentId}
         ref={contentRef}
+        aria-hidden={!open}
+        inert={!open}
         style={{ height: height !== undefined ? `${height}px` : "auto" }}
         className="overflow-hidden transition-[height] duration-200 ease-in-out"
       >

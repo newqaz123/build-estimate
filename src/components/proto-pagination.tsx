@@ -22,17 +22,24 @@ export function ProtoPagination({ page, totalPages, total, limit, onPageChange }
   }
 
   return (
-    <div className="proto-pagination">
+    <nav className="proto-pagination" aria-label="BOQ pagination">
       <span>Showing {start}–{end} of {total}</span>
       <div className="pp-btns">
-        <button disabled={page <= 1} onClick={() => onPageChange(page - 1)}>‹</button>
+        <button type="button" aria-label="Previous page" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>‹</button>
         {pages.map(p => (
-          <button key={p} className={p === page ? 'active' : ''} onClick={() => onPageChange(p)}>
+          <button
+            type="button"
+            key={p}
+            className={p === page ? 'active' : ''}
+            aria-label={`Page ${p}`}
+            aria-current={p === page ? "page" : undefined}
+            onClick={() => onPageChange(p)}
+          >
             {p}
           </button>
         ))}
-        <button disabled={page >= totalPages} onClick={() => onPageChange(page + 1)}>›</button>
+        <button type="button" aria-label="Next page" disabled={page >= totalPages} onClick={() => onPageChange(page + 1)}>›</button>
       </div>
-    </div>
+    </nav>
   )
 }

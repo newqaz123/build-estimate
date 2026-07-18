@@ -8,6 +8,7 @@ import type {
   BoqSourceRef,
   WorkType,
 } from './boq-schema'
+import { deriveSourceCostAllocation } from './boq-cost-allocation'
 
 const WORK_TYPES: readonly WorkType[] = ['Structural', 'MEP', 'Finishing', 'Unclassified']
 const ITEM_TYPES = ['unit', 'lump_sum'] as const
@@ -253,19 +254,23 @@ export function buildDraftBoq(
 ): Omit<Boq, 'createdAt' | 'updatedAt'> {
   const sections = parsed.sections.map((section) => ({
     header: section.header,
-    items: section.items.map((item): BoqItem => ({
-      id: item.id,
-      desc: item.desc,
-      unit: item.unit,
-      qty: item.qty,
-      rate: item.rate,
-      total: item.total,
-      type: item.type,
-      costComponent: item.costComponent,
-      sourceRef: item.sourceRef,
-      ...(item.sourceCosts ? { sourceCosts: item.sourceCosts } : {}),
-      stdStatus: 'unmatched',
-    }) as BoqItem),
+    items: section.items.map((item): BoqItem => {
+      const draftItem: BoqItem = {
+        id: item.id,
+        desc: item.desc,
+        unit: item.unit,
+        qty: item.qty,
+        rate: item.rate,
+        total: item.total,
+        type: item.type,
+        costComponent: item.costComponent,
+        sourceRef: item.sourceRef,
+        ...(item.sourceCosts ? { sourceCosts: item.sourceCosts } : {}),
+        stdStatus: 'unmatched',
+      }
+      const costAllocation = deriveSourceCostAllocation(draftItem)
+      return costAllocation ? { ...draftItem, costAllocation } : draftItem
+    }),
   }))
   const items = sections.flatMap((section) => section.items)
   const metadataConfidence: BoqMetadataConfidence = {

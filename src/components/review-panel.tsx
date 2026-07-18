@@ -27,11 +27,17 @@ import {
   updateReviewItem,
   type ReviewItemField,
 } from "@/lib/boq-review-state"
+import { deriveSourceCostAllocation } from "@/lib/boq-cost-allocation"
+import { getBoqCatalogReadiness } from "@/lib/boq-catalog-readiness"
+import { getBoqItemRequestIdentity } from "@/lib/boq-item-identity"
+import { CatalogMatchModal } from "./catalog-match-modal"
 
 interface ReviewPanelProps {
   boq: Boq
   onClose: () => void
-  onApproved: () => void
+  onApproved: (boq: Boq) => void
+  primaryActionLabel?: string
+  requireCatalogReadiness?: boolean
 }
 
 type VerificationApiResponse = AiSuccessResponse | AiFallbackResponse
@@ -64,7 +70,25 @@ function verificationIssueTarget(issue: VerificationResponseIssue, items: BoqIte
   return issue.itemId ? `Item ID: ${issue.itemId}` : null
 }
 
-export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
+function sectionsWithItems(boq: Boq, items: BoqItem[]): Boq["sections"] {
+  let offset = 0
+  return boq.sections.map((section) => {
+    const sectionItems = items.slice(offset, offset + section.items.length)
+    offset += section.items.length
+    return { ...section, items: sectionItems }
+  })
+}
+
+function sectionIndexForItem(boq: Boq, itemIndex: number): number {
+  let offset = 0
+  for (let sectionIndex = 0; sectionIndex < boq.sections.length; sectionIndex += 1) {
+    offset += boq.sections[sectionIndex].items.length
+    if (itemIndex < offset) return sectionIndex
+  }
+  return -1
+}
+
+export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Approve & Save", requireCatalogReadiness = false }: ReviewPanelProps) {
   const [items, setItems] = useState<BoqItem[]>(() => boq.sections.flatMap((section) => section.items))
   const [vendor, setVendor] = useState(boq.vendor)
   const [project, setProject] = useState(boq.project)
@@ -79,11 +103,18 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [sourceAttempt, setSourceAttempt] = useState(0)
   const [sourcePreviewFailed, setSourcePreviewFailed] = useState(false)
+  const [catalogMatchIndex, setCatalogMatchIndex] = useState<number | null>(null)
+  const [catalogBusyIndex, setCatalogBusyIndex] = useState<number | null>(null)
   const reviewPanelRef = useRef<HTMLDivElement>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
 
   const grandTotal = useMemo(() => items.reduce((sum, item) => sum + item.total, 0), [items])
-  const hasSource = Boolean(boq.sourceStoragePath)
+  const reviewSections = useMemo(() => sectionsWithItems(boq, items), [boq, items])
+  const catalogReadiness = useMemo(
+    () => getBoqCatalogReadiness({ sections: reviewSections }),
+    [reviewSections],
+  )
+  const hasSource = boq.sourceAvailable ?? Boolean(boq.sourceFileName)
   const sourceBaseUrl = `/api/boqs/${encodeURIComponent(boq.id)}/source`
   const sourceUrl = sourceAttempt > 0 ? `${sourceBaseUrl}?retry=${sourceAttempt}` : sourceBaseUrl
   const sourceRowCounts = useMemo(() => {
@@ -154,6 +185,38 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
     setItems((current) => updateReviewItem(current, idx, field, value))
   }, [])
 
+  const handleExcludeRequest = useCallback(async (item: BoqItem, itemIndex: number, reason: string) => {
+    const sectionIndex = sectionIndexForItem(boq, itemIndex)
+    if (sectionIndex < 0) return false
+    setCatalogBusyIndex(itemIndex)
+    setSaveError(null)
+    try {
+      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/items`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sectionIndex, items: [{ ...getBoqItemRequestIdentity(item), stdStatus: "excluded", stdExclusionReason: reason.trim() }] }),
+      })
+      if (!response.ok) throw new Error(await readError(response, "The item could not be excluded."))
+      setItems((current) => current.map((candidate, index) => {
+        if (index !== itemIndex) return candidate
+        const next = { ...candidate, stdStatus: "excluded" as const, stdExclusionReason: reason.trim() }
+        delete next.stdId
+        delete next.stdMatch
+        delete next.stdConfidence
+        return next
+      }))
+      toast.success("Item excluded from catalog comparison")
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The item could not be excluded."
+      setSaveError(message)
+      toast.error(message)
+      return false
+    } finally {
+      setCatalogBusyIndex(null)
+    }
+  }, [boq])
+
   const handleVerify = async () => {
     setVerifyLoading(true)
     const requestedFingerprint = reviewFingerprint
@@ -205,6 +268,7 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
     setApproveLoading(true)
     setSaveError(null)
     try {
+      const sections = reviewSections
       const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -214,15 +278,16 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
           workType,
           date,
           status: "approved",
-          sections: [{ header: "Parsed Items", items }],
+          sections,
         }),
       })
       if (!response.ok) throw new Error(await readError(response, "The BOQ could not be saved. Try again."))
+      const updated = await response.json() as Boq
       const reviewCount = items.filter((item) => item.stdStatus !== "matched").length
       toast.success(reviewCount > 0
         ? `BOQ approved · ${reviewCount} ${reviewCount === 1 ? "item" : "items"} sent to Catalog review`
         : "BOQ approved and linked to the Standard Catalog")
-      onApproved()
+      onApproved(updated)
       onClose()
     } catch (error) {
       const message = error instanceof Error ? error.message : "The BOQ could not be saved. Try again."
@@ -346,12 +411,13 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
             <div className="overflow-x-auto border border-border rounded-lg">
               <table className="review-items-table" data-od-id="review-items-table">
                 <thead><tr>
-                  <th>Description</th><th>Unit</th><th className="num-col">Qty</th><th className="num-col">Rate (฿)</th><th className="num-col">Total</th><th>Std</th>
+                  <th>Description</th><th>Unit</th><th className="num-col">Qty</th><th className="num-col">Rate (฿)</th><th className="num-col">Material</th><th className="num-col">Labour</th><th className="num-col">Total</th><th>Std</th>
                 </tr></thead>
                 <tbody>
                   {items.map((item, idx) => {
                     const rowKey = sourceRowKey(item)
                     const showComponent = Boolean(rowKey && (sourceRowCounts.get(rowKey) ?? 0) > 1 && item.costComponent)
+                    const allocation = deriveSourceCostAllocation(item)
                     return (
                       <tr key={reviewItemKey(boq.id, item, idx)} data-ri={idx}>
                         <td>
@@ -362,8 +428,10 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
                         <td><Input aria-label={`Unit for item ${idx + 1}`} value={item.unit} onChange={(event) => handleItemChange(idx, "unit", event.target.value)} /></td>
                         <td><Input aria-label={`Quantity for item ${idx + 1}`} type="number" value={item.qty} onChange={(event) => handleItemChange(idx, "qty", Number(event.target.value))} /></td>
                         <td><Input aria-label={`Rate for item ${idx + 1}`} type="number" value={item.rate} onChange={(event) => handleItemChange(idx, "rate", Number(event.target.value))} /></td>
+                        <td className="num-col font-mono" title={allocation ? `${allocation.origin} ${allocation.basis}` : "No reliable split in source"}>{allocation ? `฿${allocation.material.toLocaleString()}` : "Not split"}</td>
+                        <td className="num-col font-mono" title={allocation ? `${allocation.origin} ${allocation.basis}` : "No reliable split in source"}>{allocation ? `฿${allocation.labour.toLocaleString()}` : "Not split"}</td>
                         <td className="num-col font-mono">฿{item.total.toLocaleString()}</td>
-                        <td><span className={`review-std-badge ${item.stdStatus}`}>{item.stdStatus === "matched" ? "Matched" : item.stdStatus === "pending" ? "Suggested" : "—"}</span></td>
+                        <td><span className={`review-std-badge ${item.stdStatus}`}>{item.stdStatus === "matched" ? "Matched" : item.stdStatus === "excluded" ? "Excluded" : item.stdStatus === "pending" ? "Suggested" : "—"}</span></td>
                       </tr>
                     )
                   })}
@@ -371,7 +439,26 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
               </table>
             </div>
 
-            <StandardizationReview items={items} onItemsChange={setItems} />
+            {requireCatalogReadiness ? (
+              <div className="rounded-lg border border-accent/25 bg-accent/5 p-3" data-od-id="catalog-readiness">
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <strong>Catalog readiness</strong>
+                  <span className="font-mono">{catalogReadiness.resolved}/{catalogReadiness.total} resolved</span>
+                </div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+                  <div className="h-full bg-accent transition-[width]" style={{ width: `${catalogReadiness.total ? (catalogReadiness.resolved / catalogReadiness.total) * 100 : 100}%` }} />
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">Match an existing item, create a catalog entry, or exclude a one-off line with a reason before approval.</p>
+              </div>
+            ) : null}
+
+            <StandardizationReview
+              items={items}
+              onItemsChange={setItems}
+              onMatchRequest={requireCatalogReadiness ? (_item, index) => setCatalogMatchIndex(index) : undefined}
+              onExcludeRequest={requireCatalogReadiness ? handleExcludeRequest : undefined}
+              catalogBusyIndex={catalogBusyIndex}
+            />
 
             {localWarnings.length ? (
               <div className="review-warning-list review-local-warnings" role="status">
@@ -420,13 +507,43 @@ export function ReviewPanel({ boq, onClose, onApproved }: ReviewPanelProps) {
             </div>
             <div className="review-actions">
               <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>Discard</Button>
-              <Button size="sm" onClick={handleApprove} disabled={approveLoading || verification.hasBlockingIssues}>
+              <Button size="sm" onClick={handleApprove} disabled={approveLoading || verification.hasBlockingIssues || (requireCatalogReadiness && catalogReadiness.blocking > 0)}>
                 {approveLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-                Approve &amp; Save
+                {primaryActionLabel}
               </Button>
             </div>
           </section>
         </div>
+        {catalogMatchIndex !== null && items[catalogMatchIndex] ? (
+          <CatalogMatchModal
+            itemDesc={items[catalogMatchIndex].desc}
+            itemUnit={items[catalogMatchIndex].unit}
+            itemCode={items[catalogMatchIndex].code}
+            sourceProject={project}
+            sourceVendor={vendor}
+            matchContext={{
+              boqId: boq.id,
+              sectionIndex: sectionIndexForItem(boq, catalogMatchIndex),
+              ...getBoqItemRequestIdentity(items[catalogMatchIndex]),
+            }}
+            onClose={() => setCatalogMatchIndex(null)}
+            onMatch={async (standardId, standardDescription, standardUnit) => {
+              setItems((current) => current.map((candidate, index) => index === catalogMatchIndex ? {
+                ...candidate,
+                sourceDesc: candidate.sourceDesc ?? candidate.desc,
+                sourceUnit: candidate.sourceUnit ?? candidate.unit,
+                desc: standardDescription,
+                unit: standardUnit,
+                stdId: standardId,
+                stdMatch: standardDescription,
+                stdStatus: "matched",
+                stdConfidence: "manual",
+                stdExclusionReason: undefined,
+              } : candidate))
+              setCatalogMatchIndex(null)
+            }}
+          />
+        ) : null}
       </div>
     </div>
   )

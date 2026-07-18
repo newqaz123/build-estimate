@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { ProtoBadge } from "@/components/proto-badge";
 
 interface Boq {
   id: string;
@@ -15,31 +16,12 @@ interface Boq {
   updatedAt: string;
 }
 
-interface Estimate {
-  id: string;
-  name: string;
-}
-
-interface Vendor {
-  id: string;
-  name: string;
-}
-
 interface DashboardData {
   boqs: Boq[];
   boqTotal: number;
   estimates: number;
   vendors: number;
 }
-
-const statusColors: Record<string, string> = {
-  draft: "bg-[#666666]",
-  parsed: "bg-[#666666]",
-  active: "bg-accent",
-  review: "bg-[#eab308]",
-  approved: "bg-[#006400]",
-  rejected: "bg-[#dc2626]",
-};
 
 function timeAgo(dateStr: string) {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -87,23 +69,25 @@ export default function DashboardPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">
-        Loading...
+      <div className="dashboard-loading" role="status" aria-live="polite" data-od-id="dashboard-loading">
+        <span className="proto-spinner" aria-hidden="true" />
+        <span>Loading dashboard…</span>
       </div>
     );
   }
 
   if (!data || (data.boqTotal === 0 && data.estimates === 0 && data.vendors === 0)) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3 text-muted-foreground">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-10 h-10 opacity-40">
+      <div className="proto-empty-state dashboard-empty" data-od-id="dashboard-empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
           <rect x="3" y="3" width="7" height="7" />
           <rect x="14" y="3" width="7" height="7" />
           <rect x="14" y="14" width="7" height="7" />
           <rect x="3" y="14" width="7" height="7" />
         </svg>
-        <p className="text-sm">No data yet. Upload a BOQ to get started.</p>
-        <Link href="/boqs" className="text-sm text-accent hover:underline">
+        <h3>No data yet</h3>
+        <p>Upload a BOQ to start building your estimating workspace.</p>
+        <Link href="/boqs" className="btn btn-primary btn-sm" data-od-id="dashboard-empty-boqs">
           Go to BOQs
         </Link>
       </div>
@@ -114,114 +98,116 @@ export default function DashboardPage() {
 
   return (
     <>
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="proto-card stat-card">
+      <section className="dashboard-stats" data-od-id="dashboard-stats" aria-label="Workspace summary">
+        <div className="proto-card stat-card" data-od-id="stat-boqs">
           <div className="stat-value num">{data.boqTotal}</div>
           <div className="stat-label">Total BOQs</div>
-          <div className="stat-trend up">+12 this month</div>
+          <div className="stat-trend up">
+            <TrendUpIcon />
+            +12 this month
+          </div>
         </div>
-        <div className="proto-card stat-card">
+        <div className="proto-card stat-card" data-od-id="stat-items">
           <div className="stat-value num">{totalItems}</div>
           <div className="stat-label">Total Items</div>
-          <div className="stat-trend up">+847 this month</div>
+          <div className="stat-trend up">
+            <TrendUpIcon />
+            +847 this month
+          </div>
         </div>
-        <div className="proto-card stat-card">
+        <div className="proto-card stat-card" data-od-id="stat-vendors">
           <div className="stat-value num">{data.vendors}</div>
           <div className="stat-label">Vendors</div>
-          <div className="stat-trend up">+5 this month</div>
+          <div className="stat-trend up">
+            <TrendUpIcon />
+            +5 this month
+          </div>
         </div>
-        <div className="proto-card stat-card">
+        <div className="proto-card stat-card" data-od-id="stat-estimates">
           <div className="stat-value num">{data.estimates}</div>
           <div className="stat-label">Estimates</div>
-          <div className="stat-trend up">+3 this week</div>
+          <div className="stat-trend up">
+            <TrendUpIcon />
+            +3 this week
+          </div>
         </div>
-      </div>
+      </section>
 
-      <div className="grid grid-cols-2 gap-5">
-        <div className="proto-card">
-          <div className="flex items-center justify-between px-5 pt-5 pb-4">
-            <h2 className="text-[18px] font-medium">Recent Activity</h2>
-            <Link
-              href="/boqs"
-              className="btn btn-ghost btn-sm"
-            >
+      <section className="dashboard-grid" data-od-id="dashboard-grid">
+        <article className="proto-card dashboard-panel" data-od-id="recent-activity">
+          <header className="dashboard-panel-header">
+            <h2>Recent Activity</h2>
+            <Link href="/boqs" className="btn btn-ghost btn-sm" data-od-id="activity-view-all">
               View all
             </Link>
-          </div>
-          <div>
+          </header>
+          <div className="dashboard-activity-list">
             {data.boqs.length === 0 ? (
-              <div className="px-5 pb-5 text-sm text-muted-foreground">No activity yet.</div>
+              <div className="proto-empty-state dashboard-panel-empty" data-od-id="activity-empty">
+                <p>No activity yet.</p>
+                <Link href="/boqs" className="btn btn-secondary btn-sm">Upload a BOQ</Link>
+              </div>
             ) : (
               data.boqs.map((boq) => {
-                const dotColor =
-                  boq.workType === "MEP"
-                    ? "bg-[#eab308]"
-                    : boq.workType === "Finishing"
-                      ? "bg-[#006400]"
-                      : "bg-accent";
                 return (
                   <div
                     key={boq.id}
-                    className="flex items-start gap-3 px-5 py-3 border-b border-border-soft last:border-b-0"
+                    className="dashboard-activity-item"
+                    data-od-id={`activity-${boq.id}`}
                   >
-                    <div className={`w-2 h-2 rounded-full mt-[6px] shrink-0 ${dotColor}`} />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate">
+                    <span className={`dashboard-activity-dot activity-${boq.workType.toLowerCase()}`} aria-hidden="true" />
+                    <div className="dashboard-activity-content">
+                      <div className="dashboard-activity-title">
                         BOQ uploaded — {boq.project}
                       </div>
-                      <span className="meta block mt-[2px]">
+                      <span className="meta dashboard-activity-meta">
                         {boq.workType} · {boq.vendor} · {timeAgo(boq.updatedAt)}
                       </span>
                     </div>
-                    <span
-                      className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-0.5 rounded-full shrink-0 ${
-                        boq.status === "active"
-                          ? "bg-accent/12 text-accent"
-                          : boq.status === "review"
-                            ? "bg-[#eab308]/18 text-[#b88a00]"
-                            : boq.status === "approved"
-                              ? "bg-[#006400]/12 text-[#006400]"
-                              : boq.status === "rejected"
-                                ? "bg-[#dc2626]/12 text-[#dc2626]"
-                                : "bg-[#666666]/12 text-[#666666]"
-                      }`}
-                    >
-                      <span className={`w-1.5 h-1.5 rounded-full ${statusColors[boq.status] || statusColors.draft}`} />
-                      {boq.status}
-                    </span>
+                    {/* ProtoBadge intentionally maps parsed to the neutral draft treatment. */}
+                    <ProtoBadge status={boq.status} className="dashboard-activity-status" />
                   </div>
                 );
               })
             )}
           </div>
-        </div>
+        </article>
 
-        <div className="proto-card">
-          <div className="flex items-center justify-between px-5 pt-5 pb-4">
-            <h2 className="text-[18px] font-medium">Quick Stats</h2>
-          </div>
-          <div className="px-5 pb-5 space-y-4">
-            <div>
-              <div className="text-xs text-muted-foreground mb-1">Total Items Across BOQs</div>
-              <div className="font-mono text-lg font-semibold">{totalItems}</div>
+        <article className="proto-card dashboard-panel" data-od-id="quick-stats">
+          <header className="dashboard-panel-header">
+            <h2>Quick Stats</h2>
+          </header>
+          <div className="dashboard-quick-stats">
+            <div className="dashboard-quick-stat">
+              <div className="dashboard-quick-label">Total Items Across BOQs</div>
+              <div className="dashboard-quick-value num">{totalItems}</div>
             </div>
-            <div>
-              <div className="text-xs text-muted-foreground mb-1">Comparison Match Rate</div>
-              <div className="flex items-center gap-2">
-                <div className="font-mono text-lg font-semibold">—</div>
-                <span className="text-xs text-muted-foreground">Add BOQs to calculate</span>
+            <div className="dashboard-quick-stat">
+              <div className="dashboard-quick-label">Comparison Match Rate</div>
+              <div className="dashboard-quick-row">
+                <div className="dashboard-quick-value num">—</div>
+                <span className="dashboard-quick-hint">Add BOQs to calculate</span>
               </div>
             </div>
-            <div>
-              <div className="text-xs text-muted-foreground mb-1">Data Coverage</div>
-              <div className="flex items-center gap-2">
-                <div className="font-mono text-lg font-semibold">—</div>
-                <span className="text-xs text-muted-foreground">Standardize items to calculate</span>
+            <div className="dashboard-quick-stat">
+              <div className="dashboard-quick-label">Data Coverage</div>
+              <div className="dashboard-quick-row">
+                <div className="dashboard-quick-value num">—</div>
+                <span className="dashboard-quick-hint">Standardize items to calculate</span>
               </div>
             </div>
           </div>
-        </div>
-      </div>
+        </article>
+      </section>
     </>
+  );
+}
+
+function TrendUpIcon() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+      <polyline points="2 12 6 8 10 12 14 4" />
+      <polyline points="9 4 14 4 14 9" />
+    </svg>
   );
 }

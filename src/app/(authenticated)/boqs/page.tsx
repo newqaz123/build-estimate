@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react"
 import Link from "next/link"
-import { Upload as UploadIcon } from "lucide-react"
+import { Eye, Trash2, Upload as UploadIcon } from "lucide-react"
 import { toast } from "sonner"
 import { UploadModal } from "@/components/upload-modal"
 import { ReviewPanel } from "@/components/review-panel"
@@ -90,6 +90,20 @@ export default function BoqsPage() {
   const handleUploadComplete = (boq: Boq) => {
     setReviewBoq(boq)
     fetchBoqs()
+  }
+
+  const handleDeleteBoq = async (boq: Boq) => {
+    const confirmation = window.prompt(
+      `Delete the entire BOQ “${boq.project}” and its source PDF?\n\nType the project name to confirm.`,
+    )
+    if (confirmation !== boq.project) return
+    const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}`, { method: "DELETE" })
+    if (!response.ok) {
+      toast.error("The BOQ could not be deleted")
+      return
+    }
+    toast.success("BOQ deleted")
+    void fetchBoqs()
   }
 
   const formatCurrency = (amount: number) => {
@@ -239,12 +253,25 @@ export default function BoqsPage() {
                     </div>
                   </td>
                   <td className="text-right whitespace-nowrap">
+                    {boq.status !== "approved" && boq.sourceAvailable ? (
+                      <button type="button" onClick={() => setReviewBoq(boq)} className="btn btn-ghost btn-xs">
+                        <Eye className="w-3.5 h-3.5" /> Review
+                      </button>
+                    ) : null}
                     <Link href={`/boqs/${boq.id}`} className="btn btn-ghost btn-xs">View</Link>
                     <button
                       onClick={() => exportBoqCsv(boq)}
                       className="btn btn-ghost btn-xs"
                     >
                       Download
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleDeleteBoq(boq)}
+                      className="btn btn-ghost btn-xs text-destructive"
+                      aria-label={`Delete ${boq.project}`}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </td>
                 </tr>
@@ -264,7 +291,7 @@ export default function BoqsPage() {
         <ReviewPanel
           boq={reviewBoq}
           onClose={() => setReviewBoq(null)}
-          onApproved={() => fetchBoqs()}
+          onApproved={() => { void fetchBoqs() }}
         />
       )}
     </>

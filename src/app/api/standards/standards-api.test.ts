@@ -5,10 +5,27 @@ import { parseBoqListLimit } from '../boqs/route'
 import { computeBoqStdStatus, hasLinkedEstimateItems, itemMatchesStandardCanonically, updateLinkedBoqsForStandard } from './[id]/route'
 import {
   applyStandardToBoqItem,
+  enrichStandardsWithHistoricalPricing,
   mergeStandardSourceItems,
   normalizeStandardEntry,
   queryStandards,
 } from './route'
+
+test('standard enrichment attaches approved matched historical pricing', () => {
+  const now = '2026-07-18T00:00:00.000Z'
+  const standards = [{ id: 'std-1', description: 'Pipe', unit: 'pcs', aliases: [], sourceBoqCount: 1, createdAt: now, updatedAt: now }]
+  const boqs = [{
+    id: 'boq-1', project: 'Plant', vendor: 'Vendor', workType: 'MEP' as const, date: '2026-07-18',
+    totalItems: 1, grandTotal: 100, status: 'approved' as const, stdStatus: 'complete' as const,
+    sections: [{ header: 'Pipework', items: [{ id: 'item-1', desc: 'Pipe', unit: 'pcs', qty: 1, rate: 100, total: 100, type: 'unit' as const, stdStatus: 'matched' as const, stdId: 'std-1' }] }],
+    createdAt: now, updatedAt: now,
+  }]
+
+  const result = enrichStandardsWithHistoricalPricing(standards, boqs)
+
+  assert.equal(result[0]?.historicalPricing?.average, 100)
+  assert.equal(result[0]?.historicalPricing?.sources[0]?.project, 'Plant')
+})
 
 test('normalizeStandardEntry backfills legacy aliases and sourceItems', () => {
   const normalized = normalizeStandardEntry({
@@ -414,4 +431,10 @@ test('parseBoqListLimit keeps the existing default and safely clamps valid input
   assert.equal(parseBoqListLimit('1500'), 1000)
   assert.equal(parseBoqListLimit('abc'), 10)
   assert.equal(parseBoqListLimit('0'), 10)
+})
+
+test('parseBoqListLimit rejects malformed numeric strings instead of parsing a valid prefix', () => {
+  for (const value of ['10abc', '12.5', '1e9', ' 10 ', '\t10']) {
+    assert.equal(parseBoqListLimit(value), 10, `expected ${JSON.stringify(value)} to use the default`)
+  }
 })

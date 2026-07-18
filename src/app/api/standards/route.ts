@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { queryCollection, getDocument, createDocumentWithId } from '@/lib/db'
 import type { StandardEntry } from '@/lib/standard-schema'
-import type { BoqItem } from '@/lib/boq-schema'
+import type { Boq, BoqItem } from '@/lib/boq-schema'
+import { buildCatalogHistoricalPricing } from '@/lib/catalog-historical-pricing'
 
 type MatchConfidence = BoqItem['stdConfidence']
 
@@ -34,12 +35,24 @@ export function queryStandards(
     })
 }
 
+export function enrichStandardsWithHistoricalPricing(
+  standards: StandardEntry[],
+  boqs: Boq[],
+  unitMap: Record<string, string> = {},
+): StandardEntry[] {
+  const pricing = buildCatalogHistoricalPricing(standards, boqs, unitMap)
+  return standards.map((standard) => {
+    const historicalPricing = pricing.get(standard.id)
+    return historicalPricing ? { ...standard, historicalPricing } : standard
+  })
+}
+
 export function applyStandardToBoqItem(
   item: BoqItem,
   standard: StandardEntry,
   confidence: MatchConfidence,
 ): BoqItem {
-  return {
+  const updated: BoqItem = {
     ...item,
     desc: standard.description,
     unit: standard.unit,
@@ -50,6 +63,8 @@ export function applyStandardToBoqItem(
     sourceDesc: item.sourceDesc ?? item.desc,
     sourceUnit: item.sourceUnit ?? item.unit,
   }
+  delete updated.stdExclusionReason
+  return updated
 }
 
 export function mergeStandardSourceItems(
@@ -90,14 +105,18 @@ export async function GET(request: NextRequest) {
     const search = searchParams.get('search')
     const includeArchived = searchParams.get('includeArchived') === 'true'
 
-    const { docs } = await queryCollection<StandardEntry>('standards', {
-      orderByField: 'description',
-      orderDirection: 'asc',
-    })
+    const [{ docs }, { docs: boqs }, settings] = await Promise.all([
+      queryCollection<StandardEntry>('standards', {
+        orderByField: 'description',
+        orderDirection: 'asc',
+      }),
+      queryCollection<Boq>('boqs'),
+      getDocument<{ fuzzy?: { unitMap?: Record<string, string> } }>('settings', 'workspace'),
+    ])
 
     const standards = queryStandards(docs, { includeArchived, search })
 
-    return NextResponse.json(standards)
+    return NextResponse.json(enrichStandardsWithHistoricalPricing(standards, boqs, settings?.fuzzy?.unitMap ?? {}))
   } catch (error) {
     console.error('Error fetching standards:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

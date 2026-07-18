@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { queryCollection, createDocumentWithId, getDocument } from '@/lib/db'
 import type { Boq } from '@/lib/boq-schema'
+import { toPublicBoq } from '@/lib/boq-public'
 
 function computeTotals(sections: Boq['sections']) {
   const totalItems = sections.reduce((sum, s) => sum + s.items.length, 0)
@@ -10,9 +11,11 @@ function computeTotals(sections: Boq['sections']) {
 }
 
 export function parseBoqListLimit(limit: string | null): number {
-  const parsed = Number.parseInt(limit ?? '', 10)
+  if (!limit || !/^\d+$/.test(limit)) return 10
 
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const parsed = Number(limit)
+
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     return 10
   }
 
@@ -58,7 +61,7 @@ export async function GET(request: NextRequest) {
     const total = boqs.length
     const totalPages = Math.ceil(total / limit)
     const offset = (page - 1) * limit
-    const paginated = boqs.slice(offset, offset + limit)
+    const paginated = boqs.slice(offset, offset + limit).map(toPublicBoq)
 
     return NextResponse.json({ boqs: paginated, total, page, totalPages })
   } catch (error) {
@@ -113,7 +116,7 @@ export async function POST(request: NextRequest) {
     await createDocumentWithId('boqs', id, boq as unknown as Record<string, unknown>)
     const created = await getDocument<Boq>('boqs', id)
 
-    return NextResponse.json(created, { status: 201 })
+    return NextResponse.json(created ? toPublicBoq(created) : null, { status: 201 })
   } catch (error) {
     console.error('Error creating BOQ:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

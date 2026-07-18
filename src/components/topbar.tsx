@@ -34,31 +34,32 @@ export function Topbar({
   return (
     <header
       data-od-id="topbar"
-      className="h-14 border-b border-border flex items-center justify-between px-5 bg-background shrink-0"
+      className="topbar"
     >
-      <div className="flex items-center gap-3">
+      <div className="topbar-left">
         {displayBackHref && (
           <Link
             href={displayBackHref}
-            className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground no-underline"
+            className="topbar-back"
           >
             <svg
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
               strokeWidth="2"
-              className="w-4 h-4"
+              aria-hidden="true"
+              focusable="false"
             >
               <polyline points="15 18 9 12 15 6" />
             </svg>
             Back
           </Link>
         )}
-        {displayTitle && <h1 className="text-lg font-semibold tracking-tight">{displayTitle}</h1>}
+        {displayTitle && <h1>{displayTitle}</h1>}
       </div>
-      <div className="flex items-center gap-3">
-        <span className="text-[13px] text-muted-foreground">Construction Consultant</span>
-        <div className="w-8 h-8 rounded-full bg-[#e8f0fe] grid place-items-center text-xs font-semibold text-accent">
+      <div className="topbar-right">
+        <span className="topbar-role">Construction Consultant</span>
+        <div className="avatar">
           CC
         </div>
       </div>

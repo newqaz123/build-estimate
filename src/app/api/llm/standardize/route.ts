@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { callLLM } from '@/lib/llm'
-import { getDocument } from '@/lib/db'
+import { getDocument, queryCollection } from '@/lib/db'
 import type { WorkspaceSettings } from '@/lib/settings-schema'
+import type { StandardEntry } from '@/lib/standard-schema'
+import {
+  buildCatalogStandardizationPrompt,
+  normalizeCatalogStandardizationResponse,
+  parseCatalogStandardizationRequest,
+} from '@/lib/catalog-standardization'
 
 export async function POST(request: NextRequest) {
   const session = await auth()
@@ -11,29 +17,37 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const body = await request.json()
-    const { messages, provider, model } = body as {
-      messages: { role: string; content: string }[]
+    const body = await request.json() as {
+      items?: unknown
       provider?: string
       model?: string
     }
-
-    if (!messages || !Array.isArray(messages)) {
-      return NextResponse.json({ error: 'messages array is required' }, { status: 400 })
+    let structured
+    try {
+      structured = parseCatalogStandardizationRequest(body)
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : 'Invalid request.' }, { status: 400 })
     }
 
-    const settings = await getDocument<WorkspaceSettings>('settings', 'workspace')
+    const [settings, catalogResult] = await Promise.all([
+      getDocument<WorkspaceSettings>('settings', 'workspace'),
+      queryCollection<StandardEntry>('standards', { orderByField: 'description', orderDirection: 'asc' }),
+    ])
+    const standards = catalogResult.docs.filter((entry) => !entry.archivedAt)
+    if (standards.length === 0) return NextResponse.json({ suggestions: [] })
     const stdPrompt = settings?.prompts?.stdPrompt || 'Translate the following parsed BOQ items to standard descriptions:'
-
-    const augmentedMessages = [
+    const messages = [
       { role: 'system', content: stdPrompt },
-      ...messages,
+      { role: 'user', content: buildCatalogStandardizationPrompt(structured, standards) },
     ]
-
-    const result = await callLLM(augmentedMessages, provider, model)
-    return NextResponse.json(result)
+    const result = await callLLM(messages, body.provider, body.model, request.signal)
+    return NextResponse.json({
+      suggestions: normalizeCatalogStandardizationResponse(result.content, structured, standards),
+      provider: result.provider,
+      model: result.model,
+    })
   } catch (error) {
-    console.error('Error in LLM standardize:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    console.error('Catalog standardization failed:', error instanceof Error ? error.message : 'unknown error')
+    return NextResponse.json({ error: 'Catalog suggestions are unavailable.' }, { status: 503 })
   }
 }

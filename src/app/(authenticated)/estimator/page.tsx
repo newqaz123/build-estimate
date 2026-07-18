@@ -1,8 +1,17 @@
 "use client"
 
-import { useEffect, useState, useRef, useCallback } from "react"
+import { useCallback, useEffect, useState, useRef } from "react"
 import { toast } from "sonner"
-import type { Estimate } from "@/lib/estimate-schema"
+import { normalizeEstimateItemSnapshot, type Estimate, type EstimateCatalogSnapshot } from "@/lib/estimate-schema"
+import {
+  buildEstimateAiManualFallback,
+  catalogEntryToEstimateItem,
+  standardEntryToEstimateAiCatalogEntry,
+  verifyEstimateAiSuggestion,
+  type EstimateAiCatalogEntry,
+  type EstimateAiSuggestion,
+} from "@/lib/estimate-ai"
+import type { StandardEntry } from "@/lib/standard-schema"
 
 interface EstimateItemLocal {
   id: string
@@ -12,49 +21,75 @@ interface EstimateItemLocal {
   unit: string
   total: number
   source: "imported" | "manual" | "adjustment"
+  stdId?: string
+  stdSnapshot?: EstimateCatalogSnapshot
 }
 
 interface ChatMessage {
+  id: string
   role: "user" | "bot"
   text: string
-  choices?: string[]
-  suggestions?: {
-    desc: string
-    unit: string
-    rate: number
-    qty: number
-  }[]
+  suggestions?: EstimateAiSuggestion[]
 }
 
-const HISTORICAL_ITEMS = [
-  { id: 'h1', desc: 'Structural concrete C32/40', avgRate: 3850, unit: 'm³', category: 'Structural', source: '3 BOQs' },
-  { id: 'h2', desc: 'Structural concrete C25/30', avgRate: 3450, unit: 'm³', category: 'Structural', source: '4 BOQs' },
-  { id: 'h3', desc: 'Reinforcement bar SD40 — 16mm', avgRate: 28500, unit: 'ton', category: 'Structural', source: '3 BOQs' },
-  { id: 'h4', desc: 'Reinforcement bar SD40 — 12mm', avgRate: 29000, unit: 'ton', category: 'Structural', source: '3 BOQs' },
-  { id: 'h5', desc: 'Formwork — column', avgRate: 680, unit: 'm²', category: 'Structural', source: '4 BOQs' },
-  { id: 'h6', desc: 'Formwork — slab', avgRate: 590, unit: 'm²', category: 'Structural', source: '4 BOQs' },
-  { id: 'h7', desc: 'Structural steel frame — beams', avgRate: 42000, unit: 'ton', category: 'Structural', source: '2 BOQs' },
-  { id: 'h8', desc: 'Metal deck flooring', avgRate: 950, unit: 'm²', category: 'Structural', source: '3 BOQs' },
-  { id: 'h9', desc: 'HVAC ductwork — supply', avgRate: 1850, unit: 'm²', category: 'MEP', source: '2 BOQs' },
-  { id: 'h10', desc: 'HVAC ductwork — return', avgRate: 1700, unit: 'm²', category: 'MEP', source: '2 BOQs' },
-  { id: 'h11', desc: 'Electrical cable tray — 300mm', avgRate: 850, unit: 'm', category: 'MEP', source: '3 BOQs' },
-  { id: 'h12', desc: 'Electrical cable — THW 50mm²', avgRate: 320, unit: 'm', category: 'MEP', source: '3 BOQs' },
-  { id: 'h13', desc: 'Plumbing — PVC pipe 4"', avgRate: 280, unit: 'm', category: 'MEP', source: '4 BOQs' },
-  { id: 'h14', desc: 'Fire suppression — sprinkler head', avgRate: 450, unit: 'ea', category: 'MEP', source: '2 BOQs' },
-  { id: 'h15', desc: 'Ceramic tile — floor 600×600', avgRate: 680, unit: 'm²', category: 'Finishing', source: '3 BOQs' },
-  { id: 'h16', desc: 'Ceramic tile — wall 300×600', avgRate: 620, unit: 'm²', category: 'Finishing', source: '3 BOQs' },
-  { id: 'h17', desc: 'Paint — interior emulsion', avgRate: 85, unit: 'm²', category: 'Finishing', source: '4 BOQs' },
-  { id: 'h18', desc: 'Suspended ceiling — T-grid system', avgRate: 520, unit: 'm²', category: 'Finishing', source: '2 BOQs' },
-  { id: 'h19', desc: 'Door — hollow core 0.9m', avgRate: 4500, unit: 'ea', category: 'Finishing', source: '3 BOQs' },
-  { id: 'h20', desc: 'Door — solid core 1.2m', avgRate: 8200, unit: 'ea', category: 'Finishing', source: '2 BOQs' },
-]
+type CatalogSelection = Pick<StandardEntry, "id" | "description" | "unit">
 
-const CHAT_FLOWS = [
-  "Hi! I'm your BOQ Assistant. Tell me about your project — what kind of building or structure?",
-  "What type of structure?<br>• <b>RC / Concrete</b><br>• <b>Steel structure</b><br>• <b>Mixed</b>",
-  "How many floors? This helps estimate foundation, columns, and slabs.",
-  "Does the project include any of these?<br>• Basement / underground parking<br>• MEP (HVAC, electrical, plumbing)<br>• Finishing works (tiles, paint, ceiling)<br>Let me know.",
-]
+function makeId(prefix = "e") {
+  return `${prefix}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function finiteNonNegative(value: unknown, fallback = 0) {
+  const parsed = typeof value === "number" ? value : Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback
+}
+
+export function normalizeEstimateItems(items: Estimate["items"] | undefined): EstimateItemLocal[] {
+  if (!Array.isArray(items)) return []
+  return items.map((item, index) => {
+    const qty = finiteNonNegative(item.qty)
+    const rate = finiteNonNegative(item.rate)
+    const source = item.source === "imported" || item.source === "adjustment" ? item.source : "manual"
+    const stdId = typeof item.stdId === "string" && item.stdId.length > 0 ? item.stdId : undefined
+    return {
+      id: `${item.code || "saved"}-${index}`,
+      desc: typeof item.desc === "string" ? item.desc : "",
+      unit: typeof item.unit === "string" ? item.unit : "",
+      qty,
+      rate,
+      total: qty * rate,
+      source,
+      stdId,
+      stdSnapshot: normalizeEstimateItemSnapshot(item),
+    }
+  })
+}
+
+export function toEstimateItemPayload(item: EstimateItemLocal): Estimate["items"][number] {
+  return {
+    code: "",
+    desc: item.desc,
+    unit: item.unit,
+    qty: item.qty,
+    rate: item.rate,
+    total: item.total,
+    source: item.source,
+    ...(item.stdId ? { stdId: item.stdId } : {}),
+    ...(item.stdSnapshot ? { stdSnapshot: item.stdSnapshot } : {}),
+  }
+}
+
+function BotMessageText({ text }: { text: string }) {
+  const lines = text.replace(/<br\s*\/?\s*>/gi, "\n").split("\n")
+  return lines.map((line, index) => {
+    const clean = line.replace(/<\/?b>/gi, "")
+    const bullet = clean.trim().startsWith("•")
+    return (
+      <span key={`${index}-${clean}`} className={bullet ? "chat-line chat-line-bullet" : "chat-line"}>
+        {clean}
+      </span>
+    )
+  })
+}
 
 export default function EstimatorPage() {
   const [projectName, setProjectName] = useState("New Estimate")
@@ -62,14 +97,29 @@ export default function EstimatorPage() {
   const [projectDesc, setProjectDesc] = useState("")
   const [items, setItems] = useState<EstimateItemLocal[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState("")
   const [saving, setSaving] = useState(false)
+  const saveInFlightRef = useRef(false)
+  const saveRequestRef = useRef(0)
+  const editRevisionRef = useRef(0)
 
   const [chatOpen, setChatOpen] = useState(false)
   const [chatInput, setChatInput] = useState("")
   const [chatMsgs, setChatMsgs] = useState<ChatMessage[]>([])
   const [chatWaiting, setChatWaiting] = useState(false)
-  const [chatStep, setChatStep] = useState(0)
+  const [chatError, setChatError] = useState("")
   const chatEndRef = useRef<HTMLDivElement>(null)
+  const chatInputRef = useRef<HTMLInputElement>(null)
+  const chatAbortRef = useRef<AbortController | null>(null)
+
+  const [catalogOpen, setCatalogOpen] = useState(false)
+  const [catalogSearch, setCatalogSearch] = useState("")
+  const [catalogEntries, setCatalogEntries] = useState<StandardEntry[]>([])
+  const [catalogLoading, setCatalogLoading] = useState(false)
+  const [catalogError, setCatalogError] = useState("")
+  const [chatCatalogLoading, setChatCatalogLoading] = useState(false)
+  const catalogLoadedRef = useRef(false)
+  const catalogEntriesRef = useRef<StandardEntry[]>([])
 
   const [itemModalOpen, setItemModalOpen] = useState(false)
   const [editingItemId, setEditingItemId] = useState<string | null>(null)
@@ -77,28 +127,106 @@ export default function EstimatorPage() {
   const [modalQty, setModalQty] = useState("1")
   const [modalRate, setModalRate] = useState("0")
   const [modalUnit, setModalUnit] = useState("")
-  const [descSuggestions, setDescSuggestions] = useState<typeof HISTORICAL_ITEMS>([])
+  const [descSuggestions, setDescSuggestions] = useState<StandardEntry[]>([])
+  const [selectedModalStandard, setSelectedModalStandard] = useState<CatalogSelection | null>(null)
+  const [activeSuggestion, setActiveSuggestion] = useState(-1)
+  const [itemError, setItemError] = useState("")
+  const modalRef = useRef<HTMLDivElement>(null)
+  const modalDescRef = useRef<HTMLInputElement>(null)
+  const modalTriggerRef = useRef<HTMLElement | null>(null)
+
+  function claimEdit() {
+    if (saveInFlightRef.current) return false
+    editRevisionRef.current += 1
+    return true
+  }
+
+  const fetchEstimates = useCallback(async (signal?: AbortSignal) => {
+    setLoading(true)
+    setLoadError("")
+    try {
+      const res = await fetch("/api/estimates", { signal })
+      if (!res.ok) throw new Error("Could not load your latest estimate")
+      const data = (await res.json()) as { estimates?: Estimate[] }
+      const last = Array.isArray(data.estimates) ? data.estimates[0] : undefined
+      if (last) {
+        setProjectName(last.name || "New Estimate")
+        setProjectDate(last.date || "")
+        setProjectDesc(last.notes || "")
+        setItems(normalizeEstimateItems(last.items))
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return
+      setLoadError("Could not load your latest estimate. Check your connection and try again.")
+    } finally {
+      if (!signal?.aborted) setLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    async function fetchEstimates() {
-      try {
-        const res = await fetch("/api/estimates")
-        if (res.ok) {
-          const data = await res.json()
-          if (data.estimates && data.estimates.length > 0) {
-            const last = data.estimates[0] as Estimate
-            setProjectName(last.name || "New Estimate")
-            setProjectDate(last.date || "")
-            setProjectDesc(last.notes || "")
-          }
-        }
-      } catch {
-      } finally {
-        setLoading(false)
+    const controller = new AbortController()
+    void Promise.resolve().then(() => fetchEstimates(controller.signal))
+    return () => controller.abort()
+  }, [fetchEstimates])
+
+  const fetchCatalog = useCallback(async (search: string, signal?: AbortSignal): Promise<StandardEntry[]> => {
+    setCatalogLoading(true)
+    setCatalogError("")
+    try {
+      const query = search.trim() ? `?search=${encodeURIComponent(search.trim())}` : ""
+      const response = await fetch(`/api/standards${query}`, { signal })
+      if (!response.ok) throw new Error("Could not load the Standard Catalog")
+      const data = await response.json() as unknown
+      const entries = Array.isArray(data)
+        ? data.filter((entry): entry is StandardEntry => (
+          typeof entry === "object"
+          && entry !== null
+          && typeof (entry as StandardEntry).id === "string"
+          && typeof (entry as StandardEntry).description === "string"
+          && typeof (entry as StandardEntry).unit === "string"
+          && !(entry as StandardEntry).archivedAt
+        ))
+        : []
+      if (signal?.aborted) return []
+      catalogLoadedRef.current = true
+      catalogEntriesRef.current = entries
+      setCatalogEntries(entries)
+      return entries
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return []
+      if (!signal?.aborted) {
+        catalogLoadedRef.current = true
+        setCatalogError("Could not load the Standard Catalog. Try again.")
       }
+      return []
+    } finally {
+      if (!signal?.aborted) setCatalogLoading(false)
     }
-    fetchEstimates()
   }, [])
+
+  useEffect(() => {
+    if (!catalogOpen) return
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => void fetchCatalog(catalogSearch, controller.signal), 220)
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [catalogOpen, catalogSearch, fetchCatalog])
+
+  useEffect(() => {
+    if (!itemModalOpen || modalDesc.trim().length < 2) return
+    const controller = new AbortController()
+    const timer = window.setTimeout(async () => {
+      const entries = await fetchCatalog(modalDesc, controller.signal)
+      if (controller.signal.aborted) return
+      setDescSuggestions(entries.slice(0, 8))
+      setActiveSuggestion(entries.length > 0 ? 0 : -1)
+    }, 220)
+    return () => { window.clearTimeout(timer); controller.abort() }
+  }, [fetchCatalog, itemModalOpen, modalDesc])
+
+  useEffect(() => () => chatAbortRef.current?.abort(), [])
 
   useEffect(() => {
     if (chatEndRef.current) {
@@ -106,28 +234,82 @@ export default function EstimatorPage() {
     }
   }, [chatMsgs, chatWaiting])
 
-  function addItem(item?: Partial<EstimateItemLocal>) {
+  useEffect(() => {
+    if (chatOpen) chatInputRef.current?.focus()
+  }, [chatOpen])
+
+  useEffect(() => {
+    if (activeSuggestion < 0) return
+    const suggestion = descSuggestions[activeSuggestion]
+    if (!suggestion) return
+    document.getElementById(`est-suggestion-${suggestion.id}`)?.scrollIntoView({ block: "nearest" })
+  }, [activeSuggestion, descSuggestions])
+
+  useEffect(() => {
+    if (!itemModalOpen) return
+    const dialog = modalRef.current
+    const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    ) ?? [])
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault()
+        closeItemModal()
+      }
+      if (event.key !== "Tab") return
+      const controls = focusable()
+      if (controls.length === 0) return
+      const first = controls[0]
+      const last = controls[controls.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener("keydown", onKeyDown)
+    const timer = window.setTimeout(() => modalDescRef.current?.focus(), 0)
+    return () => {
+      window.clearTimeout(timer)
+      document.removeEventListener("keydown", onKeyDown)
+    }
+  }, [itemModalOpen])
+
+  function addItem(id: string, item?: Partial<EstimateItemLocal>) {
+    if (!claimEdit()) return false
+    const desc = item?.desc || ""
+    const unit = item?.unit || ""
+    const qty = finiteNonNegative(item?.qty ?? 1)
+    const rate = finiteNonNegative(item?.rate ?? 0)
     const newItem: EstimateItemLocal = {
-      id: `e${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      desc: item?.desc || "",
-      unit: item?.unit || "",
-      qty: item?.qty ?? 1,
-      rate: item?.rate ?? 0,
-      total: (item?.qty ?? 1) * (item?.rate ?? 0),
+      id,
+      desc,
+      unit,
+      qty,
+      rate,
+      total: qty * rate,
       source: item?.source || "manual",
+      stdId: item?.stdId,
+      stdSnapshot: item?.stdSnapshot || (item?.stdId && desc && unit ? { description: desc, unit } : undefined),
     }
     setItems((prev) => [...prev, newItem])
+    return true
   }
 
-  function updateItem(id: string, field: keyof EstimateItemLocal, value: string | number) {
+  function updateItem(id: string, field: keyof EstimateItemLocal, value: EstimateItemLocal[keyof EstimateItemLocal]) {
+    if (!claimEdit()) return
     setItems((prev) =>
       prev.map((item) => {
         if (item.id !== id) return item
         const updated = { ...item, [field]: value }
         if (field === "qty" || field === "rate") {
-          const q = field === "qty" ? Number(value) : item.qty
-          const r = field === "rate" ? Number(value) : item.rate
-          updated.total = (q || 0) * (r || 0)
+          const q = field === "qty" ? finiteNonNegative(value) : item.qty
+          const r = field === "rate" ? finiteNonNegative(value) : item.rate
+          if (field === "qty") updated.qty = q
+          if (field === "rate") updated.rate = r
+          updated.total = q * r
         }
         return updated
       })
@@ -135,16 +317,24 @@ export default function EstimatorPage() {
   }
 
   function removeItem(id: string) {
+    if (saveInFlightRef.current) return
+    const item = items.find((candidate) => candidate.id === id)
+    if (!item || !window.confirm(`Delete “${item.desc || "Untitled item"}”?`)) return
+    if (!claimEdit()) return
     setItems((prev) => prev.filter((i) => i.id !== id))
   }
 
   const totalAmount = items.reduce((sum, i) => sum + i.total, 0)
 
   async function handleSave() {
+    if (saveInFlightRef.current) return
     if (items.length === 0) {
       toast.error("Add at least one item")
       return
     }
+    const requestId = ++saveRequestRef.current
+    const savedRevision = editRevisionRef.current
+    saveInFlightRef.current = true
     setSaving(true)
     try {
       const res = await fetch("/api/estimates", {
@@ -155,28 +345,31 @@ export default function EstimatorPage() {
           project: projectName,
           date: projectDate,
           notes: projectDesc,
-          items: items.map((i) => ({
-            code: "",
-            desc: i.desc,
-            unit: i.unit,
-            qty: i.qty,
-            rate: i.rate,
-            total: i.total,
-            source: i.source,
-          })),
+          items: items.map(toEstimateItemPayload),
         }),
       })
       if (!res.ok) throw new Error("Save failed")
+      const saved = (await res.json()) as { id?: string } | null
+      if (!saved?.id) throw new Error("Save response was incomplete")
+      if (savedRevision !== editRevisionRef.current) {
+        toast.warning("Estimate changed while saving. Save again to include the latest edits.")
+        return
+      }
       toast.success("Estimate saved")
     } catch {
       toast.error("Failed to save estimate")
     } finally {
-      setSaving(false)
+      if (requestId === saveRequestRef.current) {
+        saveInFlightRef.current = false
+        setSaving(false)
+      }
     }
   }
 
   // ── Item modal ──
   function openItemModal(itemId?: string) {
+    if (saveInFlightRef.current) return
+    modalTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     if (itemId) {
       const item = items.find((i) => i.id === itemId)
       if (!item) return
@@ -185,25 +378,49 @@ export default function EstimatorPage() {
       setModalQty(String(item.qty))
       setModalRate(String(item.rate))
       setModalUnit(item.unit || "")
+      setSelectedModalStandard(item.stdId ? {
+        id: item.stdId,
+        description: item.stdSnapshot?.description ?? item.desc,
+        unit: item.stdSnapshot?.unit ?? item.unit,
+      } : null)
     } else {
       setEditingItemId(null)
       setModalDesc("")
       setModalQty("1")
       setModalRate("0")
       setModalUnit("")
+      setSelectedModalStandard(null)
     }
     setDescSuggestions([])
+    setActiveSuggestion(-1)
+    setItemError("")
     setItemModalOpen(true)
   }
 
+  function closeItemModal() {
+    setItemModalOpen(false)
+    setEditingItemId(null)
+    setSelectedModalStandard(null)
+    setDescSuggestions([])
+    setActiveSuggestion(-1)
+    setItemError("")
+    window.setTimeout(() => modalTriggerRef.current?.focus(), 0)
+  }
+
   function saveItemModal() {
+    if (saveInFlightRef.current) return
     const desc = modalDesc.trim()
     if (!desc) {
-      toast.error("Enter a description")
+      setItemError("Enter a description.")
+      modalDescRef.current?.focus()
       return
     }
-    const qty = parseFloat(modalQty) || 0
-    const rate = parseFloat(modalRate) || 0
+    const qty = Number(modalQty)
+    const rate = Number(modalRate)
+    if (!modalQty.trim() || !modalRate.trim() || !Number.isFinite(qty) || qty < 0 || !Number.isFinite(rate) || rate < 0) {
+      setItemError("Quantity and unit price must be zero or greater.")
+      return
+    }
     const unit = modalUnit.trim()
 
     if (editingItemId) {
@@ -211,151 +428,287 @@ export default function EstimatorPage() {
       updateItem(editingItemId, "unit", unit)
       updateItem(editingItemId, "qty", qty)
       updateItem(editingItemId, "rate", rate)
+      if (selectedModalStandard) {
+        updateItem(editingItemId, "stdId", selectedModalStandard.id)
+        updateItem(editingItemId, "stdSnapshot", { description: selectedModalStandard.description, unit: selectedModalStandard.unit })
+      }
       toast.success("Item saved")
     } else {
-      addItem({ desc, unit, qty, rate, source: "manual" })
+      addItem(`e${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, {
+        desc, unit, qty, rate, source: "manual",
+        ...(selectedModalStandard ? {
+          stdId: selectedModalStandard.id,
+          stdSnapshot: { description: selectedModalStandard.description, unit: selectedModalStandard.unit },
+        } : {}),
+      })
       toast.success("Item added")
     }
-    setItemModalOpen(false)
-    setEditingItemId(null)
+    closeItemModal()
   }
 
   // ── Description autocomplete ──
   function onDescInput(value: string) {
+    if (saveInFlightRef.current) return
     setModalDesc(value)
-    const val = value.trim().toLowerCase()
-    if (!val) {
+    setSelectedModalStandard(null)
+    setItemError("")
+    if (!value.trim()) {
       setDescSuggestions([])
+      setActiveSuggestion(-1)
       return
     }
-    const matches = HISTORICAL_ITEMS.filter((h) => h.desc.toLowerCase().includes(val))
-    setDescSuggestions(matches)
   }
 
-  function pickDescSuggestion(h: (typeof HISTORICAL_ITEMS)[number]) {
-    setModalDesc(h.desc)
-    setModalRate(String(h.avgRate))
+  function pickDescSuggestion(h: StandardEntry) {
+    if (saveInFlightRef.current) return
+    setModalDesc(h.description)
     setModalUnit(h.unit)
+    setModalRate(String(h.historicalPricing?.average ?? 0))
+    setSelectedModalStandard(h)
     setDescSuggestions([])
+    setActiveSuggestion(-1)
   }
 
-  // ── Chat ──
+  function getAiCatalogContext(entries = catalogEntriesRef.current) {
+    const available = entries.slice(0, 80).map(standardEntryToEstimateAiCatalogEntry)
+    const selectedById = new Map<string, EstimateAiCatalogEntry>()
+    for (const item of items) {
+      if (!item.stdId) continue
+      const description = item.stdSnapshot?.description || item.desc
+      const unit = item.stdSnapshot?.unit || item.unit
+      if (!description || !unit || selectedById.has(item.stdId)) continue
+      selectedById.set(item.stdId, {
+        id: item.stdId,
+        description,
+        unit,
+        defaultQty: item.qty,
+        defaultRate: item.rate,
+      })
+    }
+    return { available, selected: Array.from(selectedById.values()) }
+  }
+
+  function addCatalogEntry(entry: StandardEntry) {
+    if (saving) return
+    if (items.some((item) => item.stdId === entry.id)) {
+      toast.info("That catalog item is already in the estimate")
+      return
+    }
+    const row = catalogEntryToEstimateItem(standardEntryToEstimateAiCatalogEntry(entry))
+    if (!addItem(makeId("catalog-"), row)) return
+    toast.success(`Added "${entry.description}" from the Standard Catalog`)
+  }
+
   function toggleChat() {
-    const next = !chatOpen
-    setChatOpen(next)
-    if (next && chatMsgs.length === 0) {
-      setChatMsgs([{ role: "bot", text: CHAT_FLOWS[0] }])
-      setChatStep(1)
+    if (chatOpen) {
+      closeChat()
+      return
+    }
+    setChatOpen(true)
+    setChatError("")
+    if (chatMsgs.length === 0) {
+      setChatMsgs([{
+        id: makeId("chat-"),
+        role: "bot",
+        text: "Tell me about the project scope, building type, quantities, units, or rates. I’ll return catalog-backed and manual suggestions for your review.",
+      }])
     }
   }
 
-  function sendChatMsg() {
-    const text = chatInput.trim()
+  function closeChat() {
+    chatAbortRef.current?.abort()
+    chatAbortRef.current = null
+    setChatWaiting(false)
+    setChatOpen(false)
+  }
+
+  function isEstimateAiSuggestion(value: unknown): value is EstimateAiSuggestion {
+    if (!value || typeof value !== "object") return false
+    const suggestion = value as Partial<EstimateAiSuggestion>
+    return typeof suggestion.description === "string"
+      && typeof suggestion.unit === "string"
+      && typeof suggestion.quantity === "number"
+      && Number.isFinite(suggestion.quantity)
+      && suggestion.quantity >= 0
+      && typeof suggestion.rate === "number"
+      && Number.isFinite(suggestion.rate)
+      && suggestion.rate >= 0
+      && (suggestion.source === "catalog" || suggestion.source === "manual")
+      && typeof suggestion.reason === "string"
+  }
+
+  async function sendChatMsg(message = chatInput) {
+    const text = message.trim()
     if (!text || chatWaiting) return
     setChatInput("")
-    setChatMsgs((prev) => [...prev, { role: "user", text }])
+    setChatError("")
+    setChatMsgs((prev) => [...prev, { id: makeId("chat-"), role: "user", text }])
     setChatWaiting(true)
+    const controller = new AbortController()
+    chatAbortRef.current = controller
 
-    setTimeout(() => {
-      const t = text.toLowerCase()
-      const isLong = text.length > 15
-      const isConcrete = /concrete|foundation|column|slab|beam|rc/i.test(t)
-      const isSteel = /steel|metal|frame/i.test(t)
-      const isFinishing = /finish|tile|paint|ceiling|floor|wall|interior/i.test(t)
-      const isMep = /hvac|ac|air|electrical|cable|plumbing|pipe|fire|sprinkler/i.test(t)
-      const isBasement = /basement|underground|parking|excavation|pile/i.test(t)
-
-      if (chatStep < CHAT_FLOWS.length && !isLong) {
-        const flowMsg = CHAT_FLOWS[chatStep]
-        const choices = chatStep === 1 ? ["RC / Concrete", "Steel structure", "Mixed"] : undefined
-        setChatMsgs((prev) => [...prev, { role: "bot", text: flowMsg, choices }])
-        setChatStep((s) => s + 1)
-        setChatWaiting(false)
-      } else {
-        const sugg: ChatMessage["suggestions"] = []
-        if (isBasement || isConcrete) {
-          sugg.push({ desc: 'Bored pile — D0.80m x 18m', qty: 20, unit: 'm', rate: 4500 })
-          sugg.push({ desc: 'Concrete C32/40 — columns', qty: 50, unit: 'm³', rate: 3850 })
-          sugg.push({ desc: 'Concrete C30/37 — slabs', qty: 80, unit: 'm³', rate: 3450 })
-          sugg.push({ desc: 'Rebar SD40 — 16mm', qty: 12, unit: 'ton', rate: 28500 })
-          sugg.push({ desc: 'Formwork — column', qty: 300, unit: 'm²', rate: 680 })
-          sugg.push({ desc: 'Formwork — slab', qty: 500, unit: 'm²', rate: 590 })
-          sugg.push({ desc: 'Waterproofing membrane — basement', qty: 200, unit: 'm²', rate: 520 })
-        }
-        if (isSteel) {
-          if (!isConcrete) sugg.push({ desc: 'Bored pile — D0.80m x 18m', qty: 16, unit: 'm', rate: 4500 })
-          sugg.push({ desc: 'Steel frame — main beams', qty: 25, unit: 'ton', rate: 42000 })
-          sugg.push({ desc: 'Metal deck flooring', qty: 400, unit: 'm²', rate: 950 })
-        }
-        if (isMep || isConcrete || isSteel) {
-          sugg.push({ desc: 'HVAC ductwork — supply', qty: 150, unit: 'm²', rate: 1850 })
-          sugg.push({ desc: 'Electrical cable tray — 300mm', qty: 80, unit: 'm', rate: 850 })
-          sugg.push({ desc: 'Plumbing — PVC pipe 4"', qty: 120, unit: 'm', rate: 280 })
-          sugg.push({ desc: 'Fire suppression — sprinkler head', qty: 30, unit: 'ea', rate: 450 })
-        }
-        if (isFinishing || isConcrete || isSteel) {
-          sugg.push({ desc: 'Ceramic tile — floor 600×600', qty: 350, unit: 'm²', rate: 680 })
-          sugg.push({ desc: 'Suspended ceiling — T-grid system', qty: 300, unit: 'm²', rate: 520 })
-          sugg.push({ desc: 'Paint — interior emulsion', qty: 800, unit: 'm²', rate: 85 })
-          sugg.push({ desc: 'Door — hollow core 0.9m', qty: 15, unit: 'ea', rate: 4500 })
-        }
-        if (sugg.length === 0) {
-          sugg.push({ desc: 'Concrete C32/40 — columns', qty: 30, unit: 'm³', rate: 3850 })
-          sugg.push({ desc: 'Rebar SD40 — 16mm', qty: 8, unit: 'ton', rate: 28500 })
-          sugg.push({ desc: 'Formwork — slab', qty: 400, unit: 'm²', rate: 590 })
-          sugg.push({ desc: 'Ceramic tile — floor 600×600', qty: 200, unit: 'm²', rate: 680 })
-          sugg.push({ desc: 'Paint — interior emulsion', qty: 500, unit: 'm²', rate: 85 })
-        }
-
-        setChatMsgs((prev) => [
-          ...prev,
-          {
-            role: "bot",
-            text: "Based on your description, here are suggested items (quantities are estimates):",
-            suggestions: sugg,
+    try {
+      let entriesForChat = catalogEntries
+      if (!catalogLoadedRef.current || Boolean(catalogError) || entriesForChat.length === 0) {
+        setChatCatalogLoading(true)
+        entriesForChat = await fetchCatalog("", controller.signal)
+        setChatCatalogLoading(false)
+        if (controller.signal.aborted) return
+      }
+      if (entriesForChat.length === 0) {
+        setChatError("No active Standard Catalog entries are available. Suggestions will be manual/new items.")
+      }
+      const context = getAiCatalogContext(entriesForChat)
+      const history = [
+        ...chatMsgs,
+        { id: "pending-user-message", role: "user" as const, text },
+      ].slice(-20).map((msg) => ({
+        role: msg.role === "bot" ? "assistant" as const : "user" as const,
+        content: msg.suggestions?.length
+          ? `${msg.text}\nSuggestions: ${JSON.stringify(msg.suggestions)}`
+          : msg.text,
+      }))
+      const response = await fetch("/api/llm/estimate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          message: text,
+          estimate: {
+            projectName,
+            date: projectDate,
+            notes: projectDesc,
+            items: items.map(toEstimateItemPayload),
           },
-        ])
+          catalog: context,
+          history,
+        }),
+      })
+      const data = await response.json() as { assistantText?: unknown; suggestions?: unknown; fallback?: unknown; error?: unknown }
+      const suggestions = Array.isArray(data.suggestions) ? data.suggestions.filter(isEstimateAiSuggestion) : []
+      const isFallback = data.fallback === true
+      if ((!response.ok && !isFallback) || (!isFallback && suggestions.length === 0)) throw new Error("AI assistant unavailable")
+      setChatMsgs((prev) => [...prev, {
+        id: makeId("chat-"),
+        role: "bot",
+        text: typeof data.assistantText === "string" && data.assistantText.trim() ? data.assistantText : "Here are suggestions for your review.",
+        suggestions,
+      }])
+      if (isFallback) {
+        setChatError(typeof data.error === "string" && data.error.trim()
+          ? data.error
+          : "AI suggestions are unavailable. Review the manual/new item below.")
+      }
+    } catch {
+      if (controller.signal.aborted) return
+      const fallback = buildEstimateAiManualFallback("The AI assistant is unavailable right now.")
+      setChatMsgs((prev) => [...prev, {
+        id: makeId("chat-"),
+        role: "bot",
+        text: fallback.assistantText,
+        suggestions: fallback.suggestions,
+      }])
+      setChatError("The AI assistant is unavailable. Review the manual/new item below or add an item manually.")
+    } finally {
+      setChatCatalogLoading(false)
+      if (chatAbortRef.current === controller) {
+        chatAbortRef.current = null
         setChatWaiting(false)
+        chatInputRef.current?.focus()
       }
-    }, 700)
-  }
-
-  function chatAddSuggestion(s: NonNullable<ChatMessage["suggestions"]>[number]) {
-    addItem({ desc: s.desc, unit: s.unit, rate: s.rate, qty: s.qty, source: "manual" })
-    toast.success(`Added "${s.desc}"`)
-  }
-
-  function chatAddAll(suggestions: NonNullable<ChatMessage["suggestions"]>) {
-    for (const s of suggestions) {
-      addItem({ desc: s.desc, unit: s.unit, rate: s.rate, qty: s.qty, source: "manual" })
     }
-    toast.success(`Added ${suggestions.length} items`)
   }
 
-  function chatChoose(choice: string) {
-    setChatMsgs((prev) => [...prev, { role: "user", text: choice }])
-    setChatWaiting(true)
-    setTimeout(() => {
-      const nextStep = chatStep
-      if (nextStep < CHAT_FLOWS.length) {
-        setChatMsgs((prev) => [...prev, { role: "bot", text: CHAT_FLOWS[nextStep] }])
-        setChatStep((s) => s + 1)
-      }
-      setChatWaiting(false)
-    }, 500)
+  function chatAddSuggestion(suggestion: EstimateAiSuggestion) {
+    if (saveInFlightRef.current) return
+    const verified = verifyEstimateAiSuggestion(suggestion, [
+      ...getAiCatalogContext().available,
+      ...getAiCatalogContext().selected,
+    ])
+    const catalogBacked = verified.source === "catalog" && Boolean(verified.stdId)
+    if (catalogBacked && items.some((item) => item.stdId === verified.stdId)) {
+      toast.info("That catalog item is already in the estimate")
+      return
+    }
+    const label = catalogBacked ? "catalog-backed item" : "manual/new item"
+    if (!window.confirm(`Review and add this ${label}?\n\n${verified.description}\n${verified.quantity} ${verified.unit} × ฿${verified.rate.toLocaleString()}`)) return
+    const added = addItem(makeId("ai-"), {
+      desc: verified.description,
+      unit: verified.unit,
+      qty: verified.quantity,
+      rate: verified.rate,
+      source: catalogBacked ? "imported" : "manual",
+      stdId: catalogBacked ? verified.stdId : undefined,
+      stdSnapshot: catalogBacked ? { description: verified.description, unit: verified.unit } : undefined,
+    })
+    if (!added) return
+    toast.success(`Added "${verified.description}"`)
+    setChatMsgs((prev) => [...prev, { id: makeId("chat-"), role: "bot", text: `Added ${verified.description}. You can edit its quantity or rate in the estimate.` }])
+  }
+
+  function chatAddAll(suggestions: EstimateAiSuggestion[]) {
+    if (saveInFlightRef.current) return
+    const context = getAiCatalogContext()
+    const verified = suggestions.map((suggestion) => verifyEstimateAiSuggestion(suggestion, [...context.available, ...context.selected]))
+    const existingCatalogIds = new Set(items.flatMap((item) => item.stdId ? [item.stdId] : []))
+    const pending = verified.filter((suggestion) => {
+      if (!suggestion.stdId) return true
+      if (existingCatalogIds.has(suggestion.stdId)) return false
+      existingCatalogIds.add(suggestion.stdId)
+      return true
+    })
+    if (pending.length === 0) {
+      toast.info("All catalog-backed suggestions are already in the estimate")
+      return
+    }
+    const preview = pending.slice(0, 5).map((suggestion) => `• ${suggestion.description}`).join("\n")
+    const suffix = pending.length > 5 ? `\n• +${pending.length - 5} more` : ""
+    if (!window.confirm(`Review and add ${pending.length} suggested item${pending.length === 1 ? "" : "s"}?\n\n${preview}${suffix}`)) return
+    let added = 0
+    for (const suggestion of pending) {
+      const catalogBacked = suggestion.source === "catalog" && Boolean(suggestion.stdId)
+      if (addItem(makeId("ai-"), {
+        desc: suggestion.description,
+        unit: suggestion.unit,
+        qty: suggestion.quantity,
+        rate: suggestion.rate,
+        source: catalogBacked ? "imported" : "manual",
+        stdId: catalogBacked ? suggestion.stdId : undefined,
+        stdSnapshot: catalogBacked ? { description: suggestion.description, unit: suggestion.unit } : undefined,
+      })) added += 1
+    }
+    if (added > 0) {
+      toast.success(`Added ${added} reviewed item${added === 1 ? "" : "s"}`)
+      setChatMsgs((prev) => [...prev, { id: makeId("chat-"), role: "bot", text: "Reviewed suggestions added. Adjust quantities and rates before saving." }])
+    }
+  }
+
+  function refineChat() {
+    setChatInput("Please refine the previous suggestions with more precise quantities and rates.")
+    chatInputRef.current?.focus()
   }
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64 text-muted-foreground text-sm" data-od-id="estimator-loading">
-        <div className="proto-spinner mr-3" />
-        Loading...
+      <div className="estimator-loading" data-od-id="estimator-loading" role="status">
+        <div className="proto-spinner" />
+        Loading estimate…
+      </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <div className="proto-empty-state estimator-load-error" data-od-id="estimator-error" role="alert">
+        <h3>Estimate unavailable</h3>
+        <p>{loadError}</p>
+        <button className="btn btn-primary btn-sm" onClick={() => void fetchEstimates()}>Retry</button>
       </div>
     )
   }
 
   return (
-    <div data-od-id="estimator-page">
+    <div className={`estimator-workspace${items.length > 0 ? " has-summary" : ""}`} data-od-id="estimator-page">
       <div className="est-page">
         <div className="project-meta">
           <div className="pm-group" style={{ flex: 1 }}>
@@ -363,7 +716,11 @@ export default function EstimatorPage() {
             <input
               className="pm-name"
               value={projectName}
-              onChange={(e) => setProjectName(e.target.value)}
+              onChange={(e) => {
+                if (!claimEdit()) return
+                setProjectName(e.target.value)
+              }}
+              disabled={saving}
               placeholder="Project name…"
               data-od-id="project-name"
             />
@@ -374,7 +731,11 @@ export default function EstimatorPage() {
               className="pm-date"
               type="date"
               value={projectDate}
-              onChange={(e) => setProjectDate(e.target.value)}
+              onChange={(e) => {
+                if (!claimEdit()) return
+                setProjectDate(e.target.value)
+              }}
+              disabled={saving}
               data-od-id="project-date"
             />
           </div>
@@ -384,7 +745,11 @@ export default function EstimatorPage() {
             <label>Description</label>
             <textarea
               value={projectDesc}
-              onChange={(e) => setProjectDesc(e.target.value)}
+              onChange={(e) => {
+                if (!claimEdit()) return
+                setProjectDesc(e.target.value)
+              }}
+              disabled={saving}
               placeholder="Project description, location, notes…"
               rows={2}
               data-od-id="project-desc"
@@ -398,14 +763,95 @@ export default function EstimatorPage() {
             Estimate Items
             {items.length > 0 && <span className="meta" style={{ marginLeft: "8px" }}>({items.length} items)</span>}
           </h2>
-          <button className="btn btn-primary btn-sm" onClick={() => openItemModal()} data-od-id="add-item-btn">
-            + Add Item
-          </button>
+          <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => setCatalogOpen((open) => !open)}
+              disabled={saving}
+              aria-expanded={catalogOpen}
+              aria-controls="estimator-catalog-picker"
+              data-od-id="catalog-picker-toggle"
+            >
+              {catalogOpen ? "Hide Catalog" : "Browse Catalog"}
+            </button>
+            <button className="btn btn-primary btn-sm" onClick={() => openItemModal()} disabled={saving} data-od-id="add-item-btn">
+              + Add Item
+            </button>
+          </div>
         </div>
+
+        {catalogOpen && (
+          <section
+            id="estimator-catalog-picker"
+            className="proto-card"
+            aria-labelledby="estimator-catalog-title"
+            data-od-id="estimator-catalog-picker"
+            style={{ marginBottom: "var(--space-3)", padding: "var(--space-3)" }}
+          >
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "var(--space-3)", marginBottom: "var(--space-2)" }}>
+              <div>
+                <h3 id="estimator-catalog-title" style={{ margin: 0, fontSize: "var(--text-sm)" }}>Standard Catalog</h3>
+                <p className="meta" style={{ margin: "3px 0 0" }}>Add an active catalog item as a saved snapshot.</p>
+              </div>
+              <span className="meta" aria-live="polite">{items.filter((item) => item.stdId).length} linked</span>
+            </div>
+            <label htmlFor="estimator-catalog-search" className="meta">Search active catalog entries</label>
+            <input
+              id="estimator-catalog-search"
+              className="input"
+              value={catalogSearch}
+              onChange={(event) => setCatalogSearch(event.target.value)}
+              placeholder="Search by description, unit, or alias…"
+              autoComplete="off"
+              data-od-id="catalog-search"
+            />
+            {catalogLoading && <div role="status" className="settings-row-status" style={{ padding: "var(--space-3) 0 0" }}>Loading active catalog entries…</div>}
+            {catalogError && (
+              <div role="alert" className="catalog-modal-error" style={{ marginTop: "var(--space-2)" }}>
+                <span>{catalogError}</span>
+                <button className="btn btn-ghost btn-xs" onClick={() => void fetchCatalog(catalogSearch)} data-od-id="catalog-retry">Retry</button>
+              </div>
+            )}
+            {!catalogLoading && !catalogError && catalogEntries.length === 0 && (
+              <div className="proto-empty-state" style={{ padding: "var(--space-4) var(--space-2)" }} data-od-id="catalog-empty">
+                No active catalog entries match that search.
+              </div>
+            )}
+            {!catalogLoading && !catalogError && catalogEntries.length > 0 && (
+              <div role="list" aria-label="Active Standard Catalog entries" data-od-id="catalog-results" style={{ marginTop: "var(--space-2)", maxHeight: "210px", overflowY: "auto", borderTop: "1px solid var(--border-soft)" }}>
+                {catalogEntries.map((entry) => {
+                  const alreadyAdded = items.some((item) => item.stdId === entry.id)
+                  return (
+                    <div key={entry.id} role="listitem" aria-label={`${entry.description}, ${entry.unit}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--space-3)", padding: "var(--space-2) 0", borderBottom: "1px solid var(--border-soft)" }}>
+                      <div style={{ minWidth: 0 }}>
+                        <strong style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.description}</strong>
+                        <span className="meta">{entry.unit}{entry.category ? ` · ${entry.category}` : ""}</span>
+                        <span className="meta" style={{ display: "block", marginTop: 2 }}>
+                          {entry.historicalPricing
+                            ? `Approved average ฿${entry.historicalPricing.average.toLocaleString(undefined, { maximumFractionDigits: 2 })} / ${entry.unit} · ${entry.historicalPricing.count} ${entry.historicalPricing.count === 1 ? "rate" : "rates"}`
+                            : "No approved history · rate starts at ฿0"}
+                        </span>
+                      </div>
+                      <button
+                        className={alreadyAdded ? "btn btn-ghost btn-xs" : "btn btn-secondary btn-xs"}
+                        onClick={() => addCatalogEntry(entry)}
+                        disabled={saving}
+                        aria-label={`${alreadyAdded ? "Catalog item already added" : "Add"} ${entry.description}`}
+                        data-od-id={`catalog-add-${entry.id}`}
+                      >
+                        {alreadyAdded ? "Added" : "Add"}
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+        )}
 
         <div className="est-list" data-od-id="est-list">
           {items.length === 0 ? (
-            <div className="empty-state" data-od-id="est-empty">
+            <div className="proto-empty-state estimator-empty" data-od-id="est-empty">
               <h3>No items added</h3>
               <p>
                 Click <strong>+ Add Item</strong> to add manually, or use the chat bubble <strong>💬</strong> to
@@ -414,10 +860,27 @@ export default function EstimatorPage() {
             </div>
           ) : (
             items.map((item) => (
-              <div key={item.id} className="est-row" data-od-id={`est-row-${item.id}`} onClick={() => openItemModal(item.id)}>
+              <div
+                key={item.id}
+                className="est-row"
+                data-od-id={`est-row-${item.id}`}
+                role="button"
+                tabIndex={saving ? -1 : 0}
+                aria-disabled={saving}
+                aria-label={`Edit ${item.desc || "untitled item"}`}
+                onClick={() => openItemModal(item.id)}
+                onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget) return
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault()
+                    openItemModal(item.id)
+                  }
+                }}
+              >
                 <div className="rd">
                   {item.desc || "Untitled"}
                   {item.unit && <span className="rd-sub">{item.unit}</span>}
+                  {item.stdId && <span className="rd-sub" data-od-id={`snapshot-label-${item.id}`}>Catalog snapshot</span>}
                 </div>
                 <div className="rqty">{item.qty.toLocaleString()}</div>
                 <div className="rrate">฿{(item.rate || 0).toLocaleString()}</div>
@@ -426,8 +889,10 @@ export default function EstimatorPage() {
                   <button
                     onClick={() => removeItem(item.id)}
                     className="btn btn-icon btn-ghost"
+                    disabled={saving}
                     style={{ width: "28px", height: "28px" }}
                     data-od-id={`delete-item-${item.id}`}
+                    aria-label={`Delete ${item.desc || "untitled item"}`}
                   >
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: "14px", height: "14px" }}>
                       <polyline points="3 6 5 6 21 6" />
@@ -450,7 +915,11 @@ export default function EstimatorPage() {
           <div className="est-total-actions">
             <button
               className="btn btn-secondary btn-sm"
+              disabled={saving}
               onClick={() => {
+                if (saveInFlightRef.current) return
+                if (!window.confirm("Clear every item from this estimate?")) return
+                if (!claimEdit()) return
                 setItems([])
                 toast.info("Estimate cleared")
               }}
@@ -467,63 +936,68 @@ export default function EstimatorPage() {
           </div>
         </div>
       )}
+      {items.length > 0 && (
+        <div className="est-print-total num" data-od-id="est-print-total">
+          Estimated Total: ฿{totalAmount.toLocaleString()}
+        </div>
+      )}
 
       {/* Floating chat */}
-      <button className="chat-bubble-btn" onClick={toggleChat} data-od-id="chat-bubble">
+      <button className="chat-bubble-btn" onClick={toggleChat} data-od-id="chat-bubble" aria-label={chatOpen ? "Close BOQ assistant" : "Open BOQ assistant"} aria-expanded={chatOpen} aria-controls="boq-chat-panel">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
         </svg>
       </button>
 
-      <div className={`chat-overlay ${chatOpen ? "open" : ""}`} data-od-id="chat-panel">
+      <div id="boq-chat-panel" className={`chat-overlay ${chatOpen ? "open" : ""}`} data-od-id="chat-panel" role="dialog" aria-modal="false" aria-labelledby="estimate-chat-title" aria-hidden={!chatOpen} hidden={!chatOpen}>
         <div className="chat-header">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="12" cy="12" r="10" />
             <path d="M12 6v6l4 2" />
           </svg>
-          BOQ Maker Agent
-          <button className="close-btn" onClick={() => setChatOpen(false)}>
+          <span id="estimate-chat-title">Estimate Builder AI</span>
+          <button className="close-btn" onClick={closeChat} aria-label="Close BOQ assistant">
             ×
           </button>
         </div>
         <div className="chat-msgs" data-od-id="chat-msgs">
-          {chatMsgs.map((msg, i) => (
-            <div key={i} className={`cmsg ${msg.role}`}>
-              {msg.role === "bot" && <div className="clabel">BOQ Assistant</div>}
-              <div dangerouslySetInnerHTML={{ __html: msg.text.replace(/\n/g, "<br/>") }} />
-              {msg.choices && (
-                <div className="cactions">
-                  {msg.choices.map((c) => (
-                    <button key={c} className="btn btn-secondary btn-xs" onClick={() => chatChoose(c)}>
-                      {c}
-                    </button>
-                  ))}
-                </div>
-              )}
+          {chatMsgs.map((msg) => (
+            <div key={msg.id} className={`cmsg ${msg.role}`} data-od-id={`chat-message-${msg.id}`}>
+              {msg.role === "bot" && <div className="clabel">Estimate Builder AI</div>}
+              <div>{msg.role === "bot" ? <BotMessageText text={msg.text} /> : msg.text}</div>
               {msg.suggestions && (
                 <>
                   {msg.suggestions.map((s, si) => (
                     <div key={si} className="suggest-card">
-                      <div className="sc-title">{s.desc}</div>
+                      <div className="sc-title">{s.description}</div>
                       <div className="sc-meta">
-                        {s.qty} {s.unit} × ฿{s.rate.toLocaleString()} = ฿{(s.qty * s.rate).toLocaleString()}
+                        {s.source === "catalog" ? "Catalog-backed" : "Manual/new"} · {s.quantity} {s.unit} × ฿{s.rate.toLocaleString()} = ฿{(s.quantity * s.rate).toLocaleString()}
                       </div>
+                      <div className="meta" style={{ marginBottom: "var(--space-2)" }}>{s.reason}</div>
                       <div className="sc-actions">
-                        <button className="btn btn-primary btn-xs" onClick={() => chatAddSuggestion(s)} data-od-id={`chat-add-${si}`}>
-                          Add
+                        <button className="btn btn-primary btn-xs" onClick={() => chatAddSuggestion(s)} disabled={saving} data-od-id={`chat-verify-add-${msg.id}-${si}`}>
+                          Verify &amp; add
                         </button>
                       </div>
                     </div>
                   ))}
-                  <button className="btn btn-secondary btn-xs mt-1.5" onClick={() => msg.suggestions && chatAddAll(msg.suggestions)} data-od-id="chat-add-all">
-                    Add All to Estimate
-                  </button>
+                  <div className="chat-suggestion-total num">Total: ฿{msg.suggestions.reduce((sum, suggestion) => sum + suggestion.quantity * suggestion.rate, 0).toLocaleString()}</div>
+                  <div className="cactions">
+                    <button className="btn btn-primary btn-xs" onClick={() => msg.suggestions && chatAddAll(msg.suggestions)} disabled={saving} data-od-id={`chat-verify-add-all-${msg.id}`}>
+                      Verify &amp; add all
+                    </button>
+                    <button className="btn btn-ghost btn-xs" onClick={refineChat}>Refine</button>
+                  </div>
                 </>
               )}
             </div>
           ))}
+          {chatCatalogLoading && (
+            <div className="catalog-modal-error" role="status" data-od-id="chat-catalog-loading">Loading active Standard Catalog context…</div>
+          )}
           {chatWaiting && (
-            <div className="cmsg bot">
+            <div className="cmsg bot" data-od-id={`chat-message-thinking-${chatMsgs.length}`}>
+              <div className="clabel">Estimate Builder AI</div>
               <div className="typing-dots">
                 <span />
                 <span />
@@ -531,31 +1005,37 @@ export default function EstimatorPage() {
               </div>
             </div>
           )}
+          {chatError && <div className="catalog-modal-error" role="alert" data-od-id="chat-error">{chatError}</div>}
           <div ref={chatEndRef} />
         </div>
         <div className="chat-input-area">
           <input
+            ref={chatInputRef}
             className="input"
             value={chatInput}
+            disabled={!chatOpen || chatWaiting}
             onChange={(e) => setChatInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") sendChatMsg()
             }}
             placeholder="Describe your work…"
             data-od-id="chat-input"
+            aria-label="Message Estimate Builder AI"
           />
-          <button className="btn btn-primary btn-sm" onClick={sendChatMsg} disabled={chatWaiting || !chatInput.trim()} data-od-id="chat-send">
+          <button className="btn btn-primary btn-sm" onClick={() => void sendChatMsg()} disabled={!chatOpen || chatWaiting || !chatInput.trim()} data-od-id="chat-send">
             Send
           </button>
         </div>
       </div>
 
       {/* Item detail modal */}
-      <div className={`modal-overlay ${itemModalOpen ? "open" : ""}`}>
-        <div className="modal" style={{ maxWidth: "520px" }}>
+      {itemModalOpen && <div className="modal-overlay open" onMouseDown={(event) => {
+        if (event.target === event.currentTarget) closeItemModal()
+      }}>
+        <div ref={modalRef} className="modal estimator-item-modal" role="dialog" aria-modal="true" aria-labelledby="estimator-item-modal-title">
           <div className="modal-header">
-            <h3>{editingItemId ? "Edit Item" : "New Item"}</h3>
-            <button className="btn btn-icon btn-ghost" onClick={() => setItemModalOpen(false)}>
+            <h3 id="estimator-item-modal-title">{editingItemId ? "Edit Item" : "New Item"}</h3>
+            <button className="btn btn-icon btn-ghost" onClick={closeItemModal} aria-label="Close item dialog">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ width: "16px", height: "16px" }}>
                 <line x1="18" y1="6" x2="6" y2="18" />
                 <line x1="6" y1="6" x2="18" y2="18" />
@@ -564,24 +1044,49 @@ export default function EstimatorPage() {
           </div>
           <div className="modal-body" style={{ padding: "var(--space-4)" }}>
             <div className="form-group">
-              <label>Description</label>
+              <label htmlFor="est-item-desc">Description</label>
               <input
+                ref={modalDescRef}
+                id="est-item-desc"
                 className="input"
                 value={modalDesc}
+                disabled={saving}
                 onChange={(e) => onDescInput(e.target.value)}
-                placeholder="Type to search historical data or enter custom…"
-                autoFocus
+                placeholder="Type to search the Standard Catalog or enter custom…"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={descSuggestions.length > 0}
+                aria-controls="est-item-suggestions"
+                aria-activedescendant={activeSuggestion >= 0 ? `est-suggestion-${descSuggestions[activeSuggestion]?.id}` : undefined}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") saveItemModal()
+                  if (e.key === "ArrowDown" && descSuggestions.length) {
+                    e.preventDefault()
+                    setActiveSuggestion((current) => Math.min(current + 1, descSuggestions.length - 1))
+                  } else if (e.key === "ArrowUp" && descSuggestions.length) {
+                    e.preventDefault()
+                    setActiveSuggestion((current) => Math.max(current - 1, 0))
+                  } else if (e.key === "Enter" && activeSuggestion >= 0 && descSuggestions[activeSuggestion]) {
+                    e.preventDefault()
+                    pickDescSuggestion(descSuggestions[activeSuggestion])
+                  } else if (e.key === "Enter") {
+                    e.preventDefault()
+                    saveItemModal()
+                  } else if (e.key === "Escape" && descSuggestions.length) {
+                    e.stopPropagation()
+                    setDescSuggestions([])
+                    setActiveSuggestion(-1)
+                  }
                 }}
               />
               {descSuggestions.length > 0 && (
-                <div className="desc-suggest open">
-                  {descSuggestions.map((h) => (
-                    <div key={h.id} className="ds-item" onClick={() => pickDescSuggestion(h)}>
-                      <div className="ds-title">{h.desc}</div>
+                <div id="est-item-suggestions" className="desc-suggest open" role="listbox" aria-label="Standard Catalog suggestions">
+                  {descSuggestions.map((h, index) => (
+                    <div key={h.id} id={`est-suggestion-${h.id}`} role="option" tabIndex={-1} aria-selected={activeSuggestion === index} className={`ds-item${activeSuggestion === index ? " active" : ""}`} onMouseDown={(event) => event.preventDefault()} onClick={() => pickDescSuggestion(h)}>
+                      <div className="ds-title">{h.description}</div>
                       <div className="ds-meta">
-                        {h.category} · ฿{h.avgRate.toLocaleString()}/{h.unit} · {h.source}
+                        {h.category || "Catalog item"} · {h.unit} · {h.historicalPricing
+                          ? `Approved average ฿${h.historicalPricing.average.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+                          : "No approved history · rate starts at ฿0"}
                       </div>
                     </div>
                   ))}
@@ -589,54 +1094,61 @@ export default function EstimatorPage() {
               )}
               {modalDesc && descSuggestions.length === 0 && (
                 <div className="desc-suggest open">
-                  <div className="ds-empty">No historical match — type your own description</div>
+                  <div className="ds-empty">No catalog match — type your own description</div>
                 </div>
               )}
             </div>
             <div className="form-row-2">
               <div className="form-group">
-                <label>Quantity</label>
+                <label htmlFor="est-item-qty">Quantity</label>
                 <input
+                  id="est-item-qty"
                   className="input"
                   type="number"
                   value={modalQty}
-                  onChange={(e) => setModalQty(e.target.value)}
+                  disabled={saving}
+                  onChange={(e) => { setModalQty(e.target.value); setItemError("") }}
                   min="0"
                   step="0.5"
                 />
               </div>
               <div className="form-group">
-                <label>Unit Price (฿)</label>
+                <label htmlFor="est-item-rate">Unit Price (฿)</label>
                 <input
+                  id="est-item-rate"
                   className="input"
                   type="number"
                   value={modalRate}
-                  onChange={(e) => setModalRate(e.target.value)}
+                  disabled={saving}
+                  onChange={(e) => { setModalRate(e.target.value); setItemError("") }}
                   min="0"
                   step="100"
                 />
               </div>
             </div>
             <div className="form-group">
-              <label>Unit</label>
+              <label htmlFor="est-item-unit">Unit</label>
               <input
+                id="est-item-unit"
                 className="input"
                 value={modalUnit}
+                disabled={saving}
                 onChange={(e) => setModalUnit(e.target.value)}
                 placeholder="e.g. m³, ton, m²"
               />
             </div>
-            <div style={{ display: "flex", gap: "var(--space-2)", justifyContent: "flex-end", marginTop: "var(--space-3)" }}>
-              <button className="btn btn-ghost btn-sm" onClick={() => setItemModalOpen(false)}>
+            {itemError && <div className="form-error" role="alert">{itemError}</div>}
+            <div className="estimator-modal-actions">
+              <button className="btn btn-ghost btn-sm" onClick={closeItemModal}>
                 Cancel
               </button>
-              <button className="btn btn-primary btn-sm" onClick={saveItemModal}>
+              <button className="btn btn-primary btn-sm" onClick={saveItemModal} disabled={saving}>
                 {editingItemId ? "Save Item" : "Add Item"}
               </button>
             </div>
           </div>
         </div>
-      </div>
+      </div>}
     </div>
   )
 }

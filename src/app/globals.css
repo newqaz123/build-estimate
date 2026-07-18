@@ -158,12 +158,13 @@
 .badge-suggested, .badge-fuzzy { background: color-mix(in oklab, #eab308 18%, transparent); color: color-mix(in oklab, #eab308, black 40%); }
 .badge-llm { background: color-mix(in oklab, #8b5cf6 14%, transparent); color: #8b5cf6; }
 .badge-unmatched { background: color-mix(in oklab, #dc2626 12%, transparent); color: #dc2626; }
+.badge-excluded { background: color-mix(in oklab, #64748b 13%, transparent); color: #526174; }
 
 /* Badge status dots (::before) */
 .badge-draft::before, .badge-active::before, .badge-review::before,
 .badge-approved::before, .badge-rejected::before, .badge-matched::before,
 .badge-suggested::before, .badge-fuzzy::before, .badge-llm::before,
-.badge-unmatched::before {
+.badge-unmatched::before, .badge-excluded::before {
   content: ''; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; display: inline-block;
 }
 .badge-draft::before { background: rgba(4,14,32,0.69); }
@@ -175,6 +176,7 @@
 .badge-suggested::before, .badge-fuzzy::before { background: #eab308; }
 .badge-llm::before { background: #8b5cf6; }
 .badge-unmatched::before { background: #dc2626; }
+.badge-excluded::before { background: #64748b; }
 
 /* ─── Elevated shadow utility ─── */
 .elev-raised { box-shadow: var(--elev-raised); }
@@ -813,8 +815,8 @@
 .boq-item-row:hover .boq-item-edit,
 .boq-item-row:focus-within .boq-item-edit,
 .boq-item-edit:focus-visible { opacity: 1; }
-.boq-detail-summary { position: fixed; bottom: 0; left: var(--sidebar-w); right: 0; z-index: 40; }
-.sidebar.collapsed + .main-area .boq-detail-summary { left: var(--sidebar-collapsed-w); }
+.boq-detail-summary { position: sticky; bottom: 0; left: auto; right: auto; z-index: 20; }
+.sidebar.collapsed + .main-area .boq-detail-summary { left: auto; }
 
 @media (max-width: 920px) {
   .boq-detail-header, .boq-detail-toolbar { align-items: stretch; flex-direction: column; }

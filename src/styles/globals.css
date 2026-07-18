@@ -8,7 +8,8 @@
   --surface: #ffffff;
   --fg: #181d26;
   --fg-2: #333333;
-  --muted: rgba(4, 14, 32, 0.69);
+  --muted: #eef0f3;
+  --muted-text: rgba(4, 14, 32, 0.69);
   --border: #e0e2e6;
   --border-soft: #eef0f3;
   --accent: #1b61c9;

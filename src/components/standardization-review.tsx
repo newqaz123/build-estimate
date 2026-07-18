@@ -2,7 +2,8 @@
 
 import { useId, useState, useEffect, useCallback, useRef } from "react"
 import { Button } from "@/components/ui/button"
-import { ChevronRight, ChevronDown } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import { ChevronRight, ChevronDown, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 import type { BoqItem } from "@/lib/boq-schema"
 import type { StandardEntry } from "@/lib/standard-schema"
@@ -10,17 +11,22 @@ import type { StandardEntry } from "@/lib/standard-schema"
 interface StandardizationReviewProps {
   items: BoqItem[]
   onItemsChange: (items: BoqItem[]) => void
+  onMatchRequest?: (item: BoqItem, index: number) => void
+  onExcludeRequest?: (item: BoqItem, index: number, reason: string) => Promise<boolean>
+  catalogBusyIndex?: number | null
 }
 
 function normalizeDesc(desc: string): string {
   return desc.toLowerCase().trim().replace(/\s+/g, " ").replace(/[^\w\s\/\-\dx]/g, "")
 }
 
-export function StandardizationReview({ items, onItemsChange }: StandardizationReviewProps) {
+export function StandardizationReview({ items, onItemsChange, onMatchRequest, onExcludeRequest, catalogBusyIndex }: StandardizationReviewProps) {
   const [open, setOpen] = useState(false)
   const panelId = useId()
   const [standards, setStandards] = useState<StandardEntry[]>([])
   const [llmRunning, setLlmRunning] = useState(false)
+  const [excludeIndex, setExcludeIndex] = useState<number | null>(null)
+  const [excludeReason, setExcludeReason] = useState("")
   const ranRef = useRef(false)
   const itemsRef = useRef(items)
   const mountedRef = useRef(true)
@@ -48,7 +54,7 @@ export function StandardizationReview({ items, onItemsChange }: StandardizationR
   const runStandardization = useCallback(
     (currentItems: BoqItem[]): BoqItem[] => {
       return currentItems.map((item) => {
-        if (item.stdStatus === "matched") return item
+        if (item.stdStatus === "matched" || item.stdStatus === "excluded") return item
 
         const itemDesc = normalizeDesc(item.desc)
         const itemUnit = item.unit?.toLowerCase() || ""
@@ -57,7 +63,7 @@ export function StandardizationReview({ items, onItemsChange }: StandardizationR
           (s) => normalizeDesc(s.description) === itemDesc && s.unit.toLowerCase() === itemUnit
         )
         if (exact) {
-          return { ...item, stdStatus: "matched" as const, stdMatch: exact.description }
+          return { ...item, stdStatus: "pending" as const, stdMatch: exact.description }
         }
 
         const alias = standards.find((s) =>
@@ -84,19 +90,10 @@ export function StandardizationReview({ items, onItemsChange }: StandardizationR
   const matched = items.filter((i) => i.stdStatus === "matched").length
   const pending = items.filter((i) => i.stdStatus === "pending").length
   const unmatched = items.filter((i) => i.stdStatus === "unmatched" || !i.stdStatus).length
+  const excluded = items.filter((i) => i.stdStatus === "excluded").length
 
   const acceptAll = () => {
-    let count = 0
-    const updated = items.map((item) => {
-      if (item.stdStatus === "pending") {
-        count++
-        return { ...item, stdStatus: "matched" as const }
-      }
-      return item
-    })
-    onItemsChange(updated)
-    if (count > 0) toast.success(`Accepted ${count} suggestions`)
-    else toast.info("No pending suggestions")
+    toast.info("Open the saved BOQ and confirm each catalog link before it is marked as matched")
   }
 
   const runLLM = async () => {
@@ -112,30 +109,20 @@ export function StandardizationReview({ items, onItemsChange }: StandardizationR
     llmControllerRef.current = controller
     setLlmRunning(true)
     try {
-      const catalog = standards.map((s) => `${s.description} (${s.unit})`).join("\n")
-      const prompt = `Standard catalog:\n${catalog}\n\nMatch these items:\n${unmatchedItems
-        .map(({ item }, idx) => `${idx + 1}. "${item.desc}" unit: ${item.unit}`)
-        .join("\n")}\n\nReturn JSON array: [{index: number, stdDescription: string}]`
-
       const res = await fetch("/api/llm/standardize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: [{ role: "user", content: prompt }] }),
+        body: JSON.stringify({ items: unmatchedItems.map(({ item, originalIndex }) => ({
+          key: String(originalIndex), description: item.desc, unit: item.unit,
+        })) }),
         signal: controller.signal,
       })
 
       if (!mountedRef.current || controller.signal.aborted || llmControllerRef.current !== controller) return
       if (!res.ok) throw new Error("LLM call failed")
-      const result = await res.json()
+      const result = await res.json() as { suggestions?: Array<{ key: string; standardId: string; description: string }> }
       if (!mountedRef.current || controller.signal.aborted || llmControllerRef.current !== controller) return
-      const text = result.content || result.text || "[]"
-      let suggestions: { index: number; stdDescription: string }[]
-      try {
-        suggestions = JSON.parse(text)
-      } catch {
-        suggestions = []
-      }
-
+      const suggestions = result.suggestions
       if (!Array.isArray(suggestions)) {
         if (!mountedRef.current || llmControllerRef.current !== controller) return
         toast.error("LLM returned unexpected format")
@@ -144,10 +131,9 @@ export function StandardizationReview({ items, onItemsChange }: StandardizationR
 
       const updated = [...itemsRef.current]
       suggestions.forEach((s) => {
-        const unmatched = unmatchedItems[s.index - 1]
-        if (unmatched && updated[unmatched.originalIndex]) {
-          const idx = unmatched.originalIndex
-          const st = standards.find((st) => st.description === s.stdDescription)
+        const idx = Number(s.key)
+        if (Number.isInteger(idx) && updated[idx]) {
+          const st = standards.find((standard) => standard.id === s.standardId)
           if (st) {
             updated[idx] = { ...updated[idx], stdStatus: "pending" as const, stdMatch: st.description }
           }
@@ -182,6 +168,12 @@ export function StandardizationReview({ items, onItemsChange }: StandardizationR
           Suggested
         </span>
       )
+    if (item.stdStatus === "excluded")
+      return (
+        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
+          Excluded
+        </span>
+      )
     return (
       <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-[#dc2626]/12 text-[#dc2626]">
         Unmatched
@@ -202,7 +194,7 @@ export function StandardizationReview({ items, onItemsChange }: StandardizationR
           Standardization
         </span>
         <span className="text-xs text-muted-foreground">
-          {matched} matched · {pending} suggested · {unmatched} need review
+          {matched} matched · {excluded} excluded · {pending + unmatched} need review
         </span>
       </button>
 
@@ -225,24 +217,40 @@ export function StandardizationReview({ items, onItemsChange }: StandardizationR
       {open && (
         <div id={panelId}>
           <div className="space-y-1.5 max-h-[300px] overflow-y-auto mb-3">
-            {items.map((item, idx) => (
-              <div
-                key={item.id ?? `${normalizeDesc(item.desc)}-${item.unit}-${idx}`}
-                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/30 text-xs"
-              >
-                {showStdBadge(item)}
-                <span className="flex-1 truncate">{item.desc}</span>
-                <span className="text-muted-foreground">{item.unit}</span>
-                {item.stdMatch && item.stdMatch !== item.desc && (
-                  <span className="text-accent truncate">→ {item.stdMatch}</span>
-                )}
-              </div>
-            ))}
+            {items.map((item, idx) => {
+              const needsResolution = item.rate > 0 && item.stdStatus !== "matched" && item.stdStatus !== "excluded"
+              const busy = catalogBusyIndex === idx
+              return (
+                <div key={item.id ?? `${normalizeDesc(item.desc)}-${item.unit}-${idx}`} className="rounded-lg bg-muted/30 px-3 py-2 text-xs">
+                  <div className="flex items-center gap-2">
+                    {showStdBadge(item)}
+                    <span className="min-w-0 flex-1 truncate">{item.desc}</span>
+                    <span className="text-muted-foreground">{item.unit}</span>
+                    {item.stdMatch && item.stdMatch !== item.desc ? <span className="max-w-36 truncate text-accent">→ {item.stdMatch}</span> : null}
+                    {needsResolution && onMatchRequest && onExcludeRequest ? (
+                      <span className="flex shrink-0 items-center gap-1">
+                        <Button type="button" size="sm" variant="outline" onClick={() => onMatchRequest(item, idx)} disabled={busy}>Match or create</Button>
+                        <Button type="button" size="sm" variant="ghost" onClick={() => { setExcludeIndex(idx); setExcludeReason("") }} disabled={busy}>Exclude</Button>
+                      </span>
+                    ) : null}
+                  </div>
+                  {excludeIndex === idx && onExcludeRequest ? (
+                    <div className="mt-2 flex items-center gap-2 border-t border-border pt-2">
+                      <Input value={excludeReason} onChange={(event) => setExcludeReason(event.target.value)} placeholder="Reason this line should not use catalog pricing" aria-label={`Exclusion reason for ${item.desc}`} className="h-8" autoFocus />
+                      <Button type="button" size="sm" onClick={async () => { if (await onExcludeRequest(item, idx, excludeReason)) { setExcludeIndex(null); setExcludeReason("") } }} disabled={busy || !excludeReason.trim()}>
+                        {busy ? <Loader2 className="animate-spin" /> : null} Confirm
+                      </Button>
+                      <Button type="button" size="sm" variant="ghost" onClick={() => setExcludeIndex(null)} disabled={busy}>Cancel</Button>
+                    </div>
+                  ) : null}
+                </div>
+              )
+            })}
           </div>
 
           <div className="flex gap-2">
             <Button size="sm" onClick={acceptAll} disabled={pending === 0}>
-              Accept All Suggested
+              Review matches after save
             </Button>
             <Button size="sm" variant="outline" onClick={runLLM} disabled={llmRunning || unmatched === 0}>
               {llmRunning ? "Running..." : "Run LLM on Unmatched"}

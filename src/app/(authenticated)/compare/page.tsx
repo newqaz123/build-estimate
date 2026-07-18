@@ -1,332 +1,179 @@
 "use client"
 
-import { useEffect, useState, useMemo } from "react"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
-  Check,
-  ArrowLeftRight,
-  Loader2,
-} from "lucide-react"
+import { useCallback, useEffect, useState } from "react"
+import { AlertCircle, ArrowLeftRight, Upload } from "lucide-react"
 import { toast } from "sonner"
-import type { Boq, BoqItem } from "@/lib/boq-schema"
+
+import { CatalogMatchModal } from "@/components/catalog-match-modal"
+import { ProtoBadge } from "@/components/proto-badge"
 import { ProtoDataTable } from "@/components/proto-data-table"
+import { ReviewPanel } from "@/components/review-panel"
+import { UploadModal } from "@/components/upload-modal"
+import type { Boq } from "@/lib/boq-schema"
+import { formatHistoricalVariance, type BoqCatalogComparisonRow } from "@/lib/boq-catalog-comparison"
+import { getBoqCatalogReadiness } from "@/lib/boq-catalog-readiness"
 
-interface ItemWithBoq extends BoqItem {
-  boqId: string
-  boqProject: string
-  boqVendor: string
-}
+type ComparisonResponse = { boqId: string; rows: BoqCatalogComparisonRow[] }
 
-interface MatchedRow {
-  id: string
-  desc: string
-  unit: string
-  items: (ItemWithBoq | null)[]
-  avgRate: number
-  trend: "below" | "at" | "above" | "new"
-  llm: string
-  imported: boolean
-}
-
-const MOCK_LLM_COMMENTS: Record<string, string> = {
-  concrete:
-    "Rates within 3% of average across all BOQs. Qty variance is typical for this work type.",
-  rebar:
-    "Rebar pricing shows 5% spread. Higher rate correlates with smaller qty.",
-  formwork:
-    "Formwork rates are consistent (+-2%). Acceptable range for standard systems.",
-  steel:
-    "Steel frame pricing varies 8%. Verify grade and connection details.",
-  default:
-    "Item appears in multiple BOQs with rate variance within normal thresholds.",
-  deck: "Metal deck rate below average by 6%. Verify gauge and coating match spec.",
-  pile: "Bored pile rate 4% below average. Confirm depth and diameter match.",
-  excavation:
-    "Excavation rate competitive. Verify if disposal/fill included in all quotes.",
-  waterproofing:
-    "Waterproofing rates consistent. Confirm membrane type is comparable.",
-  joint: "Expansion joint rates within range. Verify width and sealant spec.",
-  mobilisation:
-    "Site mobilisation LS item. Verify scope inclusions are comparable.",
-}
-
-function getTrend(rate: number, avg: number): "below" | "at" | "above" {
-  const ratio = rate / avg
-  if (ratio < 0.97) return "below"
-  if (ratio > 1.03) return "above"
-  return "at"
-}
-
-function generateLlmComment(desc: string): string {
-  const lower = desc.toLowerCase()
-  if (lower.includes("concrete")) return MOCK_LLM_COMMENTS.concrete
-  if (lower.includes("rebar") || lower.includes("reinforcement"))
-    return MOCK_LLM_COMMENTS.rebar
-  if (lower.includes("formwork")) return MOCK_LLM_COMMENTS.formwork
-  if (lower.includes("steel")) return MOCK_LLM_COMMENTS.steel
-  if (lower.includes("deck")) return MOCK_LLM_COMMENTS.deck
-  if (lower.includes("pile")) return MOCK_LLM_COMMENTS.pile
-  if (lower.includes("excavation")) return MOCK_LLM_COMMENTS.excavation
-  if (lower.includes("waterproof")) return MOCK_LLM_COMMENTS.waterproofing
-  if (lower.includes("joint")) return MOCK_LLM_COMMENTS.joint
-  if (lower.includes("mobilisation")) return MOCK_LLM_COMMENTS.mobilisation
-  return MOCK_LLM_COMMENTS.default
-}
-
-function matchItems(boqs: Boq[]): MatchedRow[] {
-  const boqList = boqs.slice(0, 3)
-
-  const allItems: ItemWithBoq[] = boqList.flatMap((boq) =>
-    boq.sections.flatMap((s) =>
-      s.items.map((item) => ({
-        ...item,
-        boqId: boq.id,
-        boqProject: boq.project,
-        boqVendor: boq.vendor,
-      }))
-    )
-  )
-
-  const groups = new Map<string, ItemWithBoq[]>()
-  for (const item of allItems) {
-    const key = item.desc.toLowerCase().trim()
-    if (!groups.has(key)) groups.set(key, [])
-    groups.get(key)!.push(item)
-  }
-
-  const rows: MatchedRow[] = []
-  for (const [, items] of groups) {
-    const avgRate =
-      items.reduce((s, i) => s + i.rate, 0) / items.length
-    const trend = getTrend(items[0].rate, avgRate)
-    const desc = items[0].desc
-    const unit = items[0].unit
-
-    const rowItems: (ItemWithBoq | null)[] = boqList.map((boq) => {
-      const match = items.find((i) => i.boqId === boq.id) || null
-      return match
-    })
-
-    const sourceIdentity = items
-      .map((item) => `${item.boqId}:${item.id ?? item.code ?? ''}`)
-      .toSorted()
-      .join('|')
-    rows.push({
-      id: `row-${encodeURIComponent(sourceIdentity)}`,
-      desc,
-      unit,
-      items: rowItems,
-      avgRate,
-      trend: items.length < boqList.length ? "new" : trend,
-      llm: generateLlmComment(desc),
-      imported: false,
-    })
-  }
-
-  rows.sort((a, b) => {
-    const aCount = a.items.filter(Boolean).length
-    const bCount = b.items.filter(Boolean).length
-    if (aCount !== bCount) return bCount - aCount
-    return a.desc.localeCompare(b.desc)
-  })
-
-  return rows
+function currency(value: number) {
+  return `฿${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
 }
 
 export default function ComparePage() {
   const [boqs, setBoqs] = useState<Boq[]>([])
+  const [selectedId, setSelectedId] = useState("")
+  const [comparison, setComparison] = useState<ComparisonResponse | null>(null)
   const [loading, setLoading] = useState(true)
-  const [baselineIdx, setBaselineIdx] = useState(0)
-  const [expandedLlm, setExpandedLlm] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState(false)
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [reviewBoq, setReviewBoq] = useState<Boq | null>(null)
+  const [matchTarget, setMatchTarget] = useState<BoqCatalogComparisonRow | null>(null)
 
-  useEffect(() => {
-    async function fetchData() {
-      try {
-        const res = await fetch("/api/boqs?limit=3")
-        if (!res.ok) throw new Error("Failed to fetch")
-        const data = await res.json()
-        setBoqs(data.boqs || [])
-      } catch {
-        console.error("Failed to load BOQs")
-      } finally {
-        setLoading(false)
-      }
-    }
-    fetchData()
+  const loadBoqs = useCallback(async (preferredId?: string) => {
+    const response = await fetch("/api/boqs?limit=1000")
+    if (!response.ok) throw new Error("BOQs could not be loaded")
+    const data = await response.json() as { boqs?: Boq[] }
+    const next = data.boqs ?? []
+    setBoqs(next)
+    setSelectedId((current) => preferredId && next.some((boq) => boq.id === preferredId)
+      ? preferredId
+      : current && next.some((boq) => boq.id === current) ? current : next[0]?.id ?? "")
+    setLoading(false)
   }, [])
 
-  const matchedRows = useMemo(() => {
-    if (boqs.length === 0) return []
-    return matchItems(boqs)
-  }, [boqs])
+  const loadComparison = useCallback(async (boqId: string) => {
+    if (!boqId) { setComparison(null); return }
+    setLoading(true)
+    setLoadError(false)
+    try {
+      const response = await fetch(`/api/boqs/${encodeURIComponent(boqId)}/comparison`)
+      if (!response.ok) throw new Error("Comparison could not be loaded")
+      setComparison(await response.json() as ComparisonResponse)
+    } catch {
+      setComparison(null)
+      setLoadError(true)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
-  const [rows, setRows] = useState<MatchedRow[]>([])
   useEffect(() => {
-    setRows(matchedRows)
-  }, [matchedRows])
+    void Promise.resolve().then(() => loadBoqs()).catch(() => { setLoadError(true); setLoading(false) })
+  }, [loadBoqs])
 
-  const baselineName =
-    boqs.length > 0
-      ? boqs[baselineIdx]?.project + " (" + boqs[baselineIdx]?.vendor + ")"
-      : "\u2014"
+  const selected = boqs.find((boq) => boq.id === selectedId)
+  useEffect(() => {
+    if (!selectedId || !selected) return
+    if (selected.status !== "approved") return
+    void Promise.resolve().then(() => loadComparison(selectedId))
+  }, [loadComparison, selected, selectedId])
 
-  const avgVariance = useMemo(() => {
-    if (matchedRows.length === 0) return 0
-    const totalVar = matchedRows.reduce((sum, row) => {
-      const baselineItem = row.items[baselineIdx]
-      if (!baselineItem || row.avgRate === 0) return sum
-      return sum + Math.abs((baselineItem.rate - row.avgRate) / row.avgRate)
-    }, 0)
-    return (totalVar / matchedRows.length) * 100
-  }, [matchedRows, baselineIdx])
+  const rows = comparison?.rows ?? []
+  const matched = rows.filter((row) => row.candidate).length
+  const benchmarked = rows.filter((row) => row.benchmark).length
+  const selectedReadiness = selected ? getBoqCatalogReadiness(selected) : null
 
-  if (loading) {
-    return (
-      <div
-        className="flex items-center justify-center h-64 text-muted-foreground text-sm"
-        data-od-id="compare-loading"
-      >
-        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-        Loading BOQs...
-      </div>
-    )
-  }
-
-  if (boqs.length === 0) {
-    return (
-      <div
-        className="flex flex-col items-center justify-center h-64 gap-3 text-muted-foreground"
-        data-od-id="compare-empty"
-      >
-        <ArrowLeftRight className="w-10 h-10 opacity-40" />
-        <p className="text-sm">
-          No BOQs to compare. Upload at least one BOQ to get started.
-        </p>
-      </div>
-    )
+  const handleUploadComplete = (boq: Boq) => {
+    setUploadOpen(false)
+    setReviewBoq(boq)
+    void loadBoqs(boq.id)
   }
 
   return (
-    <div data-od-id="compare-page">
-      <div className="mb-6" data-od-id="compare-summary">
-        <div className="text-sm text-muted-foreground mb-4">
-          Compare items across {boqs.length} vendor quotations. Baseline:{" "}
-          <strong>{baselineName}</strong>
+    <div className="compare-page" data-od-id="compare-page">
+      <section className="compare-summary-section">
+        <p className="compare-intro">Upload or select one BOQ, then compare each parsed line against the Standard Catalog and historical rates from other matched BOQs.</p>
+        <div className="compare-summary">
+          <div className="proto-card stat-card"><div className="stat-value num">1</div><div className="stat-label">BOQ selected</div></div>
+          <div className="proto-card stat-card"><div className="stat-value num">{matched}/{rows.length}</div><div className="stat-label">Catalog candidates</div></div>
+          <div className="proto-card stat-card"><div className="stat-value num">{benchmarked}</div><div className="stat-label">Historical benchmarks</div></div>
         </div>
+      </section>
 
-        <div className="grid grid-cols-3 gap-4 mb-5">
-          {[
-            { label: 'BOQs Compared', value: boqs.length },
-            { label: 'Items Matched', value: matchedRows.length },
-            { label: 'Avg Variance', value: avgVariance > 0 ? `+${avgVariance.toFixed(1)}%` : `${avgVariance.toFixed(1)}%` },
-          ].map(stat => (
-            <div key={stat.label} className="proto-card stat-card">
-              <div className="stat-value num">{stat.value}</div>
-              <div className="stat-label">{stat.label}</div>
+      <div className="proto-toolbar compare-toolbar">
+        <div className="proto-toolbar-left compare-baseline">
+          <label htmlFor="compare-boq" className="compare-control-label">BOQ:</label>
+          <select id="compare-boq" className="input compare-baseline-select" value={selectedId} onChange={(event) => { setSelectedId(event.target.value); setComparison(null); setLoadError(false); setLoading(false) }}>
+            {boqs.map((boq) => <option key={boq.id} value={boq.id}>{boq.project} — {boq.vendor}</option>)}
+          </select>
+          {selected ? <ProtoBadge status={selected.status} /> : null}
+        </div>
+        <button type="button" className="btn btn-primary btn-sm" onClick={() => setUploadOpen(true)}><Upload className="w-4 h-4" /> Upload BOQ to compare</button>
+      </div>
+
+      {loading ? <div className="proto-loading-state compare-state"><div><span className="proto-spinner" /> Comparing BOQ to catalog…</div></div> : null}
+      {!loading && loadError ? (
+        <div className="proto-empty-state proto-error-state compare-state" role="alert">
+          <AlertCircle /><h3>Couldn&apos;t load this comparison</h3><p>Your BOQ has not been changed.</p>
+          <button className="btn btn-secondary" onClick={() => void loadComparison(selectedId)}>Retry</button>
+        </div>
+      ) : null}
+      {!loading && !loadError && boqs.length === 0 ? (
+        <div className="proto-empty-state compare-state"><ArrowLeftRight /><h3>No BOQ selected</h3><p>Upload a BOQ PDF to parse, review, and compare it with the catalog.</p><button className="btn btn-primary" onClick={() => setUploadOpen(true)}>Upload BOQ</button></div>
+      ) : null}
+
+      {!loading && !loadError && selected && selected.status !== "approved" ? (
+        <div className="proto-card my-4 border-accent/25 bg-accent/5 p-5" data-od-id="compare-preparation">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-[0.08em] text-accent">Prepare before comparison</p>
+              <h2 className="mt-1 font-heading text-lg font-medium">Resolve catalog lines while checking the source PDF</h2>
+              <p className="mt-1 max-w-2xl text-sm text-muted-foreground">Every priced line must be matched, created, or excluded with a reason before this BOQ can be approved and compared.</p>
             </div>
-          ))}
+            <button type="button" className="btn btn-primary" onClick={() => setReviewBoq(selected)} data-od-id="compare-review-match">
+              Review, match & approve
+            </button>
+          </div>
+          <div className="mt-4 flex items-center gap-3 text-sm">
+            <strong className="font-mono text-base">{selectedReadiness?.resolved ?? 0}/{selectedReadiness?.total ?? 0}</strong>
+            <span>catalog-ready lines</span>
+            {(selectedReadiness?.blocking ?? 0) > 0 ? <span className="text-muted-foreground">· {selectedReadiness?.blocking} still need action</span> : <span className="text-[#006400]">· Ready to approve</span>}
+          </div>
         </div>
-      </div>
+      ) : null}
 
-      <div
-        className="flex items-center justify-between mb-4"
-        data-od-id="compare-controls"
-      >
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-muted-foreground">Baseline:</span>
-          <Select
-            value={String(baselineIdx)}
-            onValueChange={(v) => setBaselineIdx(Number(v))}
+      {!loading && !loadError && rows.length > 0 ? (
+        <div className="compare-grid">
+          <ProtoDataTable
+            ariaLabel="One BOQ versus the Standard Catalog"
+            dataOdId="compare-table"
+            scrollHint="Scroll horizontally for rate benchmark details"
+            headers={[
+              { label: "BOQ item" }, { label: "Unit" }, { label: "BOQ rate", className: "num-col" },
+              { label: "Catalog item" }, { label: "Match" }, { label: "Approved historical average", className: "num-col" },
+              { label: "Compared with average" }, { label: "Action", className: "text-right" },
+            ]}
           >
-            <SelectTrigger className="w-[220px]" data-od-id="baseline-select">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {boqs.map((boq, i) => (
-                <SelectItem key={boq.id} value={String(i)}>
-                  {boq.project} ({boq.vendor})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            {rows.map((row) => (
+              <tr key={row.key}>
+                <td><strong>{row.item.desc}</strong><small className="block text-muted-foreground">{row.section}</small></td>
+                <td>{row.item.unit}</td>
+                <td className="num-col">{currency(row.item.rate)}</td>
+                <td>{row.candidate ? <><strong>{row.candidate.description}</strong><small className="block text-muted-foreground">{row.candidate.unit}</small></> : <span className="text-muted-foreground">No safe candidate</span>}</td>
+                <td>{row.candidate ? <span className="capitalize">{row.candidate.matchReason}</span> : "—"}</td>
+                <td className="num-col">{row.benchmark ? <><strong>{currency(row.benchmark.average)}</strong><small className="block text-muted-foreground">{currency(row.benchmark.min)}–{currency(row.benchmark.max)} · {row.benchmark.count} approved {row.benchmark.count === 1 ? "rate" : "rates"}</small></> : <span className="text-muted-foreground">No prior approved history</span>}</td>
+                <td className={row.variancePct != null && Math.abs(row.variancePct) > 10 ? "font-medium text-destructive" : ""}>{row.variancePct === null ? <span className="text-muted-foreground">Not enough history to compare</span> : formatHistoricalVariance(row.variancePct)}</td>
+                <td className="text-right"><button className="btn btn-ghost btn-xs" onClick={() => setMatchTarget(row)}>{row.item.stdId ? "Change match" : "Match"}</button></td>
+              </tr>
+            ))}
+          </ProtoDataTable>
         </div>
-        <span className="text-xs text-muted-foreground">
-          Green = below avg &middot; Grey = at avg &middot; Red = above avg &middot; Amber = new item
-        </span>
-      </div>
+      ) : null}
 
-      <ProtoDataTable
-        headers={[
-          { label: 'Description' },
-          { label: 'Unit' },
-          ...boqs.map(b => ({ label: `${b.project} — Rate`, className: 'num-col' })),
-          { label: 'Avg Rate', className: 'num-col' },
-          { label: 'Trend' },
-          { label: 'Actions', className: 'text-right whitespace-nowrap' },
-        ]}
-      >
-        {rows.map(row => {
-          const expanded = expandedLlm === row.id
-          const baselineItem = row.items[baselineIdx]
-          const baselineRate = baselineItem?.rate
-          const variancePct = baselineRate
-            ? Math.abs(((row.avgRate - baselineRate) / baselineRate) * 100).toFixed(1)
-            : null
-          return (
-            <tr key={row.id}>
-              <td className="font-medium">{row.desc}</td>
-              <td>{row.unit}</td>
-              {row.items.map((item, i) => {
-                const trend = item ? getTrend(item.rate, row.avgRate) : null
-                const trendColor = trend === 'below' ? 'text-[#006400]' : trend === 'above' ? 'text-[#dc2626]' : ''
-                return <td key={i} className={`num-col ${trendColor}`}>{item ? `฿${item.rate.toLocaleString()}` : '—'}</td>
-              })}
-              <td className="num-col">฿{row.avgRate.toLocaleString()}</td>
-              <td>
-                <span className={`inline-flex items-center gap-[5px] px-[10px] py-[2px] rounded-[9999px] text-xs font-medium cursor-pointer ${
-                  row.trend === 'new' ? 'badge-suggested' : row.trend === 'below' ? 'badge-approved' : row.trend === 'above' ? 'badge-rejected' : 'badge-draft'
-                }`}
-                  onClick={() => setExpandedLlm(expandedLlm === row.id ? null : row.id)}
-                >
-                  {row.trend === 'below' && `↓ ${variancePct}% vs avg`}
-                  {row.trend === 'at' && `→ at avg`}
-                  {row.trend === 'above' && `↑ +${variancePct}% vs avg`}
-                  {row.trend === 'new' && `★ New item`}
-                </span>
-                {expanded && (
-                  <div className="llm-comment mt-2">
-                    <div style={{fontFamily:'var(--font-mono)',fontSize:'11px',textTransform:'uppercase',letterSpacing:'0.05em',color:'var(--accent)',marginBottom:'4px'}}>LLM analysis · OpenAI GPT-4o</div>
-                    {row.llm}
-                  </div>
-                )}
-              </td>
-              <td className="text-right whitespace-nowrap">
-                {row.imported ? (
-                  <span className="text-[11px] text-[#006400] font-medium inline-flex items-center gap-1">
-                    <Check className="w-3 h-3" /> Imported
-                  </span>
-                ) : (
-                  <button
-                    onClick={() => {
-                      setRows(prev => prev.map(r => r.id === row.id ? { ...r, imported: true } : r))
-                      toast.success(`Imported "${row.desc}" to estimate`)
-                    }}
-                    className="btn btn-primary btn-xs"
-                  >
-                    Import
-                  </button>
-                )}
-              </td>
-            </tr>
-          )
-        })}
-      </ProtoDataTable>
+      <UploadModal open={uploadOpen} onOpenChange={setUploadOpen} onUploadComplete={handleUploadComplete} />
+      {reviewBoq ? <ReviewPanel boq={reviewBoq} onClose={() => setReviewBoq(null)} primaryActionLabel="Approve & Compare" requireCatalogReadiness onApproved={(updated) => { setReviewBoq(null); void loadBoqs(updated.id); setSelectedId(updated.id) }} /> : null}
+      {matchTarget && selected ? (
+        <CatalogMatchModal
+          itemDesc={matchTarget.item.desc}
+          itemUnit={matchTarget.item.unit}
+          itemCode={matchTarget.item.code}
+          sourceProject={selected.project}
+          sourceVendor={selected.vendor}
+          matchContext={{ boqId: selected.id, sectionIndex: matchTarget.sectionIndex, ...matchTarget.identity }}
+          onClose={() => setMatchTarget(null)}
+          onMatch={async () => { setMatchTarget(null); await loadComparison(selected.id); toast.success("Comparison refreshed") }}
+        />
+      ) : null}
     </div>
   )
 }

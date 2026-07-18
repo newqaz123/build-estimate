@@ -186,6 +186,9 @@ test('buildDraftBoq builds an unclassified draft from extracted values without s
   assert.equal(Object.hasOwn(draft.sections[0].items[0], 'code'), false)
   assert.equal(draft.sections[0].items[0].stdStatus, 'unmatched')
   assert.equal(draft.sections[0].items[0].costComponent, 'combined')
+  assert.deepEqual(draft.sections[0].items[0].costAllocation, {
+    basis: 'rate', material: 60, labour: 40, origin: 'source',
+  })
   assert.deepEqual(draft.sections[0].items[0].sourceRef, { page: 1, table: 1, row: 2 })
 })
 

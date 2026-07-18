@@ -125,6 +125,7 @@ function item(overrides: Partial<BoqItem> = {}): BoqItem {
     total: 200,
     type: 'unit',
     stdStatus: 'matched',
+    stdId: 'std-1',
     ...overrides,
   }
 }
@@ -189,7 +190,9 @@ test('approval builds and verifies the candidate while recomputing section total
 
   assert.equal(response.status, 200)
   assert.equal(harness.updates[0]?.grandTotal, 200)
-  assert.equal('sourceStoragePath' in (await response.json()), false)
+  const body = await response.json()
+  assert.equal('sourceStoragePath' in body, false)
+  assert.equal(body.sourceAvailable, true)
 })
 
 test('approval rejects every blocking local verification category with structured details', async (t) => {
@@ -218,6 +221,37 @@ test('approval rejects every blocking local verification category with structure
       assert.equal(harness.updates.length, 0)
     })
   }
+})
+
+test('approval rejects unresolved priced catalog items with item-level details', async () => {
+  const harness = detailHarness(detailBoq({
+    sections: [{ header: 'Concrete', items: [item({ id: 'pending-item', stdStatus: 'pending', stdId: undefined })] }],
+  }))
+
+  const response = await harness.handlers.PUT(new Request('http://localhost/api/boqs/boq-1', {
+    method: 'PUT',
+    body: JSON.stringify({ status: 'approved' }),
+  }), detailContext)
+  const body = await response.json()
+
+  assert.equal(response.status, 400)
+  assert.equal(body.error, 'Resolve catalog items before approval')
+  assert.equal(body.catalogReadiness.blocking, 1)
+  assert.equal(body.catalogReadiness.items[0].itemId, 'pending-item')
+  assert.equal(harness.updates.length, 0)
+})
+
+test('approval accepts an excluded priced item with a reason', async () => {
+  const harness = detailHarness(detailBoq({
+    sections: [{ header: 'Concrete', items: [item({ stdStatus: 'excluded', stdId: undefined, stdExclusionReason: 'One-off allowance' })] }],
+  }))
+
+  const response = await harness.handlers.PUT(new Request('http://localhost/api/boqs/boq-1', {
+    method: 'PUT',
+    body: JSON.stringify({ status: 'approved' }),
+  }), detailContext)
+
+  assert.equal(response.status, 200)
 })
 
 test('draft updates may explicitly save Unclassified work and retain verification warnings', async () => {

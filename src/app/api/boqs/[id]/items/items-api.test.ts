@@ -120,6 +120,41 @@ test('unlinked BOQ edits remain local and do not mutate the standard catalog', (
   assert.deepEqual(result.boqs[1]?.sections[0]?.items[0], item({ code: 'B-1', stdId: 'std-1', desc: 'Source concrete' }))
 })
 
+test('material and labour edits persist an allocation and reconcile the row rate', () => {
+  const result = applyBoqItemUpdates(
+    [boq('boq-1', [item({ stdStatus: 'unmatched' })])],
+    [],
+    'boq-1',
+    [{ sectionIndex: 0, items: [{ itemCode: 'A-1', materialCost: 70, labourCost: 50 }] }],
+  )
+  const updated = result.boqs[0]?.sections[0]?.items[0]
+  assert.deepEqual(updated?.costAllocation, { basis: 'rate', material: 70, labour: 50, origin: 'manual' })
+  assert.equal(updated?.rate, 120)
+  assert.equal(updated?.total, 240)
+})
+
+test('excluding an item requires a reason and clears its catalog link', () => {
+  assert.throws(
+    () => parseUpdateGroups({ sectionIndex: 0, items: [{ itemCode: 'A-1', stdStatus: 'excluded' }] }),
+    /exclusion reason/i,
+  )
+
+  const result = applyBoqItemUpdates(
+    [boq('boq-1', [item({ stdId: 'std-1', stdMatch: 'Source concrete', stdConfidence: 'manual' })])],
+    [standard()],
+    'boq-1',
+    [{ sectionIndex: 0, items: [{ itemCode: 'A-1', stdStatus: 'excluded', stdExclusionReason: 'One-off provisional sum' }] }],
+  )
+  const updated = result.boqs[0]?.sections[0]?.items[0]
+
+  assert.equal(updated?.stdStatus, 'excluded')
+  assert.equal(updated?.stdExclusionReason, 'One-off provisional sum')
+  assert.equal(updated?.stdId, undefined)
+  assert.equal(updated?.stdMatch, undefined)
+  assert.equal(updated?.stdConfidence, undefined)
+  assert.equal(result.boqs[0]?.stdStatus, 'complete')
+})
+
 test('same-standard partial edits compose canonical fields across one batch', () => {
   const result = applyBoqItemUpdates(
     [

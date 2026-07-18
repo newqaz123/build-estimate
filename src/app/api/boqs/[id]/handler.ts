@@ -1,6 +1,8 @@
 import { isSourceObjectNotFound } from '@/lib/boq-source-storage'
 import { verifyBoqLocally } from '@/lib/boq-ingestion'
 import type { Boq } from '@/lib/boq-schema'
+import { toPublicBoq } from '@/lib/boq-public'
+import { getBoqCatalogReadiness } from '@/lib/boq-catalog-readiness'
 
 export type BoqDetailRouteContext = { params: Promise<{ id: string }> }
 
@@ -33,13 +35,6 @@ function computeTotals(sections: unknown) {
   return { totalItems, grandTotal }
 }
 
-function publicBoq(boq: Boq | null): Omit<Boq, 'sourceStoragePath'> | null {
-  if (!boq) return null
-  const safe: Partial<Boq> = { ...boq }
-  delete safe.sourceStoragePath
-  return safe as Omit<Boq, 'sourceStoragePath'>
-}
-
 export function createBoqDetailHandlers(dependencies: BoqDetailDependencies) {
   async function GET(_request: Request, { params }: BoqDetailRouteContext): Promise<Response> {
     const session = await dependencies.authenticate()
@@ -49,7 +44,7 @@ export function createBoqDetailHandlers(dependencies: BoqDetailDependencies) {
       const { id } = await params
       const boq = await dependencies.getBoq(id)
       if (!boq) return Response.json({ error: 'BOQ not found' }, { status: 404 })
-      return Response.json(publicBoq(boq))
+      return Response.json(toPublicBoq(boq))
     } catch (error) {
       console.error('Error fetching BOQ:', error)
       return Response.json({ error: 'Internal server error' }, { status: 500 })
@@ -103,10 +98,19 @@ export function createBoqDetailHandlers(dependencies: BoqDetailDependencies) {
           { status: 400 },
         )
       }
+      if (candidate.status === 'approved') {
+        const catalogReadiness = getBoqCatalogReadiness(candidate)
+        if (catalogReadiness.blocking > 0) {
+          return Response.json(
+            { error: 'Resolve catalog items before approval', catalogReadiness },
+            { status: 400 },
+          )
+        }
+      }
 
       await dependencies.updateBoq(id, updates)
       const updated = await dependencies.getBoq(id)
-      return Response.json(publicBoq(updated))
+      return Response.json(updated ? toPublicBoq(updated) : null)
     } catch (error) {
       console.error('Error updating BOQ:', error)
       return Response.json({ error: 'Internal server error' }, { status: 500 })

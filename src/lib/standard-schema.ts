@@ -1,3 +1,5 @@
+import type { HistoricalPriceSummary } from './catalog-historical-pricing'
+
 export interface StandardSourceItem {
   boqId: string
   sectionIndex: number
@@ -14,6 +16,7 @@ export interface StandardEntry {
   aliases: string[]
   sourceItems?: StandardSourceItem[]
   sourceBoqCount: number
+  historicalPricing?: HistoricalPriceSummary
   lastMatched?: string
   archivedAt?: string
   createdAt: string

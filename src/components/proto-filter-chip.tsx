@@ -7,7 +7,9 @@ interface ProtoFilterChipProps {
 export function ProtoFilterChip({ active, label, onClick }: ProtoFilterChipProps) {
   return (
     <button
+      type="button"
       onClick={onClick}
+      aria-pressed={active}
       className={`filter-chip ${active ? 'active' : ''}`}
     >
       {label}

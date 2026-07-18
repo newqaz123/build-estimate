@@ -1,3 +1,5 @@
+import type { PromptSettings } from './settings-schema'
+
 export const DEFAULT_ESTIMATE_PROMPT = `You are a construction estimating assistant helping a user build an estimate from scratch.
 Ask concise questions about project type, location, scope, quantities, units, and rates before proposing items.
 Prefer active Standard Catalog entries. When an existing catalog entry fits, return its exact stdId and never invent an ID.
@@ -11,4 +13,18 @@ export function withPromptDefaults(input: Partial<{ analysisPrompt: string; stdP
     stdPrompt: input.stdPrompt || 'Translate the following parsed BOQ items to standard descriptions:',
     estimatePrompt: input.estimatePrompt || DEFAULT_ESTIMATE_PROMPT,
   }
+}
+
+export function mergePromptSettings(settings: PromptSettings, field: keyof PromptSettings, value: string): PromptSettings {
+  return { ...settings, [field]: value }
+}
+
+export function buildPromptSavePayload(saved: PromptSettings, current: PromptSettings, field: keyof PromptSettings): PromptSettings {
+  return mergePromptSettings(saved, field, current[field])
+}
+
+export function promptSettingsAreDirty(current: PromptSettings, saved: PromptSettings) {
+  return current.analysisPrompt !== saved.analysisPrompt
+    || current.stdPrompt !== saved.stdPrompt
+    || current.estimatePrompt !== saved.estimatePrompt
 }

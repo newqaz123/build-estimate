@@ -1,3 +1,6 @@
+import { cert, getApps, initializeApp } from 'firebase-admin/app'
+import { getFirestore } from 'firebase-admin/firestore'
+import { getStorage } from 'firebase-admin/storage'
 import type { Firestore } from 'firebase-admin/firestore'
 import type { Bucket } from '@google-cloud/storage'
 
@@ -6,10 +9,6 @@ let bucketInstance!: Bucket
 
 function getFirebase() {
   if (dbInstance && bucketInstance) return { db: dbInstance, bucket: bucketInstance }
-
-  const { cert, getApps, initializeApp } = require('firebase-admin/app')
-  const { getFirestore } = require('firebase-admin/firestore')
-  const { getStorage } = require('firebase-admin/storage')
 
   const apps = getApps()
   const app = apps.length

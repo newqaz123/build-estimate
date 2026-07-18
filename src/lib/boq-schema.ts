@@ -24,6 +24,20 @@ export interface BoqSourceCosts {
   labour: BoqSourceCost
 }
 
+export type BoqCostAllocation =
+  | {
+      basis: 'rate'
+      material: number
+      labour: number
+      origin: 'source' | 'manual'
+    }
+  | {
+      basis: 'total'
+      material: number
+      labour: number
+      origin: 'source' | 'manual'
+    }
+
 export interface BoqExtractionWarning {
   code: string
   message: string
@@ -49,8 +63,10 @@ export interface BoqItem {
   costComponent?: 'material' | 'labour' | 'combined' | 'lump_sum'
   sourceRef?: BoqSourceRef
   sourceCosts?: BoqSourceCosts
+  costAllocation?: BoqCostAllocation
   extractionWarnings?: BoqExtractionWarning[]
-  stdStatus: 'matched' | 'unmatched' | 'pending'
+  stdStatus: 'matched' | 'unmatched' | 'pending' | 'excluded'
+  stdExclusionReason?: string
   stdMatch?: string
   stdId?: string
   stdConfidence?: 'exact' | 'fuzzy' | 'llm' | 'manual'
@@ -72,6 +88,7 @@ export interface Boq {
   sections: BoqSection[]
   sourceFileName?: string
   sourceStoragePath?: string
+  sourceAvailable?: boolean
   sourcePageCount?: number
   sourceTotal?: number
   extractionWarnings?: BoqExtractionWarning[]

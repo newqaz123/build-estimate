@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Loader2, Pencil, Plus, Trash2 } from "lucide-react"
 import { toast } from "sonner"
-import { DEFAULT_ESTIMATE_PROMPT } from "@/lib/prompt-defaults"
+import { DEFAULT_ESTIMATE_PROMPT, buildPromptSavePayload, promptSettingsAreDirty } from "@/lib/prompt-defaults"
 import type { DoclingSettings, FuzzySettings, LlmSettings, PromptSettings, Vendor, WorkspaceSettings } from "@/lib/settings-schema"
 
 const LLM_PROVIDERS = [
@@ -14,6 +14,7 @@ const LLM_PROVIDERS = [
   { value: "openrouter", label: "OpenRouter" },
 ] as const
 const SPECIALTIES = ["Structural", "MEP", "Finishing", "Full Scope"]
+const LLM_TEST_TIMEOUT_MS = 30_000
 
 const DEFAULT_ANALYSIS_PROMPT = `You are a construction cost estimation assistant. Analyse the provided BOQ/quotations data and return structured JSON with the following fields for each item:
 - item_code: The item reference code
@@ -38,6 +39,8 @@ const DEFAULT_UNIT_MAP = JSON.stringify({ m2: "m²", m3: "m³", sqm: "m²", "sq.
 const DEFAULT_NORMALIZE_RULES = JSON.stringify([["structural concrete", "concrete"], ["reinforcement bar", "rebar"], ["\\bconc\\.", "concrete"], ["\\d+mm\\b", "$& dia."], ["\\bformwork\\b", "formwork"], ["\\bmobilisation\\b", "mobilization"], ["\\bdemobilisation\\b", "demobilization"], ["\\s+", " "]], null, 2)
 
 type Section = "ai" | "processing" | "vendors" | "prompts" | "account"
+type PromptKind = "analysis" | "standardization" | "estimate"
+type PromptStatus = { kind: PromptKind; message: string; tone: "status" | "success" | "error" }
 type DirtyState = { ai: boolean; docling: boolean; fuzzy: boolean; vendors: boolean; prompts: boolean }
 const CLEAN: DirtyState = { ai: false, docling: false, fuzzy: false, vendors: false, prompts: false }
 
@@ -85,6 +88,7 @@ export default function SettingsPage() {
   const fuzzyCurrentRef = useRef({ unitMap: DEFAULT_UNIT_MAP, normalizeRules: DEFAULT_NORMALIZE_RULES })
   const analysisCurrentRef = useRef(DEFAULT_ANALYSIS_PROMPT)
   const stdCurrentRef = useRef(DEFAULT_STD_PROMPT)
+  const estimateCurrentRef = useRef(DEFAULT_ESTIMATE_PROMPT)
 
   const [llmProvider, setLlmProvider] = useState<LlmSettings["provider"]>("openai")
   const [llmModel, setLlmModel] = useState("gpt-4o")
@@ -121,11 +125,16 @@ export default function SettingsPage() {
 
   const [analysisPrompt, setAnalysisPrompt] = useState(DEFAULT_ANALYSIS_PROMPT)
   const [stdPrompt, setStdPrompt] = useState(DEFAULT_STD_PROMPT)
+  const [estimatePrompt, setEstimatePrompt] = useState(DEFAULT_ESTIMATE_PROMPT)
+  const [savedEstimatePrompt, setSavedEstimatePrompt] = useState(DEFAULT_ESTIMATE_PROMPT)
   const [savingAnalysisPrompt, setSavingAnalysisPrompt] = useState(false)
   const [savingStdPrompt, setSavingStdPrompt] = useState(false)
+  const [savingEstimatePrompt, setSavingEstimatePrompt] = useState(false)
+  const [promptStatus, setPromptStatus] = useState<PromptStatus | null>(null)
   const savedEstimateRef = useRef(DEFAULT_ESTIMATE_PROMPT)
   const analysisTokenEstimate = tokenEstimate(analysisPrompt)
   const stdTokenEstimate = tokenEstimate(stdPrompt)
+  const estimateTokenEstimate = tokenEstimate(estimatePrompt)
   const settingsReady = !loadingSettings && !settingsLoadError
 
   const markDirty = (section: keyof DirtyState, value = true) => {
@@ -187,10 +196,10 @@ export default function SettingsPage() {
         const analysis = data.prompts.analysisPrompt || DEFAULT_ANALYSIS_PROMPT
         const standardization = data.prompts.stdPrompt || DEFAULT_STD_PROMPT
         const estimate = data.prompts.estimatePrompt || DEFAULT_ESTIMATE_PROMPT
-        setAnalysisPrompt(analysis); setStdPrompt(standardization)
-        analysisCurrentRef.current = analysis; stdCurrentRef.current = standardization
-        savedAnalysisRef.current = analysis; savedStdRef.current = standardization
-        savedEstimateRef.current = estimate
+        setAnalysisPrompt(analysis); setStdPrompt(standardization); setEstimatePrompt(estimate); setSavedEstimatePrompt(estimate)
+        analysisCurrentRef.current = analysis; stdCurrentRef.current = standardization; estimateCurrentRef.current = estimate
+        savedAnalysisRef.current = analysis; savedStdRef.current = standardization; savedEstimateRef.current = estimate
+        setPromptStatus(null)
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return
@@ -215,6 +224,17 @@ export default function SettingsPage() {
       if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current)
     }
   }, [fetchSettings, fetchVendors])
+
+  useEffect(() => {
+    const warnAboutUnsavedPrompts = (event: BeforeUnloadEvent) => {
+      if (!dirtyRef.current.prompts) return
+      event.preventDefault()
+      event.returnValue = ""
+    }
+
+    window.addEventListener("beforeunload", warnAboutUnsavedPrompts)
+    return () => window.removeEventListener("beforeunload", warnAboutUnsavedPrompts)
+  }, [])
 
   const saveSection = async (section: "llm" | "docling" | "fuzzy" | "prompts", data: LlmSettings | DoclingSettings | FuzzySettings | PromptSettings) => {
     if (!settingsReady) throw new Error("Reload workspace settings before making changes")
@@ -243,9 +263,9 @@ export default function SettingsPage() {
       return
     }
     setTestingLlm(true); setLlmStatus("Testing connection…")
-    const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 10000)
+    const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), LLM_TEST_TIMEOUT_MS)
     try {
-      const response = await fetch("/api/llm/verify", { method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal, body: JSON.stringify({ provider: llmProvider, model: llmModel, messages: [{ role: "user", content: "Reply with OK." }] }) })
+      const response = await fetch("/api/llm/connection", { method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal, body: JSON.stringify({ provider: llmProvider, model: llmModel }) })
       if (!response.ok) throw new Error(await responseError(response, "LLM connection failed"))
       const data = await response.json() as { provider?: string; model?: string }
       setLlmStatus(`Connected${data.provider ? ` · ${data.provider} ${data.model || ""}` : ""}`); toast.success("LLM connection successful")
@@ -269,8 +289,13 @@ export default function SettingsPage() {
     setTestingDocling(true); setDoclingStatus("Testing connection…")
     const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 5000)
     try {
-      const response = await fetch(doclingEndpoint, { method: "HEAD", signal: controller.signal })
-      if (!response.ok) throw new Error(`Sidecar returned ${response.status}`)
+      const response = await fetch("/api/docling/health", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({ endpoint: doclingEndpoint.trim() }),
+      })
+      if (!response.ok) throw new Error(await responseError(response, `Sidecar returned ${response.status}`))
       setDoclingStatus("Connected"); toast.success("Docling sidecar is reachable")
     } catch (error) {
       const message = error instanceof DOMException && error.name === "AbortError" ? "Connection timed out" : error instanceof Error ? error.message : "Docling sidecar not reachable"
@@ -359,23 +384,45 @@ export default function SettingsPage() {
     }
   }
 
-  const savePrompt = async (kind: "analysis" | "standardization") => {
-    const value = kind === "analysis" ? analysisPrompt : stdPrompt
-    if (!value.trim()) return toast.error(`${kind === "analysis" ? "Analysis" : "Standardization"} prompt cannot be empty`)
+  const currentPromptSettings = (): PromptSettings => ({
+    analysisPrompt: analysisCurrentRef.current,
+    stdPrompt: stdCurrentRef.current,
+    estimatePrompt: estimateCurrentRef.current,
+  })
+
+  const savedPromptSettings = (): PromptSettings => ({
+    analysisPrompt: savedAnalysisRef.current,
+    stdPrompt: savedStdRef.current,
+    estimatePrompt: savedEstimateRef.current,
+  })
+
+  const savePrompt = async (kind: PromptKind) => {
+    const field: keyof PromptSettings = kind === "analysis" ? "analysisPrompt" : kind === "standardization" ? "stdPrompt" : "estimatePrompt"
+    const label = kind === "analysis" ? "Analysis" : kind === "standardization" ? "Standardization" : "Estimate Builder AI"
+    const current = currentPromptSettings()
+    const value = current[field]
+    if (!value.trim()) return toast.error(`${label} prompt cannot be empty`)
     if (value.length > 20_000) return toast.error("Prompt cannot exceed 20000 characters")
-    const setSaving = kind === "analysis" ? setSavingAnalysisPrompt : setSavingStdPrompt
+    const setSaving = kind === "analysis" ? setSavingAnalysisPrompt : kind === "standardization" ? setSavingStdPrompt : setSavingEstimatePrompt
+    const data = buildPromptSavePayload(savedPromptSettings(), current, field)
     setSaving(true)
-    const data: PromptSettings = kind === "analysis"
-      ? { analysisPrompt: value, stdPrompt: savedStdRef.current, estimatePrompt: savedEstimateRef.current }
-      : { analysisPrompt: savedAnalysisRef.current, stdPrompt: value, estimatePrompt: savedEstimateRef.current }
+    setPromptStatus({ kind, message: "Saving…", tone: "status" })
     try {
       await saveSection("prompts", data)
-      if (kind === "analysis") savedAnalysisRef.current = value; else savedStdRef.current = value
-      const analysisIsDirty = analysisCurrentRef.current !== savedAnalysisRef.current
-      const standardizationIsDirty = stdCurrentRef.current !== savedStdRef.current
-      markDirty("prompts", analysisIsDirty || standardizationIsDirty)
-      toast.success(`${kind === "analysis" ? "Analysis" : "Standardization"} prompt saved`)
-    } catch (error) { toast.error(error instanceof Error ? error.message : "Failed to save prompt") }
+      if (field === "analysisPrompt") savedAnalysisRef.current = value
+      if (field === "stdPrompt") savedStdRef.current = value
+      if (field === "estimatePrompt") {
+        savedEstimateRef.current = value
+        setSavedEstimatePrompt(value)
+      }
+      markDirty("prompts", promptSettingsAreDirty(currentPromptSettings(), savedPromptSettings()))
+      setPromptStatus({ kind, message: `${label} prompt saved`, tone: "success" })
+      toast.success(`${label} prompt saved`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to save prompt"
+      setPromptStatus({ kind, message, tone: "error" })
+      toast.error(message)
+    }
     finally { setSaving(false) }
   }
 
@@ -386,11 +433,18 @@ export default function SettingsPage() {
 
   const updateAnalysisPrompt = (value: string) => {
     setAnalysisPrompt(value); analysisCurrentRef.current = value
-    markDirty("prompts", value !== savedAnalysisRef.current || stdCurrentRef.current !== savedStdRef.current)
+    setPromptStatus((status) => status?.kind === "analysis" ? null : status)
+    markDirty("prompts", promptSettingsAreDirty(currentPromptSettings(), savedPromptSettings()))
   }
   const updateStdPrompt = (value: string) => {
     setStdPrompt(value); stdCurrentRef.current = value
-    markDirty("prompts", analysisCurrentRef.current !== savedAnalysisRef.current || value !== savedStdRef.current)
+    setPromptStatus((status) => status?.kind === "standardization" ? null : status)
+    markDirty("prompts", promptSettingsAreDirty(currentPromptSettings(), savedPromptSettings()))
+  }
+  const updateEstimatePrompt = (value: string) => {
+    setEstimatePrompt(value); estimateCurrentRef.current = value
+    setPromptStatus((status) => status?.kind === "estimate" ? null : status)
+    markDirty("prompts", promptSettingsAreDirty(currentPromptSettings(), savedPromptSettings()))
   }
   const updateVendorDraft = (next: { name: string; contact: string; specialty: string }) => {
     setVendorName(next.name); setVendorContact(next.contact); setVendorSpecialty(next.specialty)
@@ -433,7 +487,20 @@ export default function SettingsPage() {
 
         <section id="settings-vendors" className="proto-card settings-section" data-od-id="vendor-settings"><header className="settings-section-header"><div><h2>Vendors</h2><p>Maintain contractor contacts used across BOQs and estimates.</p></div><button className="btn btn-primary btn-sm" onClick={openAddVendor} disabled={savingVendor || deletingVendorBusyId !== null}><Plus aria-hidden="true" />Add vendor</button></header><div className="settings-table-wrap" tabIndex={0} aria-label="Vendors table, horizontally scrollable"><table className="data-table"><thead><tr><th>Vendor name</th><th>Specialty</th><th className="num-col">Linked BOQs</th><th>Last used</th><th>Actions</th></tr></thead><tbody>{loadingVendors ? <tr><td colSpan={5}><div className="settings-row-status" role="status"><Loader2 className="proto-spinner" aria-hidden="true" />Loading vendors…</div></td></tr> : vendors.length === 0 ? <tr><td colSpan={5}><div className="settings-row-status">No vendors yet. Add one to begin.</div></td></tr> : vendors.map((vendor) => <tr key={vendor.id}><td><strong>{vendor.name}</strong>{vendor.contact && <span className="meta settings-vendor-contact">{vendor.contact}</span>}</td><td>{vendor.specialty}</td><td className="num-col">{vendor.linkedBoqCount}</td><td>{vendor.lastUsed ? new Date(vendor.lastUsed).toLocaleDateString() : "—"}</td><td><div className="settings-row-actions"><button className="btn btn-ghost btn-sm" disabled={savingVendor || deletingVendorBusyId !== null} onClick={() => openEditVendor(vendor)} aria-label={`Edit ${vendor.name}`}><Pencil aria-hidden="true" />Edit</button><button className="btn btn-outline-danger btn-sm" disabled={savingVendor || deletingVendorBusyId !== null} onClick={() => void handleDeleteVendor(vendor)} aria-label={`${deletingVendorId === vendor.id ? "Confirm removal of" : "Remove"} ${vendor.name}`}><Trash2 aria-hidden="true" />{deletingVendorBusyId === vendor.id ? "Removing…" : deletingVendorId === vendor.id ? "Confirm" : "Remove"}</button></div></td></tr>)}</tbody></table></div><p className="settings-table-note">Renaming a vendor updates the name across all linked BOQs and historical data.</p></section>
 
-        <section id="settings-prompts" role="group" aria-label="Prompt settings" className={`settings-section-group${settingsReady ? "" : " settings-configuration-locked"}`} aria-disabled={!settingsReady} inert={!settingsReady ? true : undefined}><article className="proto-card settings-section" data-od-id="llm-prompt-settings"><header className="settings-section-header"><div><h2>LLM analysis prompt</h2><p>Controls how pricing is evaluated across analysis features.</p></div><span className="meta">~{analysisTokenEstimate} tokens</span></header><div className="settings-section-body"><div className="proto-field"><label htmlFor="analysis-prompt">System prompt</label><textarea id="analysis-prompt" className="proto-textarea settings-prompt" maxLength={20000} value={analysisPrompt} onChange={(event) => updateAnalysisPrompt(event.target.value)} /></div><div className="settings-actions"><button className="btn btn-primary btn-sm" onClick={() => void savePrompt("analysis")} disabled={savingAnalysisPrompt || savingStdPrompt}>{savingAnalysisPrompt && <Loader2 className="proto-spinner" aria-hidden="true" />}Save analysis prompt</button><button className="btn btn-ghost btn-sm" onClick={() => updateAnalysisPrompt(DEFAULT_ANALYSIS_PROMPT)}>Reset to default</button></div></div></article><article className="proto-card settings-section"><header className="settings-section-header"><div><h2>Standardization prompt</h2><p>Used during Pass 3 for unmatched-item suggestions.</p></div><span className="meta">~{stdTokenEstimate} tokens</span></header><div className="settings-section-body"><div className="proto-field"><label htmlFor="standardization-prompt">System prompt</label><textarea id="standardization-prompt" className="proto-textarea settings-prompt settings-code" maxLength={20000} value={stdPrompt} onChange={(event) => updateStdPrompt(event.target.value)} /></div><div className="settings-actions"><button className="btn btn-primary btn-sm" onClick={() => void savePrompt("standardization")} disabled={savingStdPrompt || savingAnalysisPrompt}>{savingStdPrompt && <Loader2 className="proto-spinner" aria-hidden="true" />}Save standardization prompt</button><button className="btn btn-ghost btn-sm" onClick={() => updateStdPrompt(DEFAULT_STD_PROMPT)}>Reset to default</button></div></div></article></section>
+        <section id="settings-prompts" role="group" aria-label="Prompt settings" className={`settings-section-group${settingsReady ? "" : " settings-configuration-locked"}`} aria-disabled={!settingsReady} inert={!settingsReady ? true : undefined}>
+          <article className="proto-card settings-section" data-od-id="llm-prompt-settings">
+            <header className="settings-section-header"><div><h2>LLM analysis prompt</h2><p>Controls how pricing is evaluated across analysis features.</p></div><span className="meta">~{analysisTokenEstimate} tokens</span></header>
+            <div className="settings-section-body"><div className="proto-field"><label htmlFor="analysis-prompt">System prompt</label><textarea id="analysis-prompt" className="proto-textarea settings-prompt" maxLength={20000} value={analysisPrompt} disabled={savingAnalysisPrompt || savingStdPrompt || savingEstimatePrompt} onChange={(event) => updateAnalysisPrompt(event.target.value)} /></div><div className="settings-actions"><button className="btn btn-primary btn-sm" onClick={() => void savePrompt("analysis")} disabled={savingAnalysisPrompt || savingStdPrompt || savingEstimatePrompt}>{savingAnalysisPrompt && <Loader2 className="proto-spinner" aria-hidden="true" />}Save analysis prompt</button><button className="btn btn-ghost btn-sm" onClick={() => updateAnalysisPrompt(DEFAULT_ANALYSIS_PROMPT)} disabled={savingAnalysisPrompt || savingStdPrompt || savingEstimatePrompt}>Reset to default</button>{promptStatus?.kind === "analysis" && <span className="settings-inline-status" role={promptStatus.tone === "error" ? "alert" : "status"} aria-live="polite">{promptStatus.message}</span>}</div></div>
+          </article>
+          <article className="proto-card settings-section" data-od-id="standardization-prompt-settings">
+            <header className="settings-section-header"><div><h2>Standardization prompt</h2><p>Used during Pass 3 for unmatched-item suggestions.</p></div><span className="meta">~{stdTokenEstimate} tokens</span></header>
+            <div className="settings-section-body"><div className="proto-field"><label htmlFor="standardization-prompt">System prompt</label><textarea id="standardization-prompt" className="proto-textarea settings-prompt settings-code" maxLength={20000} value={stdPrompt} disabled={savingAnalysisPrompt || savingStdPrompt || savingEstimatePrompt} onChange={(event) => updateStdPrompt(event.target.value)} /></div><div className="settings-actions"><button className="btn btn-primary btn-sm" onClick={() => void savePrompt("standardization")} disabled={savingAnalysisPrompt || savingStdPrompt || savingEstimatePrompt}>{savingStdPrompt && <Loader2 className="proto-spinner" aria-hidden="true" />}Save standardization prompt</button><button className="btn btn-ghost btn-sm" onClick={() => updateStdPrompt(DEFAULT_STD_PROMPT)} disabled={savingAnalysisPrompt || savingStdPrompt || savingEstimatePrompt}>Reset to default</button>{promptStatus?.kind === "standardization" && <span className="settings-inline-status" role={promptStatus.tone === "error" ? "alert" : "status"} aria-live="polite">{promptStatus.message}</span>}</div></div>
+          </article>
+          <article className="proto-card settings-section" data-od-id="estimate-prompt-settings">
+            <header className="settings-section-header"><div><h2>Estimate Builder AI prompt</h2><p>This prompt guides AI chat when users build estimates from scratch.</p></div><div className="settings-section-header-meta">{estimatePrompt !== savedEstimatePrompt && <span className="settings-dirty">Unsaved changes</span>}<span className="meta">~{estimateTokenEstimate} tokens</span></div></header>
+            <div className="settings-section-body"><div className="proto-field"><label htmlFor="estimate-builder-prompt">Prompt text</label><textarea id="estimate-builder-prompt" className="proto-textarea settings-prompt settings-code" maxLength={20000} value={estimatePrompt} disabled={savingAnalysisPrompt || savingStdPrompt || savingEstimatePrompt} aria-describedby="estimate-builder-prompt-help" data-od-id="estimate-builder-prompt" onChange={(event) => updateEstimatePrompt(event.target.value)} /><p id="estimate-builder-prompt-help" className="settings-help">Use this to shape the questions, catalog suggestions, and JSON response returned by the estimate builder chat.</p></div><div className="settings-actions"><button type="button" className="btn btn-primary btn-sm" onClick={() => void savePrompt("estimate")} disabled={savingAnalysisPrompt || savingStdPrompt || savingEstimatePrompt} data-od-id="save-estimate-builder-prompt">{savingEstimatePrompt && <Loader2 className="proto-spinner" aria-hidden="true" />}Save Estimate Builder prompt</button><button type="button" className="btn btn-ghost btn-sm" onClick={() => updateEstimatePrompt(DEFAULT_ESTIMATE_PROMPT)} disabled={savingAnalysisPrompt || savingStdPrompt || savingEstimatePrompt} data-od-id="reset-estimate-builder-prompt">Reset to default</button>{promptStatus?.kind === "estimate" && <span className="settings-inline-status" role={promptStatus.tone === "error" ? "alert" : "status"} aria-live="polite">{promptStatus.message}</span>}</div></div>
+          </article>
+        </section>
 
         <section id="settings-account" className="proto-card settings-section" data-od-id="account-settings"><header className="settings-section-header"><div><h2>Account</h2><p>Identity values are managed by authentication configuration.</p></div></header><div className="settings-section-body settings-form-grid"><div className="proto-field"><label htmlFor="account-name">Name</label><input id="account-name" className="proto-input" value="Construction Consultant" readOnly /></div><div className="proto-field"><label htmlFor="account-email">Email</label><input id="account-email" className="proto-input" type="email" value="admin@buildestimate.app" readOnly /></div><div className="settings-field-wide"><button className="btn btn-secondary btn-sm" type="button" disabled>Change password</button><p className="settings-help">Password changes are not available in this prototype. Update authentication credentials in the server environment.</p></div></div></section>
       </div>

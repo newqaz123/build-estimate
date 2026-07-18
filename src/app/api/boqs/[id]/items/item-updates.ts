@@ -1,6 +1,7 @@
 import type { Boq, BoqItem } from '@/lib/boq-schema'
 import { getBoqItemIdentityKey, resolveBoqItemIdentity, type BoqItemRequestIdentity } from '@/lib/boq-item-identity'
 import type { StandardEntry } from '@/lib/standard-schema'
+import { applyManualCostAllocation } from '@/lib/boq-cost-allocation'
 
 export interface BoqItemUpdate {
   itemId?: string
@@ -11,9 +12,12 @@ export interface BoqItemUpdate {
   qty?: number
   rate?: number
   total?: number
+  materialCost?: number
+  labourCost?: number
   type?: BoqItem['type']
   stdStatus?: BoqItem['stdStatus'] | 'fuzzy' | 'llm'
   stdMatch?: string
+  stdExclusionReason?: string
 }
 
 export interface BoqItemUpdateGroup {
@@ -28,7 +32,7 @@ export class BoqItemsValidationError extends Error {
   }
 }
 
-const ALLOWED_STD_STATUSES = new Set(['matched', 'unmatched', 'pending', 'fuzzy', 'llm'])
+const ALLOWED_STD_STATUSES = new Set(['matched', 'unmatched', 'pending', 'excluded', 'fuzzy', 'llm'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -39,7 +43,7 @@ function normalizeStandard(entry: StandardEntry): StandardEntry {
 }
 
 function applyStandard(item: BoqItem, standard: StandardEntry): BoqItem {
-  return {
+  const next: BoqItem = {
     ...item,
     desc: standard.description,
     unit: standard.unit,
@@ -49,6 +53,8 @@ function applyStandard(item: BoqItem, standard: StandardEntry): BoqItem {
     sourceDesc: item.sourceDesc ?? item.desc,
     sourceUnit: item.sourceUnit ?? item.unit,
   }
+  delete next.stdExclusionReason
+  return next
 }
 
 function computeTotals(sections: Boq['sections']) {
@@ -62,9 +68,10 @@ function computeTotals(sections: Boq['sections']) {
 }
 
 function computeStdStatus(sections: Boq['sections']): Boq['stdStatus'] {
-  const items = sections.flatMap((section) => section.items)
-  if (items.length === 0 || items.every((item) => item.stdStatus !== 'matched')) return 'none'
-  return items.every((item) => item.stdStatus === 'matched') ? 'complete' : 'partial'
+  const items = sections.flatMap((section) => section.items).filter((item) => item.rate > 0)
+  const resolved = items.filter((item) => item.stdStatus === 'matched' || (item.stdStatus === 'excluded' && item.stdExclusionReason?.trim())).length
+  if (items.length === 0 || resolved === 0) return 'none'
+  return resolved === items.length ? 'complete' : 'partial'
 }
 
 function normalizeLinkValue(value: unknown): string {
@@ -134,6 +141,10 @@ function validateUpdate(value: unknown): BoqItemRequestIdentity {
     throw new BoqItemsValidationError('stdStatus is invalid.')
   }
   if ('stdMatch' in value && typeof value.stdMatch !== 'string') throw new BoqItemsValidationError('stdMatch must be a string.')
+  if ('stdExclusionReason' in value && typeof value.stdExclusionReason !== 'string') throw new BoqItemsValidationError('stdExclusionReason must be a string.')
+  if (update.stdStatus === 'excluded' && !update.stdExclusionReason?.trim()) {
+    throw new BoqItemsValidationError('An exclusion reason is required.')
+  }
 
   const itemId = update.itemId?.trim()
   const itemCode = (update.itemCode ?? update.code)?.trim()
@@ -145,7 +156,7 @@ function validateUpdate(value: unknown): BoqItemRequestIdentity {
   }
   if (update.desc !== undefined && !update.desc.trim()) throw new BoqItemsValidationError('Description cannot be empty.')
   if (update.unit !== undefined && !update.unit.trim()) throw new BoqItemsValidationError('Unit cannot be empty.')
-  for (const [field, fieldValue] of [['qty', update.qty], ['rate', update.rate], ['total', update.total]] as const) {
+  for (const [field, fieldValue] of [['qty', update.qty], ['rate', update.rate], ['total', update.total], ['materialCost', update.materialCost], ['labourCost', update.labourCost]] as const) {
     if (fieldValue !== undefined && (typeof fieldValue !== 'number' || !Number.isFinite(fieldValue) || fieldValue < 0)) {
       throw new BoqItemsValidationError(`${field} must be a finite non-negative number.`)
     }
@@ -179,7 +190,7 @@ export function parseUpdateGroups(body: unknown): BoqItemUpdateGroup[] {
 }
 
 function updateOneItem(item: BoqItem, update: BoqItemUpdate): BoqItem {
-  const next = {
+  let next = {
     ...item,
     ...(update.code !== undefined ? { code: update.code.trim() } : {}),
     ...(update.desc !== undefined ? { desc: update.desc.trim() } : {}),
@@ -189,8 +200,23 @@ function updateOneItem(item: BoqItem, update: BoqItemUpdate): BoqItem {
     ...(update.type !== undefined ? { type: update.type } : {}),
     ...(update.stdStatus !== undefined ? { stdStatus: update.stdStatus } : {}),
     ...(update.stdMatch !== undefined ? { stdMatch: update.stdMatch.trim() } : {}),
+    ...(update.stdExclusionReason !== undefined ? { stdExclusionReason: update.stdExclusionReason.trim() } : {}),
   } as BoqItem
+  if (update.materialCost !== undefined || update.labourCost !== undefined) {
+    next = applyManualCostAllocation(
+      next,
+      update.materialCost ?? item.costAllocation?.material ?? 0,
+      update.labourCost ?? item.costAllocation?.labour ?? 0,
+    )
+  }
   if (update.stdMatch === undefined && 'stdMatch' in update) delete next.stdMatch
+  if (update.stdStatus === 'excluded') {
+    delete next.stdId
+    delete next.stdMatch
+    delete next.stdConfidence
+  } else if (update.stdStatus !== undefined) {
+    delete next.stdExclusionReason
+  }
   if (update.qty !== undefined || update.rate !== undefined) next.total = next.qty * next.rate
   else if (update.total !== undefined) next.total = update.total
   return next
