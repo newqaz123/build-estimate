@@ -26,6 +26,22 @@ Give every catalog item a transparent historical unit-price summary and ensure C
 - Make the price summary clickable. Open a detail dialog listing every included BOQ rate and the arithmetic calculation.
 - Show “No approved matched history” when no qualifying records exist.
 
+## Material and labour units
+
+- Material and labour are independent catalog items, not rate components that must share one unit.
+- Each item keeps its own description, quantity, unit, and historical pricing; for example, pipe uses `pcs` while welding uses `DB`.
+- Never add or average rates with different units. Estimate totals are calculated per line and then summed.
+- Do not create assemblies, child rows, conversion coefficients, or automatic quantity linkage. Changing pipe quantity must not change welding quantity.
+
+## Estimator UX
+
+- Adding a catalog item creates one independent estimate line.
+- Seed its editable rate from that catalog item’s approved historical average for the exact compatible unit.
+- Material, labour, and combined-work items all use the same rule: their own catalog history seeds their own line.
+- Show the pricing source and source count in the catalog picker. If no history exists, seed zero and clearly request a manual rate.
+- Save the selected rate in the estimate snapshot so later catalog-history changes do not rewrite existing estimates.
+- Provide the same historical default rate to catalog-backed AI estimator suggestions.
+
 ## Compare UX
 
 - Show the approved historical average and plain-language variance for every matched row with prior history.
