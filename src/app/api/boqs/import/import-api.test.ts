@@ -3,7 +3,9 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import type { Boq } from '@/lib/boq-schema'
-import type { DoclingResultV2 } from '@/lib/boq-ingestion'
+import { parseDoclingResult, type DoclingResult, type DoclingResultV2 } from '@/lib/boq-ingestion'
+import { v3Fixture } from '@/lib/boq-extraction-test-fixtures'
+import type { ExtractionStore } from '@/lib/boq-extraction-storage'
 import {
   importPdfAtomically,
   type ImportServiceDependencies,
@@ -90,8 +92,28 @@ function serviceDependencies(
     createDocumentWithId: async () => undefined,
     getBoq: async () => null,
     deleteSourcePdf: async () => undefined,
+    createRunId: () => 'run-1',
+    now: () => new Date('2026-07-19T00:00:00.000Z'),
+    extractionStore: extractionStore(),
     ...overrides,
   }
+}
+
+function extractionStore(overrides: Partial<ExtractionStore> = {}): ExtractionStore {
+  return {
+    createRun: async () => 'created',
+    writeSourceRows: async () => undefined,
+    verifySourceRows: async () => ({ count: 4, checksum: '' }),
+    finalizeBoqAndRun: async () => 'finalized',
+    getReadyImport: async () => null,
+    deleteRunTree: async () => undefined,
+    listExpiredStagingRuns: async () => [],
+    ...overrides,
+  }
+}
+
+function validV3Payload(): DoclingResult {
+  return parseDoclingResult(v3Fixture())
 }
 
 test('Docling URL policy permits localhost plus configured origins and targets one parse path', () => {
@@ -326,6 +348,89 @@ test('atomic import saves exact bytes, propagates signal, and persists a draft',
   assert.deepEqual(calls, ['save', 'parse:http://localhost:5001', 'persist'])
   assert.equal(draft.status, 'draft')
   assert.equal(persisted?.sourceStoragePath, 'boqs/boq-1/source.pdf')
+})
+
+test('v3 stages and verifies evidence before atomically finalizing BOQ and run', async () => {
+  const events: string[] = []
+  let expectedChecksum = ''
+  const store = extractionStore({
+    createRun: async (run) => { events.push('run:stage'); expectedChecksum = run.sourceRowChecksum; return 'created' },
+    writeSourceRows: async () => { events.push('rows:write') },
+    verifySourceRows: async () => { events.push('rows:verify'); return { count: 4, checksum: expectedChecksum } },
+    finalizeBoqAndRun: async (boq, run) => {
+      events.push('boq+run:finalize')
+      assert.equal(boq.activeExtractionRunId, 'run-fixed')
+      assert.equal(run.status, 'staging')
+      return 'finalized'
+    },
+  })
+  const result = await importPdfAtomically(pdfFile(), 'boq-1', serviceDependencies({
+    saveSourcePdf: async () => { events.push('source:save') },
+    parsePdfWithDocling: async () => { events.push('parse:v3'); return validV3Payload() },
+    createRunId: () => 'run-fixed',
+    extractionStore: store,
+    createDocumentWithId: async () => { events.push('v2:persist') },
+  }))
+  assert.equal(result.activeExtractionRunId, 'run-fixed')
+  assert.deepEqual(events, ['source:save', 'parse:v3', 'run:stage', 'rows:write', 'rows:verify', 'boq+run:finalize'])
+})
+
+test('v3 staging failure cleans run then source, but uncertain cleanup preserves source', async () => {
+  const calls: string[] = []
+  await assert.rejects(() => importPdfAtomically(pdfFile(), 'boq-1', serviceDependencies({
+    parsePdfWithDocling: async () => validV3Payload(),
+    extractionStore: extractionStore({
+      createRun: async () => 'created',
+      writeSourceRows: async () => { throw new Error('write failed') },
+      deleteRunTree: async () => { calls.push('run:delete') },
+    }),
+    deleteSourcePdf: async () => { calls.push('source:delete') },
+  })))
+  assert.deepEqual(calls, ['run:delete', 'source:delete'])
+
+  calls.length = 0
+  await assert.rejects(() => importPdfAtomically(pdfFile(), 'boq-1', serviceDependencies({
+    parsePdfWithDocling: async () => validV3Payload(),
+    extractionStore: extractionStore({
+      createRun: async () => 'created',
+      writeSourceRows: async () => { throw new Error('write failed') },
+      deleteRunTree: async () => { throw new Error('cleanup unknown') },
+    }),
+    deleteSourcePdf: async () => { calls.push('source:delete') },
+  })))
+  assert.deepEqual(calls, [])
+})
+
+test('zero-item v3 import still finalizes a ready reviewable draft', async () => {
+  const payload = v3Fixture()
+  payload.sourceRows = []
+  payload.sections = []
+  payload.warnings = []
+  payload.totalItems = 0
+  payload.sourceTotal = null
+  payload.reconciliation = { itemTotal: 0, sourceTotal: null, reconciled: false, difference: 0 }
+  let checksum = ''
+  let finalized = false
+  const result = await importPdfAtomically(pdfFile(), 'boq-empty', serviceDependencies({
+    parsePdfWithDocling: async () => parseDoclingResult(payload),
+    extractionStore: extractionStore({
+      createRun: async (run) => { checksum = run.sourceRowChecksum; return 'created' },
+      verifySourceRows: async () => ({ count: 0, checksum }),
+      finalizeBoqAndRun: async () => { finalized = true; return 'finalized' },
+    }),
+  }))
+  assert.equal(result.totalItems, 0)
+  assert.equal(finalized, true)
+})
+
+test('invalid caller-generated v3 run identity rolls back the saved source', async () => {
+  const calls: string[] = []
+  await assert.rejects(() => importPdfAtomically(pdfFile(), 'boq-1', serviceDependencies({
+    parsePdfWithDocling: async () => validV3Payload(),
+    createRunId: () => '',
+    deleteSourcePdf: async () => { calls.push('source:delete') },
+  })), /runId/i)
+  assert.deepEqual(calls, ['source:delete'])
 })
 
 test('storage commit-then-reject reconciles existence and continues import', async () => {

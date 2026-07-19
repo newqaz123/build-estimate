@@ -1,5 +1,15 @@
 import type { Boq } from './boq-schema'
-import { buildDraftBoq, type DoclingResultV2 } from './boq-ingestion'
+import { buildDraftImport, type DoclingResult } from './boq-ingestion'
+import {
+  buildExtractionRun,
+  digestBytes,
+  fingerprintParserConfig,
+} from './boq-extraction-run'
+import {
+  ExtractionCleanupUncertainError,
+  persistStagedRun,
+  type ExtractionStore,
+} from './boq-extraction-storage'
 import { boqSourcePath, isSourceObjectNotFound } from './boq-source-storage'
 import { DoclingClientError } from './docling-client'
 import type { WorkspaceSettings } from './settings-schema'
@@ -10,10 +20,13 @@ export interface ImportServiceDependencies {
   getWorkspaceSettings(): Promise<Pick<WorkspaceSettings, 'docling'> | null>
   saveSourcePdf(path: string, bytes: Uint8Array): Promise<void>
   sourcePdfExists(path: string): Promise<boolean>
-  parsePdfWithDocling(file: File, endpoint: string, signal?: AbortSignal): Promise<DoclingResultV2>
+  parsePdfWithDocling(file: File, endpoint: string, signal?: AbortSignal): Promise<DoclingResult>
   createDocumentWithId(collection: string, id: string, data: Record<string, unknown>): Promise<void>
   getBoq(id: string): Promise<Boq | null>
   deleteSourcePdf(path: string): Promise<void>
+  createRunId(): string
+  now(): Date
+  extractionStore: ExtractionStore
 }
 
 function throwIfCancelled(signal?: AbortSignal): void {
@@ -47,18 +60,52 @@ export async function importPdfAtomically(
     if (!await dependencies.sourcePdfExists(sourcePath)) throw saveError
   }
 
-  let draft: Omit<Boq, 'createdAt' | 'updatedAt'>
+  let parsed: DoclingResult
+  let endpoint: string
   try {
     throwIfCancelled(signal)
     const settings = await dependencies.getWorkspaceSettings()
-    const endpoint = settings?.docling?.endpoint?.trim() || DEFAULT_DOCLING_ENDPOINT
-    const parsed = await dependencies.parsePdfWithDocling(file, endpoint, signal)
+    endpoint = settings?.docling?.endpoint?.trim() || DEFAULT_DOCLING_ENDPOINT
+    parsed = await dependencies.parsePdfWithDocling(file, endpoint, signal)
     throwIfCancelled(signal)
-    draft = buildDraftBoq(id, sourcePath, parsed)
   } catch (error) {
     await rollbackSource(sourcePath, dependencies)
     throw error
   }
+
+  let draftImport: ReturnType<typeof buildDraftImport>
+  try {
+    draftImport = buildDraftImport(
+      id,
+      sourcePath,
+      parsed,
+      parsed.contractVersion === 3 ? dependencies.createRunId() : 'unused-v2',
+    )
+  } catch (error) {
+    await rollbackSource(sourcePath, dependencies)
+    throw error
+  }
+
+  if (parsed.contractVersion === 3) {
+    const seed = draftImport.run
+    if (!seed) throw new Error('Extraction run seed missing')
+    const run = buildExtractionRun({
+      seed,
+      sourceDigest: digestBytes(bytes),
+      parserConfigFingerprint: fingerprintParserConfig({ endpoint, contractVersion: 3 }),
+      now: dependencies.now(),
+    })
+    try {
+      return await persistStagedRun({ boq: draftImport.boq, run, rows: seed.sourceRows }, dependencies.extractionStore, signal)
+    } catch (error) {
+      if (error instanceof ExtractionCleanupUncertainError) throw error
+      await rollbackSource(sourcePath, dependencies)
+      if (signal?.aborted) throw new DoclingClientError('cancelled', 'Request cancelled')
+      throw error
+    }
+  }
+
+  const draft = draftImport.boq
 
   try {
     await dependencies.createDocumentWithId('boqs', id, draft as unknown as Record<string, unknown>)

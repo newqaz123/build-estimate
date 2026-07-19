@@ -1,5 +1,6 @@
 import { auth } from '@/lib/auth'
 import { importPdfAtomically } from '@/lib/boq-import-service'
+import { createFirestoreExtractionStore } from '@/lib/boq-extraction-storage'
 import {
   deleteSourcePdf,
   saveSourcePdf,
@@ -7,7 +8,7 @@ import {
 } from '@/lib/boq-source-storage'
 import type { Boq } from '@/lib/boq-schema'
 import { parsePdfWithDocling } from '@/lib/docling-client'
-import { createDocumentWithId, getDocument } from '@/lib/db'
+import { createDocumentWithId, getDb, getDocument } from '@/lib/db'
 import type { WorkspaceSettings } from '@/lib/settings-schema'
 import { createImportHandler } from './handler'
 
@@ -22,5 +23,8 @@ export const POST = createImportHandler({
     createDocumentWithId,
     getBoq: (boqId) => getDocument<Boq>('boqs', boqId),
     deleteSourcePdf,
+    createRunId: () => crypto.randomUUID(),
+    now: () => new Date(),
+    extractionStore: createFirestoreExtractionStore(getDb()),
   }, signal),
 })
