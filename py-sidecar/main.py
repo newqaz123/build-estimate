@@ -7,7 +7,9 @@ from fastapi.concurrency import run_in_threadpool
 from typing import Annotated, Any, List, Literal, Optional
 from pydantic import BaseModel, Field, FiniteFloat, PositiveInt
 
+from boq_contract import ParseResponseV3
 from boq_parser import extract_boq_document
+from boq_source_rows import build_source_rows
 
 app = FastAPI(title="Docling Sidecar", version="0.1.0")
 logger = logging.getLogger("docling_sidecar")
@@ -117,9 +119,10 @@ def get_converter():
     return DocumentConverter()
 
 
-def build_parse_response(filename: str, document: Any) -> ParseResponse:
+def build_parse_response(filename: str, document: Any) -> ParseResponseV3:
     document_text = document.export_to_text(page_break_placeholder="\n\f\n")
     tables: list[dict[str, Any]] = []
+    raw_tables: list[dict[str, Any]] = []
     for index, table in enumerate(document.tables, start=1):
         frame = table.export_to_dataframe(doc=document).fillna("")
         page = table.prov[0].page_no if table.prov else 1
@@ -128,16 +131,60 @@ def build_parse_response(filename: str, document: Any) -> ParseResponse:
             "table": index,
             "rows": [list(frame.columns), *frame.values.tolist()],
         })
+        raw_tables.append({
+            "page": page,
+            "table": index,
+            "cells": list(table.data.table_cells),
+        })
+    source_rows = build_source_rows(raw_tables)
     normalized = extract_boq_document(tables, document_text)
-    total_items = sum(len(section["items"]) for section in normalized["sections"])
-    return ParseResponse(
-        contractVersion=2,
+    source_ids_by_location: dict[tuple[int, int, int], list[str]] = {}
+    for source_row in source_rows:
+        location = (source_row["page"], source_row["table"], source_row["row"])
+        source_ids_by_location.setdefault(location, []).append(source_row["id"])
+
+    sections: list[dict[str, Any]] = []
+    for section in normalized["sections"]:
+        items: list[dict[str, Any]] = []
+        for item in section["items"]:
+            source_ref = item["sourceRef"]
+            location = (source_ref["page"], source_ref["table"], source_ref["row"])
+            source_ids = source_ids_by_location.get(location)
+            if not source_ids:
+                raise ValueError(f"derived item has no retained source row at {location}")
+            items.append({
+                "id": item["id"],
+                "desc": item["desc"],
+                "pricingRole": "standard",
+                "sourceRowIds": [source_ids[0]],
+                "unit": item["unit"],
+                "qty": item["qty"],
+                "rate": item["rate"],
+                "total": item["total"],
+            })
+        sections.append({"header": section["header"], "items": items})
+
+    total_items = sum(len(section["items"]) for section in sections)
+    item_total = sum(item["total"] for section in sections for item in section["items"])
+    source_total = normalized["sourceTotal"]
+    difference = item_total - source_total if source_total is not None else 0.0
+    return ParseResponseV3(
+        contractVersion=3,
         documentName=filename,
         pageCount=len(document.pages),
         documentText=document_text,
-        tables=tables,
+        sourceRows=source_rows,
+        sections=sections,
+        metadata=normalized["metadata"],
+        warnings=normalized["warnings"],
+        sourceTotal=source_total,
+        reconciliation={
+            "itemTotal": item_total,
+            "sourceTotal": source_total,
+            "reconciled": source_total is not None and abs(difference) <= 0.01,
+            "difference": difference,
+        },
         totalItems=total_items,
-        **normalized,
     )
 
 
@@ -149,7 +196,7 @@ def convert_pdf(filename: str, content: bytes):
     return build_parse_response(filename, result.document)
 
 
-@app.post("/parse", response_model=ParseResponse)
+@app.post("/parse", response_model=ParseResponseV3)
 async def parse_pdf(file: UploadFile = File(...)):
     filename = file.filename or "document.pdf"
     if not filename.lower().endswith(".pdf"):

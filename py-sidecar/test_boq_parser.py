@@ -9,6 +9,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from boq_parser import extract_boq_document, extract_boq_sections, extract_metadata, parse_number
+from boq_contract import DerivedItemV3, ParseResponseV3, RawCell, SourceRow
+from boq_source_rows import build_source_rows
 
 
 class BoqParserTest(unittest.TestCase):
@@ -605,8 +607,30 @@ class SidecarContractTest(unittest.TestCase):
         class Provenance:
             page_no = 2
 
+        class Cell:
+            def __init__(self, text, row, column, *, column_header=False):
+                self.text = text
+                self.start_row_offset_idx = row
+                self.end_row_offset_idx = row + 1
+                self.start_col_offset_idx = column
+                self.end_col_offset_idx = column + 1
+                self.row_span = 1
+                self.col_span = 1
+                self.column_header = column_header
+                self.row_header = False
+                self.row_section = False
+
+        class Data:
+            table_cells = [
+                Cell("Description", 0, 0, column_header=True),
+                Cell("Amount", 0, 1, column_header=True),
+                Cell("Install valve", 1, 0),
+                Cell("2,500.00", 1, 1),
+            ]
+
         class Table:
             prov = [Provenance()]
+            data = Data()
 
             def __init__(self):
                 self.exported_with = None
@@ -631,15 +655,22 @@ class SidecarContractTest(unittest.TestCase):
 
         self.assertEqual(document.placeholder, "\n\f\n")
         self.assertIs(document.tables[0].exported_with, document)
-        self.assertEqual(payload["contractVersion"], 2)
+        self.assertEqual(payload["contractVersion"], 3)
         self.assertEqual(payload["documentName"], "quote.pdf")
         self.assertEqual(payload["pageCount"], 2)
-        self.assertEqual(payload["tables"][0]["page"], 2)
-        self.assertEqual(payload["tables"][0]["table"], 1)
-        self.assertEqual(payload["tables"][0]["rows"][1], ["Install valve", "2,500.00"])
+        self.assertEqual(payload["sourceRows"][0]["page"], 2)
+        self.assertEqual(payload["sourceRows"][0]["table"], 1)
+        self.assertEqual(payload["sourceRows"][1]["rawText"], "Install valve | 2,500.00")
         self.assertEqual(payload["metadata"]["workType"]["value"], "MEP")
         self.assertEqual(payload["totalItems"], 1)
         self.assertTrue(all("code" not in item for section in payload["sections"] for item in section["items"]))
+
+    def test_parse_endpoint_declares_v3_response_model(self):
+        main = self._import_main()
+
+        route = next(route for route in main.app.routes if getattr(route, "path", None) == "/parse")
+
+        self.assertIs(route.response_model, ParseResponseV3)
 
     def test_versioned_item_contract_drops_legacy_source_code(self):
         main = self._import_main()
@@ -723,6 +754,178 @@ class SidecarContractTest(unittest.TestCase):
 
         self.assertEqual(raised.exception.detail, "Docling could not parse this PDF")
         self.assertIn("sensitive converter detail", "\n".join(captured.output))
+
+
+class LosslessContractV3Test(unittest.TestCase):
+    @staticmethod
+    def _table(page=3, table=1, cells=None):
+        return {"page": page, "table": table, "cells": cells or []}
+
+    @staticmethod
+    def _cell(text, row, column, **overrides):
+        cell = {
+            "text": text,
+            "start_row_offset_idx": row,
+            "end_row_offset_idx": row + 1,
+            "start_col_offset_idx": column,
+            "end_col_offset_idx": column + 1,
+            "row_span": 1,
+            "col_span": 1,
+            "column_header": False,
+            "row_header": False,
+            "row_section": False,
+        }
+        cell.update(overrides)
+        return cell
+
+    def test_v3_preserves_multiline_spans_offsets_flags_and_location(self):
+        rows = build_source_rows([self._table(cells=[
+            self._cell("Description", 0, 0, column_header=True),
+            self._cell(
+                "Pump body\nLabour",
+                1,
+                0,
+                row_span=2,
+                col_span=3,
+                end_row_offset_idx=3,
+                end_col_offset_idx=3,
+                row_header=True,
+                row_section=True,
+            ),
+        ])])
+
+        raw = rows[1]["rawCells"][0]
+        self.assertEqual(raw["rawText"], "Pump body\nLabour")
+        self.assertEqual(raw["lines"], ["Pump body", "Labour"])
+        self.assertEqual((raw["rowSpan"], raw["columnSpan"]), (2, 3))
+        self.assertEqual(
+            (
+                raw["startRowOffset"], raw["endRowOffset"],
+                raw["startColumnOffset"], raw["endColumnOffset"],
+            ),
+            (1, 3, 0, 3),
+        )
+        self.assertEqual(
+            (raw["columnHeader"], raw["rowHeader"], raw["rowSection"]),
+            (False, True, True),
+        )
+        self.assertEqual((rows[1]["page"], rows[1]["table"], rows[1]["row"]), (3, 1, 2))
+        self.assertEqual(rows[1]["confidence"], 1.0)
+
+    def test_every_logical_row_is_retained_with_headers_and_current_section(self):
+        rows = build_source_rows([self._table(cells=[
+            self._cell("Description", 0, 0, column_header=True),
+            self._cell("Amount", 0, 1, column_header=True),
+            self._cell("Mechanical", 1, 0, row_section=True),
+            self._cell("Pump", 2, 0),
+            self._cell("100", 2, 1),
+            self._cell("Unsupported note", 3, 0),
+        ])])
+
+        self.assertEqual([row["row"] for row in rows], [1, 2, 3, 4])
+        self.assertEqual(rows[2]["headers"], ["Description", "Amount"])
+        self.assertEqual(rows[2]["section"], "Mechanical")
+        self.assertEqual(rows[0]["classification"], "header")
+        self.assertEqual(rows[1]["classification"], "section")
+
+    def test_source_row_ids_are_stable_and_duplicate_provenance_does_not_collide(self):
+        table = self._table(cells=[
+            self._cell("Description", 0, 0, column_header=True),
+            self._cell("Pump", 1, 0),
+        ])
+        duplicate_location = self._table(cells=[
+            self._cell("Description", 0, 0, column_header=True),
+            self._cell("Valve", 1, 0),
+        ])
+
+        first = build_source_rows([table, duplicate_location])
+        second = build_source_rows([table, duplicate_location])
+
+        self.assertEqual([row["id"] for row in first], [row["id"] for row in second])
+        self.assertEqual(len({row["id"] for row in first}), len(first))
+        pump = next(row for row in first if row["rawText"] == "Pump")
+        valve = next(row for row in first if row["rawText"] == "Valve")
+        self.assertNotEqual(pump["id"], valve["id"])
+
+    def test_duplicate_provenance_does_not_leak_header_context_between_tables(self):
+        first_table = self._table(cells=[
+            self._cell("Description", 0, 0, column_header=True),
+            self._cell("Pump", 1, 0),
+        ])
+        duplicate_location = self._table(cells=[self._cell("Standalone note", 0, 0)])
+
+        rows = build_source_rows([first_table, duplicate_location])
+
+        self.assertEqual(rows[-1]["headers"], [])
+        self.assertIsNone(rows[-1]["section"])
+
+    def test_v3_models_reject_negative_nonfinite_and_invalid_confidence_or_enums(self):
+        priced = {
+            "id": "item-1",
+            "desc": "Pump",
+            "pricingRole": "standard",
+            "sourceRowIds": ["row-1"],
+            "unit": "set",
+            "qty": 1.0,
+            "rate": 100.0,
+            "total": 100.0,
+        }
+        for field in ("qty", "rate", "total"):
+            for invalid in (-1.0, math.nan, math.inf, -math.inf):
+                with self.subTest(field=field, invalid=invalid):
+                    with self.assertRaises(Exception):
+                        DerivedItemV3(**{**priced, field: invalid})
+        for invalid in (-0.1, 1.1, math.inf):
+            with self.subTest(confidence=invalid):
+                with self.assertRaises(Exception):
+                    SourceRow(
+                        id="row-1", page=1, table=1, row=1, headers=[], rawCells=[],
+                        rawText="", classification="unknown", confidence=invalid, warnings=[],
+                    )
+        with self.assertRaises(Exception):
+            SourceRow(
+                id="row-1", page=1, table=1, row=1, headers=[], rawCells=[],
+                rawText="", classification="invented", confidence=1.0, warnings=[],
+            )
+        with self.assertRaises(Exception):
+            DerivedItemV3(**{**priced, "pricingRole": "invented"})
+
+    def test_bundle_child_carries_no_priced_fields_and_priced_roles_are_complete(self):
+        child = DerivedItemV3(
+            id="child-1", desc="Pump body", pricingRole="bundle_child",
+            sourceRowIds=["row-1"], parentBundleId="bundle-1",
+        )
+        self.assertIsNone(child.total)
+
+        with self.assertRaises(Exception):
+            DerivedItemV3(
+                id="child-1", desc="Pump body", pricingRole="bundle_child",
+                sourceRowIds=["row-1"], parentBundleId="bundle-1", total=0,
+            )
+        with self.assertRaises(Exception):
+            DerivedItemV3(
+                id="item-1", desc="Pump", pricingRole="standard", sourceRowIds=["row-1"],
+            )
+
+    def test_raw_cell_contract_rejects_invalid_spans_and_extra_fields(self):
+        fields = {
+            "column": 0,
+            "rawText": "Pump",
+            "lines": ["Pump"],
+            "rowSpan": 1,
+            "columnSpan": 1,
+            "startRowOffset": 0,
+            "endRowOffset": 1,
+            "startColumnOffset": 0,
+            "endColumnOffset": 1,
+            "columnHeader": False,
+            "rowHeader": False,
+            "rowSection": False,
+        }
+        with self.assertRaises(Exception):
+            RawCell(**{**fields, "rowSpan": 0})
+        with self.assertRaises(Exception):
+            RawCell(**{**fields, "unexpected": True})
 
 
 if __name__ == "__main__":
