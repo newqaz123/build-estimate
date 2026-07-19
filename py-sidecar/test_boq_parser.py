@@ -2185,6 +2185,157 @@ class CompoundDerivationTest(unittest.TestCase):
         self.assertNotIn("optional", items[1])
         self.assertTrue(items[2]["optional"])
 
+    def test_total_selection_uses_named_sections_and_unsectioned_summary_context(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/merged-and-repeated-headers.json").read_text())
+        template = fixture["sourceRows"][-1]
+
+        def total_row(row_id, label, value, *, page, table, section):
+            source = json.loads(json.dumps(template))
+            source.update(
+                id=row_id, page=page, table=table, row=1, section=section,
+                rawText=f"{label} | {value}",
+            )
+            source["rawCells"][0].update(rawText=label, lines=[label])
+            source["rawCells"][-1].update(rawText=str(value), lines=[str(value)])
+            return source
+
+        a = total_row("sr-a", "SUB TOTAL", "50", page=1, table=1, section="A")
+        b = total_row("sr-b", "SUB TOTAL", "50", page=2, table=2, section="B")
+        c = total_row("sr-c", "SUB TOTAL", "100", page=3, table=3, section="C")
+        summary_50 = total_row(
+            "sr-summary-50", "SUB TOTAL", "50", page=2, table=2, section=None,
+        )
+        summary_100 = total_row(
+            "sr-summary-100", "SUB TOTAL", "100", page=3, table=3, section=None,
+        )
+        document_total = total_row(
+            "sr-document-total", "TOTAL", "100", page=2, table=2, section=None,
+        )
+
+        cases = [
+            ("three named totals remain additive", [a, b, c], 200.0),
+            ("one named total collapses to unsectioned summary", [a, summary_50], 50.0),
+            ("two named totals collapse to unsectioned summary", [a, b, summary_100], 100.0),
+            ("document total supersedes partial named subtotal", [a, document_total], 100.0),
+            ("named totals without summary remain additive", [a, b], 100.0),
+        ]
+        for label, rows, expected in cases:
+            with self.subTest(label=label):
+                self.assertEqual(derive_document(rows)["sourceTotal"], expected)
+
+        cell = LosslessContractV3Test._cell
+        columns = ("Description", "Qty", "Unit", "Rate", "Amount")
+        named = LosslessContractV3Test._table(
+            page=1, table=1, num_rows=4, num_cols=5, cells=[
+                cell("A", 0, 0, row_section=True),
+                *[
+                    cell(value, 1, column, column_header=True)
+                    for column, value in enumerate(columns)
+                ],
+                *[
+                    cell(value, 2, column)
+                    for column, value in enumerate(("Named work", "1", "lot", "50", "50"))
+                ],
+                cell("SUB TOTAL", 3, 0), cell("50", 3, 4),
+            ],
+        )
+        summary = LosslessContractV3Test._table(
+            page=2, table=2, num_rows=2, num_cols=5, cells=[
+                *[
+                    cell(value, 0, column, column_header=True)
+                    for column, value in enumerate(columns)
+                ],
+                cell("TOTAL", 1, 0), cell("50", 1, 4),
+            ],
+        )
+        result = derive_document(build_source_rows([named, summary]))
+        self.assertEqual(result["sourceTotal"], 50.0)
+        self.assertTrue(result["reconciliation"]["reconciled"])
+
+    def test_repeated_explicit_section_marker_continues_open_cross_page_instance(self):
+        cell = LosslessContractV3Test._cell
+        columns = ("Description", "Qty", "Unit", "Rate", "Amount")
+        first = LosslessContractV3Test._table(page=1, table=1, num_rows=3, num_cols=5, cells=[
+            cell("Pumps", 0, 0, row_section=True),
+            *[cell(value, 1, column, column_header=True) for column, value in enumerate(columns)],
+            *[cell(value, 2, column) for column, value in enumerate(("Supply pump", "1", "set", "50", "50"))],
+        ])
+        second = LosslessContractV3Test._table(page=2, table=2, num_rows=4, num_cols=5, cells=[
+            cell("Pumps", 0, 0, row_section=True),
+            *[cell(value, 1, column, column_header=True) for column, value in enumerate(columns)],
+            *[cell(value, 2, column) for column, value in enumerate(("Install pump", "1", "set", "50", "50"))],
+            cell("TOTAL", 3, 0), cell("100", 3, 4),
+        ])
+        result = derive_document(build_source_rows([first, second]))
+        self.assertEqual([section["header"] for section in result["sections"]], ["Pumps"])
+        self.assertEqual(
+            [item["desc"] for item in result["sections"][0]["items"]],
+            ["Supply pump", "Install pump"],
+        )
+        self.assertNotIn("section_total_mismatch", result["warningCodes"])
+
+        incompatible_columns = ("Description", "Qty", "Unit", "Price", "Amount")
+        incompatible = LosslessContractV3Test._table(
+            page=2, table=2, num_rows=3, num_cols=5, cells=[
+                cell("Pumps", 0, 0, row_section=True),
+                *[
+                    cell(value, 1, column, column_header=True)
+                    for column, value in enumerate(incompatible_columns)
+                ],
+                *[
+                    cell(value, 2, column)
+                    for column, value in enumerate(("Install pump", "1", "set", "50", "50"))
+                ],
+            ],
+        )
+        separated = derive_document(build_source_rows([first, incompatible]))
+        self.assertEqual(
+            [section["header"] for section in separated["sections"]],
+            ["Pumps", "Pumps"],
+        )
+
+    def test_adjustment_magnitudes_and_warnings_do_not_erase_explicit_total(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/merged-and-repeated-headers.json").read_text())
+        template = fixture["sourceRows"][-1]
+
+        def total_row(row_id, label, value, row):
+            source = json.loads(json.dumps(template))
+            source.update(
+                id=row_id, row=row, section=None, rawText=f"{label} | {value}",
+            )
+            source["rawCells"][0].update(rawText=label, lines=[label])
+            source["rawCells"][-1].update(rawText=value, lines=[value])
+            return source
+
+        explicit = total_row("sr-explicit", "TOTAL", "100", 1)
+        discount = total_row("sr-parenthesized-discount", "DISCOUNT", "(10)", 2)
+        grand = total_row("sr-grand-payable", "GRAND TOTAL", "90", 3)
+        accepted = derive_document([explicit, discount, grand])
+        self.assertEqual(accepted["sourceTotal"], 100.0)
+        self.assertNotIn("invalid_numeric_format", accepted["warningCodes"])
+
+        invalid = total_row("sr-invalid-discount", "DISCOUNT", "ten", 2)
+        retained = derive_document([explicit, invalid, grand])
+        self.assertEqual(retained["sourceTotal"], 100.0)
+        self.assertIn("invalid_numeric_format", retained["warningCodes"])
+        self.assertIn("sr-invalid-discount", retained["reviewCandidateRowIds"])
+        warning = next(
+            warning for warning in retained["warnings"]
+            if warning["code"] == "invalid_numeric_format"
+        )
+        self.assertEqual(
+            warning["sourceRef"],
+            {"page": invalid["page"], "table": invalid["table"], "row": 2},
+        )
+        retained_row = next(
+            row for row in retained["sourceRows"]
+            if row["id"] == "sr-invalid-discount"
+        )
+        self.assertIn(
+            "invalid_numeric_format",
+            [warning["code"] for warning in retained_row["warnings"]],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

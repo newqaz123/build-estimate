@@ -335,7 +335,18 @@ def _section_instances(
         signatures[instance] = signature
         return instance
 
-    for row in rows:
+    def next_header_signature(index: int, context: tuple[int, int]) -> tuple[str, ...]:
+        for candidate in rows[index + 1:]:
+            if (candidate["page"], candidate["table"]) != context:
+                return ()
+            classification = candidate.get("classification")
+            if classification == "header":
+                return _header_signature(candidate)
+            if classification not in {"note", "unknown"}:
+                return ()
+        return ()
+
+    for index, row in enumerate(rows):
         classification = row.get("classification")
         context = (row["page"], row["table"])
         signature = _header_signature(row)
@@ -343,7 +354,17 @@ def _section_instances(
         context_changed = last_context is not None and context != last_context
 
         if classification == "section":
-            active = open_instance(section_name or row.get("rawText"), signature)
+            repeated_signature = next_header_signature(index, context)
+            continues_open_instance = (
+                active is not None
+                and context_changed
+                and _normal(section_name or row.get("rawText")) == _normal(names[active])
+                and bool(repeated_signature)
+                and bool(signatures[active])
+                and repeated_signature == signatures[active]
+            )
+            if not continues_open_instance:
+                active = open_instance(section_name or row.get("rawText"), signature)
         elif classification == "header":
             if active is None:
                 active = open_instance(section_name, signature)
@@ -572,99 +593,141 @@ def _total_rows(rows: list[dict[str, Any]]) -> list[tuple[dict[str, Any], float]
     return totals
 
 
-def _source_total(rows: list[dict[str, Any]]) -> tuple[float | None, list[dict[str, Any]]]:
+def _total_kind(label: str) -> str | None:
+    if "grand total" in label:
+        return "grand"
+    if label.startswith("discount") or label.startswith("less discount"):
+        return "discount"
+    if re.search(r"before vat|pre vat|exclud\w* vat|excl vat|vat excluded", label):
+        return "pre_vat"
+    if re.search(r"\bvat\b", label):
+        return "vat"
+    if label.startswith("sub total"):
+        return "subtotal"
+    if label.startswith("total"):
+        return "pre_discount"
+    return None
+
+
+def _adjustment_decimal(raw: str) -> Decimal | None:
+    text = raw.strip()
+    if text.startswith("(") and text.endswith(")"):
+        text = text[1:-1].strip()
+    return _decimal(text)
+
+
+def _source_total(
+    rows: list[dict[str, Any]],
+    row_instances: dict[str, int],
+    instance_names: dict[int, str],
+) -> tuple[float | None, list[dict[str, Any]]]:
     evidence_warnings: list[dict[str, Any]] = []
-    candidates: dict[str, list[tuple[dict[str, Any], Decimal]]] = {
+    candidates: dict[str, list[dict[str, Any]]] = {
         kind: [] for kind in (
             "discount", "vat", "pre_discount", "pre_vat", "subtotal", "grand"
         )
     }
-    for row in rows:
+    invalid_adjustment = False
+    for order, row in enumerate(rows):
         if row.get("classification") != "total":
+            continue
+        label = _normal(row.get("rawText"))
+        kind = _total_kind(label)
+        if kind is None:
             continue
         roles = _find_columns(row)
         raw = _value(row, roles.get("amount")).strip()
-        value = _decimal(raw)
+        value = _adjustment_decimal(raw) if kind in {"discount", "vat"} else _decimal(raw)
         if raw not in NON_NUMBER and value is None:
             evidence_warnings.append(_warning(
                 row, "invalid_numeric_format",
                 "Source total evidence uses an unsupported or ambiguous token format.",
             ))
+            invalid_adjustment = invalid_adjustment or kind in {"discount", "vat"}
             continue
         if value is not None and _finite_float(value) is None:
             evidence_warnings.append(_warning(
                 row, "numeric_overflow",
                 "Source total exceeds the finite response range.",
             ))
+            invalid_adjustment = invalid_adjustment or kind in {"discount", "vat"}
             continue
-        label = _normal(row.get("rawText"))
         if value is None or re.search(r"\b(?:carried|brought)\b", label):
             continue
-        if "grand total" in label:
-            kind = "grand"
-        elif label.startswith("discount") or label.startswith("less discount"):
-            kind = "discount"
-        elif re.search(r"before vat|pre vat|exclud\w* vat|excl vat|vat excluded", label):
-            kind = "pre_vat"
-        elif re.search(r"\bvat\b", label):
-            kind = "vat"
-        elif label.startswith("sub total"):
-            kind = "subtotal"
-        elif label.startswith("total"):
-            kind = "pre_discount"
-        else:
-            continue
-        candidates[kind].append((row, value))
-    if evidence_warnings:
-        return None, evidence_warnings
-    if candidates["discount"] and candidates["pre_discount"]:
-        _row, value = candidates["pre_discount"][-1]
-        return _finite_float(value), []
+        instance = row_instances.get(row["id"])
+        candidates[kind].append({
+            "row": row,
+            "value": value,
+            "order": order,
+            "instance": instance,
+            "documentSummary": (
+                row.get("section") is None
+                and instance is not None
+                and instance_names.get(instance) == "Unsectioned"
+            ),
+        })
+
     if candidates["pre_vat"]:
-        _row, value = candidates["pre_vat"][-1]
-        return _finite_float(value), []
-    selected = candidates["subtotal"] or candidates["pre_discount"]
-    if selected:
-        preceding = sum((value for _row, value in selected[:-1]), Decimal(0))
-        if len(selected) > 2 and abs(selected[-1][1] - preceding) <= RECONCILIATION_TOLERANCE:
-            return _finite_float(selected[-1][1]), []
-        combined = sum((value for _row, value in selected), Decimal(0))
+        value = candidates["pre_vat"][-1]["value"]
+        return _finite_float(value), evidence_warnings
+
+    base_candidates = sorted(
+        [*candidates["subtotal"], *candidates["pre_discount"]],
+        key=lambda candidate: candidate["order"],
+    )
+    document_summaries = [
+        candidate for candidate in base_candidates if candidate["documentSummary"]
+    ]
+    if document_summaries:
+        return _finite_float(document_summaries[-1]["value"]), evidence_warnings
+    if base_candidates:
+        latest_by_instance: dict[int, dict[str, Any]] = {}
+        for candidate in base_candidates:
+            instance = candidate["instance"]
+            if instance is not None:
+                latest_by_instance[instance] = candidate
+        selected = list(latest_by_instance.values())
+        combined = sum((candidate["value"] for candidate in selected), Decimal(0))
         if _finite_float(combined) is None:
-            return None, [_warning(
-                selected[-1][0], "numeric_overflow",
+            return None, [*evidence_warnings, _warning(
+                selected[-1]["row"], "numeric_overflow",
                 "Aggregated source totals exceed the finite response range.",
             )]
-        return _finite_float(combined), []
+        return _finite_float(combined), evidence_warnings
 
     grand = candidates["grand"][-1] if candidates["grand"] else None
+    if invalid_adjustment:
+        return None, evidence_warnings
     if candidates["vat"] and candidates["discount"]:
-        warning_row = grand[0] if grand is not None else candidates["vat"][-1][0]
-        return None, [_warning(
+        warning_row = grand["row"] if grand is not None else candidates["vat"][-1]["row"]
+        return None, [*evidence_warnings, _warning(
             warning_row, "ambiguous_total_adjustments",
             "VAT and discount adjustments lack explicit pre-adjustment ordering; source total was not guessed.",
         )]
     if grand is None:
-        return None, []
-    grand_row, grand_value = grand
+        return None, evidence_warnings
+    grand_row, grand_value = grand["row"], grand["value"]
     if candidates["vat"]:
-        vat = sum((value for _row, value in candidates["vat"]), Decimal(0))
+        vat = sum((candidate["value"] for candidate in candidates["vat"]), Decimal(0))
         derived = grand_value - vat
         if derived < 0:
-            return None, [_warning(
+            return None, [*evidence_warnings, _warning(
                 grand_row, "invalid_total_hierarchy",
                 "Grand total is less than its explicit VAT adjustment.",
             )]
     elif candidates["discount"]:
-        discount = sum((value for _row, value in candidates["discount"]), Decimal(0))
+        discount = sum(
+            (candidate["value"] for candidate in candidates["discount"]), Decimal(0)
+        )
         derived = grand_value + discount
     else:
         derived = grand_value
     if _finite_float(derived) is None:
-        return None, [_warning(
+        return None, [*evidence_warnings, _warning(
             grand_row, "numeric_overflow",
             "Derived pre-adjustment source total exceeds the finite response range.",
         )]
-    return _finite_float(derived), []
+    return _finite_float(derived), evidence_warnings
 
 
 def _section_total_warnings(
@@ -736,7 +799,9 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         warnings.extend(row_warnings)
         if row_warnings:
             review_ids.append(row["id"])
-    source_total, source_warnings = _source_total(evidence)
+    source_total, source_warnings = _source_total(
+        evidence, row_instances, instance_names
+    )
     warnings.extend(source_warnings)
     review_ids.extend(warning["sourceRowId"] for warning in source_warnings)
     section_warnings = _section_total_warnings(
