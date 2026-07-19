@@ -97,6 +97,15 @@ class SourceCostEvidence(ContractModel):
     rate: NonNegativeFinite
     total: NonNegativeFinite
 
+    @model_validator(mode="after")
+    def validate_arithmetic(self):
+        if abs(
+            _decimal(self.qty, "source cost qty") * _decimal(self.rate, "source cost rate")
+            - _decimal(self.total, "source cost total")
+        ) > RECONCILIATION_TOLERANCE:
+            raise ValueError("source cost quantity multiplied by rate must match total")
+        return self
+
 
 class SourceCostsEvidence(ContractModel):
     material: SourceCostEvidence
@@ -141,6 +150,11 @@ class DerivedItemV3(ContractModel):
                 raise ValueError("standard and bundle_parent items require unit, qty, rate, and total")
             if self.costComponent is None:
                 raise ValueError("priced items require costComponent")
+            quantity = _decimal(self.qty, "derived item qty")
+            rate = _decimal(self.rate, "derived item rate")
+            total = _decimal(self.total, "derived item total")
+            if abs(quantity * rate - total) > RECONCILIATION_TOLERANCE:
+                raise ValueError("priced item quantity multiplied by rate must match total")
         if self.excludedFromTotal and not self.optional:
             raise ValueError("excludedFromTotal requires optional")
         if self.excludedFromTotal and not self.exclusionReason:
@@ -149,6 +163,19 @@ class DerivedItemV3(ContractModel):
             raise ValueError("exclusionReason requires excludedFromTotal")
         if self.sourceCosts is not None and self.costComponent != "combined":
             raise ValueError("sourceCosts require the combined cost component")
+        if self.sourceCosts is not None:
+            material, labour = self.sourceCosts.material, self.sourceCosts.labour
+            if material.unit != labour.unit or material.unit != self.unit:
+                raise ValueError("combined source costs and item must share a unit")
+            component_qty = _decimal(material.qty, "material qty")
+            if component_qty != _decimal(labour.qty, "labour qty") or component_qty != _decimal(self.qty, "item qty"):
+                raise ValueError("combined source costs and item must share quantity")
+            component_rate = _decimal(material.rate, "material rate") + _decimal(labour.rate, "labour rate")
+            component_total = _decimal(material.total, "material total") + _decimal(labour.total, "labour total")
+            if abs(component_rate - _decimal(self.rate, "item rate")) > RECONCILIATION_TOLERANCE:
+                raise ValueError("component rates must sum to item rate")
+            if abs(component_total - _decimal(self.total, "item total")) > RECONCILIATION_TOLERANCE:
+                raise ValueError("component totals must sum to item total")
         return self
 
 

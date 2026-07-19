@@ -9,6 +9,7 @@ from __future__ import annotations
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 import hashlib
+import json
 import math
 import re
 from typing import Any
@@ -16,9 +17,14 @@ from typing import Any
 from boq_contract import RECONCILIATION_TOLERANCE, build_reconciliation, checked_contributing_total
 
 
-OPTION = re.compile(r"\b(?:optional|option|alternate|alternative|provisional|add[ -]?on)\b", re.I)
+OPTION = re.compile(
+    r"^\s*(?:(?:optional|option|provisional|add[ -]?on)\b|"
+    r"(?:alternate|alternative)(?=\s*(?:[:.)#-]|\d|option\b|no\.?\b)))",
+    re.I,
+)
 CONTINUATION_PREFIX = re.compile(r"^(?:including|continued|comprising|consisting|together with|complete with)\b", re.I)
 NON_NUMBER = {"", "-", "—", "–", "n/a", "N/A"}
+NUMBER_TOKEN = re.compile(r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$")
 
 
 def _normal(value: Any) -> str:
@@ -29,16 +35,16 @@ def _decimal(value: Any) -> Decimal | None:
     text = str(value or "").strip()
     if text in NON_NUMBER:
         return None
-    negative = text.startswith("(") and text.endswith(")")
-    normalized = re.sub(r"[^0-9.\-]", "", text.replace(",", ""))
-    if normalized in NON_NUMBER or normalized in {".", "-."}:
+    if text.startswith("(") or text.startswith("-") or text.startswith("+"):
+        return None
+    normalized = re.sub(r"^(?:THB|USD|SGD|฿|\$)\s*", "", text, flags=re.I)
+    normalized = re.sub(r"\s*(?:THB|USD|SGD|฿|\$)$", "", normalized, flags=re.I)
+    if not NUMBER_TOKEN.fullmatch(normalized):
         return None
     try:
-        result = Decimal(normalized)
+        result = Decimal(normalized.replace(",", ""))
     except InvalidOperation:
         return None
-    if negative:
-        result = -abs(result)
     if not result.is_finite() or result < 0:
         return None
     return result
@@ -78,12 +84,22 @@ def _header(row: dict[str, Any], column: int) -> str:
     return _normal(headers[column]) if column < len(headers) else ""
 
 
+def _header_leaf(row: dict[str, Any], column: int) -> str:
+    headers = row.get("headers", [])
+    if column >= len(headers):
+        return ""
+    return _normal(str(headers[column]).rsplit("/", 1)[-1])
+
+
 def _find_columns(row: dict[str, Any]) -> dict[str, int]:
     roles: dict[str, int] = {}
     for column in _cells(row):
         header = _header(row, column)
+        leaf_header = _header_leaf(row, column)
         component = "material" if "material" in header else "labour" if "labour" in header else ""
-        if "desc" in header or "particular" in header or header in {"item", "work"}:
+        if "desc" in header or "particular" in header:
+            roles["desc"] = column
+        elif header in {"item", "work"}:
             roles.setdefault("desc", column)
         elif component and ("qty" in header or "quantity" in header):
             roles[f"{component}_qty"] = column
@@ -93,13 +109,13 @@ def _find_columns(row: dict[str, Any]) -> dict[str, int]:
             roles[f"{component}_total"] = column
         elif component and ("rate" in header or "price" in header):
             roles[f"{component}_rate"] = column
-        elif header in {"qty", "q ty", "quantity"}:
+        elif leaf_header in {"qty", "q ty", "quantity"}:
             roles["qty"] = column
-        elif header in {"unit", "uom", "unit of measure"}:
+        elif leaf_header in {"unit", "uom", "unit of measure"}:
             roles["unit"] = column
-        elif "rate" in header or header in {"price", "unit price"}:
+        elif "rate" in leaf_header or leaf_header in {"price", "unit price"}:
             roles["rate"] = column
-        elif "amount" in header or header in {"total", "total price", "value"}:
+        elif "amount" in leaf_header or leaf_header in {"total", "total price", "value"}:
             roles["amount"] = column
     if "desc" not in roles and _cells(row):
         roles["desc"] = min(_cells(row))
@@ -186,12 +202,30 @@ def _has_pricing(row: dict[str, Any]) -> bool:
     return False
 
 
+def _has_pricing_text(row: dict[str, Any]) -> bool:
+    roles = _find_columns(row)
+    return any(
+        role != "desc" and _value(row, column).strip() not in NON_NUMBER
+        for role, column in roles.items()
+    )
+
+
 def _has_numeric_overflow(row: dict[str, Any], roles: dict[str, int]) -> bool:
     for role, column in roles.items():
-        if role == "desc":
+        if role == "desc" or role == "unit" or role.endswith("_unit"):
             continue
         raw = _value(row, column)
         if _decimal(raw) is not None and _number(raw) is None:
+            return True
+    return False
+
+
+def _has_invalid_numeric_format(row: dict[str, Any], roles: dict[str, int]) -> bool:
+    for role, column in roles.items():
+        if role == "desc" or role == "unit" or role.endswith("_unit"):
+            continue
+        raw = _value(row, column).strip()
+        if raw not in NON_NUMBER and _decimal(raw) is None:
             return True
     return False
 
@@ -213,38 +247,48 @@ def _has_continuation_cue(row: dict[str, Any]) -> bool:
 def _continuation_map(rows: list[dict[str, Any]]) -> tuple[dict[str, list[dict[str, Any]]], set[str]]:
     additions: dict[str, list[dict[str, Any]]] = {}
     consumed: set[str] = set()
-    for index, row in enumerate(rows):
-        if (
-            row.get("classification") not in {"continuation", "item"}
-            or _has_pricing(row)
-            or not _has_continuation_cue(row)
-        ):
+    base: dict[str, Any] | None = None
+    last_content: dict[str, Any] | None = None
+    boundary_headers: list[dict[str, Any]] = []
+    for row in rows:
+        classification = row.get("classification")
+        if classification == "header":
+            if base is not None:
+                boundary_headers.append(row)
             continue
-        previous_index = index - 1
-        intervening: list[dict[str, Any]] = []
-        while previous_index >= 0 and rows[previous_index].get("classification") == "header":
-            intervening.insert(0, rows[previous_index])
-            previous_index -= 1
-        if previous_index < 0:
-            continue
-        base = rows[previous_index]
-        if base.get("classification") not in {"item", "option"} or not _has_pricing(base):
-            continue
-        base_roles = _find_columns(base)
-        if len(_lines(base, base_roles.get("desc"))) != 1:
-            continue
-        compatible_section = row.get("section") in {None, base.get("section")}
-        same_context = compatible_section and base.get("headers") == row.get("headers")
-        same_table = base["page"] == row["page"] and base["table"] == row["table"] and not intervening
-        cross_page = (
-            base["page"] != row["page"]
-            and base["table"] != row["table"]
-            and bool(intervening)
-            and all(header.get("headers") == base.get("headers") for header in intervening)
+        is_candidate = (
+            classification in {"continuation", "item"}
+            and not _has_pricing_text(row)
+            and _has_continuation_cue(row)
         )
-        if same_context and (same_table or cross_page):
-            additions.setdefault(base["id"], []).append(row)
-            consumed.add(row["id"])
+        if is_candidate and base is not None and last_content is not None:
+            compatible_section = row.get("section") in {None, base.get("section")}
+            compatible_headers = base.get("headers") == row.get("headers")
+            same_table = (
+                not boundary_headers
+                and last_content["page"] == row["page"]
+                and last_content["table"] == row["table"]
+            )
+            cross_page = (
+                bool(boundary_headers)
+                and base["page"] != row["page"]
+                and base["table"] != row["table"]
+                and boundary_headers[-1].get("headers") == base.get("headers")
+            )
+            if compatible_section and compatible_headers and (same_table or cross_page):
+                additions.setdefault(base["id"], []).append(row)
+                consumed.add(row["id"])
+                last_content = row
+                boundary_headers = []
+                continue
+        if classification in {"item", "option"} and _has_pricing(row):
+            roles = _find_columns(row)
+            base = row if len(_lines(row, roles.get("desc"))) == 1 else None
+            last_content = row if base is not None else None
+        else:
+            base = None
+            last_content = None
+        boundary_headers = []
     return additions, consumed
 
 
@@ -332,6 +376,11 @@ def _derive_row(row: dict[str, Any], continuations: list[dict[str, Any]]) -> tup
         return [], [_warning(
             row, "numeric_overflow",
             "Numeric source evidence exceeds the finite response range.",
+        )]
+    if _has_invalid_numeric_format(row, roles):
+        return [], [_warning(
+            row, "invalid_numeric_format",
+            "Numeric source evidence uses an unsupported or ambiguous token format.",
         )]
     if any(
         (cell.get("rowSpan", 1) > 1 or cell.get("columnSpan", 1) > 1 or cell.get("carried", False))
@@ -448,23 +497,58 @@ def _source_total(rows: list[dict[str, Any]]) -> tuple[float | None, list[dict[s
             ))
     if overflow_warnings:
         return None, overflow_warnings
-    totals = _total_rows(rows)
-    if not totals:
-        return None, []
-    grand = [value for row, value in totals if "grand total" in _normal(row.get("rawText"))]
-    if grand:
-        return grand[-1], []
-    by_section: dict[str, tuple[dict[str, Any], float]] = {}
-    for row, value in totals:
+    candidates: dict[str, list[tuple[dict[str, Any], Decimal]]] = {
+        kind: [] for kind in ("discount", "pre_discount", "pre_vat", "subtotal", "grand")
+    }
+    for row in rows:
+        if row.get("classification") != "total":
+            continue
         label = _normal(row.get("rawText"))
-        if label.startswith("total") or label.startswith("sub total"):
-            key = row.get("section") or f"table:{row['page']}:{row['table']}"
-            by_section[key] = (row, value)
-    if not by_section:
-        return totals[-1][1], []
+        if re.search(r"\b(?:carried|brought)\b", label):
+            continue
+        roles = _find_columns(row)
+        value = _decimal(_value(row, roles.get("amount")))
+        if value is None:
+            continue
+        if label.startswith("discount") or label.startswith("less discount"):
+            kind = "discount"
+        elif re.search(r"before vat|pre vat|exclud\w* vat|excl vat|vat excluded", label):
+            kind = "pre_vat"
+        elif re.search(r"\bvat\b", label):
+            continue
+        elif label.startswith("sub total"):
+            kind = "subtotal"
+        elif label.startswith("total"):
+            kind = "pre_discount"
+        elif "grand total" in label:
+            kind = "grand"
+        else:
+            continue
+        candidates[kind].append((row, value))
+    if candidates["discount"] and candidates["pre_discount"]:
+        row, value = candidates["pre_discount"][-1]
+        return _finite_float(value), []
+    if candidates["pre_vat"]:
+        row, value = candidates["pre_vat"][-1]
+        return _finite_float(value), []
+    selected = candidates["subtotal"] or candidates["pre_discount"]
+    if not selected:
+        if candidates["grand"]:
+            return _finite_float(candidates["grand"][-1][1]), []
+        return None, []
+    if len(selected) > 1:
+        preceding = sum((value for _row, value in selected[:-1]), Decimal(0))
+        trailing_row = selected[-1][0]
+        prior_row = selected[-2][0]
+        trailing_context = (
+            trailing_row["table"] == prior_row["table"]
+            and trailing_row.get("section") in {None, prior_row.get("section")}
+        )
+        if trailing_context and abs(selected[-1][1] - preceding) <= RECONCILIATION_TOLERANCE:
+            return _finite_float(selected[-1][1]), []
     combined = Decimal(0)
-    for row, value in by_section.values():
-        combined += Decimal(str(value))
+    for row, value in selected:
+        combined += value
         if _finite_float(combined) is None:
             return None, [_warning(
                 row, "numeric_overflow",
@@ -474,20 +558,19 @@ def _source_total(rows: list[dict[str, Any]]) -> tuple[float | None, list[dict[s
 
 
 def _section_total_warnings(
-    sections: list[dict[str, Any]], rows: list[dict[str, Any]]
+    section_items: dict[tuple[int, int, str], list[dict[str, Any]]], rows: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    section_items = {section["header"]: section["items"] for section in sections}
-    latest: dict[str, tuple[dict[str, Any], float]] = {}
+    latest: dict[tuple[int, int, str], tuple[dict[str, Any], float]] = {}
     for row, value in _total_rows(rows):
         if row.get("section") is None:
             continue
-        section_name = row["section"]
+        section_key = (row["page"], row["table"], row["section"])
         label = _normal(row.get("rawText"))
-        if "grand total" not in label and (label.startswith("total") or label.startswith("sub total")):
-            latest[section_name] = (row, value)
+        if "grand total" not in label and not re.search(r"\b(?:vat|discount|carried|brought)\b", label) and (label.startswith("total") or label.startswith("sub total")):
+            latest[section_key] = (row, value)
     warnings: list[dict[str, Any]] = []
-    for section_name, (row, quoted) in latest.items():
-        derived = checked_contributing_total(section_items.get(section_name, []))
+    for section_key, (row, quoted) in latest.items():
+        derived = checked_contributing_total(section_items.get(section_key, []))
         if abs(derived - Decimal(str(quoted))) > RECONCILIATION_TOLERANCE:
             warnings.append(_warning(
                 row, "section_total_mismatch",
@@ -503,17 +586,19 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     evidence = deepcopy(rows)
     continuation_map, consumed = _continuation_map(evidence)
     sections: list[dict[str, Any]] = []
-    sections_by_name: dict[str, dict[str, Any]] = {}
+    sections_by_key: dict[tuple[int, int, str], dict[str, Any]] = {}
     warnings: list[dict[str, Any]] = []
     review_ids: list[str] = []
     cumulative_contribution = Decimal(0)
 
-    def section_for(name: str) -> dict[str, Any]:
-        if name not in sections_by_name:
+    def section_for(row: dict[str, Any]) -> dict[str, Any]:
+        name = row.get("section") or "Unsectioned"
+        key = (row["page"], row["table"], name)
+        if key not in sections_by_key:
             section = {"header": name, "items": []}
-            sections_by_name[name] = section
+            sections_by_key[key] = section
             sections.append(section)
-        return sections_by_name[name]
+        return sections_by_key[key]
 
     for row in evidence:
         classification = row.get("classification")
@@ -524,8 +609,7 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             warnings.append(warning)
             review_ids.append(row["id"])
             continue
-        section_name = row.get("section") or "Unsectioned"
-        section = section_for(section_name)
+        section = section_for(row)
         items, row_warnings = _derive_row(row, continuation_map.get(row["id"], []))
         candidate_contribution = cumulative_contribution + _contributing_decimal(items)
         if items and _finite_float(candidate_contribution) is None:
@@ -543,7 +627,9 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     source_total, source_warnings = _source_total(evidence)
     warnings.extend(source_warnings)
     review_ids.extend(warning["sourceRowId"] for warning in source_warnings)
-    section_warnings = _section_total_warnings(sections, evidence)
+    section_warnings = _section_total_warnings(
+        {key: section["items"] for key, section in sections_by_key.items()}, evidence
+    )
     warnings.extend(section_warnings)
     review_ids.extend(warning["sourceRowId"] for warning in section_warnings)
     _total_items, reconciliation = build_reconciliation(sections, source_total)
@@ -558,9 +644,16 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         row_id = warning.get("sourceRowId")
         if row_id not in rows_by_id:
             continue
-        rows_by_id[row_id].setdefault("warnings", []).append({
+        row_warnings = rows_by_id[row_id].setdefault("warnings", [])
+        annotation = {
             key: value for key, value in warning.items() if key != "sourceRowId"
-        })
+        }
+        signature = json.dumps(annotation, sort_keys=True, ensure_ascii=False)
+        existing = {
+            json.dumps(value, sort_keys=True, ensure_ascii=False) for value in row_warnings
+        }
+        if signature not in existing:
+            row_warnings.append(annotation)
     return {
         "sourceRows": annotated_rows,
         "sections": sections,

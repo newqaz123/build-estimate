@@ -11,7 +11,11 @@ from boq_parser import parse_number
 
 
 TOTAL_ROW = re.compile(r"^(?:sub[\s-]*total|grand[\s-]+total|total|vat|discount)\b", re.I)
-OPTION_ROW = re.compile(r"\b(?:optional|option|alternate|alternative|provisional|add-on)\b", re.I)
+OPTION_ROW = re.compile(
+    r"^\s*(?:(?:optional|option|provisional|add[ -]?on)\b|"
+    r"(?:alternate|alternative)(?=\s*(?:[:.)#-]|\d|option\b|no\.?\b)))",
+    re.I,
+)
 NOTE_ROW = re.compile(r"^(?:note|notes|remark|remarks)\b", re.I)
 NUMBER_TOKEN = re.compile(r"(?:\(?[-+]?\d[\d,]*(?:\.\d+)?\)?)")
 MISSING = object()
@@ -143,16 +147,21 @@ def build_source_rows(tables: list[Any], *, document: Any | None = None) -> list
             if cell["endRowOffset"] > row_count or cell["endColumnOffset"] > column_count:
                 raise ValueError("raw cell geometry exceeds declared table dimensions")
 
-        headers: dict[int, str] = {}
+        header_paths: list[list[str]] = [[] for _ in range(column_count)]
+        previous_was_header = False
         section: str | None = None
         indexed_cells = _index_cells_by_row(cells, row_count)
         for row_offset, covered_cells in enumerate(indexed_cells):
             anchor_cells = [cell for cell in covered_cells if not cell["carried"]]
-
-            for cell in anchor_cells:
-                if cell["columnHeader"] and cell["rawText"]:
+            header_cells = [cell for cell in anchor_cells if cell["columnHeader"]]
+            if header_cells and not previous_was_header:
+                header_paths = [[] for _ in range(column_count)]
+            for cell in header_cells:
+                token = cell["rawText"].strip()
+                if token:
                     for column in range(cell["startColumnOffset"], cell["endColumnOffset"]):
-                        headers[column] = cell["rawText"]
+                        if not header_paths[column] or header_paths[column][-1].casefold() != token.casefold():
+                            header_paths[column].append(token)
             section_cells = [
                 cell["rawText"] for cell in anchor_cells if cell["rowSection"] and cell["rawText"]
             ]
@@ -170,7 +179,7 @@ def build_source_rows(tables: list[Any], *, document: Any | None = None) -> list
                 table=table,
                 row=row_offset + 1,
                 section=section,
-                headers=[headers[column] for column in sorted(headers)],
+                headers=[" / ".join(path) for path in header_paths],
                 rawCells=covered_cells,
                 rawText=raw_text,
                 classification=_classify(anchor_cells, raw_text),
@@ -178,6 +187,7 @@ def build_source_rows(tables: list[Any], *, document: Any | None = None) -> list
                 warnings=[],
             )
             rows.append(source_row.model_dump())
+            previous_was_header = bool(header_cells)
     return rows
 
 

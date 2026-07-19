@@ -217,8 +217,6 @@ async def parse_pdf(file: UploadFile = File(...)):
             _safe_log_filename(filename),
         )
         raise HTTPException(status_code=422, detail="Docling could not parse this PDF") from error
-    if response.totalItems == 0:
-        raise HTTPException(status_code=422, detail="No BOQ line-item tables were found in this PDF")
     return response
 
 

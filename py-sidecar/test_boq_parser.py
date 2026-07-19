@@ -792,7 +792,7 @@ class SidecarContractTest(unittest.TestCase):
         self.assertNotIn("\nforged", logs)
         self.assertIn("file=forged.pdf", logs)
 
-    def test_parse_endpoint_rejects_response_with_only_unbound_empty_sections(self):
+    def test_parse_endpoint_returns_source_rows_when_no_items_are_reliable(self):
         main = self._import_main()
         response = ParseResponseV3(**ContractV3InvariantTest()._response(
             sections=[{"header": "Works", "items": []}], source_total=None,
@@ -805,10 +805,10 @@ class SidecarContractTest(unittest.TestCase):
         async def return_unbound(*_args): return response
 
         with patch.object(main, "run_in_threadpool", return_unbound):
-            with self.assertRaises(main.HTTPException) as raised:
-                asyncio.run(main.parse_pdf(Upload()))
+            parsed = asyncio.run(main.parse_pdf(Upload()))
 
-        self.assertEqual(raised.exception.status_code, 422)
+        self.assertEqual(parsed.totalItems, 0)
+        self.assertEqual(len(parsed.sourceRows), 1)
 
 
 class LosslessContractV3Test(unittest.TestCase):
@@ -924,7 +924,7 @@ class LosslessContractV3Test(unittest.TestCase):
 
         rows = build_source_rows([first_table, duplicate_location])
 
-        self.assertEqual(rows[-1]["headers"], [])
+        self.assertEqual(rows[-1]["headers"], [""])
         self.assertIsNone(rows[-1]["section"])
 
     def test_table_dimensions_retain_sparse_trailing_and_entirely_empty_rows(self):
@@ -1166,6 +1166,8 @@ class ContractV3InvariantTest(unittest.TestCase):
             "qty": 1.0, "rate": 100.0, "total": 100.0, "costComponent": "combined",
         }
         item.update(overrides)
+        if "total" in overrides and "rate" not in overrides and "qty" not in overrides:
+            item["rate"] = overrides["total"]
         return item
 
     def _response(self, *, rows=None, sections=None, source_total=100.0,
@@ -1276,6 +1278,25 @@ class ContractV3InvariantTest(unittest.TestCase):
             DerivedItemV3(**self._item("incomplete", sourceCosts={"material": costs["material"]}))
         with self.assertRaises(ValidationError):
             DerivedItemV3(**self._item("wrong-component", sourceCosts=costs, costComponent="material"))
+
+    def test_priced_item_and_source_cost_arithmetic_is_reconciled(self):
+        with self.assertRaises(ValidationError):
+            DerivedItemV3(**self._item("bad-arithmetic", qty=2.0, rate=60.0, total=100.0))
+        bad_cost = {"qty": 2.0, "unit": "set", "rate": 20.0, "total": 41.0}
+        with self.assertRaises(ValidationError):
+            DerivedItemV3(**self._item("bad-source-cost", sourceCosts={
+                "material": bad_cost,
+                "labour": {"qty": 2.0, "unit": "set", "rate": 30.0, "total": 60.0},
+            }))
+        contradictions = [
+            {"material": {"qty": 1.0, "unit": "set", "rate": 40.0, "total": 40.0},
+             "labour": {"qty": 2.0, "unit": "hr", "rate": 30.0, "total": 60.0}},
+            {"material": {"qty": 1.0, "unit": "set", "rate": 40.0, "total": 40.0},
+             "labour": {"qty": 1.0, "unit": "set", "rate": 50.0, "total": 50.0}},
+        ]
+        for costs in contradictions:
+            with self.subTest(costs=costs), self.assertRaises(ValidationError):
+                DerivedItemV3(**self._item("contradictory", sourceCosts=costs))
 
     def test_response_rejects_reconciliation_contradictions(self):
         contradictions = [
@@ -1897,6 +1918,149 @@ class CompoundDerivationTest(unittest.TestCase):
         self.assertIn("sr-total-second", result["reviewCandidateRowIds"])
         retained = next(source for source in result["sourceRows"] if source["id"] == "sr-total-second")
         self.assertIn("numeric_overflow", [warning["code"] for warning in retained["warnings"]])
+
+    def test_dense_multilevel_headers_drive_real_component_derivation(self):
+        cell = LosslessContractV3Test._cell
+        top = ("Item", "Description", "Qty", "Unit")
+        cells = [cell(value, 0, column, column_header=True) for column, value in enumerate(top)]
+        cells.extend([
+            cell("Material", 0, 4, column_header=True, col_span=2, end_col_offset_idx=6),
+            cell("Labour", 0, 6, column_header=True, col_span=2, end_col_offset_idx=8),
+            cell("Amount", 0, 8, column_header=True),
+        ])
+        children = ("Item", "Description", "Qty", "Unit", "Rate", "Total", "Rate", "Total", "Amount")
+        cells.extend(cell(value, 1, column, column_header=True) for column, value in enumerate(children))
+        values = ("A.1", "Concrete slab", "10", "m2", "60", "600", "40", "400", "1000")
+        cells.extend(cell(value, 2, column) for column, value in enumerate(values))
+        rows = build_source_rows([LosslessContractV3Test._table(
+            page=1, table=1, cells=cells, num_rows=3, num_cols=9,
+        )])
+        self.assertEqual(rows[-1]["headers"], [
+            "Item", "Description", "Qty", "Unit", "Material / Rate",
+            "Material / Total", "Labour / Rate", "Labour / Total", "Amount",
+        ])
+        result = derive_document(rows)
+        item = result["sections"][0]["items"][0]
+        self.assertEqual((item["desc"], item["qty"], item["rate"], item["total"]),
+                         ("Concrete slab", 10.0, 100.0, 1000.0))
+        self.assertEqual(set(item["sourceCosts"]), {"material", "labour"})
+
+    def test_total_selection_prefers_subtotal_before_vat(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/merged-and-repeated-headers.json").read_text())
+        item = fixture["sourceRows"][2]
+        subtotal = json.loads(json.dumps(fixture["sourceRows"][-1]))
+        vat = json.loads(json.dumps(subtotal))
+        grand = json.loads(json.dumps(subtotal))
+        vat.update(id="sr-vat", row=6, rawText="VAT 7% | 3.5")
+        vat["rawCells"][0].update(rawText="VAT 7%", lines=["VAT 7%"])
+        vat["rawCells"][1].update(rawText="3.5", lines=["3.5"])
+        grand.update(id="sr-grand", row=7, rawText="GRAND TOTAL | 53.5")
+        grand["rawCells"][0].update(rawText="GRAND TOTAL", lines=["GRAND TOTAL"])
+        grand["rawCells"][1].update(rawText="53.5", lines=["53.5"])
+        result = derive_document([item, subtotal, vat, grand])
+        self.assertEqual(result["sourceTotal"], 50.0)
+        self.assertTrue(result["reconciliation"]["reconciled"])
+
+        pre_vat = json.loads(json.dumps(subtotal))
+        pre_vat.update(id="sr-pre-vat", rawText="TOTAL BEFORE VAT | 50")
+        pre_vat["rawCells"][0].update(rawText="TOTAL BEFORE VAT", lines=["TOTAL BEFORE VAT"])
+        self.assertEqual(derive_document([pre_vat, vat, grand])["sourceTotal"], 50.0)
+
+        carried = json.loads(json.dumps(subtotal))
+        carried.update(id="sr-carried", row=8, rawText="TOTAL CARRIED FORWARD | 50")
+        carried["rawCells"][0].update(rawText="TOTAL CARRIED FORWARD", lines=["TOTAL CARRIED FORWARD"])
+        self.assertEqual(derive_document([subtotal, carried])["sourceTotal"], 50.0)
+
+    def test_total_selection_prefers_pre_discount_and_avoids_cumulative_double_count(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/merged-and-repeated-headers.json").read_text())
+        base = fixture["sourceRows"][-1]
+        total = json.loads(json.dumps(base))
+        discount = json.loads(json.dumps(base))
+        payable = json.loads(json.dumps(base))
+        total.update(id="sr-pre-discount", rawText="TOTAL | 100")
+        total["rawCells"][0].update(rawText="TOTAL", lines=["TOTAL"])
+        total["rawCells"][1].update(rawText="100", lines=["100"])
+        discount.update(id="sr-discount", row=6, rawText="DISCOUNT | 10")
+        discount["rawCells"][0].update(rawText="DISCOUNT", lines=["DISCOUNT"])
+        discount["rawCells"][1].update(rawText="10", lines=["10"])
+        payable.update(id="sr-payable", row=7, rawText="GRAND TOTAL | 90")
+        payable["rawCells"][0].update(rawText="GRAND TOTAL", lines=["GRAND TOTAL"])
+        payable["rawCells"][1].update(rawText="90", lines=["90"])
+        self.assertEqual(derive_document([total, discount, payable])["sourceTotal"], 100.0)
+
+        first = json.loads(json.dumps(base)); second = json.loads(json.dumps(base)); final = json.loads(json.dumps(base))
+        first.update(id="sr-sub-a", table=1, section="A", rawText="SUB TOTAL | 50")
+        second.update(id="sr-sub-b", table=1, row=6, section="B", rawText="SUB TOTAL | 50")
+        final.update(id="sr-sub-final", table=1, row=7, section=None, rawText="SUB TOTAL | 100")
+        for row, value in ((first, "50"), (second, "50"), (final, "100")):
+            row["rawCells"][0].update(rawText="SUB TOTAL", lines=["SUB TOTAL"])
+            row["rawCells"][1].update(rawText=value, lines=[value])
+        self.assertEqual(derive_document([first, second, final])["sourceTotal"], 100.0)
+
+    def test_duplicate_section_names_remain_distinct_by_table_provenance(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/merged-and-repeated-headers.json").read_text())
+        first = json.loads(json.dumps(fixture["sourceRows"][2:])); second = json.loads(json.dumps(first))
+        for row in first:
+            row["section"] = "Works"
+        for row in second:
+            row["id"] += "-second"; row["page"] = 2; row["table"] = 2; row["section"] = "Works"
+        result = derive_document([*first, *second])
+        self.assertEqual([section["header"] for section in result["sections"]], ["Works", "Works"])
+        self.assertEqual([len(section["items"]) for section in result["sections"]], [1, 1])
+        self.assertEqual(result["sourceTotal"], 100.0)
+
+    def test_multiple_continuation_tails_chain_and_reset_on_unsupported_boundary(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/continuation-cross-page.json").read_text())
+        base = fixture["sourceRows"][1]
+        tail1 = json.loads(json.dumps(fixture["sourceRows"][3])); tail2 = json.loads(json.dumps(tail1))
+        tail1.update(id="sr-tail-1", page=1, table=1, row=3, section="Pumps", rawText="including controls")
+        tail1["rawCells"][0].update(rawText="including controls", lines=["including controls"])
+        tail2.update(id="sr-tail-2", page=1, table=1, row=4, section="Pumps", rawText="and commissioning")
+        tail2["rawCells"][0].update(rawText="and commissioning", lines=["and commissioning"])
+        chained = derive_document([base, tail1, tail2])["sections"][0]["items"][0]
+        self.assertEqual(chained["sourceRowIds"], ["sr-cont-base", "sr-tail-1", "sr-tail-2"])
+        boundary = json.loads(json.dumps(tail1)); boundary.update(id="sr-boundary", row=4, rawText="Warranty")
+        boundary["rawCells"][0].update(rawText="Warranty", lines=["Warranty"])
+        tail2["row"] = 5
+        reset = derive_document([base, tail1, boundary, tail2])
+        self.assertEqual(reset["sections"][0]["items"][0]["sourceRowIds"], ["sr-cont-base", "sr-tail-1"])
+        self.assertIn("sr-tail-2", reset["reviewCandidateRowIds"])
+
+    def test_ambiguous_numeric_tokens_are_rejected_without_reinterpretation(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/merged-and-repeated-headers.json").read_text())
+        for token in ("1e3", "1.234,56", "1,50", "1 234,50"):
+            with self.subTest(token=token):
+                row = json.loads(json.dumps(fixture["sourceRows"][2]))
+                row["rawCells"][1].update(rawText=token, lines=[token])
+                result = derive_document([row])
+                self.assertEqual(result["sections"][0]["items"], [])
+                self.assertIn("invalid_numeric_format", result["warningCodes"])
+
+    def test_alternative_energy_is_not_optional_and_warning_annotation_is_idempotent(self):
+        cell = LosslessContractV3Test._cell
+        classified = build_source_rows([LosslessContractV3Test._table(
+            page=1, table=1, num_rows=2, num_cols=2, cells=[
+                cell("Alternative energy system", 0, 0), cell("500", 0, 1),
+                cell("Option 1: solar package", 1, 0), cell("600", 1, 1),
+            ],
+        )])
+        self.assertEqual(
+            [row["classification"] for row in classified],
+            ["item", "option"],
+        )
+
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/options.json").read_text())
+        row = json.loads(json.dumps(fixture["sourceRows"][1]))
+        row.update(id="sr-energy", classification="item", rawText="Alternative energy system | 1 | set | 500 | 500")
+        row["rawCells"][0].update(rawText="Alternative energy system", lines=["Alternative energy system"])
+        item = derive_document([row])["sections"][0]["items"][0]
+        self.assertNotIn("optional", item)
+
+        uncertain = json.loads((Path(__file__).resolve().parent / "fixtures/compound/unequal-lines.json").read_text())["sourceRows"]
+        first = derive_document(uncertain)
+        second = derive_document(first["sourceRows"])
+        retained = next(row for row in second["sourceRows"] if row["id"] == "sr-unequal")
+        self.assertEqual([warning["code"] for warning in retained["warnings"]], ["unequal_multiline_counts"])
 
 
 if __name__ == "__main__":
