@@ -5,6 +5,7 @@ import {
   contributesToBoqTotal,
   isPricedBoqItem,
 } from './boq-pricing'
+import * as pricing from './boq-pricing'
 import type {
   BoqInformationalItem,
   BoqPricedItem,
@@ -157,4 +158,14 @@ test('rejects an invalid total even when the priced option is excluded', () => {
     () => calculateBoqTotals([{ header: 'Options', items: [excluded] }]),
     /finite/i,
   )
+})
+
+test('numeric BOQ edit parsing ignores negative and non-finite values without changing valid input', () => {
+  const parseEdit = (pricing as unknown as { parseNonNegativeBoqEditValue?: (value: string) => number | undefined }).parseNonNegativeBoqEditValue
+  assert.equal(typeof parseEdit, 'function')
+  assert.equal(parseEdit?.('12.5'), 12.5)
+  assert.equal(parseEdit?.(''), 0)
+  assert.equal(parseEdit?.('-1'), undefined)
+  assert.equal(parseEdit?.('1e999'), undefined)
+  assert.equal(parseEdit?.('not-a-number'), undefined)
 })

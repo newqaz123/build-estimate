@@ -71,8 +71,8 @@ export function createBoqDetailHandlers(dependencies: BoqDetailDependencies) {
         }
         updates.status = body.status
       }
-      if (body.sections !== undefined) {
-        const sections = parseCanonicalBoqSections(body.sections)
+      if (body.sections !== undefined || body.status === 'approved') {
+        const sections = parseCanonicalBoqSections(body.sections ?? existing.sections)
         updates.sections = sections
         const { totalItems, grandTotal } = computeTotals(sections)
         updates.totalItems = totalItems

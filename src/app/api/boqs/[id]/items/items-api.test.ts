@@ -116,6 +116,20 @@ test('linked canonical edits update the standard and every linked BOQ item atomi
   assert.equal(unrelated?.unit, 'm3')
 })
 
+test('canonical sync assigns manual confidence to a linked legacy row without confidence', () => {
+  const result = applyBoqItemUpdates(
+    [
+      boq('boq-1', [item({ stdId: 'std-1' })]),
+      boq('boq-legacy', [item({ desc: 'Source concrete', unit: 'm3', stdConfidence: undefined })]),
+    ],
+    [standard({ sourceItems: [{ boqId: 'boq-legacy', sectionIndex: 0, itemCode: 'A-1', sourceDescription: 'Source concrete' }] })],
+    'boq-1',
+    [{ sectionIndex: 0, items: [{ itemCode: 'A-1', desc: 'Canonical concrete' }] }],
+  )
+
+  assert.equal(priced(result.boqs[1]?.sections[0]?.items[0]).stdConfidence, 'manual')
+})
+
 test('unlinked BOQ edits remain local and do not mutate the standard catalog', () => {
   const result = applyBoqItemUpdates(
     [

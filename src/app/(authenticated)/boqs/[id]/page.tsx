@@ -13,7 +13,7 @@ import { ProtoBadge } from "@/components/proto-badge"
 import type { Boq, BoqItem } from "@/lib/boq-schema"
 import { getBoqItemIdentityKey, getBoqItemRequestIdentity } from "@/lib/boq-item-identity"
 import { applyManualCostAllocation, deriveSourceCostAllocation } from "@/lib/boq-cost-allocation"
-import { calculateBoqTotals, isPricedBoqItem } from "@/lib/boq-pricing"
+import { calculateBoqTotals, isPricedBoqItem, parseNonNegativeBoqEditValue } from "@/lib/boq-pricing"
 
 type EditsMap = Record<string, Record<string, string | number | undefined>>
 type LoadState = "loading" | "loaded" | "not-found" | "error"
@@ -181,6 +181,11 @@ export default function BoqDetailPage() {
     if (boq.status === "approved" && field !== "stdStatus" && field !== "stdMatch") return
     const current = editsRef.current
     replaceEdits({ ...current, [key]: { ...current[key], [field]: value } })
+  }
+
+  const handleNumericEdit = (key: string, field: string, rawValue: string) => {
+    const value = parseNonNegativeBoqEditValue(rawValue)
+    if (value !== undefined) handleEdit(key, field, value)
   }
 
   const handleSaveAll = async () => {
@@ -824,9 +829,11 @@ export default function BoqDetailPage() {
                               <Input
                                 disabled={mutationBusy}
                                 type="number"
+                                min="0"
+                                step="any"
                                 defaultValue={display.qty ?? ""}
                                 className="h-7 w-20 text-xs text-right"
-                                onBlur={(e) => handleEdit(key, "qty", parseFloat(e.target.value) || 0)}
+                                onBlur={(e) => handleNumericEdit(key, "qty", e.target.value)}
                                 onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
                               />
                             ) : (
@@ -838,9 +845,11 @@ export default function BoqDetailPage() {
                               <Input
                                 disabled={mutationBusy}
                                 type="number"
+                                min="0"
+                                step="any"
                                 defaultValue={display.rate ?? ""}
                                 className="h-7 w-24 text-xs text-right"
-                                onBlur={(e) => handleEdit(key, "rate", parseFloat(e.target.value) || 0)}
+                                onBlur={(e) => handleNumericEdit(key, "rate", e.target.value)}
                                 onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
                               />
                             ) : (
@@ -862,7 +871,7 @@ export default function BoqDetailPage() {
                                     defaultValue={value ?? 0}
                                     aria-label={`${component} cost for ${display.desc}`}
                                     className="h-7 w-24 text-xs text-right"
-                                    onBlur={(event) => handleEdit(key, field, Number(event.target.value) || 0)}
+                                    onBlur={(event) => handleNumericEdit(key, field, event.target.value)}
                                   />
                                 ) : value !== undefined ? (
                                   <span title={`${allocation?.origin === "source" ? "Parsed from source" : "Manual"} · ${allocation?.basis === "total" ? "total allocation" : "unit rate"}`}>฿{value.toLocaleString()}</span>

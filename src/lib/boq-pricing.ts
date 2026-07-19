@@ -8,6 +8,11 @@ export function contributesToBoqTotal(item: BoqItem): item is BoqPricedItem {
   return isPricedBoqItem(item) && item.excludedFromTotal !== true
 }
 
+export function parseNonNegativeBoqEditValue(value: string): number | undefined {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
+}
+
 function diagnosticContext(
   sectionIndex: number,
   item: BoqPricedItem,

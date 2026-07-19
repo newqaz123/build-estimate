@@ -195,6 +195,37 @@ test('approval builds and verifies the candidate while recomputing section total
   assert.equal(body.sourceAvailable, true)
 })
 
+test('approval reparses stored sections when the partial PUT omits sections', async (t) => {
+  const malformed = [
+    [{ header: 'Pump', items: [
+      item({ id: 'parent', pricingRole: 'bundle_parent' }),
+      { id: 'child', pricingRole: 'bundle_child', parentBundleId: 'parent', desc: 'Body', stdStatus: 'pending', costAllocation: { basis: 'rate', material: 1, labour: 2, origin: 'manual' } },
+    ] }],
+    [{ header: 'Pump', items: [item({ optional: false, excludedFromTotal: true, exclusionReason: 'Invalid option' })] }],
+  ]
+  for (const sections of malformed) {
+    await t.test('rejects malformed stored sections', async () => {
+      const harness = detailHarness(detailBoq({ sections: sections as Boq['sections'] }))
+      const response = await harness.handlers.PUT(new Request('http://localhost/api/boqs/boq-1', {
+        method: 'PUT', body: JSON.stringify({ status: 'approved' }),
+      }), detailContext)
+      assert.equal(response.status, 400)
+      assert.equal(harness.updates.length, 0)
+    })
+  }
+
+  await t.test('accepts and persists recalculated legacy priced sections', async () => {
+    const harness = detailHarness(detailBoq({ totalItems: 99, grandTotal: 999 }))
+    const response = await harness.handlers.PUT(new Request('http://localhost/api/boqs/boq-1', {
+      method: 'PUT', body: JSON.stringify({ status: 'approved' }),
+    }), detailContext)
+    assert.equal(response.status, 200)
+    assert.equal(harness.updates[0]?.totalItems, 1)
+    assert.equal(harness.updates[0]?.grandTotal, 200)
+    assert.deepEqual(harness.updates[0]?.sections, detailBoq().sections)
+  })
+})
+
 test('approval rejects every blocking local verification category with structured details', async (t) => {
   const cases: [string, Partial<Boq>, Record<string, unknown>][] = [
     ['unclassified', {}, { status: 'approved', workType: 'Unclassified' }],
@@ -203,7 +234,6 @@ test('approval rejects every blocking local verification category with structure
     ['blank date', { date: '' }, { status: 'approved' }],
     ['empty items', {}, { status: 'approved', sections: [] }],
     ['invalid numbers', {}, { status: 'approved', sections: [{ header: 'Bad', items: [item({ qty: Number.NaN })] }] }],
-    ['grand total mismatch', { grandTotal: 199 }, { status: 'approved' }],
     ['source total mismatch', { sourceTotal: 199 }, { status: 'approved' }],
   ]
 

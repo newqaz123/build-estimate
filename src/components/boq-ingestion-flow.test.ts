@@ -107,6 +107,8 @@ test('BOQ list uses the shared behavior-tested CSV builder', () => {
 test('BOQ detail totals use the shared pricing calculator after applying edits', () => {
   assert.match(boqDetailSource, /calculateBoqTotals/)
   assert.doesNotMatch(boqDetailSource, /contributesToBoqTotal/)
+  assert.match(boqDetailSource, /parseNonNegativeBoqEditValue/)
+  assert.match(boqDetailSource, /min="0"/)
 })
 
 test('a failed review save reports the safe error without resetting edited items', () => {

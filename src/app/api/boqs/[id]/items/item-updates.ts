@@ -3,6 +3,7 @@ import { getBoqItemIdentityKey, resolveBoqItemIdentity, type BoqItemRequestIdent
 import type { StandardEntry } from '@/lib/standard-schema'
 import { applyManualCostAllocation } from '@/lib/boq-cost-allocation'
 import { calculateBoqTotals, isPricedBoqItem } from '@/lib/boq-pricing'
+import { applyStandardToBoqItem } from '../../../standards/route'
 
 export interface BoqItemUpdate {
   itemId?: string
@@ -41,22 +42,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizeStandard(entry: StandardEntry): StandardEntry {
   return { ...entry, aliases: entry.aliases ?? [], sourceItems: entry.sourceItems ?? [] }
-}
-
-function applyStandard(item: BoqItem, standard: StandardEntry): BoqItem {
-  if (!isPricedBoqItem(item)) return item
-  const next: BoqItem = {
-    ...item,
-    desc: standard.description,
-    unit: standard.unit,
-    stdId: standard.id,
-    stdMatch: standard.description,
-    stdStatus: 'matched',
-    sourceDesc: item.sourceDesc ?? item.desc,
-    sourceUnit: item.sourceUnit ?? item.unit,
-  }
-  delete next.stdExclusionReason
-  return next
 }
 
 function computeTotals(sections: Boq['sections']) {
@@ -335,7 +320,7 @@ export function applyBoqItemUpdates(
             )
           : item
         if (standard) {
-          next = applyStandard(next, standard)
+          next = applyStandardToBoqItem(next, standard, next.stdConfidence ?? 'manual')
           affectedItems += 1
         }
         return next
