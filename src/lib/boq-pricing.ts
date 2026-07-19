@@ -30,15 +30,14 @@ export function calculateBoqTotals(sections: BoqSection[]): {
       if (!isPricedBoqItem(item)) continue
 
       totalItems += 1
-      if (!contributesToBoqTotal(item)) continue
-
       const context = diagnosticContext(sectionIndex, item, itemIndex)
       if (!Number.isFinite(item.total)) {
-        throw new RangeError(`Contributing BOQ item total must be finite (${context})`)
+        throw new RangeError(`Priced BOQ item total must be finite (${context})`)
       }
       if (item.total < 0) {
-        throw new RangeError(`Contributing BOQ item total must be non-negative (${context})`)
+        throw new RangeError(`Priced BOQ item total must be non-negative (${context})`)
       }
+      if (!contributesToBoqTotal(item)) continue
 
       grandTotal += item.total
       if (!Number.isFinite(grandTotal)) {

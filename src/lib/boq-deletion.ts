@@ -36,14 +36,21 @@ export function deleteBoqItemAndPruneStandards(
   sectionIndex: number,
   identity: BoqItemRequestIdentity,
 ): { boq: Boq; standards: StandardEntry[] } {
-  if (boq.totalItems <= 1 || boq.sections.flatMap((section) => section.items).length <= 1) {
-    throw new Error('Delete the entire BOQ instead of removing its final item.')
-  }
   const section = boq.sections[sectionIndex]
   if (!section) throw new Error('Section not found.')
   const resolution = resolveBoqItemIdentity(section.items, identity)
   if (resolution.status === 'ambiguous') throw new Error('BOQ item identity is ambiguous.')
   if (resolution.status !== 'found') throw new Error('BOQ item not found.')
+  const target = section.items[resolution.index]
+  const pricedCount = boq.sections.flatMap((candidate) => candidate.items).filter(isPricedBoqItem).length
+  if (isPricedBoqItem(target) && pricedCount <= 1) {
+    throw new Error('Delete the entire BOQ instead of removing its final priced item.')
+  }
+  if (isPricedBoqItem(target) && target.id && section.items.some((item) =>
+    item.pricingRole === 'bundle_child' && item.parentBundleId === target.id,
+  )) {
+    throw new Error('Remove the bundle children before deleting their priced parent.')
+  }
 
   const sections = boq.sections
     .map((candidate, index) => index === sectionIndex

@@ -216,8 +216,12 @@ test('approval rejects every blocking local verification category with structure
       }), detailContext)
       const body = await response.json()
       assert.equal(response.status, 400)
-      assert.equal(body.error, 'Resolve required BOQ fields before approval')
-      assert.equal(body.verification.hasBlockingIssues, true)
+      if (name === 'invalid numbers') {
+        assert.match(body.error, /must be a finite non-negative number/)
+      } else {
+        assert.equal(body.error, 'Resolve required BOQ fields before approval')
+        assert.equal(body.verification.hasBlockingIssues, true)
+      }
       assert.equal(harness.updates.length, 0)
     })
   }
@@ -260,7 +264,7 @@ test('approval counts only priced rows and totals only contributing rows', async
     items: [
       item({ id: 'bundle', pricingRole: 'bundle_parent', qty: 1, total: 95_200, rate: 95_200 }),
       { id: 'child', pricingRole: 'bundle_child', parentBundleId: 'bundle', desc: 'Pump body', stdStatus: 'pending' },
-      item({ id: 'option', desc: 'Optional controls', qty: 1, total: 10_000, rate: 10_000, optional: true, excludedFromTotal: true, stdStatus: 'excluded', stdId: undefined, stdExclusionReason: 'Optional alternate' }),
+      item({ id: 'option', desc: 'Optional controls', qty: 1, total: 10_000, rate: 10_000, optional: true, excludedFromTotal: true, exclusionReason: 'Optional alternate', stdStatus: 'excluded', stdId: undefined, stdExclusionReason: 'Optional alternate' }),
     ],
   }]
   const harness = detailHarness(detailBoq({ sections, grandTotal: 95_200, sourceTotal: 95_200 }))
@@ -301,6 +305,22 @@ test('invalid workType validation lists Unclassified as an accepted value', asyn
   assert.deepEqual(await response.json(), {
     error: 'workType must be Structural, MEP, Finishing, or Unclassified',
   })
+})
+
+test('PUT rejects malformed canonical section payloads before persistence', async () => {
+  for (const sections of [
+    [{ header: 'Pump', items: [{ id: 'child', pricingRole: 'bundle_child', parentBundleId: 'missing', desc: 'Body', stdStatus: 'pending' }] }],
+    [{ header: 'Pump', items: [{ ...item(), optional: 'yes' }] }],
+    [{ header: 'Pump', items: [{ ...item(), optional: false, excludedFromTotal: true, exclusionReason: 'Arbitrary' }] }],
+    [{ header: 'Pump', items: [item({ id: 'one', total: Number.MAX_VALUE }), item({ id: 'two', total: Number.MAX_VALUE })] }],
+  ]) {
+    const harness = detailHarness()
+    const response = await harness.handlers.PUT(new Request('http://localhost/api/boqs/boq-1', {
+      method: 'PUT', body: JSON.stringify({ status: 'draft', sections }),
+    }), detailContext)
+    assert.equal(response.status, 400)
+    assert.equal(harness.updates.length, 0)
+  }
 })
 
 test('DELETE caches exact source bytes before source and Firestore deletion', async () => {

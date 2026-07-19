@@ -63,3 +63,38 @@ test('pending informational children do not leave a matched BOQ partially standa
   assert.equal(result.boq.totalItems, 1)
   assert.equal(result.boq.stdStatus, 'complete')
 })
+
+test('allows deleting an informational child when only one priced parent remains', () => {
+  const input = boq()
+  input.sections[0].items = [input.sections[0].items[0], {
+    id: 'child', pricingRole: 'bundle_child', parentBundleId: 'item-1', desc: 'Included', stdStatus: 'pending',
+  }]
+  input.totalItems = 1
+  const result = deleteBoqItemAndPruneStandards(input, [standard()], 0, { itemId: 'child' })
+  assert.equal(result.boq.totalItems, 1)
+  assert.deepEqual(result.boq.sections[0].items.map((item) => item.id), ['item-1'])
+})
+
+test('rejects deleting a bundle parent while children still reference it', () => {
+  const input = boq()
+  input.sections[0].items.push({
+    id: 'child', pricingRole: 'bundle_child', parentBundleId: 'item-1', desc: 'Included', stdStatus: 'pending',
+  })
+  assert.throws(() => deleteBoqItemAndPruneStandards(input, [standard()], 0, { itemId: 'item-1' }), /bundle children/i)
+})
+
+test('derives priced count instead of trusting stale totalItems', () => {
+  const input = boq()
+  input.totalItems = 1
+  const result = deleteBoqItemAndPruneStandards(input, [standard()], 0, { itemId: 'item-2' })
+  assert.equal(result.boq.totalItems, 1)
+})
+
+test('protects the final priced row even when informational rows remain', () => {
+  const input = boq()
+  input.sections[0].items = [input.sections[0].items[0], {
+    id: 'child', pricingRole: 'bundle_child', parentBundleId: 'item-1', desc: 'Included', stdStatus: 'pending',
+  }]
+  input.totalItems = 99
+  assert.throws(() => deleteBoqItemAndPruneStandards(input, [standard()], 0, { itemId: 'item-1' }), /final priced|entire BOQ/i)
+})

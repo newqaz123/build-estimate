@@ -13,6 +13,10 @@ const boqsPageSource = readFileSync(
   new URL('../app/(authenticated)/boqs/page.tsx', import.meta.url),
   'utf8',
 )
+const boqDetailSource = readFileSync(
+  new URL('../app/(authenticated)/boqs/[id]/page.tsx', import.meta.url),
+  'utf8',
+)
 
 test('BOQ upload uses the atomic multipart import API and consumes its returned BOQ', () => {
   assert.doesNotMatch(uploadSource, /MOCK_PARSED_ITEMS/)
@@ -98,6 +102,11 @@ test('standardization review hides legacy item codes while retaining normalized 
 
 test('BOQ list uses the shared behavior-tested CSV builder', () => {
   assert.match(boqsPageSource, /buildBoqCsv\(boq\)/)
+})
+
+test('BOQ detail totals use the shared pricing calculator after applying edits', () => {
+  assert.match(boqDetailSource, /calculateBoqTotals/)
+  assert.doesNotMatch(boqDetailSource, /contributesToBoqTotal/)
 })
 
 test('a failed review save reports the safe error without resetting edited items', () => {

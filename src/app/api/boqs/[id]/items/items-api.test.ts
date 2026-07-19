@@ -4,6 +4,7 @@ import test from 'node:test'
 import type { Boq, BoqItem, BoqPricedItem } from '@/lib/boq-schema'
 import type { StandardEntry } from '@/lib/standard-schema'
 import { applyBoqItemUpdates, countBoqStandardLinks, parseUpdateGroups } from './item-updates'
+import { readFileSync } from 'node:fs'
 import { calculateBoqTotals, isPricedBoqItem } from '@/lib/boq-pricing'
 
 const timestamps = {
@@ -58,6 +59,14 @@ function standard(overrides: Partial<StandardEntry> = {}): StandardEntry {
     ...overrides,
   }
 }
+
+test('production item route delegates parsing and updates to the tested pure module', () => {
+  const source = readFileSync(new URL('./route.ts', import.meta.url), 'utf8')
+  assert.match(source, /from ['"]\.\/item-updates['"]/)
+  assert.match(source, /parseUpdateGroups\(body\)/)
+  assert.match(source, /applyBoqItemUpdates\(/)
+  assert.doesNotMatch(source, /function (?:parseUpdateGroups|applyBoqItemUpdates|cloneItemWithUpdate)\b/)
+})
 
 test('linked canonical edits update the standard and every linked BOQ item atomically', () => {
   const result = applyBoqItemUpdates(

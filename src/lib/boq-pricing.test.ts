@@ -146,15 +146,15 @@ test('rejects aggregate overflow with the section and 1-based item index', () =>
   )
 })
 
-test('does not validate the total of an explicitly excluded priced option', () => {
+test('rejects an invalid total even when the priced option is excluded', () => {
   const excluded = pricedItem({
     total: Number.NaN,
     optional: true,
     excludedFromTotal: true,
   })
 
-  assert.deepEqual(calculateBoqTotals([{ header: 'Options', items: [excluded] }]), {
-    totalItems: 1,
-    grandTotal: 0,
-  })
+  assert.throws(
+    () => calculateBoqTotals([{ header: 'Options', items: [excluded] }]),
+    /finite/i,
+  )
 })

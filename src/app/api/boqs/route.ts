@@ -4,6 +4,7 @@ import { queryCollection, createDocumentWithId, getDocument } from '@/lib/db'
 import type { Boq } from '@/lib/boq-schema'
 import { toPublicBoq } from '@/lib/boq-public'
 import { calculateBoqTotals } from '@/lib/boq-pricing'
+import { BoqCanonicalValidationError, parseCanonicalBoqSections } from '@/lib/boq-canonical'
 
 function computeTotals(sections: Boq['sections']) {
   return calculateBoqTotals(sections)
@@ -94,7 +95,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'workType must be Structural, MEP, or Finishing' }, { status: 400 })
     }
 
-    const safeSections = sections || []
+    const safeSections = parseCanonicalBoqSections(sections ?? [])
     const { totalItems, grandTotal } = computeTotals(safeSections)
 
     const id = crypto.randomUUID()
@@ -117,6 +118,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(created ? toPublicBoq(created) : null, { status: 201 })
   } catch (error) {
+    if (error instanceof BoqCanonicalValidationError || error instanceof RangeError) {
+      return NextResponse.json({ error: error.message }, { status: 400 })
+    }
     console.error('Error creating BOQ:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }

@@ -4,6 +4,7 @@ import type { Boq } from '@/lib/boq-schema'
 import { toPublicBoq } from '@/lib/boq-public'
 import { getBoqCatalogReadiness } from '@/lib/boq-catalog-readiness'
 import { calculateBoqTotals } from '@/lib/boq-pricing'
+import { BoqCanonicalValidationError, parseCanonicalBoqSections } from '@/lib/boq-canonical'
 
 export type BoqDetailRouteContext = { params: Promise<{ id: string }> }
 
@@ -18,21 +19,8 @@ interface BoqDetailDependencies {
   logError(message: string, error: unknown): void
 }
 
-function computeTotals(sections: unknown) {
-  if (!Array.isArray(sections)) return { totalItems: 0, grandTotal: Number.NaN }
-  try {
-    return calculateBoqTotals(sections as Boq['sections'])
-  } catch {
-    const totalItems = sections.reduce((count, section) => {
-      const items = typeof section === 'object' && section !== null && Array.isArray((section as { items?: unknown }).items)
-        ? (section as { items: unknown[] }).items
-        : []
-      return count + items.filter((row) =>
-        typeof row !== 'object' || row === null || (row as { pricingRole?: unknown }).pricingRole !== 'bundle_child',
-      ).length
-    }, 0)
-    return { totalItems, grandTotal: Number.NaN }
-  }
+function computeTotals(sections: Boq['sections']) {
+  return calculateBoqTotals(sections)
 }
 
 export function createBoqDetailHandlers(dependencies: BoqDetailDependencies) {
@@ -84,8 +72,9 @@ export function createBoqDetailHandlers(dependencies: BoqDetailDependencies) {
         updates.status = body.status
       }
       if (body.sections !== undefined) {
-        updates.sections = body.sections
-        const { totalItems, grandTotal } = computeTotals(body.sections)
+        const sections = parseCanonicalBoqSections(body.sections)
+        updates.sections = sections
+        const { totalItems, grandTotal } = computeTotals(sections)
         updates.totalItems = totalItems
         updates.grandTotal = grandTotal
       }
@@ -112,6 +101,9 @@ export function createBoqDetailHandlers(dependencies: BoqDetailDependencies) {
       const updated = await dependencies.getBoq(id)
       return Response.json(updated ? toPublicBoq(updated) : null)
     } catch (error) {
+      if (error instanceof BoqCanonicalValidationError || error instanceof RangeError) {
+        return Response.json({ error: error.message }, { status: 400 })
+      }
       console.error('Error updating BOQ:', error)
       return Response.json({ error: 'Internal server error' }, { status: 500 })
     }

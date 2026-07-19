@@ -13,7 +13,7 @@ import { ProtoBadge } from "@/components/proto-badge"
 import type { Boq, BoqItem } from "@/lib/boq-schema"
 import { getBoqItemIdentityKey, getBoqItemRequestIdentity } from "@/lib/boq-item-identity"
 import { applyManualCostAllocation, deriveSourceCostAllocation } from "@/lib/boq-cost-allocation"
-import { contributesToBoqTotal, isPricedBoqItem } from "@/lib/boq-pricing"
+import { calculateBoqTotals, isPricedBoqItem } from "@/lib/boq-pricing"
 
 type EditsMap = Record<string, Record<string, string | number | undefined>>
 type LoadState = "loading" | "loaded" | "not-found" | "error"
@@ -551,13 +551,10 @@ export default function BoqDetailPage() {
     : []
 
   const grandTotal = boq
-    ? boq.sections.reduce(
-        (sum, section, si) => sum + section.items.reduce((sectionSum, item, ii) => {
-          const merged = mergeItemEdits(item, edits[`${si}-${ii}`])
-          return sectionSum + (contributesToBoqTotal(merged) ? merged.total : 0)
-        }, 0),
-        0
-      )
+    ? calculateBoqTotals(boq.sections.map((section, si) => ({
+        ...section,
+        items: section.items.map((item, ii) => mergeItemEdits(item, edits[`${si}-${ii}`])),
+      }))).grandTotal
     : 0
 
   const editsCount = Object.keys(edits).length
@@ -725,10 +722,10 @@ export default function BoqDetailPage() {
       <div data-od-id="boq-sections" className="boq-detail-sections">
           {filteredSections.map((section) => {
           const si = section.realSi
-          const sectionTotal = section.items.reduce((sum, { item, ii }) => {
-            const merged = mergeItemEdits(item, edits[`${si}-${ii}`])
-            return sum + (contributesToBoqTotal(merged) ? merged.total : 0)
-          }, 0)
+          const sectionTotal = calculateBoqTotals([{
+            header: section.header,
+            items: section.items.map(({ item, ii }) => mergeItemEdits(item, edits[`${si}-${ii}`])),
+          }]).grandTotal
           return (
             <CollapsibleSection
               key={si}
