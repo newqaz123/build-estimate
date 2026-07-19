@@ -169,6 +169,15 @@ def _priced_item(
     return item
 
 
+def _contributing_decimal(items: list[dict[str, Any]]) -> Decimal:
+    total = Decimal(0)
+    for item in items:
+        if item["pricingRole"] == "bundle_child" or item.get("excludedFromTotal", False):
+            continue
+        total += Decimal(str(item["total"]))
+    return total
+
+
 def _has_pricing(row: dict[str, Any]) -> bool:
     roles = _find_columns(row)
     for role, column in roles.items():
@@ -425,19 +434,43 @@ def _total_rows(rows: list[dict[str, Any]]) -> list[tuple[dict[str, Any], float]
     return totals
 
 
-def _source_total(rows: list[dict[str, Any]]) -> float | None:
+def _source_total(rows: list[dict[str, Any]]) -> tuple[float | None, list[dict[str, Any]]]:
+    overflow_warnings: list[dict[str, Any]] = []
+    for row in rows:
+        if row.get("classification") != "total":
+            continue
+        roles = _find_columns(row)
+        raw = _value(row, roles.get("amount"))
+        if _decimal(raw) is not None and _number(raw) is None:
+            overflow_warnings.append(_warning(
+                row, "numeric_overflow",
+                "Source total exceeds the finite response range.",
+            ))
+    if overflow_warnings:
+        return None, overflow_warnings
     totals = _total_rows(rows)
     if not totals:
-        return None
+        return None, []
     grand = [value for row, value in totals if "grand total" in _normal(row.get("rawText"))]
     if grand:
-        return grand[-1]
-    by_section: dict[str, float] = {}
+        return grand[-1], []
+    by_section: dict[str, tuple[dict[str, Any], float]] = {}
     for row, value in totals:
         label = _normal(row.get("rawText"))
         if label.startswith("total") or label.startswith("sub total"):
-            by_section[row.get("section") or f"table:{row['page']}:{row['table']}"] = value
-    return float(sum((Decimal(str(value)) for value in by_section.values()), Decimal(0))) if by_section else totals[-1][1]
+            key = row.get("section") or f"table:{row['page']}:{row['table']}"
+            by_section[key] = (row, value)
+    if not by_section:
+        return totals[-1][1], []
+    combined = Decimal(0)
+    for row, value in by_section.values():
+        combined += Decimal(str(value))
+        if _finite_float(combined) is None:
+            return None, [_warning(
+                row, "numeric_overflow",
+                "Aggregated source totals exceed the finite response range.",
+            )]
+    return _finite_float(combined), []
 
 
 def _section_total_warnings(
@@ -473,6 +506,7 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     sections_by_name: dict[str, dict[str, Any]] = {}
     warnings: list[dict[str, Any]] = []
     review_ids: list[str] = []
+    cumulative_contribution = Decimal(0)
 
     def section_for(name: str) -> dict[str, Any]:
         if name not in sections_by_name:
@@ -493,11 +527,22 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         section_name = row.get("section") or "Unsectioned"
         section = section_for(section_name)
         items, row_warnings = _derive_row(row, continuation_map.get(row["id"], []))
+        candidate_contribution = cumulative_contribution + _contributing_decimal(items)
+        if items and _finite_float(candidate_contribution) is None:
+            items = []
+            row_warnings.append(_warning(
+                row, "numeric_overflow",
+                "Adding this row would exceed the finite document contribution range.",
+            ))
+        else:
+            cumulative_contribution = candidate_contribution
         section["items"].extend(items)
         warnings.extend(row_warnings)
         if row_warnings:
             review_ids.append(row["id"])
-    source_total = _source_total(evidence)
+    source_total, source_warnings = _source_total(evidence)
+    warnings.extend(source_warnings)
+    review_ids.extend(warning["sourceRowId"] for warning in source_warnings)
     section_warnings = _section_total_warnings(sections, evidence)
     warnings.extend(section_warnings)
     review_ids.extend(warning["sourceRowId"] for warning in section_warnings)

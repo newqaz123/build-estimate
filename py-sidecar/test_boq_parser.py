@@ -1850,6 +1850,54 @@ class CompoundDerivationTest(unittest.TestCase):
         self.assertEqual(len(item["sourceRowIds"]), 2)
         self.assertEqual(result["sections"][0]["header"], "Pumps")
 
+    def test_separate_component_group_cumulative_overflow_emits_no_partial_items(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/separate-components.json").read_text())
+        row = fixture["sourceRows"][1]
+        huge = "9" + ("0" * 307)
+        for column in (1, 3, 4, 5, 7, 8):
+            value = "1" if column in (1, 5) else huge
+            row["rawCells"][column].update(rawText=value, lines=[value])
+        row["rawCells"][9].update(rawText="", lines=[""])
+        result = derive_document(fixture["sourceRows"][:2])
+        self.assertEqual(result["sections"][0]["items"], [])
+        self.assertIn("numeric_overflow", result["warningCodes"])
+        retained = next(source for source in result["sourceRows"] if source["id"] == "sr-separate")
+        self.assertIn("numeric_overflow", [warning["code"] for warning in retained["warnings"]])
+
+    def test_later_ordinary_row_is_rejected_when_document_contribution_would_overflow(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/merged-and-repeated-headers.json").read_text())
+        huge = "9" + ("0" * 307)
+        first = json.loads(json.dumps(fixture["sourceRows"][2]))
+        second = json.loads(json.dumps(first))
+        for row in (first, second):
+            for column, value in ((1, "1"), (3, huge), (4, huge)):
+                row["rawCells"][column].update(rawText=value, lines=[value])
+        first.update(id="sr-huge-first", section="Huge")
+        second.update(id="sr-huge-second", page=2, table=2, row=1, section="Huge")
+        result = derive_document([first, second])
+        items = result["sections"][0]["items"]
+        self.assertEqual([item["sourceRowIds"] for item in items], [["sr-huge-first"]])
+        self.assertEqual(result["reconciliation"]["itemTotal"], 9e307)
+        self.assertIn("sr-huge-second", result["reviewCandidateRowIds"])
+
+    def test_section_total_aggregation_overflow_is_row_warned_and_omitted(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/merged-and-repeated-headers.json").read_text())
+        huge = "9" + ("0" * 307)
+        first = json.loads(json.dumps(fixture["sourceRows"][-1]))
+        second = json.loads(json.dumps(first))
+        for row in (first, second):
+            row["rawCells"][1].update(rawText=huge, lines=[huge])
+            row["rawText"] = f"TOTAL | {huge}"
+        first.update(id="sr-total-first", section="First")
+        second.update(id="sr-total-second", page=2, table=2, row=1, section="Second")
+        result = derive_document([first, second])
+        self.assertIsNone(result["sourceTotal"])
+        self.assertIsNone(result["reconciliation"]["sourceTotal"])
+        self.assertFalse(result["reconciliation"]["reconciled"])
+        self.assertIn("sr-total-second", result["reviewCandidateRowIds"])
+        retained = next(source for source in result["sourceRows"] if source["id"] == "sr-total-second")
+        self.assertIn("numeric_overflow", [warning["code"] for warning in retained["warnings"]])
+
 
 if __name__ == "__main__":
     unittest.main()
