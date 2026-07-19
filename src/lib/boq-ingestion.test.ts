@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import { buildDraftBoq, parseDoclingResult, verifyBoqLocally } from './boq-ingestion'
+import { buildDraftBoq, buildDraftImport, parseDoclingResult, verifyBoqLocally } from './boq-ingestion'
 import { buildBoqCsv } from './boq-csv'
 import type { Boq } from './boq-schema'
 import { isPricedBoqItem } from './boq-pricing'
+import { v3Fixture } from './boq-extraction-test-fixtures'
 
 function validPayload() {
   return {
@@ -78,6 +79,7 @@ function makeBoq(overrides: Partial<Boq> = {}): Boq {
 test('parseDoclingResult accepts contract version 2 and preserves source fields', () => {
   const payload = validPayload()
   const parsed = parseDoclingResult(payload)
+  assert(parsed.contractVersion === 2)
 
   assert.notEqual(parsed, payload)
   assert.deepEqual(parsed.tables, payload.tables)
@@ -93,6 +95,7 @@ test('version 2 ignores source row codes so new imports cannot persist or export
   Object.assign(payload.sections[0].items[0], { code: 'C-01' })
 
   const parsed = parseDoclingResult(payload)
+  assert(parsed.contractVersion === 2)
   const draft = buildDraftBoq('boq-new', 'boqs/boq-new/source.pdf', parsed)
   const item = draft.sections[0].items[0] as unknown as Record<string, unknown>
 
@@ -107,6 +110,7 @@ test('real ayt001 contract artifact cannot reintroduce source row codes', () => 
     section.items.some((item) => item.code)))
 
   const parsed = parseDoclingResult(payload)
+  assert(parsed.contractVersion === 2)
   const draft = buildDraftBoq('boq-ayt001', 'boqs/boq-ayt001/source.pdf', parsed)
 
   assert.ok(parsed.sections.flatMap((section) => section.items).every((item) => !Object.hasOwn(item, 'code')))
@@ -165,6 +169,7 @@ test('buildDraftBoq builds an unclassified draft from extracted values without s
   payload.metadata.date.value = ''
   payload.metadata.workType.value = 'Unclassified'
   const parsed = parseDoclingResult(payload)
+  assert(parsed.contractVersion === 2)
 
   const draft = buildDraftBoq('boq-22', 'boqs/boq-22/source.pdf', parsed)
 
@@ -193,6 +198,71 @@ test('buildDraftBoq builds an unclassified draft from extracted values without s
     basis: 'rate', material: 60, labour: 40, origin: 'source',
   })
   assert.deepEqual(draft.sections[0].items[0].sourceRef, { page: 1, table: 1, row: 2 })
+})
+
+test('v3 builds a canonical draft and detached immutable extraction-run seed', () => {
+  const input = v3Fixture()
+  const parsed = parseDoclingResult(input)
+  assert(parsed.contractVersion === 3)
+  const built = buildDraftImport('boq-v3', 'boqs/boq-v3/source.pdf', parsed, 'run-fixed')
+
+  assert.ok(built.run)
+  assert.equal(built.run.id, 'run-fixed')
+  assert.equal(built.run.boqId, 'boq-v3')
+  assert.equal(built.run.contractVersion, 3)
+  assert.equal(built.run.sourceRows.length, (input.sourceRows as unknown[]).length)
+  assert.equal(built.run.documentText, 'quotation evidence')
+  assert.deepEqual(built.run.reconciliation, input.reconciliation)
+  assert.equal(built.boq.activeExtractionRunId, built.run.id)
+  assert.equal(built.boq.totalItems, 3)
+  assert.equal(built.boq.grandTotal, 95_300)
+
+  const [parent, child, option, combined] = built.boq.sections[0].items
+  assert.equal(parent.pricingRole, 'bundle_parent')
+  assert.equal(child.pricingRole, 'bundle_child')
+  assert.equal(child.parentBundleId, 'bundle')
+  assert.equal(Object.hasOwn(child, 'qty'), false)
+  assert.equal(option.optional, true)
+  assert.equal(option.excludedFromTotal, true)
+  assert.equal(option.entryOrigin, 'docling')
+  assert.deepEqual(combined.sourceRowIds, ['row-4'])
+  assert.ok(isPricedBoqItem(combined))
+  assert.deepEqual(combined.sourceCosts, {
+    material: { present: true, qty: 1, unit: 'set', rate: 40, total: 40 },
+    labour: { present: true, qty: 1, unit: 'set', rate: 60, total: 60 },
+  })
+
+  ;(input.sourceRows as Array<Record<string, unknown>>)[0].rawText = 'caller mutation'
+  assert.notEqual(built.run.sourceRows[0].rawText, 'caller mutation')
+  built.run.sourceRows[0].rawCells[0].lines[0] = 'run mutation'
+  assert.notEqual((input.sourceRows as Array<{ rawCells: Array<{ lines: string[] }> }>)[0].rawCells[0].lines[0], 'run mutation')
+  assert.notEqual(parsed.sourceRows[0].rawCells[0].lines[0], 'run mutation')
+})
+
+test('v2 builds a legacy-compatible standard draft and no extraction run', () => {
+  const built = buildDraftImport('boq-v2', 'boqs/boq-v2/source.pdf', parseDoclingResult(validPayload()), 'unused')
+  assert.equal(built.run, null)
+  assert.equal(built.boq.sections[0].items[0].pricingRole, 'standard')
+  assert.equal(built.boq.activeExtractionRunId, undefined)
+})
+
+test('v3 zero-item extraction still builds a reviewable draft and run', () => {
+  const payload = v3Fixture()
+  payload.sections = []
+  payload.sourceTotal = null
+  payload.reconciliation = { itemTotal: 0, sourceTotal: null, reconciled: false, difference: 0 }
+  payload.totalItems = 0
+
+  const built = buildDraftImport('boq-empty', 'boqs/boq-empty/source.pdf', parseDoclingResult(payload), 'run-empty')
+  assert.equal(built.boq.totalItems, 0)
+  assert.equal(built.boq.grandTotal, 0)
+  assert.equal(built.run?.id, 'run-empty')
+})
+
+test('v3 run IDs are caller-supplied, non-empty, and deterministic', () => {
+  const parsed = parseDoclingResult(v3Fixture())
+  assert.throws(() => buildDraftImport('boq-v3', 'source.pdf', parsed, ''), /runId/i)
+  assert.equal(buildDraftImport('boq-v3', 'source.pdf', parsed, 'stable-id').run?.id, 'stable-id')
 })
 
 test('local verification reports a line arithmetic mismatch', () => {

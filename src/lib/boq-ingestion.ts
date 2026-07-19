@@ -1,73 +1,34 @@
 import type {
   Boq,
-  BoqExtractionWarning,
   BoqItem,
   BoqMetadataConfidence,
-  BoqSourceCost,
-  BoqSourceCosts,
-  BoqSourceRef,
   WorkType,
 } from './boq-schema'
 import { deriveSourceCostAllocation } from './boq-cost-allocation'
 import { calculateBoqTotals } from './boq-pricing'
+import {
+  type BoqSourceRowV3,
+  type DoclingMetadata,
+  type DoclingReconciliationV3,
+  type DoclingResult,
+  type DoclingResultV2,
+  type DoclingResultV3,
+  type DoclingWarningV3,
+} from './boq-extraction-schema'
+export { parseDoclingResult } from './boq-extraction-schema'
+export type {
+  DoclingItemV2 as DoclingItem,
+  DoclingMetadata,
+  DoclingMetadataField,
+  DoclingRawTable,
+  DoclingResult,
+  DoclingResultV2,
+  DoclingResultV3,
+  DoclingSectionV2 as DoclingSection,
+} from './boq-extraction-schema'
 
 const WORK_TYPES: readonly WorkType[] = ['Structural', 'MEP', 'Finishing', 'Unclassified']
-const ITEM_TYPES = ['unit', 'lump_sum'] as const
-const COST_COMPONENTS = ['material', 'labour', 'combined', 'lump_sum'] as const
 const TOLERANCE = 0.01
-
-type DoclingItemType = typeof ITEM_TYPES[number]
-type CostComponent = typeof COST_COMPONENTS[number]
-
-export interface DoclingMetadataField<T extends string = string> {
-  value: T
-  confidence: number
-  source: string
-}
-
-export interface DoclingMetadata {
-  vendor: DoclingMetadataField
-  project: DoclingMetadataField
-  date: DoclingMetadataField
-  workType: DoclingMetadataField<WorkType>
-}
-
-export interface DoclingItem {
-  id: string
-  desc: string
-  unit: string
-  qty: number
-  rate: number
-  total: number
-  type: DoclingItemType
-  costComponent: CostComponent
-  sourceRef: BoqSourceRef
-  sourceCosts?: BoqSourceCosts | null
-}
-
-export interface DoclingSection {
-  header: string
-  items: DoclingItem[]
-}
-
-export interface DoclingRawTable {
-  page: number
-  table: number
-  rows: unknown[][]
-}
-
-export interface DoclingResultV2 {
-  contractVersion: 2
-  documentName: string
-  pageCount: number
-  documentText: string
-  tables: DoclingRawTable[]
-  sections: DoclingSection[]
-  metadata: DoclingMetadata
-  warnings: Array<BoqExtractionWarning & { sourceRef?: BoqSourceRef | null }>
-  sourceTotal?: number | null
-  totalItems: number
-}
 
 export type VerificationIssueCode =
   | 'metadata_missing'
@@ -95,159 +56,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function invalid(path: string, expectation: string): never {
-  throw new TypeError(`Invalid Docling result: ${path} must be ${expectation}`)
-}
-
-function requireRecord(value: unknown, path: string): Record<string, unknown> {
-  if (!isRecord(value)) invalid(path, 'an object')
-  return value
-}
-
-function requireArray(value: unknown, path: string): unknown[] {
-  if (!Array.isArray(value)) invalid(path, 'an array')
-  return value
-}
-
-function requireString(value: unknown, path: string): string {
-  if (typeof value !== 'string') invalid(path, 'a string')
-  return value
-}
-
-function requireFiniteNumber(value: unknown, path: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) invalid(path, 'a finite number')
-  return value
-}
-
-function requireNonNegativeInteger(value: unknown, path: string): number {
-  const number = requireFiniteNumber(value, path)
-  if (!Number.isInteger(number) || number < 0) invalid(path, 'a non-negative integer')
-  return number
-}
-
-function requirePositiveInteger(value: unknown, path: string): number {
-  const number = requireFiniteNumber(value, path)
-  if (!Number.isInteger(number) || number <= 0) invalid(path, 'a positive integer')
-  return number
-}
-
-function requireEnum<T extends string>(value: unknown, allowed: readonly T[], path: string): T {
-  if (typeof value !== 'string' || !allowed.includes(value as T)) {
-    invalid(path, `one of ${allowed.join(', ')}`)
-  }
-  return value as T
-}
-
-function validateSourceRef(value: unknown, path: string): BoqSourceRef {
-  const record = requireRecord(value, path)
-  requirePositiveInteger(record.page, `${path}.page`)
-  requirePositiveInteger(record.table, `${path}.table`)
-  requirePositiveInteger(record.row, `${path}.row`)
-  return record as unknown as BoqSourceRef
-}
-
-function validateSourceCost(value: unknown, path: string): BoqSourceCost {
-  const record = requireRecord(value, path)
-  if (typeof record.present !== 'boolean') invalid(`${path}.present`, 'a boolean')
-  requireFiniteNumber(record.qty, `${path}.qty`)
-  requireString(record.unit, `${path}.unit`)
-  requireFiniteNumber(record.rate, `${path}.rate`)
-  requireFiniteNumber(record.total, `${path}.total`)
-  return record as unknown as BoqSourceCost
-}
-
-function validateSourceCosts(value: unknown, path: string): BoqSourceCosts {
-  const record = requireRecord(value, path)
-  validateSourceCost(record.material, `${path}.material`)
-  validateSourceCost(record.labour, `${path}.labour`)
-  return record as unknown as BoqSourceCosts
-}
-
-function validateMetadataField(value: unknown, path: string, workType = false): void {
-  const record = requireRecord(value, path)
-  if (workType) requireEnum(record.value, WORK_TYPES, `${path}.value`)
-  else requireString(record.value, `${path}.value`)
-  const confidence = requireFiniteNumber(record.confidence, `${path}.confidence`)
-  if (confidence < 0 || confidence > 1) invalid(`${path}.confidence`, 'between 0 and 1')
-  requireString(record.source, `${path}.source`)
-}
-
-function validateItem(value: unknown, path: string): void {
-  const record = requireRecord(value, path)
-  const id = requireString(record.id, `${path}.id`)
-  if (id.trim() === '') invalid(`${path}.id`, 'a non-empty string')
-  if (record.code !== undefined && record.code !== null) requireString(record.code, `${path}.code`)
-  requireString(record.desc, `${path}.desc`)
-  requireString(record.unit, `${path}.unit`)
-  requireFiniteNumber(record.qty, `${path}.qty`)
-  requireFiniteNumber(record.rate, `${path}.rate`)
-  requireFiniteNumber(record.total, `${path}.total`)
-  requireEnum(record.type, ITEM_TYPES, `${path}.type`)
-  requireEnum(record.costComponent, COST_COMPONENTS, `${path}.costComponent`)
-  validateSourceRef(record.sourceRef, `${path}.sourceRef`)
-  if (record.sourceCosts !== undefined && record.sourceCosts !== null) {
-    validateSourceCosts(record.sourceCosts, `${path}.sourceCosts`)
-  }
-}
-
-function validateWarning(value: unknown, path: string): void {
-  const record = requireRecord(value, path)
-  requireString(record.code, `${path}.code`)
-  requireString(record.message, `${path}.message`)
-  if (record.sourceRef !== undefined && record.sourceRef !== null) {
-    validateSourceRef(record.sourceRef, `${path}.sourceRef`)
-  }
-}
-
-export function parseDoclingResult(value: unknown): DoclingResultV2 {
-  const result = requireRecord(value, 'result')
-  if (result.contractVersion !== 2) invalid('contractVersion', 'exactly 2')
-  requireString(result.documentName, 'documentName')
-  requireNonNegativeInteger(result.pageCount, 'pageCount')
-  requireString(result.documentText, 'documentText')
-
-  requireArray(result.tables, 'tables').forEach((table, tableIndex) => {
-    const record = requireRecord(table, `tables[${tableIndex}]`)
-    requireNonNegativeInteger(record.page, `tables[${tableIndex}].page`)
-    requireNonNegativeInteger(record.table, `tables[${tableIndex}].table`)
-    requireArray(record.rows, `tables[${tableIndex}].rows`).forEach((row, rowIndex) => {
-      requireArray(row, `tables[${tableIndex}].rows[${rowIndex}]`)
-    })
-  })
-
-  requireArray(result.sections, 'sections').forEach((section, sectionIndex) => {
-    const record = requireRecord(section, `sections[${sectionIndex}]`)
-    requireString(record.header, `sections[${sectionIndex}].header`)
-    requireArray(record.items, `sections[${sectionIndex}].items`).forEach((item, itemIndex) => {
-      validateItem(item, `sections[${sectionIndex}].items[${itemIndex}]`)
-    })
-  })
-
-  const metadata = requireRecord(result.metadata, 'metadata')
-  validateMetadataField(metadata.vendor, 'metadata.vendor')
-  validateMetadataField(metadata.project, 'metadata.project')
-  validateMetadataField(metadata.date, 'metadata.date')
-  validateMetadataField(metadata.workType, 'metadata.workType', true)
-  requireArray(result.warnings, 'warnings').forEach((warning, index) => validateWarning(warning, `warnings[${index}]`))
-  if (result.sourceTotal !== undefined && result.sourceTotal !== null) {
-    requireFiniteNumber(result.sourceTotal, 'sourceTotal')
-  }
-  requireNonNegativeInteger(result.totalItems, 'totalItems')
-
-  // Contract v2 deliberately treats printed row numbers/codes as source-only
-  // information. SourceRef is the stable identity for new imports. Strip a
-  // code sent by an older sidecar during a rolling deployment so it cannot be
-  // persisted or cause CSV to expose the retired Code column.
-  return {
-    ...result,
-    sections: (result.sections as Array<Record<string, unknown>>).map((section) => ({
-      ...section,
-      items: (section.items as Array<Record<string, unknown>>).map((item) =>
-        Object.fromEntries(Object.entries(item).filter(([key]) => key !== 'code'))),
-    })),
-  } as unknown as DoclingResultV2
-}
-
 export function buildDraftBoq(
   id: string,
   sourcePath: string,
@@ -259,6 +67,7 @@ export function buildDraftBoq(
       const draftItem: BoqItem = {
         id: item.id,
         desc: item.desc,
+        pricingRole: 'standard',
         unit: item.unit,
         qty: item.qty,
         rate: item.rate,
@@ -303,6 +112,158 @@ export function buildDraftBoq(
     })),
     metadataConfidence,
   }
+}
+
+export interface BoqExtractionRunSeed {
+  id: string
+  boqId: string
+  contractVersion: 3
+  sourceFileName: string
+  sourceStoragePath: string
+  pageCount: number
+  documentText: string
+  sourceRows: BoqSourceRowV3[]
+  metadata: DoclingMetadata
+  warnings: DoclingWarningV3[]
+  reconciliation: DoclingReconciliationV3
+  sourceTotal?: number | null
+  totalItems: number
+}
+
+export interface DraftImport {
+  boq: Omit<Boq, 'createdAt' | 'updatedAt'>
+  run: BoqExtractionRunSeed | null
+}
+
+function metadataConfidence(parsed: Pick<DoclingResult, 'metadata'>): BoqMetadataConfidence {
+  return {
+    vendor: parsed.metadata.vendor.confidence,
+    project: parsed.metadata.project.confidence,
+    date: parsed.metadata.date.confidence,
+    workType: parsed.metadata.workType.confidence,
+  }
+}
+
+function canonicalWarnings(warnings: DoclingWarningV3[]): NonNullable<Boq['extractionWarnings']> {
+  return warnings.map((warning) => ({
+    code: warning.code,
+    message: warning.message,
+    ...(warning.sourceRef ? { sourceRef: warning.sourceRef } : {}),
+  }))
+}
+
+function buildV3Draft(
+  id: string,
+  sourcePath: string,
+  parsed: DoclingResultV3,
+  runId: string,
+): DraftImport {
+  if (runId.trim() === '') throw new TypeError('runId must be a non-empty string')
+  const sourceRows = new Map(parsed.sourceRows.map((row) => [row.id, row]))
+  const sections = parsed.sections.map((section) => ({
+    header: section.header,
+    items: section.items.map((item): BoqItem => {
+      const firstRow = sourceRows.get(item.sourceRowIds[0])
+      const sourceRef = firstRow
+        ? { page: firstRow.page, table: firstRow.table, row: firstRow.row }
+        : undefined
+      const extractionWarnings = item.sourceRowIds.flatMap((rowId) =>
+        sourceRows.get(rowId)?.warnings ?? [])
+      const common = {
+        id: item.id,
+        desc: item.desc,
+        sourceRowId: item.sourceRowIds[0],
+        sourceRowIds: [...item.sourceRowIds],
+        entryOrigin: item.entryOrigin,
+        optional: item.optional,
+        excludedFromTotal: item.excludedFromTotal,
+        ...(item.exclusionReason ? { exclusionReason: item.exclusionReason } : {}),
+        ...(sourceRef ? { sourceRef } : {}),
+        ...(extractionWarnings.length > 0
+          ? { extractionWarnings: canonicalWarnings(extractionWarnings) }
+          : {}),
+      }
+      if (item.pricingRole === 'bundle_child') {
+        return {
+          ...common,
+          pricingRole: 'bundle_child',
+          parentBundleId: item.parentBundleId,
+          stdStatus: 'pending',
+        }
+      }
+      const sourceCosts = item.sourceCosts
+        ? {
+            material: { ...item.sourceCosts.material, present: true },
+            labour: { ...item.sourceCosts.labour, present: true },
+          }
+        : undefined
+      const draftItem: BoqItem = {
+        ...common,
+        pricingRole: item.pricingRole,
+        unit: item.unit,
+        qty: item.qty,
+        rate: item.rate,
+        total: item.total,
+        type: item.costComponent === 'lump_sum' ? 'lump_sum' : 'unit',
+        costComponent: item.costComponent,
+        ...(sourceCosts ? { sourceCosts } : {}),
+        stdStatus: item.excludedFromTotal ? 'excluded' : 'unmatched',
+      }
+      const allocation = deriveSourceCostAllocation(draftItem)
+      return allocation ? { ...draftItem, costAllocation: allocation } : draftItem
+    }),
+  }))
+  const totals = calculateBoqTotals(sections)
+  const boq: Omit<Boq, 'createdAt' | 'updatedAt'> = {
+    id,
+    project: parsed.metadata.project.value,
+    vendor: parsed.metadata.vendor.value,
+    workType: parsed.metadata.workType.value,
+    date: parsed.metadata.date.value,
+    ...totals,
+    status: 'draft',
+    stdStatus: 'none',
+    sections,
+    sourceFileName: parsed.documentName,
+    sourceStoragePath: sourcePath,
+    sourcePageCount: parsed.pageCount,
+    ...(typeof parsed.sourceTotal === 'number' ? { sourceTotal: parsed.sourceTotal } : {}),
+    activeExtractionRunId: runId,
+    extractionWarnings: canonicalWarnings(parsed.warnings),
+    metadataConfidence: metadataConfidence(parsed),
+  }
+  const run: BoqExtractionRunSeed = structuredClone({
+    id: runId,
+    boqId: id,
+    contractVersion: 3,
+    sourceFileName: parsed.documentName,
+    sourceStoragePath: sourcePath,
+    pageCount: parsed.pageCount,
+    documentText: parsed.documentText,
+    sourceRows: parsed.sourceRows,
+    metadata: parsed.metadata,
+    warnings: parsed.warnings,
+    reconciliation: parsed.reconciliation,
+    ...(parsed.sourceTotal === undefined ? {} : { sourceTotal: parsed.sourceTotal }),
+    totalItems: parsed.totalItems,
+  })
+  return { boq, run }
+}
+
+/**
+ * Pure import adapter. Run identity is supplied by the caller so validation and
+ * draft construction never depend on time or randomness. Task 6 owns ID
+ * generation and staged persistence.
+ */
+export function buildDraftImport(
+  id: string,
+  sourcePath: string,
+  parsed: DoclingResult,
+  runId: string,
+): DraftImport {
+  return parsed.contractVersion === 2
+    ? { boq: buildDraftBoq(id, sourcePath, parsed), run: null }
+    : buildV3Draft(id, sourcePath, parsed, runId)
 }
 
 function issue(

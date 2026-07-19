@@ -3,7 +3,7 @@ import {
   invalidPdfResponse,
   requireSinglePdf,
 } from '@/lib/boq-import-request'
-import type { DoclingResultV2 } from '@/lib/boq-ingestion'
+import type { DoclingResult } from '@/lib/boq-ingestion'
 import { DoclingClientError } from '@/lib/docling-client'
 
 const DEFAULT_DOCLING_ENDPOINT = 'http://localhost:5001'
@@ -11,7 +11,7 @@ const DEFAULT_DOCLING_ENDPOINT = 'http://localhost:5001'
 interface DoclingParseHandlerDependencies {
   authenticate(): Promise<{ user?: unknown } | null>
   getEndpoint(): Promise<string>
-  parsePdf(file: File, endpoint: string, signal: AbortSignal): Promise<DoclingResultV2>
+  parsePdf(file: File, endpoint: string, signal: AbortSignal): Promise<DoclingResult>
 }
 
 export function createDoclingParseHandler(dependencies: DoclingParseHandlerDependencies) {

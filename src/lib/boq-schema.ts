@@ -111,6 +111,7 @@ export interface Boq {
   sourceAvailable?: boolean
   sourcePageCount?: number
   sourceTotal?: number
+  activeExtractionRunId?: string
   extractionWarnings?: BoqExtractionWarning[]
   metadataConfidence?: BoqMetadataConfidence
   createdAt: string

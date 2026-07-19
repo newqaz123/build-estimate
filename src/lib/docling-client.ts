@@ -1,4 +1,4 @@
-import { parseDoclingResult, type DoclingResultV2 } from './boq-ingestion'
+import { parseDoclingResult, type DoclingResult } from './boq-ingestion'
 
 const DEFAULT_DOCLING_ORIGIN = 'http://localhost:5001'
 const DOCLING_PARSE_TIMEOUT_MS = 180_000
@@ -92,7 +92,7 @@ export async function parsePdfWithDocling(
   file: File,
   endpoint: string,
   signal?: AbortSignal,
-): Promise<DoclingResultV2> {
+): Promise<DoclingResult> {
   if (signal?.aborted) throw new DoclingClientError('cancelled', 'Request cancelled')
 
   const timeoutController = new AbortController()
