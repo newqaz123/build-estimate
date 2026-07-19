@@ -1726,7 +1726,7 @@ class CompoundDerivationTest(unittest.TestCase):
         fixture["sourceRows"][-1]["rawCells"][1]["lines"] = ["60"]
         result = derive_document(fixture["sourceRows"])
         warning = next(warning for warning in result["warnings"] if warning["code"] == "section_total_mismatch")
-        self.assertEqual(warning["sourceRef"], {"page": 1, "table": 1, "row": 4})
+        self.assertEqual(warning["sourceRef"], {"page": 1, "table": 1, "row": 5})
 
     def test_missing_component_price_is_not_inferred_from_aggregate(self):
         fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/shared-components.json").read_text())
@@ -1748,7 +1748,107 @@ class CompoundDerivationTest(unittest.TestCase):
             row["rawCells"][column]["lines"] = [huge]
         result = derive_document(fixture["sourceRows"])
         self.assertEqual(result["sections"][0]["items"], [])
+        self.assertIn("numeric_overflow", result["warningCodes"])
+
+    def test_shared_component_arithmetic_mismatch_stays_unpriced(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/shared-components.json").read_text())
+        row = fixture["sourceRows"][1]
+        row["rawCells"][4].update(rawText="601", lines=["601"])
+        result = derive_document(fixture["sourceRows"])
+        self.assertEqual(result["sections"][0]["items"], [])
+        self.assertIn("component_arithmetic_mismatch", result["warningCodes"])
+
+    def test_separate_component_arithmetic_mismatch_stays_unpriced(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/separate-components.json").read_text())
+        row = fixture["sourceRows"][1]
+        row["rawCells"][8].update(rawText="61", lines=["61"])
+        result = derive_document(fixture["sourceRows"])
+        self.assertEqual(result["sections"][0]["items"], [])
+        self.assertIn("component_arithmetic_mismatch", result["warningCodes"])
+
+    def test_present_component_arithmetic_is_checked_even_when_unit_is_missing(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/separate-components.json").read_text())
+        row = fixture["sourceRows"][1]
+        row["rawCells"][2].update(rawText="", lines=[""])
+        row["rawCells"][4].update(rawText="41", lines=["41"])
+        result = derive_document(fixture["sourceRows"])
+        self.assertEqual(result["sections"][0]["items"], [])
+        self.assertIn("component_arithmetic_mismatch", result["warningCodes"])
+
+    def test_standalone_unpriced_item_is_not_guessed_as_continuation(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/continuation-cross-page.json").read_text())
+        base = fixture["sourceRows"][1]
+        warranty = json.loads(json.dumps(fixture["sourceRows"][3]))
+        warranty.update(id="sr-warranty", page=1, table=1, row=3, section="Pumps", classification="item")
+        warranty["rawCells"][0].update(rawText="Warranty", lines=["Warranty"])
+        warranty["rawText"] = "Warranty"
+        result = derive_document([fixture["sourceRows"][0], base, warranty])
+        self.assertEqual(result["sections"][0]["items"][0]["desc"], "Supply and install booster pump")
+        self.assertIn("sr-warranty", result["reviewCandidateRowIds"])
         self.assertIn("unsupported_row", result["warningCodes"])
+
+    def test_explicit_same_page_continuation_merges_without_pricing(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/continuation-cross-page.json").read_text())
+        base = fixture["sourceRows"][1]
+        tail = json.loads(json.dumps(fixture["sourceRows"][3]))
+        tail.update(id="sr-explicit-tail", page=1, table=1, row=3, section="Pumps", classification="continuation")
+        tail["rawCells"][0].update(rawText="Warranty terms apply", lines=["Warranty terms apply"])
+        tail["rawText"] = "Warranty terms apply"
+        result = derive_document([fixture["sourceRows"][0], base, tail])
+        item = result["sections"][0]["items"][0]
+        self.assertEqual(item["desc"], "Supply and install booster pump Warranty terms apply")
+        self.assertEqual(item["sourceRowIds"], ["sr-cont-base", "sr-explicit-tail"])
+
+    def test_blank_unknown_row_is_retained_warned_and_reviewable(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/unequal-lines.json").read_text())
+        blank = json.loads(json.dumps(fixture["sourceRows"][0]))
+        blank.update(id="sr-blank", row=3, rawCells=[], rawText="", classification="unknown")
+        result = derive_document([blank])
+        self.assertEqual(result["reviewCandidateRowIds"], ["sr-blank"])
+        retained = result["sourceRows"][0]
+        self.assertEqual([warning["code"] for warning in retained["warnings"]], ["unsupported_row"])
+        self.assertEqual(result["warnings"][0]["sourceRef"], {"page": 1, "table": 1, "row": 3})
+
+    def test_combined_component_sum_overflow_is_warned_without_item(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/shared-components.json").read_text())
+        row = fixture["sourceRows"][1]
+        huge = "9" + ("0" * 307)
+        for column in (1, 3, 4, 5, 6):
+            value = "1" if column == 1 else huge
+            row["rawCells"][column].update(rawText=value, lines=[value])
+        row["rawCells"][7].update(rawText="", lines=[""])
+        result = derive_document(fixture["sourceRows"][:2])
+        self.assertEqual(result["sections"][0]["items"], [])
+        self.assertIn("numeric_overflow", result["warningCodes"])
+
+    def test_bundle_does_not_silently_consume_description_tail(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/aggregate-bundle.json").read_text())
+        tail = json.loads(json.dumps(fixture["sourceRows"][1]))
+        tail.update(id="sr-bundle-tail", row=3, rawText="including commissioning", classification="item")
+        tail["rawCells"] = [{"column":0,"rawText":"including commissioning","lines":["including commissioning"],"carried":False}]
+        result = derive_document([fixture["sourceRows"][0], fixture["sourceRows"][1], tail])
+        parent = result["sections"][0]["items"][0]
+        self.assertEqual(parent["sourceRowIds"], ["sr-bundle"])
+        self.assertIn("sr-bundle-tail", result["reviewCandidateRowIds"])
+        self.assertIn("unsupported_row", result["warningCodes"])
+
+    def test_real_source_builder_cross_page_header_carries_base_section_for_cued_tail(self):
+        cell = LosslessContractV3Test._cell
+        first = LosslessContractV3Test._table(page=1, table=1, num_rows=3, num_cols=5, cells=[
+            cell("Pumps", 0, 0, row_section=True),
+            *[cell(value, 1, column, column_header=True) for column, value in enumerate(("Description", "Qty", "Unit", "Rate", "Amount"))],
+            *[cell(value, 2, column) for column, value in enumerate(("Supply pump", "1", "set", "100", "100"))],
+        ])
+        second = LosslessContractV3Test._table(page=2, table=2, num_rows=2, num_cols=5, cells=[
+            *[cell(value, 0, column, column_header=True) for column, value in enumerate(("Description", "Qty", "Unit", "Rate", "Amount"))],
+            cell("including commissioning", 1, 0),
+        ])
+        source_rows = build_source_rows([first, second])
+        result = derive_document(source_rows)
+        item = result["sections"][0]["items"][0]
+        self.assertEqual(item["desc"], "Supply pump including commissioning")
+        self.assertEqual(len(item["sourceRowIds"]), 2)
+        self.assertEqual(result["sections"][0]["header"], "Pumps")
 
 
 if __name__ == "__main__":

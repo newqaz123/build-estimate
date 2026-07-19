@@ -17,6 +17,7 @@ from boq_contract import RECONCILIATION_TOLERANCE, build_reconciliation, checked
 
 
 OPTION = re.compile(r"\b(?:optional|option|alternate|alternative|provisional|add[ -]?on)\b", re.I)
+CONTINUATION_PREFIX = re.compile(r"^(?:including|continued|comprising|consisting|together with|complete with)\b", re.I)
 NON_NUMBER = {"", "-", "—", "–", "n/a", "N/A"}
 
 
@@ -49,6 +50,16 @@ def _number(value: Any) -> float | None:
         return None
     try:
         converted = float(parsed)
+    except (OverflowError, ValueError):
+        return None
+    return converted if math.isfinite(converted) else None
+
+
+def _finite_float(value: Decimal) -> float | None:
+    if not value.is_finite():
+        return None
+    try:
+        converted = float(value)
     except (OverflowError, ValueError):
         return None
     return converted if math.isfinite(converted) else None
@@ -166,11 +177,39 @@ def _has_pricing(row: dict[str, Any]) -> bool:
     return False
 
 
+def _has_numeric_overflow(row: dict[str, Any], roles: dict[str, int]) -> bool:
+    for role, column in roles.items():
+        if role == "desc":
+            continue
+        raw = _value(row, column)
+        if _decimal(raw) is not None and _number(raw) is None:
+            return True
+    return False
+
+
+def _has_continuation_cue(row: dict[str, Any]) -> bool:
+    if row.get("classification") == "continuation":
+        return True
+    roles = _find_columns(row)
+    text = _value(row, roles.get("desc")).lstrip()
+    if not text:
+        return False
+    return bool(
+        CONTINUATION_PREFIX.match(text)
+        or text[0].islower()
+        or not text[0].isalnum()
+    )
+
+
 def _continuation_map(rows: list[dict[str, Any]]) -> tuple[dict[str, list[dict[str, Any]]], set[str]]:
     additions: dict[str, list[dict[str, Any]]] = {}
     consumed: set[str] = set()
     for index, row in enumerate(rows):
-        if row.get("classification") not in {"continuation", "item"} or _has_pricing(row):
+        if (
+            row.get("classification") not in {"continuation", "item"}
+            or _has_pricing(row)
+            or not _has_continuation_cue(row)
+        ):
             continue
         previous_index = index - 1
         intervening: list[dict[str, Any]] = []
@@ -180,9 +219,13 @@ def _continuation_map(rows: list[dict[str, Any]]) -> tuple[dict[str, list[dict[s
         if previous_index < 0:
             continue
         base = rows[previous_index]
-        if base.get("classification") not in {"item", "option"}:
+        if base.get("classification") not in {"item", "option"} or not _has_pricing(base):
             continue
-        same_context = base.get("section") == row.get("section") and base.get("headers") == row.get("headers")
+        base_roles = _find_columns(base)
+        if len(_lines(base, base_roles.get("desc"))) != 1:
+            continue
+        compatible_section = row.get("section") in {None, base.get("section")}
+        same_context = compatible_section and base.get("headers") == row.get("headers")
         same_table = base["page"] == row["page"] and base["table"] == row["table"] and not intervening
         cross_page = (
             base["page"] != row["page"]
@@ -199,18 +242,36 @@ def _continuation_map(rows: list[dict[str, Any]]) -> tuple[dict[str, list[dict[s
 def _derive_components(row: dict[str, Any], roles: dict[str, int], desc: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
     if not any(role.startswith("material_") for role in roles) or not any(role.startswith("labour_") for role in roles):
         return None
-    shared_qty = _number(_value(row, roles.get("qty")))
+    shared_qty_decimal = _decimal(_value(row, roles.get("qty")))
     shared_unit = _value(row, roles.get("unit"))
     components: dict[str, dict[str, Any]] = {}
+    component_decimals: dict[str, dict[str, Decimal]] = {}
+    arithmetic_mismatch = False
     for component in ("material", "labour"):
-        qty = _number(_value(row, roles.get(f"{component}_qty")))
+        qty_decimal = _decimal(_value(row, roles.get(f"{component}_qty")))
         unit = _value(row, roles.get(f"{component}_unit"))
-        rate = _number(_value(row, roles.get(f"{component}_rate")))
-        total = _number(_value(row, roles.get(f"{component}_total")))
-        qty = shared_qty if qty is None else qty
+        rate_decimal = _decimal(_value(row, roles.get(f"{component}_rate")))
+        total_decimal = _decimal(_value(row, roles.get(f"{component}_total")))
+        qty_decimal = shared_qty_decimal if qty_decimal is None else qty_decimal
         unit = shared_unit if not unit else unit
-        if total is not None and qty is not None and unit and rate is not None:
-            components[component] = {"qty": qty, "unit": unit, "rate": rate, "total": total}
+        if total_decimal is not None and qty_decimal is not None and rate_decimal is not None:
+            if abs(
+                qty_decimal * rate_decimal - total_decimal
+            ) > RECONCILIATION_TOLERANCE:
+                arithmetic_mismatch = True
+        if total_decimal is not None and qty_decimal is not None and unit and rate_decimal is not None:
+            component_decimals[component] = {
+                "qty": qty_decimal, "rate": rate_decimal, "total": total_decimal,
+            }
+            components[component] = {
+                "qty": _finite_float(qty_decimal), "unit": unit,
+                "rate": _finite_float(rate_decimal), "total": _finite_float(total_decimal),
+            }
+    if arithmetic_mismatch:
+        return ([], [_warning(
+            row, "component_arithmetic_mismatch",
+            "A component quantity multiplied by rate does not reconcile to its source total.",
+        )])
     if not components:
         return ([], [_warning(row, "incomplete_component_evidence", "Component prices were incomplete and were not inferred from the aggregate.")])
     if len(components) == 1:
@@ -223,15 +284,28 @@ def _derive_components(row: dict[str, Any], roles: dict[str, int], desc: str) ->
             )],
         )
     material, labour = components["material"], components["labour"]
-    aggregate = _number(_value(row, roles.get("amount")))
-    component_sum = Decimal(str(material["total"])) + Decimal(str(labour["total"]))
+    material_decimals = component_decimals["material"]
+    labour_decimals = component_decimals["labour"]
+    aggregate = _decimal(_value(row, roles.get("amount")))
+    component_sum = material_decimals["total"] + labour_decimals["total"]
     warnings: list[dict[str, Any]] = []
-    if aggregate is not None and abs(component_sum - Decimal(str(aggregate))) > RECONCILIATION_TOLERANCE:
+    if aggregate is not None and abs(component_sum - aggregate) > RECONCILIATION_TOLERANCE:
         return ([], [_warning(row, "component_total_mismatch", "Material and labour totals do not reconcile to the quoted aggregate.")])
-    if material["qty"] == labour["qty"] and material["unit"] == labour["unit"]:
-        total = float(component_sum)
+    if material_decimals["qty"] == labour_decimals["qty"] and material["unit"] == labour["unit"]:
+        total = _finite_float(component_sum)
         qty = material["qty"]
-        rate = float(Decimal(str(material["rate"])) + Decimal(str(labour["rate"])))
+        combined_rate = material_decimals["rate"] + labour_decimals["rate"]
+        rate = _finite_float(combined_rate)
+        if total is None or rate is None:
+            return ([], [_warning(
+                row, "numeric_overflow",
+                "Combined component arithmetic exceeds the finite response range.",
+            )])
+        if abs(material_decimals["qty"] * combined_rate - component_sum) > RECONCILIATION_TOLERANCE:
+            return ([], [_warning(
+                row, "component_arithmetic_mismatch",
+                "Combined component rate and total do not reconcile for the shared quantity.",
+            )])
         return ([_priced_item(
             row, ordinal=1, desc=desc, component="combined", qty=qty,
             unit=material["unit"], rate=rate, total=total,
@@ -245,6 +319,20 @@ def _derive_components(row: dict[str, Any], roles: dict[str, int], desc: str) ->
 
 def _derive_row(row: dict[str, Any], continuations: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     roles = _find_columns(row)
+    if _has_numeric_overflow(row, roles):
+        return [], [_warning(
+            row, "numeric_overflow",
+            "Numeric source evidence exceeds the finite response range.",
+        )]
+    if any(
+        (cell.get("rowSpan", 1) > 1 or cell.get("columnSpan", 1) > 1 or cell.get("carried", False))
+        and len(cell.get("lines") or []) > 1
+        for cell in row.get("rawCells", [])
+    ):
+        return [], [_warning(
+            row, "ambiguous_merged_cell",
+            "Merged multiline cell geometry does not support an unambiguous deterministic split.",
+        )]
     descriptions = _lines(row, roles.get("desc"))
     if not descriptions:
         return [], [_warning(row, "unsupported_row", "No deterministic description evidence was found.")]
@@ -264,7 +352,8 @@ def _derive_row(row: dict[str, Any], continuations: list[dict[str, Any]]) -> tup
     qty_lines = _lines(row, roles.get("qty"))
     unit_lines = _lines(row, roles.get("unit"))
     rate_lines = _lines(row, roles.get("rate"))
-    amount = _number(_value(row, roles.get("amount")))
+    amount_decimal = _decimal(_value(row, roles.get("amount")))
+    amount = _finite_float(amount_decimal) if amount_decimal is not None else None
     if len(descriptions) > 1 and amount is not None and not qty_lines and not rate_lines:
         parent_id = _item_id(row["id"], "bundle", 1)
         parent = _priced_item(
@@ -286,23 +375,40 @@ def _derive_row(row: dict[str, Any], continuations: list[dict[str, Any]]) -> tup
         items: list[dict[str, Any]] = []
         for index, values in enumerate(zip(descriptions, qty_lines, unit_lines, rate_lines, amount_lines), start=1):
             line_desc, raw_qty, unit, raw_rate, raw_total = values
-            qty, rate, total = _number(raw_qty), _number(raw_rate), _number(raw_total)
-            if qty is None or rate is None or total is None or abs(Decimal(str(qty)) * Decimal(str(rate)) - Decimal(str(total))) > RECONCILIATION_TOLERANCE:
+            qty_decimal, rate_decimal, total_decimal = (
+                _decimal(raw_qty), _decimal(raw_rate), _decimal(raw_total)
+            )
+            if (
+                qty_decimal is None or rate_decimal is None or total_decimal is None
+                or abs(qty_decimal * rate_decimal - total_decimal) > RECONCILIATION_TOLERANCE
+            ):
                 return [], [_warning(row, "item_arithmetic_mismatch", "Aligned line arithmetic does not reconcile; the compound row was left unpriced.")]
+            qty, rate, total = (
+                _finite_float(qty_decimal), _finite_float(rate_decimal), _finite_float(total_decimal)
+            )
+            if qty is None or rate is None or total is None:
+                return [], [_warning(row, "numeric_overflow", "Aligned numeric evidence exceeds the finite response range.")]
             items.append(_priced_item(row, ordinal=index, desc=line_desc, unit=unit, qty=qty, rate=rate, total=total))
         return items, []
 
-    qty = _number(_value(row, roles.get("qty")))
+    qty_decimal = _decimal(_value(row, roles.get("qty")))
+    qty = _finite_float(qty_decimal) if qty_decimal is not None else None
     unit = _value(row, roles.get("unit"))
-    rate = _number(_value(row, roles.get("rate")))
+    rate_decimal = _decimal(_value(row, roles.get("rate")))
+    rate = _finite_float(rate_decimal) if rate_decimal is not None else None
     if amount is not None and qty is None and rate is None:
         return [_priced_item(row, ordinal=1, desc=desc, unit="L/S", qty=1.0, rate=amount, total=amount, component="lump_sum", source_row_ids=source_ids)], []
     if qty is not None and unit and rate is not None and amount is None:
-        computed = qty * rate
+        computed = _finite_float(qty_decimal * rate_decimal)
+        if computed is None:
+            return [], [_warning(
+                row, "numeric_overflow",
+                "Quantity multiplied by rate exceeds the finite response range.",
+            )]
         return [_priced_item(row, ordinal=1, desc=desc, unit=unit, qty=qty, rate=rate, total=computed, source_row_ids=source_ids)], []
     if qty is None or not unit or rate is None or amount is None:
         return [], [_warning(row, "unsupported_row", "Pricing evidence was incomplete; no numeric value was fabricated.")]
-    if abs(Decimal(str(qty)) * Decimal(str(rate)) - Decimal(str(amount))) > RECONCILIATION_TOLERANCE:
+    if abs(qty_decimal * rate_decimal - amount_decimal) > RECONCILIATION_TOLERANCE:
         return [], [_warning(row, "item_arithmetic_mismatch", "Quantity multiplied by rate does not match the source amount.")]
     return [_priced_item(row, ordinal=1, desc=desc, unit=unit, qty=qty, rate=rate, total=amount, source_row_ids=source_ids)], []
 
@@ -340,7 +446,9 @@ def _section_total_warnings(
     section_items = {section["header"]: section["items"] for section in sections}
     latest: dict[str, tuple[dict[str, Any], float]] = {}
     for row, value in _total_rows(rows):
-        section_name = row.get("section") or "Unsectioned"
+        if row.get("section") is None:
+            continue
+        section_name = row["section"]
         label = _normal(row.get("rawText"))
         if "grand total" not in label and (label.startswith("total") or label.startswith("sub total")):
             latest[section_name] = (row, value)
@@ -365,23 +473,27 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     sections_by_name: dict[str, dict[str, Any]] = {}
     warnings: list[dict[str, Any]] = []
     review_ids: list[str] = []
-    for row in evidence:
-        section_name = row.get("section") or "Unsectioned"
-        if section_name not in sections_by_name:
-            section = {"header": section_name, "items": []}
-            sections_by_name[section_name] = section
+
+    def section_for(name: str) -> dict[str, Any]:
+        if name not in sections_by_name:
+            section = {"header": name, "items": []}
+            sections_by_name[name] = section
             sections.append(section)
+        return sections_by_name[name]
+
+    for row in evidence:
         classification = row.get("classification")
         if classification in {"header", "section", "total", "note"} or row["id"] in consumed:
             continue
         if classification not in {"item", "option"}:
-            if row.get("rawText"):
-                warning = _warning(row, "unsupported_row", "The source row was retained but could not be deterministically classified.")
-                warnings.append(warning)
-                review_ids.append(row["id"])
+            warning = _warning(row, "unsupported_row", "The source row was retained but could not be deterministically classified.")
+            warnings.append(warning)
+            review_ids.append(row["id"])
             continue
+        section_name = row.get("section") or "Unsectioned"
+        section = section_for(section_name)
         items, row_warnings = _derive_row(row, continuation_map.get(row["id"], []))
-        sections_by_name[section_name]["items"].extend(items)
+        section["items"].extend(items)
         warnings.extend(row_warnings)
         if row_warnings:
             review_ids.append(row["id"])
