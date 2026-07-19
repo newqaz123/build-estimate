@@ -40,7 +40,24 @@ test('normalizes nested nulls omitted by the sidecar HTTP response', () => {
   assert.equal(parsed.reconciliation.sourceTotal, null)
 })
 
-test('rejects missing dense raw-cell evidence and inconsistent geometry', () => {
+test('accepts a sparse trailing logical row with no cells as retained unknown evidence', () => {
+  const payload = v3Fixture()
+  ;(payload.sourceRows as Array<Record<string, unknown>>).push({
+    id: 'row-empty', page: 1, table: 1, row: 5, section: 'Pump Works',
+    headers: ['Description'], rawCells: [], rawText: '', classification: 'unknown',
+    confidence: 1, warnings: [],
+  })
+
+  const parsed = parseDoclingResult(payload)
+  assert(parsed.contractVersion === 3)
+  assert.deepEqual(parsed.sourceRows.at(-1)?.rawCells, [])
+})
+
+test('rejects missing raw-cell evidence, nonempty rows without cells, and inconsistent geometry', () => {
+  const absent = v3Fixture()
+  delete (absent.sourceRows as Array<Record<string, unknown>>)[0].rawCells
+  assert.throws(() => parseDoclingResult(absent), /rawCells/i)
+
   const missing = v3Fixture()
   ;(missing.sourceRows as Array<Record<string, unknown>>)[0].rawCells = []
   assert.throws(() => parseDoclingResult(missing), /rawCells/i)

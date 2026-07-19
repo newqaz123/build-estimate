@@ -13,6 +13,7 @@ import {
   type DoclingResult,
   type DoclingResultV2,
   type DoclingResultV3,
+  type DoclingSectionV3,
   type DoclingWarningV3,
 } from './boq-extraction-schema'
 export { parseDoclingResult } from './boq-extraction-schema'
@@ -123,6 +124,7 @@ export interface BoqExtractionRunSeed {
   pageCount: number
   documentText: string
   sourceRows: BoqSourceRowV3[]
+  sections: DoclingSectionV3[]
   metadata: DoclingMetadata
   warnings: DoclingWarningV3[]
   reconciliation: DoclingReconciliationV3
@@ -241,6 +243,7 @@ function buildV3Draft(
     pageCount: parsed.pageCount,
     documentText: parsed.documentText,
     sourceRows: parsed.sourceRows,
+    sections: parsed.sections,
     metadata: parsed.metadata,
     warnings: parsed.warnings,
     reconciliation: parsed.reconciliation,

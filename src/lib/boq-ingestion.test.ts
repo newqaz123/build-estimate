@@ -211,6 +211,7 @@ test('v3 builds a canonical draft and detached immutable extraction-run seed', (
   assert.equal(built.run.boqId, 'boq-v3')
   assert.equal(built.run.contractVersion, 3)
   assert.equal(built.run.sourceRows.length, (input.sourceRows as unknown[]).length)
+  assert.deepEqual(built.run.sections, parsed.sections)
   assert.equal(built.run.documentText, 'quotation evidence')
   assert.deepEqual(built.run.reconciliation, input.reconciliation)
   assert.equal(built.boq.activeExtractionRunId, built.run.id)
@@ -234,9 +235,17 @@ test('v3 builds a canonical draft and detached immutable extraction-run seed', (
 
   ;(input.sourceRows as Array<Record<string, unknown>>)[0].rawText = 'caller mutation'
   assert.notEqual(built.run.sourceRows[0].rawText, 'caller mutation')
+  parsed.sourceRows[0].rawText = 'parsed source mutation'
+  parsed.sections[0].items[0].desc = 'parsed derivation mutation'
+  built.boq.sections[0].items[0].desc = 'canonical mutation'
+  assert.notEqual(built.run.sourceRows[0].rawText, 'parsed source mutation')
+  assert.notEqual(built.run.sections[0].items[0].desc, 'parsed derivation mutation')
+  assert.notEqual(built.run.sections[0].items[0].desc, 'canonical mutation')
   built.run.sourceRows[0].rawCells[0].lines[0] = 'run mutation'
+  built.run.sections[0].items[0].desc = 'run derivation mutation'
   assert.notEqual((input.sourceRows as Array<{ rawCells: Array<{ lines: string[] }> }>)[0].rawCells[0].lines[0], 'run mutation')
   assert.notEqual(parsed.sourceRows[0].rawCells[0].lines[0], 'run mutation')
+  assert.notEqual(built.boq.sections[0].items[0].desc, 'run derivation mutation')
 })
 
 test('v2 builds a legacy-compatible standard draft and no extraction run', () => {

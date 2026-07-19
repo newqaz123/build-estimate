@@ -399,8 +399,12 @@ function parseSourceRow(value: unknown, path: string): BoqSourceRowV3 {
     table: integer(input.table, `${path}.table`, 1),
     row: rowNumber,
   }
+  const rawText = string(input.rawText, `${path}.rawText`)
+  const classification = enumeration(input.classification, CLASSIFICATIONS, `${path}.classification`)
   const cells = array(input.rawCells, `${path}.rawCells`)
-  if (cells.length === 0) invalid(`${path}.rawCells`, 'contain dense source evidence')
+  if (cells.length === 0 && (rawText !== '' || classification !== 'unknown')) {
+    invalid(`${path}.rawCells`, 'be empty only for an empty unknown logical row')
+  }
   const rawCells = cells.map((cell, index) => parseRawCell(cell, `${path}.rawCells[${index}]`, rowNumber))
   const headers = array(input.headers, `${path}.headers`).map((header, index) => string(header, `${path}.headers[${index}]`))
   if (headers.length < Math.max(...rawCells.map((cell) => cell.endColumnOffset))) {
@@ -421,8 +425,8 @@ function parseSourceRow(value: unknown, path: string): BoqSourceRowV3 {
       : string(input.section, `${path}.section`),
     headers,
     rawCells,
-    rawText: string(input.rawText, `${path}.rawText`),
-    classification: enumeration(input.classification, CLASSIFICATIONS, `${path}.classification`),
+    rawText,
+    classification,
     confidence: confidence(input.confidence, `${path}.confidence`),
     warnings,
   }
