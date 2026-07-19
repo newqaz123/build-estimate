@@ -14,6 +14,95 @@ const ENTRY_ORIGINS: readonly BoqEntryOrigin[] = ['docling', 'ai_accepted', 'use
 const CLASSIFICATIONS = ['header', 'section', 'item', 'continuation', 'total', 'option', 'note', 'unknown'] as const
 export const BOQ_RECONCILIATION_TOLERANCE = 0.01
 
+interface ExactDecimal {
+  coefficient: bigint
+  scale: number
+}
+
+const BIGINT_ZERO = BigInt(0)
+const BIGINT_ONE = BigInt(1)
+const BIGINT_TEN = BigInt(10)
+
+function exactDecimal(value: number): ExactDecimal {
+  const text = value.toString().toLowerCase()
+  const negative = text.startsWith('-')
+  const unsigned = negative ? text.slice(1) : text
+  const [mantissa, exponentText] = unsigned.split('e')
+  const exponent = exponentText === undefined ? 0 : Number(exponentText)
+  const point = mantissa.indexOf('.')
+  const fractionDigits = point === -1 ? 0 : mantissa.length - point - 1
+  const digits = mantissa.replace('.', '')
+  let coefficient = BigInt(digits) * (negative ? -BIGINT_ONE : BIGINT_ONE)
+  let scale = fractionDigits - exponent
+  if (scale < 0) {
+    coefficient *= BIGINT_TEN ** BigInt(-scale)
+    scale = 0
+  }
+  while (scale > 0 && coefficient % BIGINT_TEN === BIGINT_ZERO) {
+    coefficient /= BIGINT_TEN
+    scale -= 1
+  }
+  return { coefficient, scale }
+}
+
+const MAX_FINITE_DECIMAL = exactDecimal(Number.MAX_VALUE)
+const DECIMAL_TOLERANCE = exactDecimal(BOQ_RECONCILIATION_TOLERANCE)
+
+function alignDecimals(left: ExactDecimal, right: ExactDecimal): [bigint, bigint, number] {
+  const scale = Math.max(left.scale, right.scale)
+  return [
+    left.coefficient * BIGINT_TEN ** BigInt(scale - left.scale),
+    right.coefficient * BIGINT_TEN ** BigInt(scale - right.scale),
+    scale,
+  ]
+}
+
+function addDecimals(left: ExactDecimal, right: ExactDecimal): ExactDecimal {
+  const [leftCoefficient, rightCoefficient, scale] = alignDecimals(left, right)
+  return { coefficient: leftCoefficient + rightCoefficient, scale }
+}
+
+function subtractDecimals(left: ExactDecimal, right: ExactDecimal): ExactDecimal {
+  const [leftCoefficient, rightCoefficient, scale] = alignDecimals(left, right)
+  return { coefficient: leftCoefficient - rightCoefficient, scale }
+}
+
+function multiplyDecimals(left: ExactDecimal, right: ExactDecimal): ExactDecimal {
+  return { coefficient: left.coefficient * right.coefficient, scale: left.scale + right.scale }
+}
+
+function decimalsEqual(left: ExactDecimal, right: ExactDecimal): boolean {
+  const [leftCoefficient, rightCoefficient] = alignDecimals(left, right)
+  return leftCoefficient === rightCoefficient
+}
+
+function absoluteWithinTolerance(value: ExactDecimal): boolean {
+  const [coefficient, tolerance] = alignDecimals(
+    { coefficient: value.coefficient < BIGINT_ZERO ? -value.coefficient : value.coefficient, scale: value.scale },
+    DECIMAL_TOLERANCE,
+  )
+  return coefficient <= tolerance
+}
+
+function absoluteAtMost(left: ExactDecimal, right: ExactDecimal): boolean {
+  const [leftCoefficient, rightCoefficient] = alignDecimals(
+    { coefficient: left.coefficient < BIGINT_ZERO ? -left.coefficient : left.coefficient, scale: left.scale },
+    { coefficient: right.coefficient < BIGINT_ZERO ? -right.coefficient : right.coefficient, scale: right.scale },
+  )
+  return leftCoefficient <= rightCoefficient
+}
+
+function numbersExactlyEqual(left: number, right: number): boolean {
+  return decimalsEqual(exactDecimal(left), exactDecimal(right))
+}
+
+function checkedFloatRoundTrip(value: ExactDecimal, path: string): { number: number; decimal: ExactDecimal } {
+  if (!absoluteAtMost(value, MAX_FINITE_DECIMAL)) invalid(path, 'remain within the finite JSON-number range')
+  const serialized = Number(`${value.coefficient}e-${value.scale}`)
+  if (!Number.isFinite(serialized)) invalid(path, 'remain within the finite JSON-number range')
+  return { number: serialized, decimal: exactDecimal(serialized) }
+}
+
 type V2ItemType = typeof V2_ITEM_TYPES[number]
 export type BoqCostComponent = typeof COST_COMPONENTS[number]
 export type BoqPricingRole = typeof PRICING_ROLES[number]
@@ -406,6 +495,16 @@ function parseSourceRow(value: unknown, path: string): BoqSourceRowV3 {
     invalid(`${path}.rawCells`, 'be empty only for an empty unknown logical row')
   }
   const rawCells = cells.map((cell, index) => parseRawCell(cell, `${path}.rawCells[${index}]`, rowNumber))
+  for (let index = 1; index < rawCells.length; index += 1) {
+    const previous = rawCells[index - 1]
+    const current = rawCells[index]
+    if (
+      current.startColumnOffset < previous.startColumnOffset
+      || (current.startColumnOffset === previous.startColumnOffset && current.endColumnOffset < previous.endColumnOffset)
+    ) {
+      invalid(`${path}.rawCells`, 'remain in deterministic geometry order')
+    }
+  }
   const headers = array(input.headers, `${path}.headers`).map((header, index) => string(header, `${path}.headers[${index}]`))
   if (headers.length < Math.max(...rawCells.map((cell) => cell.endColumnOffset))) {
     invalid(`${path}.headers`, 'cover every raw-cell column')
@@ -417,6 +516,11 @@ function parseSourceRow(value: unknown, path: string): BoqSourceRowV3 {
     }
     return parsed
   })
+  const expectedRawText = rawCells
+    .filter((cell) => !cell.carried && cell.rawText !== '')
+    .map((cell) => cell.rawText)
+    .join(' | ')
+  if (rawText !== expectedRawText) invalid(`${path}.rawText`, 'match ordered non-carried raw-cell evidence')
   return {
     id: string(input.id, `${path}.id`, true),
     ...location,
@@ -441,7 +545,10 @@ function parseSourceCost(value: unknown, path: string): DoclingSourceCostV3 {
     rate: finite(input.rate, `${path}.rate`, true),
     total: finite(input.total, `${path}.total`, true),
   }
-  if (!within(result.qty * result.rate, result.total)) invalid(path, 'have quantity multiplied by rate match total')
+  if (!absoluteWithinTolerance(subtractDecimals(
+    multiplyDecimals(exactDecimal(result.qty), exactDecimal(result.rate)),
+    exactDecimal(result.total),
+  ))) invalid(path, 'have quantity multiplied by rate match total')
   return result
 }
 
@@ -490,7 +597,10 @@ function parseV3Item(value: unknown, path: string): DerivedItemV3 {
     rate: finite(input.rate, `${path}.rate`, true),
     total: finite(input.total, `${path}.total`, true),
   }
-  if (!within(result.qty * result.rate, result.total)) invalid(path, 'have quantity multiplied by rate match total arithmetic')
+  if (!absoluteWithinTolerance(subtractDecimals(
+    multiplyDecimals(exactDecimal(result.qty), exactDecimal(result.rate)),
+    exactDecimal(result.total),
+  ))) invalid(path, 'have quantity multiplied by rate match total arithmetic')
   if (input.sourceCosts !== undefined && input.sourceCosts !== null) {
     const costsInput = record(input.sourceCosts, `${path}.sourceCosts`)
     exactKeys(costsInput, ['material', 'labour'], `${path}.sourceCosts`)
@@ -502,11 +612,17 @@ function parseV3Item(value: unknown, path: string): DerivedItemV3 {
     if (sourceCosts.material.unit !== sourceCosts.labour.unit || sourceCosts.material.unit !== result.unit) {
       invalid(`${path}.sourceCosts`, 'share the priced item unit')
     }
-    if (!within(sourceCosts.material.qty, sourceCosts.labour.qty) || !within(sourceCosts.material.qty, result.qty)) {
+    if (!numbersExactlyEqual(sourceCosts.material.qty, sourceCosts.labour.qty)
+      || !numbersExactlyEqual(sourceCosts.material.qty, result.qty)) {
       invalid(`${path}.sourceCosts`, 'share the priced item quantity')
     }
-    if (!within(sourceCosts.material.rate + sourceCosts.labour.rate, result.rate)
-      || !within(sourceCosts.material.total + sourceCosts.labour.total, result.total)) {
+    if (!absoluteWithinTolerance(subtractDecimals(
+      addDecimals(exactDecimal(sourceCosts.material.rate), exactDecimal(sourceCosts.labour.rate)),
+      exactDecimal(result.rate),
+    )) || !absoluteWithinTolerance(subtractDecimals(
+      addDecimals(exactDecimal(sourceCosts.material.total), exactDecimal(sourceCosts.labour.total)),
+      exactDecimal(result.total),
+    ))) {
       invalid(`${path}.sourceCosts`, 'have component rates and totals sum to the priced item')
     }
     result.sourceCosts = sourceCosts
@@ -516,10 +632,6 @@ function parseV3Item(value: unknown, path: string): DerivedItemV3 {
 
 function locationKey(ref: BoqSourceRef): string {
   return `${ref.page}:${ref.table}:${ref.row}`
-}
-
-function within(left: number, right: number): boolean {
-  return Number.isFinite(left) && Number.isFinite(right) && Math.abs(left - right) <= BOQ_RECONCILIATION_TOLERANCE
 }
 
 function parseV3(value: Record<string, unknown>): DoclingResultV3 {
@@ -584,21 +696,31 @@ function parseV3(value: Record<string, unknown>): DoclingResultV3 {
   const totalItems = integer(value.totalItems, 'totalItems', 0)
   const pricedItems = items.filter((item): item is DerivedPricedItemV3 => item.pricingRole !== 'bundle_child')
   if (totalItems !== pricedItems.length) invalid('totalItems', 'equal the number of priced derived items')
-  let calculatedTotal = 0
+  let calculatedTotal: ExactDecimal = { coefficient: BIGINT_ZERO, scale: 0 }
   for (const item of pricedItems) {
     if (item.excludedFromTotal) continue
-    calculatedTotal += item.total
-    if (!Number.isFinite(calculatedTotal)) invalid('reconciliation.itemTotal', 'remain finite')
+    calculatedTotal = addDecimals(calculatedTotal, exactDecimal(item.total))
+    checkedFloatRoundTrip(calculatedTotal, 'reconciliation.itemTotal')
   }
-  if (!within(reconciliation.itemTotal, calculatedTotal)) invalid('reconciliation.itemTotal', 'match contributing derived items')
-  if (sourceTotal === undefined) {
+  const serializedTotal = checkedFloatRoundTrip(calculatedTotal, 'reconciliation.itemTotal')
+  if (!decimalsEqual(exactDecimal(reconciliation.itemTotal), serializedTotal.decimal)) {
+    invalid('reconciliation.itemTotal', 'match the checked contributing-item total')
+  }
+  if (sourceTotal === undefined || sourceTotal === null) {
     if (reconciliation.sourceTotal !== null) invalid('reconciliation.sourceTotal', 'match absent sourceTotal')
-  } else if (sourceTotal !== reconciliation.sourceTotal) {
+  } else if (reconciliation.sourceTotal === null || !numbersExactlyEqual(sourceTotal, reconciliation.sourceTotal)) {
     invalid('reconciliation.sourceTotal', 'match sourceTotal')
   }
-  const expectedDifference = sourceTotal === undefined || sourceTotal === null ? 0 : calculatedTotal - sourceTotal
-  if (!within(reconciliation.difference, expectedDifference)) invalid('reconciliation.difference', 'match itemTotal minus sourceTotal')
-  const expectedReconciled = sourceTotal !== undefined && sourceTotal !== null && Math.abs(expectedDifference) <= BOQ_RECONCILIATION_TOLERANCE
+  const expectedDifference = sourceTotal === undefined || sourceTotal === null
+    ? { coefficient: BIGINT_ZERO, scale: 0 }
+    : subtractDecimals(serializedTotal.decimal, exactDecimal(sourceTotal))
+  const serializedDifference = checkedFloatRoundTrip(expectedDifference, 'reconciliation.difference')
+  if (!decimalsEqual(exactDecimal(reconciliation.difference), serializedDifference.decimal)) {
+    invalid('reconciliation.difference', 'match the checked itemTotal minus sourceTotal')
+  }
+  const expectedReconciled = sourceTotal !== undefined
+    && sourceTotal !== null
+    && absoluteWithinTolerance(serializedDifference.decimal)
   if (reconciliation.reconciled !== expectedReconciled) invalid('reconciliation.reconciled', 'match deterministic reconciliation')
 
   return {

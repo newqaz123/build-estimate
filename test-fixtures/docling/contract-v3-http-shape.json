@@ -1,0 +1,99 @@
+{
+  "contractVersion": 3,
+  "documentName": "python-http-shape.pdf",
+  "pageCount": 1,
+  "documentText": "Boundary",
+  "sourceRows": [
+    {
+      "id": "row-boundary",
+      "page": 1,
+      "table": 1,
+      "row": 1,
+      "headers": [
+        "Description"
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "Boundary",
+          "lines": [
+            "Boundary"
+          ],
+          "rowSpan": 1,
+          "columnSpan": 1,
+          "startRowOffset": 0,
+          "endRowOffset": 1,
+          "startColumnOffset": 0,
+          "endColumnOffset": 1,
+          "columnHeader": false,
+          "rowHeader": false,
+          "rowSection": false,
+          "carried": false
+        }
+      ],
+      "rawText": "Boundary",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    }
+  ],
+  "sections": [
+    {
+      "header": "Boundary Works",
+      "items": [
+        {
+          "id": "boundary-item",
+          "desc": "Boundary",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "row-boundary"
+          ],
+          "optional": false,
+          "excludedFromTotal": false,
+          "entryOrigin": "docling",
+          "costComponent": "combined",
+          "unit": "set",
+          "qty": 1.0,
+          "rate": 0.1,
+          "total": 0.09
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "vendor": {
+      "value": "Fixture Vendor",
+      "confidence": 1.0,
+      "source": "fixture"
+    },
+    "project": {
+      "value": "Decimal Boundary",
+      "confidence": 1.0,
+      "source": "fixture"
+    },
+    "date": {
+      "value": "2026-07-19",
+      "confidence": 1.0,
+      "source": "fixture"
+    },
+    "workType": {
+      "value": "MEP",
+      "confidence": 1.0,
+      "source": "fixture"
+    }
+  },
+  "warnings": [
+    {
+      "code": "fixture",
+      "message": "Python-produced contract fixture"
+    }
+  ],
+  "sourceTotal": 0.09,
+  "reconciliation": {
+    "itemTotal": 0.09,
+    "sourceTotal": 0.09,
+    "reconciled": true,
+    "difference": 0.0
+  },
+  "totalItems": 1
+}
