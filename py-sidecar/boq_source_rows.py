@@ -16,6 +16,8 @@ OPTION_ROW = re.compile(
     r"(?:alternate|alternative)(?=\s*(?:[:.)#-]|\d|option\b|no\.?\b)))",
     re.I,
 )
+CONTEXTUAL_ALTERNATE_ROW = re.compile(r"^\s*alternate\b", re.I)
+OPTION_CONTEXT = re.compile(r"\b(?:options?|alternates?|alternatives?|remarks?|status)\b", re.I)
 NOTE_ROW = re.compile(r"^(?:note|notes|remark|remarks)\b", re.I)
 NUMBER_TOKEN = re.compile(r"(?:\(?[-+]?\d[\d,]*(?:\.\d+)?\)?)")
 MISSING = object()
@@ -89,7 +91,16 @@ def _raw_cell(cell: Any, document: Any | None) -> dict[str, Any]:
     return model.model_dump()
 
 
-def _classify(cells: list[dict[str, Any]], raw_text: str) -> str:
+def _has_option_context(section: str | None, headers: list[str]) -> bool:
+    return bool(
+        OPTION_CONTEXT.search(section or "")
+        or any(OPTION_CONTEXT.search(header) for header in headers)
+    )
+
+
+def _classify(
+    cells: list[dict[str, Any]], raw_text: str, section: str | None, headers: list[str]
+) -> str:
     if any(cell["columnHeader"] for cell in cells):
         return "header"
     if any(cell["rowSection"] for cell in cells):
@@ -97,7 +108,10 @@ def _classify(cells: list[dict[str, Any]], raw_text: str) -> str:
     normalized = raw_text.strip()
     if TOTAL_ROW.search(normalized):
         return "total"
-    if OPTION_ROW.search(normalized):
+    if OPTION_ROW.search(normalized) or (
+        CONTEXTUAL_ALTERNATE_ROW.search(normalized)
+        and _has_option_context(section, headers)
+    ):
         return "option"
     if NOTE_ROW.search(normalized):
         return "note"
@@ -173,16 +187,17 @@ def build_source_rows(tables: list[Any], *, document: Any | None = None) -> list
             occurrence_key = (page, table, row_offset + 1, evidence_hash)
             occurrence = occurrences[occurrence_key]
             occurrences[occurrence_key] += 1
+            headers = [" / ".join(path) for path in header_paths]
             source_row = SourceRow(
                 id=_row_id(page, table, row_offset + 1, covered_cells, occurrence),
                 page=page,
                 table=table,
                 row=row_offset + 1,
                 section=section,
-                headers=[" / ".join(path) for path in header_paths],
+                headers=headers,
                 rawCells=covered_cells,
                 rawText=raw_text,
-                classification=_classify(anchor_cells, raw_text),
+                classification=_classify(anchor_cells, raw_text, section, headers),
                 confidence=1.0,
                 warnings=[],
             )

@@ -1997,7 +1997,7 @@ class CompoundDerivationTest(unittest.TestCase):
             row["rawCells"][1].update(rawText=value, lines=[value])
         self.assertEqual(derive_document([first, second, final])["sourceTotal"], 100.0)
 
-    def test_duplicate_section_names_remain_distinct_by_table_provenance(self):
+    def test_closed_duplicate_section_instances_remain_distinct(self):
         fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/merged-and-repeated-headers.json").read_text())
         first = json.loads(json.dumps(fixture["sourceRows"][2:])); second = json.loads(json.dumps(first))
         for row in first:
@@ -2061,6 +2061,129 @@ class CompoundDerivationTest(unittest.TestCase):
         second = derive_document(first["sourceRows"])
         retained = next(row for row in second["sourceRows"] if row["id"] == "sr-unequal")
         self.assertEqual([warning["code"] for warning in retained["warnings"]], ["unequal_multiline_counts"])
+
+    def test_section_instance_continues_across_repeated_header_pages_until_total(self):
+        cell = LosslessContractV3Test._cell
+        columns = ("Description", "Qty", "Unit", "Rate", "Amount")
+        first = LosslessContractV3Test._table(page=1, table=1, num_rows=3, num_cols=5, cells=[
+            cell("Pumps", 0, 0, row_section=True),
+            *[cell(value, 1, column, column_header=True) for column, value in enumerate(columns)],
+            *[cell(value, 2, column) for column, value in enumerate(("Supply pump", "1", "set", "50", "50"))],
+        ])
+        second = LosslessContractV3Test._table(page=2, table=2, num_rows=3, num_cols=5, cells=[
+            *[cell(value, 0, column, column_header=True) for column, value in enumerate(columns)],
+            *[cell(value, 1, column) for column, value in enumerate(("Install pump", "1", "set", "50", "50"))],
+            cell("TOTAL", 2, 0), cell("100", 2, 4),
+        ])
+        source_rows = build_source_rows([first, second])
+        result = derive_document(source_rows)
+        self.assertEqual([section["header"] for section in result["sections"]], ["Pumps"])
+        self.assertEqual(
+            [item["desc"] for item in result["sections"][0]["items"]],
+            ["Supply pump", "Install pump"],
+        )
+        self.assertNotIn("section_total_mismatch", result["warningCodes"])
+
+        mismatched = json.loads(json.dumps(source_rows))
+        mismatched[-1]["rawCells"][-1].update(rawText="90", lines=["90"])
+        mismatched[-1]["rawText"] = "TOTAL | 90"
+        audited = derive_document(mismatched)
+        warning = next(
+            warning for warning in audited["warnings"]
+            if warning["code"] == "section_total_mismatch"
+        )
+        self.assertEqual(warning["sourceRef"], {"page": 2, "table": 2, "row": 3})
+
+    def test_cross_page_continuation_total_audits_the_base_section_instance(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/continuation-cross-page.json").read_text())
+        result = derive_document(fixture["sourceRows"])
+        self.assertNotIn("section_total_mismatch", result["warningCodes"])
+
+        mismatched = json.loads(json.dumps(fixture["sourceRows"]))
+        mismatched[-1]["rawCells"][-1].update(rawText="90", lines=["90"])
+        mismatched[-1]["rawText"] = "TOTAL | 90"
+        audited = derive_document(mismatched)
+        self.assertIn("section_total_mismatch", audited["warningCodes"])
+
+    def test_adjusted_grand_totals_and_cross_table_cumulative_subtotal(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/merged-and-repeated-headers.json").read_text())
+        template = fixture["sourceRows"][-1]
+
+        def total_row(row_id, label, value, *, page=1, table=1, row=1, section=None):
+            source = json.loads(json.dumps(template))
+            source.update(
+                id=row_id, page=page, table=table, row=row, section=section,
+                rawText=f"{label} | {value}",
+            )
+            source["rawCells"][0].update(rawText=label, lines=[label])
+            source["rawCells"][-1].update(rawText=str(value), lines=[str(value)])
+            return source
+
+        vat = total_row("sr-vat-only", "VAT 7%", "7")
+        grand_107 = total_row("sr-grand-107", "GRAND TOTAL", "107", row=2)
+        self.assertEqual(derive_document([vat, grand_107])["sourceTotal"], 100.0)
+
+        discount = total_row("sr-discount-only", "LESS DISCOUNT", "10")
+        grand_90 = total_row("sr-grand-90", "GRAND TOTAL", "90", row=2)
+        self.assertEqual(derive_document([discount, grand_90])["sourceTotal"], 100.0)
+
+        ambiguous = derive_document([discount, vat, grand_90])
+        self.assertIsNone(ambiguous["sourceTotal"])
+        self.assertIn("ambiguous_total_adjustments", ambiguous["warningCodes"])
+
+        first = total_row("sr-sub-a", "SUB TOTAL", "50", section="A")
+        second = total_row("sr-sub-b", "SUB TOTAL", "50", page=2, table=2, section="B")
+        cumulative = total_row("sr-sub-summary", "SUB TOTAL", "100", page=3, table=3)
+        self.assertEqual(
+            derive_document([first, second, cumulative])["sourceTotal"],
+            100.0,
+        )
+
+    def test_invalid_total_numeric_is_warned_annotated_and_reviewable(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/merged-and-repeated-headers.json").read_text())
+        for token in ("1e3", "1.234,56"):
+            with self.subTest(token=token):
+                total = json.loads(json.dumps(fixture["sourceRows"][-1]))
+                total["rawCells"][-1].update(rawText=token, lines=[token])
+                total["rawText"] = f"TOTAL | {token}"
+                result = derive_document([total])
+                self.assertIsNone(result["sourceTotal"])
+                self.assertIn("invalid_numeric_format", result["warningCodes"])
+                self.assertEqual(result["reviewCandidateRowIds"], [total["id"]])
+                self.assertIn(
+                    "invalid_numeric_format",
+                    [warning["code"] for warning in result["sourceRows"][0]["warnings"]],
+                )
+
+    def test_plain_alternate_is_optional_only_in_strong_option_context(self):
+        cell = LosslessContractV3Test._cell
+        columns = ("Description", "Qty", "Unit", "Rate", "Amount")
+        options = LosslessContractV3Test._table(page=1, table=1, num_rows=3, num_cols=5, cells=[
+            cell("Options", 0, 0, row_section=True),
+            *[cell(value, 1, column, column_header=True) for column, value in enumerate(columns)],
+            *[cell(value, 2, column) for column, value in enumerate(("Alternate motor", "1", "set", "600", "600"))],
+        ])
+        ordinary = LosslessContractV3Test._table(page=2, table=2, num_rows=3, num_cols=5, cells=[
+            cell("Works", 0, 0, row_section=True),
+            *[cell(value, 1, column, column_header=True) for column, value in enumerate(columns)],
+            *[cell(value, 2, column) for column, value in enumerate(("Alternative energy system", "1", "set", "500", "500"))],
+        ])
+        remarks = LosslessContractV3Test._table(page=3, table=3, num_rows=2, num_cols=5, cells=[
+            *[cell(value, 0, column, column_header=True) for column, value in enumerate(("Remark", "Qty", "Unit", "Rate", "Amount"))],
+            *[cell(value, 1, column) for column, value in enumerate(("Alternate coating", "1", "lot", "200", "200"))],
+        ])
+        source_rows = build_source_rows([options, ordinary, remarks])
+        priced_rows = [row for row in source_rows if row["row"] == 3]
+        priced_rows.append(source_rows[-1])
+        self.assertEqual(
+            [row["classification"] for row in priced_rows],
+            ["option", "item", "option"],
+        )
+        result = derive_document(source_rows)
+        items = [item for section in result["sections"] for item in section["items"]]
+        self.assertTrue(items[0]["optional"])
+        self.assertNotIn("optional", items[1])
+        self.assertTrue(items[2]["optional"])
 
 
 if __name__ == "__main__":

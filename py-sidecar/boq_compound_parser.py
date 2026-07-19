@@ -22,6 +22,8 @@ OPTION = re.compile(
     r"(?:alternate|alternative)(?=\s*(?:[:.)#-]|\d|option\b|no\.?\b)))",
     re.I,
 )
+CONTEXTUAL_ALTERNATE = re.compile(r"^\s*alternate\b", re.I)
+OPTION_CONTEXT = re.compile(r"\b(?:options?|alternates?|alternatives?|remarks?|status)\b", re.I)
 CONTINUATION_PREFIX = re.compile(r"^(?:including|continued|comprising|consisting|together with|complete with)\b", re.I)
 NON_NUMBER = {"", "-", "—", "–", "n/a", "N/A"}
 NUMBER_TOKEN = re.compile(r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$")
@@ -156,7 +158,18 @@ def _item_id(row_id: str, kind: str, ordinal: int) -> str:
 
 
 def _optional_fields(row: dict[str, Any]) -> dict[str, Any]:
-    if row.get("classification") == "option" or OPTION.search(row.get("rawText", "")):
+    contextual_alternate = (
+        CONTEXTUAL_ALTERNATE.search(row.get("rawText", ""))
+        and (
+            OPTION_CONTEXT.search(row.get("section") or "")
+            or any(OPTION_CONTEXT.search(header) for header in row.get("headers", []))
+        )
+    )
+    if (
+        row.get("classification") == "option"
+        or OPTION.search(row.get("rawText", ""))
+        or contextual_alternate
+    ):
         return {
             "optional": True,
             "excludedFromTotal": True,
@@ -290,6 +303,82 @@ def _continuation_map(rows: list[dict[str, Any]]) -> tuple[dict[str, list[dict[s
             last_content = None
         boundary_headers = []
     return additions, consumed
+
+
+def _header_signature(row: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(_normal(header) for header in row.get("headers", []))
+
+
+def _is_section_total(row: dict[str, Any]) -> bool:
+    if row.get("classification") != "total":
+        return False
+    label = _normal(row.get("rawText"))
+    return (
+        not re.search(r"\b(?:grand|vat|discount|carried|brought)\b", label)
+        and (label.startswith("total") or label.startswith("sub total"))
+    )
+
+
+def _section_instances(
+    rows: list[dict[str, Any]],
+) -> tuple[dict[str, int], dict[int, str]]:
+    """Assign ordered evidence rows to semantic section instances."""
+    row_instances: dict[str, int] = {}
+    names: dict[int, str] = {}
+    signatures: dict[int, tuple[str, ...]] = {}
+    active: int | None = None
+    last_context: tuple[int, int] | None = None
+
+    def open_instance(name: str | None, signature: tuple[str, ...]) -> int:
+        instance = len(names)
+        names[instance] = name or "Unsectioned"
+        signatures[instance] = signature
+        return instance
+
+    for row in rows:
+        classification = row.get("classification")
+        context = (row["page"], row["table"])
+        signature = _header_signature(row)
+        section_name = row.get("section")
+        context_changed = last_context is not None and context != last_context
+
+        if classification == "section":
+            active = open_instance(section_name or row.get("rawText"), signature)
+        elif classification == "header":
+            if active is None:
+                active = open_instance(section_name, signature)
+            elif section_name and _normal(section_name) != _normal(names[active]):
+                active = open_instance(section_name, signature)
+            elif (
+                context_changed
+                and signatures[active]
+                and signature
+                and signatures[active] != signature
+            ):
+                active = open_instance(section_name, signature)
+            elif signature:
+                signatures[active] = signature
+        elif classification in {"item", "option", "continuation", "total"}:
+            if active is None:
+                active = open_instance(section_name, signature)
+            elif section_name and _normal(section_name) != _normal(names[active]):
+                active = open_instance(section_name, signature)
+            elif (
+                context_changed
+                and signatures[active]
+                and signature
+                and signatures[active] != signature
+            ):
+                active = open_instance(section_name, signature)
+            elif signature and not signatures[active]:
+                signatures[active] = signature
+
+        if active is not None:
+            row_instances[row["id"]] = active
+        if _is_section_total(row):
+            active = None
+        last_context = context
+    return row_instances, names
 
 
 def _derive_components(row: dict[str, Any], roles: dict[str, int], desc: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
@@ -484,93 +573,116 @@ def _total_rows(rows: list[dict[str, Any]]) -> list[tuple[dict[str, Any], float]
 
 
 def _source_total(rows: list[dict[str, Any]]) -> tuple[float | None, list[dict[str, Any]]]:
-    overflow_warnings: list[dict[str, Any]] = []
-    for row in rows:
-        if row.get("classification") != "total":
-            continue
-        roles = _find_columns(row)
-        raw = _value(row, roles.get("amount"))
-        if _decimal(raw) is not None and _number(raw) is None:
-            overflow_warnings.append(_warning(
-                row, "numeric_overflow",
-                "Source total exceeds the finite response range.",
-            ))
-    if overflow_warnings:
-        return None, overflow_warnings
+    evidence_warnings: list[dict[str, Any]] = []
     candidates: dict[str, list[tuple[dict[str, Any], Decimal]]] = {
-        kind: [] for kind in ("discount", "pre_discount", "pre_vat", "subtotal", "grand")
+        kind: [] for kind in (
+            "discount", "vat", "pre_discount", "pre_vat", "subtotal", "grand"
+        )
     }
     for row in rows:
         if row.get("classification") != "total":
             continue
-        label = _normal(row.get("rawText"))
-        if re.search(r"\b(?:carried|brought)\b", label):
-            continue
         roles = _find_columns(row)
-        value = _decimal(_value(row, roles.get("amount")))
-        if value is None:
+        raw = _value(row, roles.get("amount")).strip()
+        value = _decimal(raw)
+        if raw not in NON_NUMBER and value is None:
+            evidence_warnings.append(_warning(
+                row, "invalid_numeric_format",
+                "Source total evidence uses an unsupported or ambiguous token format.",
+            ))
             continue
-        if label.startswith("discount") or label.startswith("less discount"):
+        if value is not None and _finite_float(value) is None:
+            evidence_warnings.append(_warning(
+                row, "numeric_overflow",
+                "Source total exceeds the finite response range.",
+            ))
+            continue
+        label = _normal(row.get("rawText"))
+        if value is None or re.search(r"\b(?:carried|brought)\b", label):
+            continue
+        if "grand total" in label:
+            kind = "grand"
+        elif label.startswith("discount") or label.startswith("less discount"):
             kind = "discount"
         elif re.search(r"before vat|pre vat|exclud\w* vat|excl vat|vat excluded", label):
             kind = "pre_vat"
         elif re.search(r"\bvat\b", label):
-            continue
+            kind = "vat"
         elif label.startswith("sub total"):
             kind = "subtotal"
         elif label.startswith("total"):
             kind = "pre_discount"
-        elif "grand total" in label:
-            kind = "grand"
         else:
             continue
         candidates[kind].append((row, value))
+    if evidence_warnings:
+        return None, evidence_warnings
     if candidates["discount"] and candidates["pre_discount"]:
-        row, value = candidates["pre_discount"][-1]
+        _row, value = candidates["pre_discount"][-1]
         return _finite_float(value), []
     if candidates["pre_vat"]:
-        row, value = candidates["pre_vat"][-1]
+        _row, value = candidates["pre_vat"][-1]
         return _finite_float(value), []
     selected = candidates["subtotal"] or candidates["pre_discount"]
-    if not selected:
-        if candidates["grand"]:
-            return _finite_float(candidates["grand"][-1][1]), []
-        return None, []
-    if len(selected) > 1:
+    if selected:
         preceding = sum((value for _row, value in selected[:-1]), Decimal(0))
-        trailing_row = selected[-1][0]
-        prior_row = selected[-2][0]
-        trailing_context = (
-            trailing_row["table"] == prior_row["table"]
-            and trailing_row.get("section") in {None, prior_row.get("section")}
-        )
-        if trailing_context and abs(selected[-1][1] - preceding) <= RECONCILIATION_TOLERANCE:
+        if len(selected) > 2 and abs(selected[-1][1] - preceding) <= RECONCILIATION_TOLERANCE:
             return _finite_float(selected[-1][1]), []
-    combined = Decimal(0)
-    for row, value in selected:
-        combined += value
+        combined = sum((value for _row, value in selected), Decimal(0))
         if _finite_float(combined) is None:
             return None, [_warning(
-                row, "numeric_overflow",
+                selected[-1][0], "numeric_overflow",
                 "Aggregated source totals exceed the finite response range.",
             )]
-    return _finite_float(combined), []
+        return _finite_float(combined), []
+
+    grand = candidates["grand"][-1] if candidates["grand"] else None
+    if candidates["vat"] and candidates["discount"]:
+        warning_row = grand[0] if grand is not None else candidates["vat"][-1][0]
+        return None, [_warning(
+            warning_row, "ambiguous_total_adjustments",
+            "VAT and discount adjustments lack explicit pre-adjustment ordering; source total was not guessed.",
+        )]
+    if grand is None:
+        return None, []
+    grand_row, grand_value = grand
+    if candidates["vat"]:
+        vat = sum((value for _row, value in candidates["vat"]), Decimal(0))
+        derived = grand_value - vat
+        if derived < 0:
+            return None, [_warning(
+                grand_row, "invalid_total_hierarchy",
+                "Grand total is less than its explicit VAT adjustment.",
+            )]
+    elif candidates["discount"]:
+        discount = sum((value for _row, value in candidates["discount"]), Decimal(0))
+        derived = grand_value + discount
+    else:
+        derived = grand_value
+    if _finite_float(derived) is None:
+        return None, [_warning(
+            grand_row, "numeric_overflow",
+            "Derived pre-adjustment source total exceeds the finite response range.",
+        )]
+    return _finite_float(derived), []
 
 
 def _section_total_warnings(
-    section_items: dict[tuple[int, int, str], list[dict[str, Any]]], rows: list[dict[str, Any]]
+    section_items: dict[int, list[dict[str, Any]]],
+    row_instances: dict[str, int],
+    rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    latest: dict[tuple[int, int, str], tuple[dict[str, Any], float]] = {}
+    latest: dict[int, tuple[dict[str, Any], float]] = {}
     for row, value in _total_rows(rows):
-        if row.get("section") is None:
+        instance = row_instances.get(row["id"])
+        if instance is None or instance not in section_items:
             continue
-        section_key = (row["page"], row["table"], row["section"])
         label = _normal(row.get("rawText"))
         if "grand total" not in label and not re.search(r"\b(?:vat|discount|carried|brought)\b", label) and (label.startswith("total") or label.startswith("sub total")):
-            latest[section_key] = (row, value)
+            latest[instance] = (row, value)
     warnings: list[dict[str, Any]] = []
-    for section_key, (row, quoted) in latest.items():
-        derived = checked_contributing_total(section_items.get(section_key, []))
+    for instance, (row, quoted) in latest.items():
+        derived = checked_contributing_total(section_items.get(instance, []))
         if abs(derived - Decimal(str(quoted))) > RECONCILIATION_TOLERANCE:
             warnings.append(_warning(
                 row, "section_total_mismatch",
@@ -585,20 +697,20 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         raise ValueError("source rows must be a list")
     evidence = deepcopy(rows)
     continuation_map, consumed = _continuation_map(evidence)
+    row_instances, instance_names = _section_instances(evidence)
     sections: list[dict[str, Any]] = []
-    sections_by_key: dict[tuple[int, int, str], dict[str, Any]] = {}
+    sections_by_instance: dict[int, dict[str, Any]] = {}
     warnings: list[dict[str, Any]] = []
     review_ids: list[str] = []
     cumulative_contribution = Decimal(0)
 
     def section_for(row: dict[str, Any]) -> dict[str, Any]:
-        name = row.get("section") or "Unsectioned"
-        key = (row["page"], row["table"], name)
-        if key not in sections_by_key:
-            section = {"header": name, "items": []}
-            sections_by_key[key] = section
+        instance = row_instances[row["id"]]
+        if instance not in sections_by_instance:
+            section = {"header": instance_names[instance], "items": []}
+            sections_by_instance[instance] = section
             sections.append(section)
-        return sections_by_key[key]
+        return sections_by_instance[instance]
 
     for row in evidence:
         classification = row.get("classification")
@@ -628,7 +740,9 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     warnings.extend(source_warnings)
     review_ids.extend(warning["sourceRowId"] for warning in source_warnings)
     section_warnings = _section_total_warnings(
-        {key: section["items"] for key, section in sections_by_key.items()}, evidence
+        {instance: section["items"] for instance, section in sections_by_instance.items()},
+        row_instances,
+        evidence,
     )
     warnings.extend(section_warnings)
     review_ids.extend(warning["sourceRowId"] for warning in section_warnings)
