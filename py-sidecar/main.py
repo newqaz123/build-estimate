@@ -1,4 +1,5 @@
 import logging
+import re
 from functools import lru_cache
 from io import BytesIO
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -7,9 +8,9 @@ from fastapi.concurrency import run_in_threadpool
 from typing import Annotated, Any, List, Literal, Optional
 from pydantic import BaseModel, Field, FiniteFloat, PositiveInt
 
-from boq_contract import ParseResponseV3
+from boq_contract import ParseResponseV3, build_reconciliation
 from boq_parser import extract_boq_document
-from boq_source_rows import build_source_rows
+from boq_source_rows import bind_legacy_sections, build_source_rows
 
 app = FastAPI(title="Docling Sidecar", version="0.1.0")
 logger = logging.getLogger("docling_sidecar")
@@ -119,13 +120,34 @@ def get_converter():
     return DocumentConverter()
 
 
+def _table_page(table: Any) -> int:
+    provenance = getattr(table, "prov", None)
+    if type(provenance) is not list or not provenance:
+        raise ValueError("Docling table is missing page provenance")
+    page = getattr(provenance[0], "page_no", None)
+    if type(page) is not int or page < 1:
+        raise ValueError("Docling table page provenance is invalid")
+    return page
+
+
+def _table_data(table: Any) -> Any:
+    data = getattr(table, "data", None)
+    if data is None:
+        raise ValueError("Docling table is missing table data")
+    for field in ("table_cells", "num_rows", "num_cols"):
+        if not hasattr(data, field):
+            raise ValueError(f"Docling table data is missing {field}")
+    return data
+
+
 def build_parse_response(filename: str, document: Any) -> ParseResponseV3:
     document_text = document.export_to_text(page_break_placeholder="\n\f\n")
     tables: list[dict[str, Any]] = []
     raw_tables: list[dict[str, Any]] = []
     for index, table in enumerate(document.tables, start=1):
+        page = _table_page(table)
+        data = _table_data(table)
         frame = table.export_to_dataframe(doc=document).fillna("")
-        page = table.prov[0].page_no if table.prov else 1
         tables.append({
             "page": page,
             "table": index,
@@ -134,40 +156,15 @@ def build_parse_response(filename: str, document: Any) -> ParseResponseV3:
         raw_tables.append({
             "page": page,
             "table": index,
-            "cells": list(table.data.table_cells),
+            "cells": list(data.table_cells),
+            "num_rows": data.num_rows,
+            "num_cols": data.num_cols,
         })
-    source_rows = build_source_rows(raw_tables)
+    source_rows = build_source_rows(raw_tables, document=document)
     normalized = extract_boq_document(tables, document_text)
-    source_ids_by_location: dict[tuple[int, int, int], list[str]] = {}
-    for source_row in source_rows:
-        location = (source_row["page"], source_row["table"], source_row["row"])
-        source_ids_by_location.setdefault(location, []).append(source_row["id"])
-
-    sections: list[dict[str, Any]] = []
-    for section in normalized["sections"]:
-        items: list[dict[str, Any]] = []
-        for item in section["items"]:
-            source_ref = item["sourceRef"]
-            location = (source_ref["page"], source_ref["table"], source_ref["row"])
-            source_ids = source_ids_by_location.get(location)
-            if not source_ids:
-                raise ValueError(f"derived item has no retained source row at {location}")
-            items.append({
-                "id": item["id"],
-                "desc": item["desc"],
-                "pricingRole": "standard",
-                "sourceRowIds": [source_ids[0]],
-                "unit": item["unit"],
-                "qty": item["qty"],
-                "rate": item["rate"],
-                "total": item["total"],
-            })
-        sections.append({"header": section["header"], "items": items})
-
-    total_items = sum(len(section["items"]) for section in sections)
-    item_total = sum(item["total"] for section in sections for item in section["items"])
+    sections, binding_warnings = bind_legacy_sections(normalized, source_rows)
     source_total = normalized["sourceTotal"]
-    difference = item_total - source_total if source_total is not None else 0.0
+    total_items, reconciliation = build_reconciliation(sections, source_total)
     return ParseResponseV3(
         contractVersion=3,
         documentName=filename,
@@ -176,14 +173,9 @@ def build_parse_response(filename: str, document: Any) -> ParseResponseV3:
         sourceRows=source_rows,
         sections=sections,
         metadata=normalized["metadata"],
-        warnings=normalized["warnings"],
+        warnings=[*normalized["warnings"], *binding_warnings],
         sourceTotal=source_total,
-        reconciliation={
-            "itemTotal": item_total,
-            "sourceTotal": source_total,
-            "reconciled": source_total is not None and abs(difference) <= 0.01,
-            "difference": difference,
-        },
+        reconciliation=reconciliation,
         totalItems=total_items,
     )
 
@@ -209,8 +201,23 @@ async def parse_pdf(file: UploadFile = File(...)):
     except ImportError as error:
         raise HTTPException(status_code=503, detail="Docling is not installed") from error
     except Exception as error:
-        logger.exception("Docling conversion failed for %s", filename)
+        category = "validation_error" if isinstance(error, ValueError) else "conversion_error"
+        logger.error(
+            "Docling conversion failed category=%s file=%s",
+            category,
+            _safe_log_filename(filename),
+        )
         raise HTTPException(status_code=422, detail="Docling could not parse this PDF") from error
-    if not response.sections:
+    if response.totalItems == 0:
         raise HTTPException(status_code=422, detail="No BOQ line-item tables were found in this PDF")
     return response
+
+
+def _safe_log_filename(filename: Any) -> str:
+    if type(filename) is not str:
+        return "document.pdf"
+    path_like = filename.replace("\\", "/")
+    path_like = re.sub(r"[\x00-\x1f\x7f]+", "/", path_like)
+    basename = path_like.rsplit("/", 1)[-1]
+    sanitized = re.sub(r"[^A-Za-z0-9._ -]", "_", basename).strip(" .")
+    return (sanitized or "document.pdf")[:128]
