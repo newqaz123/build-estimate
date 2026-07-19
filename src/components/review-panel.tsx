@@ -31,6 +31,7 @@ import { deriveSourceCostAllocation } from "@/lib/boq-cost-allocation"
 import { getBoqCatalogReadiness } from "@/lib/boq-catalog-readiness"
 import { getBoqItemRequestIdentity } from "@/lib/boq-item-identity"
 import { CatalogMatchModal } from "./catalog-match-modal"
+import { calculateBoqTotals, isPricedBoqItem } from "@/lib/boq-pricing"
 
 interface ReviewPanelProps {
   boq: Boq
@@ -108,8 +109,8 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
   const reviewPanelRef = useRef<HTMLDivElement>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
 
-  const grandTotal = useMemo(() => items.reduce((sum, item) => sum + item.total, 0), [items])
   const reviewSections = useMemo(() => sectionsWithItems(boq, items), [boq, items])
+  const grandTotal = useMemo(() => calculateBoqTotals(reviewSections).grandTotal, [reviewSections])
   const catalogReadiness = useMemo(
     () => getBoqCatalogReadiness({ sections: reviewSections }),
     [reviewSections],
@@ -231,7 +232,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
           workType,
           date,
           sourceTotal: boq.sourceTotal,
-          items: items.map((item) => ({
+          items: items.filter(isPricedBoqItem).map((item) => ({
             ...(item.id ? { id: item.id } : {}),
             desc: item.desc,
             unit: item.unit,
@@ -416,6 +417,18 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
                 <tbody>
                   {items.map((item, idx) => {
                     const rowKey = sourceRowKey(item)
+                    if (!isPricedBoqItem(item)) {
+                      return (
+                        <tr key={reviewItemKey(boq.id, item, idx)} data-ri={idx} className="bg-muted/20 text-muted-foreground">
+                          <td className="pl-5">
+                            <span className="mr-2 inline-flex rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium">Included</span>
+                            {item.desc}
+                          </td>
+                          <td colSpan={6}>Informational bundle component · pricing is held by the parent item</td>
+                          <td><span className="review-std-badge pending">Info</span></td>
+                        </tr>
+                      )
+                    }
                     const showComponent = Boolean(rowKey && (sourceRowCounts.get(rowKey) ?? 0) > 1 && item.costComponent)
                     const allocation = deriveSourceCostAllocation(item)
                     return (
@@ -514,7 +527,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
             </div>
           </section>
         </div>
-        {catalogMatchIndex !== null && items[catalogMatchIndex] ? (
+        {catalogMatchIndex !== null && items[catalogMatchIndex] && isPricedBoqItem(items[catalogMatchIndex]) ? (
           <CatalogMatchModal
             itemDesc={items[catalogMatchIndex].desc}
             itemUnit={items[catalogMatchIndex].unit}
@@ -528,18 +541,21 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
             }}
             onClose={() => setCatalogMatchIndex(null)}
             onMatch={async (standardId, standardDescription, standardUnit) => {
-              setItems((current) => current.map((candidate, index) => index === catalogMatchIndex ? {
-                ...candidate,
-                sourceDesc: candidate.sourceDesc ?? candidate.desc,
-                sourceUnit: candidate.sourceUnit ?? candidate.unit,
-                desc: standardDescription,
-                unit: standardUnit,
-                stdId: standardId,
-                stdMatch: standardDescription,
-                stdStatus: "matched",
-                stdConfidence: "manual",
-                stdExclusionReason: undefined,
-              } : candidate))
+              setItems((current) => current.map((candidate, index) => {
+                if (index !== catalogMatchIndex || !isPricedBoqItem(candidate)) return candidate
+                return {
+                  ...candidate,
+                  sourceDesc: candidate.sourceDesc ?? candidate.desc,
+                  sourceUnit: candidate.sourceUnit ?? candidate.unit,
+                  desc: standardDescription,
+                  unit: standardUnit,
+                  stdId: standardId,
+                  stdMatch: standardDescription,
+                  stdStatus: "matched",
+                  stdConfidence: "manual",
+                  stdExclusionReason: undefined,
+                }
+              }))
               setCatalogMatchIndex(null)
             }}
           />

@@ -54,3 +54,18 @@ test('CSV still escapes embedded quotes after formula neutralization', () => {
   const csv = buildBoqCsv(boqWith([{ desc: '=say "hello"' }]))
   assert.match(csv, /"'=say ""hello"""/)
 })
+
+test('informational bundle children keep their description with blank numeric cells', () => {
+  const csv = buildBoqCsv(boqWith([
+    { id: 'bundle', pricingRole: 'bundle_parent', desc: 'Pump package', total: 95_200 },
+    {
+      id: 'pump-body',
+      pricingRole: 'bundle_child',
+      parentBundleId: 'bundle',
+      desc: 'Stainless steel pump body',
+    },
+  ]))
+
+  assert.match(csv, /"Stainless steel pump body","","","",""/)
+  assert.doesNotMatch(csv, /"Stainless steel pump body","0","0","0","0"/)
+})

@@ -1,5 +1,6 @@
 import { verifyBoqLocally, type VerificationResult } from './boq-ingestion'
 import type { Boq, BoqItem, WorkType } from './boq-schema'
+import { calculateBoqTotals, isPricedBoqItem } from './boq-pricing'
 
 export type ReviewItemField = 'desc' | 'unit' | 'qty' | 'rate'
 
@@ -29,20 +30,24 @@ export function updateReviewItem(
 ): BoqItem[] {
   return items.map((item, itemIndex) => {
     if (itemIndex !== index) return item
+    if (!isPricedBoqItem(item) && field !== 'desc') return item
     const updated = { ...item, [field]: value }
-    if (field === 'qty' || field === 'rate') updated.total = updated.qty * updated.rate
+    if (isPricedBoqItem(updated) && (field === 'qty' || field === 'rate')) {
+      updated.total = updated.qty * updated.rate
+    }
     return updated
   })
 }
 
 export function buildReviewVerification(boq: Boq, edits: ReviewEdits): VerificationResult {
-  const grandTotal = edits.items.reduce((sum, item) => sum + item.total, 0)
+  const pricedItems = edits.items.filter(isPricedBoqItem)
+  const { grandTotal } = calculateBoqTotals([{ header: 'Parsed Items', items: edits.items }])
   return verifyBoqLocally({
     vendor: edits.vendor,
     project: edits.project,
     workType: edits.workType,
     date: edits.date,
-    sections: [{ header: 'Parsed Items', items: edits.items }],
+    sections: [{ header: 'Parsed Items', items: pricedItems }],
     grandTotal,
     sourceTotal: boq.sourceTotal,
   })

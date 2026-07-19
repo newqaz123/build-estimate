@@ -13,6 +13,7 @@ import { ProtoBadge } from "@/components/proto-badge"
 import type { Boq, BoqItem } from "@/lib/boq-schema"
 import { getBoqItemIdentityKey, getBoqItemRequestIdentity } from "@/lib/boq-item-identity"
 import { applyManualCostAllocation, deriveSourceCostAllocation } from "@/lib/boq-cost-allocation"
+import { contributesToBoqTotal, isPricedBoqItem } from "@/lib/boq-pricing"
 
 type EditsMap = Record<string, Record<string, string | number | undefined>>
 type LoadState = "loading" | "loaded" | "not-found" | "error"
@@ -20,6 +21,7 @@ type LoadState = "loading" | "loaded" | "not-found" | "error"
 const FILTERS = ["All", "Unit", "Lump Sum", "Job"] as const
 
 function mergeItemEdits(item: BoqItem, edited: EditsMap[string] = {}): BoqItem {
+  if (!isPricedBoqItem(item)) return item
   let merged = { ...item, ...edited } as BoqItem
   if (edited.materialCost !== undefined || edited.labourCost !== undefined) {
     const allocation = deriveSourceCostAllocation(item)
@@ -30,7 +32,7 @@ function mergeItemEdits(item: BoqItem, edited: EditsMap[string] = {}): BoqItem {
     )
   }
   if (edited.qty !== undefined || edited.rate !== undefined) {
-    merged.total = (merged.qty ?? 0) * (merged.rate ?? 0)
+    if (isPricedBoqItem(merged)) merged.total = merged.qty * merged.rate
   }
   return merged
 }
@@ -204,7 +206,7 @@ export default function BoqDetailPage() {
       sectionUpdates.items.push(itemUpdate)
       updates.set(sectionIndex, sectionUpdates)
 
-      if (item.stdId && ((edit.desc !== undefined && edit.desc !== item.desc) || (edit.unit !== undefined && edit.unit !== item.unit))) {
+      if (isPricedBoqItem(item) && item.stdId && ((edit.desc !== undefined && edit.desc !== item.desc) || (edit.unit !== undefined && edit.unit !== item.unit))) {
         linkedCanonicalEdits.push({
           item,
           standardId: item.stdId,
@@ -352,6 +354,7 @@ export default function BoqDetailPage() {
   const handleStdMatch = (si: number, ii: number, descriptionOverride?: string) => {
     if (!boq || mutationBusy) return
     const item = boq.sections[si].items[ii]
+    if (!isPricedBoqItem(item)) return
     const edited = edits[`${si}-${ii}`]
     setCatalogMatchTarget({
       si,
@@ -405,7 +408,9 @@ export default function BoqDetailPage() {
 
   const handleLlmSuggest = async () => {
     if (!boq || mutationBusy) return
-    const candidates = boq.sections.flatMap((section, si) => section.items.map((item, ii) => ({ item, si, ii })))
+    const candidates = boq.sections.flatMap((section, si) => section.items.flatMap((item, ii) =>
+      isPricedBoqItem(item) ? [{ item, si, ii }] : [],
+    ))
       .filter(({ item, si, ii }) => {
         const status = edits[`${si}-${ii}`]?.stdStatus ?? item.stdStatus
         return status === "unmatched" || status === "pending"
@@ -457,15 +462,16 @@ export default function BoqDetailPage() {
     const rows = [["Section", "Code", "Description", "Unit", "Qty", "Rate", "Total", "Type", "Std Status", "Std Match"]]
     boq.sections.forEach((section) => {
       section.items.forEach((item) => {
+        const numeric = isPricedBoqItem(item)
         rows.push([
           section.header,
           item.code ?? "",
           item.desc,
-          item.unit || "",
-          String(item.qty ?? ""),
-          String(item.rate ?? ""),
-          String(item.total),
-          item.type,
+          numeric ? item.unit : "",
+          numeric ? String(item.qty) : "",
+          numeric ? String(item.rate) : "",
+          numeric ? String(item.total) : "",
+          numeric ? item.type : "",
           item.stdStatus,
           item.stdMatch || "",
         ])
@@ -527,7 +533,7 @@ export default function BoqDetailPage() {
             .map((item, ii) => ({ item, ii }))
             .filter(({ item, ii }) => {
               const edited = edits[`${si}-${ii}`] || {}
-              const type = (edited.type as string) || item.type
+              const type = isPricedBoqItem(item) ? ((edited.type as string) || item.type) : undefined
               if (activeFilter !== "All") {
                 const filterMap: Record<string, string> = { "Unit": "unit", "Lump Sum": "lump_sum", "Job": "job" }
                 if (type !== filterMap[activeFilter]) return false
@@ -546,10 +552,10 @@ export default function BoqDetailPage() {
 
   const grandTotal = boq
     ? boq.sections.reduce(
-        (sum, section, si) => sum + section.items.reduce(
-          (sectionSum, item, ii) => sectionSum + mergeItemEdits(item, edits[`${si}-${ii}`]).total,
-          0
-        ),
+        (sum, section, si) => sum + section.items.reduce((sectionSum, item, ii) => {
+          const merged = mergeItemEdits(item, edits[`${si}-${ii}`])
+          return sectionSum + (contributesToBoqTotal(merged) ? merged.total : 0)
+        }, 0),
         0
       )
     : 0
@@ -719,10 +725,10 @@ export default function BoqDetailPage() {
       <div data-od-id="boq-sections" className="boq-detail-sections">
           {filteredSections.map((section) => {
           const si = section.realSi
-          const sectionTotal = section.items.reduce(
-            (sum, { item, ii }) => sum + mergeItemEdits(item, edits[`${si}-${ii}`]).total,
-            0
-          )
+          const sectionTotal = section.items.reduce((sum, { item, ii }) => {
+            const merged = mergeItemEdits(item, edits[`${si}-${ii}`])
+            return sum + (contributesToBoqTotal(merged) ? merged.total : 0)
+          }, 0)
           return (
             <CollapsibleSection
               key={si}
@@ -749,8 +755,23 @@ export default function BoqDetailPage() {
                   <tbody>
                     {section.items.map(({ item, ii }) => {
                       const key = `${si}-${ii}`
+                      if (!isPricedBoqItem(item)) {
+                        return (
+                          <tr key={getBoqItemIdentityKey(item) ?? key} data-item-id={key} className="boq-item-row bg-muted/20 text-muted-foreground">
+                            <td className="p-2.5 font-mono text-xs">{item.code || "—"}</td>
+                            <td className="p-2.5 text-xs pl-5">
+                              <span className="mr-2 inline-flex rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium">Included</span>
+                              {item.desc}
+                            </td>
+                            <td className="p-2.5 text-xs" colSpan={7}>Informational bundle component · pricing is held by the parent item</td>
+                            <td className="p-2.5"><ProtoBadge status="pending" /></td>
+                            <td className="p-2.5" />
+                          </tr>
+                        )
+                      }
                       const edited = edits[key] || {}
                       const display = mergeItemEdits(item, edited)
+                      if (!isPricedBoqItem(display)) return null
                       const hasEdits = key in edits
                       const isEditing = editingKey === key
 
@@ -760,7 +781,7 @@ export default function BoqDetailPage() {
                           data-item-id={key}
                           className={`boq-item-row ${
                             hasEdits ? "bg-[#eab308]/6" : ""
-                          } ${isEditing ? "bg-accent/6" : ""}`}
+                          } ${isEditing ? "bg-accent/6" : ""} ${display.excludedFromTotal ? "opacity-70" : ""}`}
                         >
                           <td className="p-2.5">
                             {isEditing && !isReadOnly ? (

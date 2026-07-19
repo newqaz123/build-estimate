@@ -1,4 +1,5 @@
 import type { Boq, BoqItem } from './boq-schema'
+import { isPricedBoqItem } from './boq-pricing'
 import type { StandardEntry } from './standard-schema'
 import { unitsCompatible } from './standard-matching'
 
@@ -73,7 +74,7 @@ export function buildCatalogHistoricalPricing(
     if (boq.status !== 'approved' || boq.id === options.excludeBoqId) continue
     boq.sections.forEach((section, sectionIndex) => {
       section.items.forEach((item) => {
-        if (item.stdStatus !== 'matched' || !Number.isFinite(item.rate) || item.rate <= 0) return
+        if (!isPricedBoqItem(item) || item.stdStatus !== 'matched' || !Number.isFinite(item.rate) || item.rate <= 0) return
         const standardId = resolver.resolve(boq.id, sectionIndex, item)
         if (!standardId) return
         const standard = resolver.byId.get(standardId)

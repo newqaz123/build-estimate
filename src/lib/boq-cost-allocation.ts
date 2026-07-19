@@ -1,4 +1,5 @@
-import type { BoqCostAllocation, BoqItem } from './boq-schema'
+import type { BoqCostAllocation, BoqItem, BoqPricedItem } from './boq-schema'
+import { isPricedBoqItem } from './boq-pricing'
 
 const TOLERANCE = 0.01
 
@@ -9,6 +10,7 @@ function requireComponent(value: number, name: string): number {
 }
 
 export function deriveSourceCostAllocation(item: BoqItem): BoqCostAllocation | undefined {
+  if (!isPricedBoqItem(item)) return undefined
   if (item.costAllocation) return item.costAllocation
 
   if (item.type !== 'lump_sum' && item.sourceCosts?.material.present && item.sourceCosts.labour.present) {
@@ -30,7 +32,8 @@ export function deriveSourceCostAllocation(item: BoqItem): BoqCostAllocation | u
   return undefined
 }
 
-export function applyManualCostAllocation(item: BoqItem, material: number, labour: number): BoqItem {
+export function applyManualCostAllocation(item: BoqItem, material: number, labour: number): BoqPricedItem {
+  if (!isPricedBoqItem(item)) throw new TypeError('Cost allocation requires a priced BOQ item.')
   const safeMaterial = requireComponent(material, 'Material component')
   const safeLabour = requireComponent(labour, 'Labour component')
   const combined = safeMaterial + safeLabour
@@ -63,6 +66,7 @@ export function applyManualCostAllocation(item: BoqItem, material: number, labou
 }
 
 export function costAllocationReconciles(item: BoqItem): boolean {
+  if (!isPricedBoqItem(item)) return true
   const allocation = deriveSourceCostAllocation(item)
   if (!allocation) return true
   const combined = allocation.material + allocation.labour

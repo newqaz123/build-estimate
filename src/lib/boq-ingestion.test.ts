@@ -4,6 +4,7 @@ import test from 'node:test'
 import { buildDraftBoq, parseDoclingResult, verifyBoqLocally } from './boq-ingestion'
 import { buildBoqCsv } from './boq-csv'
 import type { Boq } from './boq-schema'
+import { isPricedBoqItem } from './boq-pricing'
 
 function validPayload() {
   return {
@@ -185,8 +186,10 @@ test('buildDraftBoq builds an unclassified draft from extracted values without s
   assert.equal(draft.sections[0].items[0].id, 'sidecar-item-1')
   assert.equal(Object.hasOwn(draft.sections[0].items[0], 'code'), false)
   assert.equal(draft.sections[0].items[0].stdStatus, 'unmatched')
-  assert.equal(draft.sections[0].items[0].costComponent, 'combined')
-  assert.deepEqual(draft.sections[0].items[0].costAllocation, {
+  const parsedItem = draft.sections[0].items[0]
+  assert.ok(isPricedBoqItem(parsedItem))
+  assert.equal(parsedItem.costComponent, 'combined')
+  assert.deepEqual(parsedItem.costAllocation, {
     basis: 'rate', material: 60, labour: 40, origin: 'source',
   })
   assert.deepEqual(draft.sections[0].items[0].sourceRef, { page: 1, table: 1, row: 2 })
@@ -275,4 +278,25 @@ test('local verification accepts a correct BOQ and arithmetic within 0.01 tolera
 
   assert.deepEqual(result.issues, [])
   assert.equal(result.hasBlockingIssues, false)
+})
+
+test('local verification skips informational children and excludes optional priced rows from totals', () => {
+  const result = verifyBoqLocally({
+    vendor: 'Vendor',
+    project: 'Project',
+    workType: 'MEP',
+    date: '2026-07-19',
+    grandTotal: 95_200,
+    sections: [{
+      header: 'Pump package',
+      items: [
+        { id: 'bundle', pricingRole: 'bundle_parent', desc: 'Pump package', unit: 'item', qty: 1, rate: 95_200, total: 95_200, type: 'unit', stdStatus: 'matched' },
+        { id: 'child', pricingRole: 'bundle_child', parentBundleId: 'bundle', desc: 'Pump body', stdStatus: 'pending' },
+        { id: 'option', desc: 'Optional controls', unit: 'item', qty: 1, rate: 10_000, total: 10_000, type: 'unit', optional: true, excludedFromTotal: true, stdStatus: 'excluded' },
+      ],
+    }],
+  })
+
+  assert.equal(result.hasBlockingIssues, false)
+  assert.equal(result.issues.some((issue) => issue.itemId === 'child'), false)
 })

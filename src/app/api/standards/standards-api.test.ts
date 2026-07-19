@@ -10,6 +10,7 @@ import {
   normalizeStandardEntry,
   queryStandards,
 } from './route'
+import { isPricedBoqItem } from '@/lib/boq-pricing'
 
 test('standard enrichment attaches approved matched historical pricing', () => {
   const now = '2026-07-18T00:00:00.000Z'
@@ -100,6 +101,7 @@ test('applyStandardToBoqItem canonicalizes the BOQ item while preserving origina
   )
 
   assert.equal(updated.stdId, 'std-1')
+  assert.ok(isPricedBoqItem(updated))
   assert.equal(updated.desc, 'Ready-mix concrete')
   assert.equal(updated.unit, 'm³')
   assert.equal(updated.stdMatch, 'Ready-mix concrete')
@@ -256,7 +258,9 @@ test('updateLinkedBoqsForStandard updates linked items and preserves original so
 
   assert.equal(affectedItems, 1)
   assert.equal(boqs[0]?.sections[0]?.items[0]?.desc, 'New canonical')
-  assert.equal(boqs[0]?.sections[0]?.items[0]?.unit, 'm³')
+  const renamedItem = boqs[0]?.sections[0]?.items[0]
+  assert.ok(renamedItem && isPricedBoqItem(renamedItem))
+  assert.equal(renamedItem.unit, 'm³')
   assert.equal(boqs[0]?.sections[0]?.items[0]?.stdMatch, 'New canonical')
   assert.equal(boqs[0]?.sections[0]?.items[0]?.sourceDesc, 'Old canonical')
   assert.equal(boqs[0]?.sections[0]?.items[0]?.sourceUnit, 'm3')
@@ -316,6 +320,7 @@ test('updateLinkedBoqsForStandard preserves legacy links across a rename and sta
   )
 
   const updatedItem = boqs[0]?.sections[0]?.items[0]
+  assert.ok(updatedItem && isPricedBoqItem(updatedItem))
   assert.equal(affectedItems, 1)
   assert.equal(updatedItem?.stdId, 'std-1')
   assert.equal(updatedItem?.desc, 'New canonical')

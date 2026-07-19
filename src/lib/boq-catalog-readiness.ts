@@ -1,4 +1,5 @@
 import type { Boq, BoqItem } from './boq-schema'
+import { isPricedBoqItem } from './boq-pricing'
 
 export interface CatalogReadinessIssue {
   sectionIndex: number
@@ -16,7 +17,7 @@ export interface BoqCatalogReadiness {
 }
 
 export function isCatalogPricedItem(item: BoqItem): boolean {
-  return Number.isFinite(item.rate) && item.rate > 0
+  return isPricedBoqItem(item) && Number.isFinite(item.rate) && item.rate > 0
 }
 
 function issueFor(item: BoqItem, sectionIndex: number): CatalogReadinessIssue | null {

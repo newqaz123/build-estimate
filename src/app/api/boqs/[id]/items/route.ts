@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { runTransaction } from '@/lib/db'
-import type { Boq, BoqItem } from '@/lib/boq-schema'
+import type { Boq, BoqItem, BoqPricedItem } from '@/lib/boq-schema'
 import type { StandardEntry } from '@/lib/standard-schema'
 import {
   getBoqItemIdentityKey,
@@ -12,6 +12,7 @@ import { applyStandardToBoqItem, normalizeStandardEntry } from '../../../standar
 import { computeBoqStdStatus } from '../../../standards/[id]/route'
 import { deleteBoqItemAndPruneStandards } from '@/lib/boq-deletion'
 import { applyManualCostAllocation } from '@/lib/boq-cost-allocation'
+import { calculateBoqTotals, isPricedBoqItem } from '@/lib/boq-pricing'
 
 export interface BoqItemUpdate {
   itemId?: string
@@ -24,7 +25,7 @@ export interface BoqItemUpdate {
   total?: number
   materialCost?: number
   labourCost?: number
-  type?: BoqItem['type']
+  type?: BoqPricedItem['type']
   stdStatus?: BoqItem['stdStatus'] | 'fuzzy' | 'llm'
   stdMatch?: string
   stdExclusionReason?: string
@@ -49,9 +50,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function computeTotals(sections: Boq['sections']) {
-  const totalItems = sections.reduce((sum, s) => sum + s.items.length, 0)
-  const grandTotal = sections.reduce((sum, s) => sum + s.items.reduce((s2, i) => s2 + i.total, 0), 0)
-  return { totalItems, grandTotal }
+  return calculateBoqTotals(sections)
 }
 
 function normalizeLinkValue(value: unknown): string {
@@ -92,6 +91,7 @@ function collectStandardLinkKeys(
   for (const boq of boqs) {
     boq.sections.forEach((section, sectionIndex) => {
       section.items.forEach((item) => {
+        if (!isPricedBoqItem(item)) return
         const identityKey = getBoqItemIdentityKey(item)
         if (!identityKey) return
         const key = makeLinkKey(boq.id, sectionIndex, identityKey)
@@ -118,7 +118,18 @@ export function countBoqStandardLinks(
 }
 
 function cloneItemWithUpdate(item: BoqItem, update: BoqItemUpdate): BoqItem {
-  let next = {
+  if (!isPricedBoqItem(item)) {
+    const hasNumericEdit = update.unit !== undefined || update.qty !== undefined || update.rate !== undefined
+      || update.total !== undefined || update.type !== undefined || update.materialCost !== undefined
+      || update.labourCost !== undefined
+    if (hasNumericEdit) throw new BoqItemsValidationError('Informational bundle children are read-only numeric rows.')
+    return {
+      ...item,
+      ...(update.code !== undefined ? { code: update.code.trim() } : {}),
+      ...(update.desc !== undefined ? { desc: update.desc.trim() } : {}),
+    }
+  }
+  let next: BoqPricedItem = {
     ...item,
     ...(update.code !== undefined ? { code: update.code.trim() } : {}),
     ...(update.desc !== undefined ? { desc: update.desc.trim() } : {}),
@@ -126,10 +137,10 @@ function cloneItemWithUpdate(item: BoqItem, update: BoqItemUpdate): BoqItem {
     ...(update.qty !== undefined ? { qty: update.qty } : {}),
     ...(update.rate !== undefined ? { rate: update.rate } : {}),
     ...(update.type !== undefined ? { type: update.type } : {}),
-    ...(update.stdStatus !== undefined ? { stdStatus: update.stdStatus } : {}),
+    ...(update.stdStatus !== undefined ? { stdStatus: update.stdStatus === 'fuzzy' || update.stdStatus === 'llm' ? 'pending' as const : update.stdStatus } : {}),
     ...(update.stdMatch !== undefined ? { stdMatch: update.stdMatch.trim() } : {}),
     ...(update.stdExclusionReason !== undefined ? { stdExclusionReason: update.stdExclusionReason.trim() } : {}),
-  } as BoqItem
+  }
 
   if (update.materialCost !== undefined || update.labourCost !== undefined) {
     const current = item.costAllocation
@@ -248,6 +259,8 @@ export function applyBoqItemUpdates(
       const currentItem = target.sections[group.sectionIndex].items[itemIndex]
       targetUpdates.set(key, { sectionIndex: group.sectionIndex, itemIndex, item: currentItem, update })
 
+      if (!isPricedBoqItem(currentItem)) continue
+
       const canonicalChanged =
         (update.desc !== undefined && update.desc.trim() !== currentItem.desc) ||
         (update.unit !== undefined && update.unit.trim() !== currentItem.unit)
@@ -320,7 +333,7 @@ export function applyBoqItemUpdates(
         let next = item
         if (targetUpdate) {
           next = cloneItemWithUpdate(
-            item.sourceDesc === undefined && item.stdId ? { ...item, sourceDesc: item.desc, sourceUnit: item.sourceUnit ?? item.unit } : item,
+            isPricedBoqItem(item) && item.sourceDesc === undefined && item.stdId ? { ...item, sourceDesc: item.desc, sourceUnit: item.sourceUnit ?? item.unit } : item,
             targetUpdate.update,
           )
         }

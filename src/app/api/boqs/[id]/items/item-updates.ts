@@ -1,7 +1,8 @@
-import type { Boq, BoqItem } from '@/lib/boq-schema'
+import type { Boq, BoqItem, BoqPricedItem } from '@/lib/boq-schema'
 import { getBoqItemIdentityKey, resolveBoqItemIdentity, type BoqItemRequestIdentity } from '@/lib/boq-item-identity'
 import type { StandardEntry } from '@/lib/standard-schema'
 import { applyManualCostAllocation } from '@/lib/boq-cost-allocation'
+import { calculateBoqTotals, isPricedBoqItem } from '@/lib/boq-pricing'
 
 export interface BoqItemUpdate {
   itemId?: string
@@ -14,7 +15,7 @@ export interface BoqItemUpdate {
   total?: number
   materialCost?: number
   labourCost?: number
-  type?: BoqItem['type']
+  type?: BoqPricedItem['type']
   stdStatus?: BoqItem['stdStatus'] | 'fuzzy' | 'llm'
   stdMatch?: string
   stdExclusionReason?: string
@@ -43,6 +44,7 @@ function normalizeStandard(entry: StandardEntry): StandardEntry {
 }
 
 function applyStandard(item: BoqItem, standard: StandardEntry): BoqItem {
+  if (!isPricedBoqItem(item)) return item
   const next: BoqItem = {
     ...item,
     desc: standard.description,
@@ -58,17 +60,11 @@ function applyStandard(item: BoqItem, standard: StandardEntry): BoqItem {
 }
 
 function computeTotals(sections: Boq['sections']) {
-  return {
-    totalItems: sections.reduce((sum, section) => sum + section.items.length, 0),
-    grandTotal: sections.reduce(
-      (sum, section) => sum + section.items.reduce((sectionSum, item) => sectionSum + item.total, 0),
-      0,
-    ),
-  }
+  return calculateBoqTotals(sections)
 }
 
 function computeStdStatus(sections: Boq['sections']): Boq['stdStatus'] {
-  const items = sections.flatMap((section) => section.items).filter((item) => item.rate > 0)
+  const items = sections.flatMap((section) => section.items).filter(isPricedBoqItem).filter((item) => item.rate > 0)
   const resolved = items.filter((item) => item.stdStatus === 'matched' || (item.stdStatus === 'excluded' && item.stdExclusionReason?.trim())).length
   if (items.length === 0 || resolved === 0) return 'none'
   return resolved === items.length ? 'complete' : 'partial'
@@ -109,6 +105,7 @@ function collectStandardLinks(
   for (const boq of boqs) {
     boq.sections.forEach((section, sectionIndex) => {
       section.items.forEach((item) => {
+        if (!isPricedBoqItem(item)) return
         const identityKey = getBoqItemIdentityKey(item)
         if (!identityKey) return
         const key = makeLinkKey(boq.id, sectionIndex, identityKey)
@@ -190,7 +187,18 @@ export function parseUpdateGroups(body: unknown): BoqItemUpdateGroup[] {
 }
 
 function updateOneItem(item: BoqItem, update: BoqItemUpdate): BoqItem {
-  let next = {
+  if (!isPricedBoqItem(item)) {
+    const hasNumericEdit = update.unit !== undefined || update.qty !== undefined || update.rate !== undefined
+      || update.total !== undefined || update.type !== undefined || update.materialCost !== undefined
+      || update.labourCost !== undefined
+    if (hasNumericEdit) throw new BoqItemsValidationError('Informational bundle children are read-only numeric rows.')
+    return {
+      ...item,
+      ...(update.code !== undefined ? { code: update.code.trim() } : {}),
+      ...(update.desc !== undefined ? { desc: update.desc.trim() } : {}),
+    }
+  }
+  let next: BoqPricedItem = {
     ...item,
     ...(update.code !== undefined ? { code: update.code.trim() } : {}),
     ...(update.desc !== undefined ? { desc: update.desc.trim() } : {}),
@@ -198,10 +206,10 @@ function updateOneItem(item: BoqItem, update: BoqItemUpdate): BoqItem {
     ...(update.qty !== undefined ? { qty: update.qty } : {}),
     ...(update.rate !== undefined ? { rate: update.rate } : {}),
     ...(update.type !== undefined ? { type: update.type } : {}),
-    ...(update.stdStatus !== undefined ? { stdStatus: update.stdStatus } : {}),
+    ...(update.stdStatus !== undefined ? { stdStatus: update.stdStatus === 'fuzzy' || update.stdStatus === 'llm' ? 'pending' as const : update.stdStatus } : {}),
     ...(update.stdMatch !== undefined ? { stdMatch: update.stdMatch.trim() } : {}),
     ...(update.stdExclusionReason !== undefined ? { stdExclusionReason: update.stdExclusionReason.trim() } : {}),
-  } as BoqItem
+  }
   if (update.materialCost !== undefined || update.labourCost !== undefined) {
     next = applyManualCostAllocation(
       next,
@@ -254,6 +262,7 @@ export function applyBoqItemUpdates(
       updates.set(key, update)
 
       const current = target.sections[group.sectionIndex].items[resolution.index]!
+      if (!isPricedBoqItem(current)) continue
       const canonicalChanged = (update.desc !== undefined && update.desc.trim() !== current.desc)
         || (update.unit !== undefined && update.unit.trim() !== current.unit)
       if (!canonicalChanged || !current.stdId) continue
@@ -319,7 +328,7 @@ export function applyBoqItemUpdates(
         affectedBoqIds.add(boq.id)
         let next = directUpdate
           ? updateOneItem(
-              item.sourceDesc === undefined && item.stdId
+              isPricedBoqItem(item) && item.sourceDesc === undefined && item.stdId
                 ? { ...item, sourceDesc: item.desc, sourceUnit: item.sourceUnit ?? item.unit }
                 : item,
               directUpdate,

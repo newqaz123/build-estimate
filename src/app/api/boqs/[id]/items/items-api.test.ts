@@ -1,16 +1,17 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import type { Boq, BoqItem } from '@/lib/boq-schema'
+import type { Boq, BoqItem, BoqPricedItem } from '@/lib/boq-schema'
 import type { StandardEntry } from '@/lib/standard-schema'
 import { applyBoqItemUpdates, countBoqStandardLinks, parseUpdateGroups } from './item-updates'
+import { calculateBoqTotals, isPricedBoqItem } from '@/lib/boq-pricing'
 
 const timestamps = {
   createdAt: '2026-07-13T00:00:00.000Z',
   updatedAt: '2026-07-13T00:00:00.000Z',
 }
 
-function item(overrides: Partial<BoqItem> = {}): BoqItem {
+function item(overrides: Partial<BoqPricedItem> = {}): BoqPricedItem {
   return {
     code: 'A-1',
     desc: 'Source concrete',
@@ -25,19 +26,24 @@ function item(overrides: Partial<BoqItem> = {}): BoqItem {
 }
 
 function boq(id: string, items: BoqItem[]): Boq {
+  const totals = calculateBoqTotals([{ header: 'Concrete', items }])
   return {
     id,
     project: id,
     vendor: 'Vendor',
     workType: 'Structural',
     date: '2026-07-13',
-    totalItems: items.length,
-    grandTotal: items.reduce((sum, current) => sum + current.total, 0),
+    ...totals,
     status: 'active',
     stdStatus: 'complete',
     sections: [{ header: 'Concrete', items }],
     ...timestamps,
   }
+}
+
+function priced(value: BoqItem | undefined): BoqPricedItem {
+  assert.ok(value && isPricedBoqItem(value))
+  return value
 }
 
 function standard(overrides: Partial<StandardEntry> = {}): StandardEntry {
@@ -80,9 +86,9 @@ test('linked canonical edits update the standard and every linked BOQ item atomi
   assert.equal(result.standards[0]?.description, 'Ready-mix concrete')
   assert.equal(result.standards[0]?.unit, 'm³')
 
-  const first = result.boqs[0]?.sections[0]?.items[0]
-  const second = result.boqs[1]?.sections[0]?.items[0]
-  const unrelated = result.boqs[2]?.sections[0]?.items[0]
+  const first = priced(result.boqs[0]?.sections[0]?.items[0])
+  const second = priced(result.boqs[1]?.sections[0]?.items[0])
+  const unrelated = priced(result.boqs[2]?.sections[0]?.items[0])
   assert.equal(first?.desc, 'Ready-mix concrete')
   assert.equal(first?.unit, 'm³')
   assert.equal(first?.qty, 5)
@@ -127,7 +133,7 @@ test('material and labour edits persist an allocation and reconcile the row rate
     'boq-1',
     [{ sectionIndex: 0, items: [{ itemCode: 'A-1', materialCost: 70, labourCost: 50 }] }],
   )
-  const updated = result.boqs[0]?.sections[0]?.items[0]
+  const updated = priced(result.boqs[0]?.sections[0]?.items[0])
   assert.deepEqual(updated?.costAllocation, { basis: 'rate', material: 70, labour: 50, origin: 'manual' })
   assert.equal(updated?.rate, 120)
   assert.equal(updated?.total, 240)
@@ -177,6 +183,7 @@ test('same-standard partial edits compose canonical fields across one batch', ()
   assert.equal(result.standards[0]?.description, 'Ready-mix concrete')
   assert.equal(result.standards[0]?.unit, 'm³')
   for (const linked of result.boqs[0]?.sections[0]?.items ?? []) {
+    assert.ok(isPricedBoqItem(linked))
     assert.equal(linked.desc, 'Ready-mix concrete')
     assert.equal(linked.unit, 'm³')
   }
@@ -230,7 +237,7 @@ test('code-less imported items update by internal ID', () => {
     [{ sectionIndex: 0, items: [{ itemId: 'item-1', qty: 7, rate: 3 }] }],
   )
 
-  assert.equal(result.boqs[0]?.sections[0]?.items[0]?.total, 21)
+  assert.equal(priced(result.boqs[0]?.sections[0]?.items[0]).total, 21)
 })
 
 test('duplicate legacy codes are ambiguous while an internal ID selects one item', () => {

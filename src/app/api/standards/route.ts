@@ -4,6 +4,7 @@ import { queryCollection, getDocument, createDocumentWithId } from '@/lib/db'
 import type { StandardEntry } from '@/lib/standard-schema'
 import type { Boq, BoqItem } from '@/lib/boq-schema'
 import { buildCatalogHistoricalPricing } from '@/lib/catalog-historical-pricing'
+import { isPricedBoqItem } from '@/lib/boq-pricing'
 
 type MatchConfidence = BoqItem['stdConfidence']
 
@@ -52,6 +53,7 @@ export function applyStandardToBoqItem(
   standard: StandardEntry,
   confidence: MatchConfidence,
 ): BoqItem {
+  if (!isPricedBoqItem(item)) return item
   const updated: BoqItem = {
     ...item,
     desc: standard.description,

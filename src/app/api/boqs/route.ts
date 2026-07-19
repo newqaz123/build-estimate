@@ -3,11 +3,10 @@ import { auth } from '@/lib/auth'
 import { queryCollection, createDocumentWithId, getDocument } from '@/lib/db'
 import type { Boq } from '@/lib/boq-schema'
 import { toPublicBoq } from '@/lib/boq-public'
+import { calculateBoqTotals } from '@/lib/boq-pricing'
 
 function computeTotals(sections: Boq['sections']) {
-  const totalItems = sections.reduce((sum, s) => sum + s.items.length, 0)
-  const grandTotal = sections.reduce((sum, s) => sum + s.items.reduce((s2, i) => s2 + i.total, 0), 0)
-  return { totalItems, grandTotal }
+  return calculateBoqTotals(sections)
 }
 
 export function parseBoqListLimit(limit: string | null): number {

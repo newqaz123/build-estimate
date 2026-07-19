@@ -6,9 +6,10 @@ import {
   reviewItemKey,
   updateReviewItem,
 } from './boq-review-state'
-import type { Boq, BoqItem } from './boq-schema'
+import type { Boq, BoqItem, BoqPricedItem } from './boq-schema'
+import { isPricedBoqItem } from './boq-pricing'
 
-const item: BoqItem = {
+const item: BoqPricedItem = {
   id: 'row-1', code: '', desc: 'Concrete', unit: 'm3', qty: 2, rate: 5, total: 10,
   type: 'unit', stdStatus: 'unmatched',
 }
@@ -21,8 +22,10 @@ const boq: Boq = {
 
 test('quantity and rate edits recompute the normalized row total', () => {
   const quantityEdit = updateReviewItem([item], 0, 'qty', 3)
+  assert.ok(isPricedBoqItem(quantityEdit[0]))
   assert.equal(quantityEdit[0].total, 15)
   const rateEdit = updateReviewItem(quantityEdit, 0, 'rate', 7)
+  assert.ok(isPricedBoqItem(rateEdit[0]))
   assert.equal(rateEdit[0].total, 21)
 })
 
@@ -67,4 +70,25 @@ test('LLM verification fingerprint changes whenever reviewed metadata or items c
   const original = buildReviewFingerprint(edits)
   assert.notEqual(buildReviewFingerprint({ ...edits, vendor: 'Edited' }), original)
   assert.notEqual(buildReviewFingerprint({ ...edits, items: [{ ...item, rate: 6, total: 12 }] }), original)
+})
+
+test('review keeps informational bundle children read-only and excludes them from verification totals', () => {
+  const child: BoqItem = {
+    id: 'bundle-child',
+    pricingRole: 'bundle_child',
+    parentBundleId: 'row-1',
+    desc: 'Pump body',
+    stdStatus: 'pending',
+  }
+
+  assert.deepEqual(updateReviewItem([child], 0, 'qty', 99), [child])
+  const result = buildReviewVerification({ ...boq, sourceTotal: 10 }, {
+    vendor: 'Vendor',
+    project: 'Project',
+    workType: 'Structural',
+    date: '2026-07-15',
+    items: [item, child],
+  })
+  assert.equal(result.hasBlockingIssues, false)
+  assert.equal(result.issues.some((issue) => issue.code === 'invalid_number'), false)
 })

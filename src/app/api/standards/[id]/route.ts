@@ -5,13 +5,14 @@ import type { Boq, BoqItem } from '@/lib/boq-schema'
 import type { Estimate } from '@/lib/estimate-schema'
 import type { StandardEntry } from '@/lib/standard-schema'
 import { applyStandardToBoqItem, normalizeStandardEntry } from '../route'
+import { isPricedBoqItem } from '@/lib/boq-pricing'
 
 function normalizeText(value: string | undefined): string {
   return value?.trim().toLowerCase() ?? ''
 }
 
 export function computeBoqStdStatus(sections: Boq['sections']): Boq['stdStatus'] {
-  const items = sections.flatMap((section) => section.items).filter((item) => item.rate > 0)
+  const items = sections.flatMap((section) => section.items).filter(isPricedBoqItem).filter((item) => item.rate > 0)
   const matchedCount = items.filter((item) => item.stdStatus === 'matched' || (item.stdStatus === 'excluded' && item.stdExclusionReason?.trim())).length
 
   if (matchedCount === 0) return 'none'
@@ -20,7 +21,7 @@ export function computeBoqStdStatus(sections: Boq['sections']): Boq['stdStatus']
 }
 
 export function itemMatchesStandardCanonically(item: BoqItem, standard: StandardEntry): boolean {
-  return normalizeText(item.desc) === normalizeText(standard.description) && normalizeText(item.unit) === normalizeText(standard.unit)
+  return isPricedBoqItem(item) && normalizeText(item.desc) === normalizeText(standard.description) && normalizeText(item.unit) === normalizeText(standard.unit)
 }
 
 export function hasLinkedEstimateItems(estimates: Estimate[], standardId: string): boolean {

@@ -9,6 +9,7 @@ import type {
   WorkType,
 } from './boq-schema'
 import { deriveSourceCostAllocation } from './boq-cost-allocation'
+import { calculateBoqTotals } from './boq-pricing'
 
 const WORK_TYPES: readonly WorkType[] = ['Structural', 'MEP', 'Finishing', 'Unclassified']
 const ITEM_TYPES = ['unit', 'lump_sum'] as const
@@ -272,7 +273,7 @@ export function buildDraftBoq(
       return costAllocation ? { ...draftItem, costAllocation } : draftItem
     }),
   }))
-  const items = sections.flatMap((section) => section.items)
+  const { totalItems, grandTotal } = calculateBoqTotals(sections)
   const metadataConfidence: BoqMetadataConfidence = {
     vendor: parsed.metadata.vendor.confidence,
     project: parsed.metadata.project.confidence,
@@ -286,8 +287,8 @@ export function buildDraftBoq(
     vendor: parsed.metadata.vendor.value,
     workType: parsed.metadata.workType.value,
     date: parsed.metadata.date.value,
-    totalItems: items.length,
-    grandTotal: items.reduce((sum, item) => sum + item.total, 0),
+    totalItems,
+    grandTotal,
     status: 'draft',
     stdStatus: 'none',
     sections,
@@ -356,8 +357,9 @@ export function verifyBoqLocally(
     }
 
     items.forEach((item, itemIndex) => {
-      itemCount += 1
       const row = isRecord(item) ? item : {}
+      if (row.pricingRole === 'bundle_child') return
+      itemCount += 1
       const location = {
         sectionIndex,
         itemIndex,
@@ -386,7 +388,7 @@ export function verifyBoqLocally(
         }
       }
 
-      if (typeof row.total === 'number' && Number.isFinite(row.total) && row.total >= 0) {
+      if (row.excludedFromTotal !== true && typeof row.total === 'number' && Number.isFinite(row.total) && row.total >= 0) {
         itemTotalSum += row.total
       }
       if (arithmeticInputsValid) {

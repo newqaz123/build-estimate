@@ -7,6 +7,7 @@ import { ChevronRight, ChevronDown, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 import type { BoqItem } from "@/lib/boq-schema"
 import type { StandardEntry } from "@/lib/standard-schema"
+import { isPricedBoqItem } from "@/lib/boq-pricing"
 
 interface StandardizationReviewProps {
   items: BoqItem[]
@@ -54,6 +55,7 @@ export function StandardizationReview({ items, onItemsChange, onMatchRequest, on
   const runStandardization = useCallback(
     (currentItems: BoqItem[]): BoqItem[] => {
       return currentItems.map((item) => {
+        if (!isPricedBoqItem(item)) return item
         if (item.stdStatus === "matched" || item.stdStatus === "excluded") return item
 
         const itemDesc = normalizeDesc(item.desc)
@@ -87,19 +89,20 @@ export function StandardizationReview({ items, onItemsChange, onMatchRequest, on
     }
   }, [standards, items, runStandardization, onItemsChange])
 
-  const matched = items.filter((i) => i.stdStatus === "matched").length
-  const pending = items.filter((i) => i.stdStatus === "pending").length
-  const unmatched = items.filter((i) => i.stdStatus === "unmatched" || !i.stdStatus).length
-  const excluded = items.filter((i) => i.stdStatus === "excluded").length
+  const pricedItems = items.filter(isPricedBoqItem)
+  const matched = pricedItems.filter((i) => i.stdStatus === "matched").length
+  const pending = pricedItems.filter((i) => i.stdStatus === "pending").length
+  const unmatched = pricedItems.filter((i) => i.stdStatus === "unmatched" || !i.stdStatus).length
+  const excluded = pricedItems.filter((i) => i.stdStatus === "excluded").length
 
   const acceptAll = () => {
     toast.info("Open the saved BOQ and confirm each catalog link before it is marked as matched")
   }
 
   const runLLM = async () => {
-    const unmatchedItems = items
-      .map((item, originalIndex) => ({ item, originalIndex }))
-      .filter(({ item }) => item.stdStatus === "unmatched")
+    const unmatchedItems = items.flatMap((item, originalIndex) =>
+      isPricedBoqItem(item) && item.stdStatus === "unmatched" ? [{ item, originalIndex }] : [],
+    )
     if (unmatchedItems.length === 0) {
       toast.info("No unmatched items")
       return
@@ -218,6 +221,7 @@ export function StandardizationReview({ items, onItemsChange, onMatchRequest, on
         <div id={panelId}>
           <div className="space-y-1.5 max-h-[300px] overflow-y-auto mb-3">
             {items.map((item, idx) => {
+              if (!isPricedBoqItem(item)) return null
               const needsResolution = item.rate > 0 && item.stdStatus !== "matched" && item.stdStatus !== "excluded"
               const busy = catalogBusyIndex === idx
               return (

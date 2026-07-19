@@ -2,6 +2,7 @@ import type { Boq } from './boq-schema'
 import type { BoqItemRequestIdentity } from './boq-item-identity'
 import { resolveBoqItemIdentity } from './boq-item-identity'
 import type { StandardEntry, StandardSourceItem } from './standard-schema'
+import { calculateBoqTotals } from './boq-pricing'
 
 function sourceMatches(source: StandardSourceItem, boqId: string, sectionIndex: number, identity: BoqItemRequestIdentity): boolean {
   if (source.boqId !== boqId || source.sectionIndex !== sectionIndex) return false
@@ -49,11 +50,7 @@ export function deleteBoqItemAndPruneStandards(
       ? { ...candidate, items: candidate.items.filter((_, itemIndex) => itemIndex !== resolution.index) }
       : candidate)
     .filter((candidate) => candidate.items.length > 0)
-  const totalItems = sections.reduce((sum, candidate) => sum + candidate.items.length, 0)
-  const grandTotal = sections.reduce(
-    (sum, candidate) => sum + candidate.items.reduce((sectionSum, item) => sectionSum + item.total, 0),
-    0,
-  )
+  const { totalItems, grandTotal } = calculateBoqTotals(sections)
 
   return {
     boq: { ...boq, sections, totalItems, grandTotal, stdStatus: stdStatus(sections) },

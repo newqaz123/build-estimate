@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import type { Boq, BoqItem } from '@/lib/boq-schema'
+import type { Boq, BoqPricedItem } from '@/lib/boq-schema'
 import { createBoqDetailHandlers } from './[id]/handler'
 import { createSourceHandler } from './[id]/source/handler'
 
@@ -115,7 +115,7 @@ test('source GET safely encodes filenames containing lone UTF-16 surrogates', as
   assert.match(response.headers.get('content-disposition') ?? '', /filename\*=UTF-8''hostile-%EF%BF%BD\.pdf/)
 })
 
-function item(overrides: Partial<BoqItem> = {}): BoqItem {
+function item(overrides: Partial<BoqPricedItem> = {}): BoqPricedItem {
   return {
     code: 'A-1',
     desc: 'Source concrete',
@@ -252,6 +252,27 @@ test('approval accepts an excluded priced item with a reason', async () => {
   }), detailContext)
 
   assert.equal(response.status, 200)
+})
+
+test('approval counts only priced rows and totals only contributing rows', async () => {
+  const sections: Boq['sections'] = [{
+    header: 'Pump package',
+    items: [
+      item({ id: 'bundle', pricingRole: 'bundle_parent', qty: 1, total: 95_200, rate: 95_200 }),
+      { id: 'child', pricingRole: 'bundle_child', parentBundleId: 'bundle', desc: 'Pump body', stdStatus: 'pending' },
+      item({ id: 'option', desc: 'Optional controls', qty: 1, total: 10_000, rate: 10_000, optional: true, excludedFromTotal: true, stdStatus: 'excluded', stdId: undefined, stdExclusionReason: 'Optional alternate' }),
+    ],
+  }]
+  const harness = detailHarness(detailBoq({ sections, grandTotal: 95_200, sourceTotal: 95_200 }))
+
+  const response = await harness.handlers.PUT(new Request('http://localhost/api/boqs/boq-1', {
+    method: 'PUT',
+    body: JSON.stringify({ status: 'approved', sections }),
+  }), detailContext)
+
+  assert.equal(response.status, 200)
+  assert.equal(harness.updates[0]?.totalItems, 2)
+  assert.equal(harness.updates[0]?.grandTotal, 95_200)
 })
 
 test('draft updates may explicitly save Unclassified work and retain verification warnings', async () => {

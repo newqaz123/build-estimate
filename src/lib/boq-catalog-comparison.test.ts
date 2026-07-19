@@ -54,3 +54,29 @@ test('formats historical variance in plain language', () => {
   assert.equal(formatHistoricalVariance(0.04), 'At average')
   assert.equal(formatHistoricalVariance(null), 'No historical baseline')
 })
+
+test('comparison skips informational bundle children but retains excluded priced options', () => {
+  const target = boq('target', 120, 'std-1')
+  target.sections[0].items.push({
+    id: 'bundle-child',
+    pricingRole: 'bundle_child',
+    parentBundleId: 'target-item',
+    desc: 'Pump body',
+    stdStatus: 'pending',
+  })
+  target.sections[0].items.push({
+    id: 'option',
+    desc: 'Optional controls',
+    unit: 'item',
+    qty: 1,
+    rate: 50,
+    total: 50,
+    type: 'unit',
+    optional: true,
+    excludedFromTotal: true,
+    stdStatus: 'unmatched',
+  })
+
+  const result = compareBoqToCatalog(target, [standard], [target])
+  assert.deepEqual(result.rows.map((row) => row.item.id), ['target-item', 'option'])
+})

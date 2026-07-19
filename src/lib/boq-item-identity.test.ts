@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import type { BoqItem } from './boq-schema'
+import type { BoqPricedItem } from './boq-schema'
 import {
   getBoqItemIdentity,
   getBoqItemRequestIdentity,
@@ -9,7 +9,7 @@ import {
   resolveBoqItemIdentity,
 } from './boq-item-identity'
 
-function item(overrides: Partial<BoqItem>): BoqItem {
+function item(overrides: Partial<BoqPricedItem>): BoqPricedItem {
   return {
     desc: 'Item',
     unit: 'ea',

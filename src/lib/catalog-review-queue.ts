@@ -1,4 +1,5 @@
 import type { Boq, BoqItem } from './boq-schema'
+import { isPricedBoqItem } from './boq-pricing'
 
 export interface CatalogReviewItem {
   boqId: string
@@ -21,6 +22,7 @@ export function collectCatalogReviewItems(boqs: Boq[]): CatalogReviewItem[] {
     if (boq.status === 'rejected') continue
     boq.sections.forEach((section, sectionIndex) => {
       section.items.forEach((item) => {
+        if (!isPricedBoqItem(item)) return
         if (item.stdStatus !== 'pending' && item.stdStatus !== 'unmatched') return
         items.push({
           boqId: boq.id,

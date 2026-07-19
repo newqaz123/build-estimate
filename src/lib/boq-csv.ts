@@ -1,4 +1,5 @@
 import type { Boq } from './boq-schema'
+import { isPricedBoqItem } from './boq-pricing'
 
 function csvCell(value: string | number): string {
   const text = String(value)
@@ -10,13 +11,15 @@ export function buildBoqCsv(boq: Pick<Boq, 'sections'>): string {
   const items = boq.sections.flatMap((section) => section.items)
   const includeCode = items.some((item) => (item.code ?? '').trim().length > 0)
   const headers = [...(includeCode ? ['Code'] : []), 'Description', 'Unit', 'Qty', 'Rate', 'Total']
-  const rows = items.map((item) => [
-    ...(includeCode ? [item.code ?? ''] : []),
-    item.desc,
-    item.unit,
-    item.qty,
-    item.rate,
-    item.total,
-  ])
+  const rows = items.map((item) => {
+    const numericCells = isPricedBoqItem(item)
+      ? [item.unit, item.qty, item.rate, item.total]
+      : ['', '', '', '']
+    return [
+      ...(includeCode ? [item.code ?? ''] : []),
+      item.desc,
+      ...numericCells,
+    ]
+  })
   return [headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\n')
 }

@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import type { Boq, BoqItem } from './boq-schema'
+import type { Boq, BoqPricedItem } from './boq-schema'
 import type { StandardEntry } from './standard-schema'
 import { buildCatalogHistoricalPricing } from './catalog-historical-pricing'
 
 const now = '2026-07-18T00:00:00.000Z'
 
-function item(id: string, rate: number, overrides: Partial<BoqItem> = {}): BoqItem {
+function item(id: string, rate: number, overrides: Partial<BoqPricedItem> = {}): BoqPricedItem {
   return {
     id,
     desc: 'Pipe 6 inch',
@@ -22,7 +22,7 @@ function item(id: string, rate: number, overrides: Partial<BoqItem> = {}): BoqIt
   }
 }
 
-function boq(id: string, status: Boq['status'], boqItem: BoqItem): Boq {
+function boq(id: string, status: Boq['status'], boqItem: BoqPricedItem): Boq {
   return {
     id,
     project: `Project ${id}`,

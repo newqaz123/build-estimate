@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import type { Boq, BoqItem } from './boq-schema'
+import type { Boq, BoqItem, BoqPricedItem } from './boq-schema'
 import { getBoqCatalogReadiness } from './boq-catalog-readiness'
 
 const now = '2026-07-17T00:00:00.000Z'
 
-function item(overrides: Partial<BoqItem> = {}): BoqItem {
+function item(overrides: Partial<BoqPricedItem> = {}): BoqPricedItem {
   return {
     id: 'item-1',
     desc: 'Stainless steel pipe 6 inch',
@@ -59,4 +59,26 @@ test('catalog readiness ignores non-priced structural rows', () => {
   ]))
 
   assert.deepEqual(result, { total: 1, resolved: 1, blocking: 0, items: [] })
+})
+
+test('catalog readiness ignores informational bundle children and keeps excluded priced options visible', () => {
+  const result = getBoqCatalogReadiness(boq([
+    item({ id: 'bundle', pricingRole: 'bundle_parent', stdStatus: 'matched', stdId: 'std-1' }),
+    {
+      id: 'bundle-child',
+      pricingRole: 'bundle_child',
+      parentBundleId: 'bundle',
+      desc: 'Pump body',
+      stdStatus: 'pending',
+    },
+    item({
+      id: 'option',
+      optional: true,
+      excludedFromTotal: true,
+      stdStatus: 'excluded',
+      stdExclusionReason: 'Optional alternate',
+    }),
+  ]))
+
+  assert.deepEqual(result, { total: 2, resolved: 2, blocking: 0, items: [] })
 })

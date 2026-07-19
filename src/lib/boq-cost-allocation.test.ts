@@ -5,9 +5,9 @@ import {
   deriveSourceCostAllocation,
   costAllocationReconciles,
 } from './boq-cost-allocation'
-import type { BoqItem } from './boq-schema'
+import type { BoqItem, BoqPricedItem } from './boq-schema'
 
-function item(overrides: Partial<BoqItem> = {}): BoqItem {
+function item(overrides: Partial<BoqPricedItem> = {}): BoqPricedItem {
   return {
     id: 'item-1',
     desc: 'Concrete',
@@ -73,4 +73,17 @@ test('manual lump-sum allocation derives total and rate', () => {
 test('rejects non-finite and negative manual component values', () => {
   assert.throws(() => applyManualCostAllocation(item(), -1, 10), /non-negative/i)
   assert.throws(() => applyManualCostAllocation(item(), Number.NaN, 10), /finite/i)
+})
+
+test('informational bundle children are never assigned invented cost allocations', () => {
+  const child: BoqItem = {
+    id: 'bundle-child',
+    pricingRole: 'bundle_child',
+    parentBundleId: 'bundle',
+    desc: 'Pump body',
+    stdStatus: 'pending',
+  }
+
+  assert.equal(deriveSourceCostAllocation(child), undefined)
+  assert.throws(() => applyManualCostAllocation(child, 60, 40), /priced BOQ item/i)
 })

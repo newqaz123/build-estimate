@@ -3,6 +3,7 @@ import { verifyBoqLocally } from '@/lib/boq-ingestion'
 import type { Boq } from '@/lib/boq-schema'
 import { toPublicBoq } from '@/lib/boq-public'
 import { getBoqCatalogReadiness } from '@/lib/boq-catalog-readiness'
+import { calculateBoqTotals } from '@/lib/boq-pricing'
 
 export type BoqDetailRouteContext = { params: Promise<{ id: string }> }
 
@@ -19,20 +20,19 @@ interface BoqDetailDependencies {
 
 function computeTotals(sections: unknown) {
   if (!Array.isArray(sections)) return { totalItems: 0, grandTotal: Number.NaN }
-
-  let totalItems = 0
-  let grandTotal = 0
-  for (const section of sections) {
-    const items = typeof section === 'object' && section !== null && Array.isArray((section as { items?: unknown }).items)
-      ? (section as { items: unknown[] }).items
-      : []
-    totalItems += items.length
-    for (const row of items) {
-      const total = typeof row === 'object' && row !== null ? (row as { total?: unknown }).total : undefined
-      grandTotal += typeof total === 'number' ? total : Number.NaN
-    }
+  try {
+    return calculateBoqTotals(sections as Boq['sections'])
+  } catch {
+    const totalItems = sections.reduce((count, section) => {
+      const items = typeof section === 'object' && section !== null && Array.isArray((section as { items?: unknown }).items)
+        ? (section as { items: unknown[] }).items
+        : []
+      return count + items.filter((row) =>
+        typeof row !== 'object' || row === null || (row as { pricingRole?: unknown }).pricingRole !== 'bundle_child',
+      ).length
+    }, 0)
+    return { totalItems, grandTotal: Number.NaN }
   }
-  return { totalItems, grandTotal }
 }
 
 export function createBoqDetailHandlers(dependencies: BoqDetailDependencies) {
