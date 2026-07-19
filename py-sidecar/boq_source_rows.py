@@ -10,7 +10,11 @@ from boq_contract import RECONCILIATION_TOLERANCE, RawCell, SourceRow
 from boq_parser import parse_number
 
 
-TOTAL_ROW = re.compile(r"^(?:sub[\s-]*total|grand[\s-]+total|total|vat|discount)\b", re.I)
+TOTAL_ROW = re.compile(
+    r"^(?:sub[\s-]*total|grand[\s-]+total|total|vat|discount|"
+    r"less[\s-]+discount|add[\s-]+vat|(?:carried|brought)[\s-]+forward)\b",
+    re.I,
+)
 OPTION_ROW = re.compile(
     r"^\s*(?:(?:optional|option|provisional|add[ -]?on)\b|"
     r"(?:alternate|alternative)(?=\s*(?:[:.)#-]|\d|option\b|no\.?\b)))",

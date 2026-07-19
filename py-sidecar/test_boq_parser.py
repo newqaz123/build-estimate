@@ -2336,6 +2336,51 @@ class CompoundDerivationTest(unittest.TestCase):
             [warning["code"] for warning in retained_row["warnings"]],
         )
 
+    def test_raw_adjustment_and_balance_rows_never_become_derived_items(self):
+        cell = LosslessContractV3Test._cell
+        columns = ("Description", "Qty", "Unit", "Rate", "Amount")
+        evidence = (
+            ("Base work", "1", "lot", "100", "100"),
+            ("TOTAL", "", "", "", "100"),
+            ("LESS DISCOUNT", "", "", "", "10"),
+            ("ADD VAT 7%", "", "", "", "6.3"),
+            ("CARRIED FORWARD", "", "", "", "96.3"),
+            ("BROUGHT FORWARD", "", "", "", "96.3"),
+            ("GRAND TOTAL", "", "", "", "96.3"),
+        )
+        table = LosslessContractV3Test._table(
+            page=1,
+            table=1,
+            num_rows=len(evidence) + 1,
+            num_cols=5,
+            cells=[
+                *[
+                    cell(value, 0, column, column_header=True)
+                    for column, value in enumerate(columns)
+                ],
+                *[
+                    cell(value, row, column)
+                    for row, values in enumerate(evidence, start=1)
+                    for column, value in enumerate(values)
+                ],
+            ],
+        )
+        source_rows = build_source_rows([table])
+        self.assertEqual(
+            [row["classification"] for row in source_rows[2:]],
+            ["total"] * 6,
+        )
+
+        result = derive_document(source_rows)
+        items = [
+            item for section in result["sections"] for item in section["items"]
+        ]
+        self.assertEqual([item["desc"] for item in items], ["Base work"])
+        self.assertEqual(result["totalItems"], 1)
+        self.assertEqual(result["reconciliation"]["itemTotal"], 100.0)
+        self.assertEqual(result["sourceTotal"], 100.0)
+        self.assertTrue(result["reconciliation"]["reconciled"])
+
 
 if __name__ == "__main__":
     unittest.main()
