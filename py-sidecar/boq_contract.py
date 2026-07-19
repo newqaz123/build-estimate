@@ -1,4 +1,5 @@
 from decimal import Decimal, InvalidOperation
+import math
 import sys
 from typing import Annotated, Any, Literal
 
@@ -153,6 +154,9 @@ class ParseResponseV3(ContractModel):
         source_ids = [row.id for row in self.sourceRows]
         if len(source_ids) != len(set(source_ids)):
             raise ValueError("source row IDs must be unique")
+        source_locations = [(row.page, row.table, row.row) for row in self.sourceRows]
+        if len(source_locations) != len(set(source_locations)):
+            raise ValueError("source row locations must be unique")
         known_source_ids = set(source_ids)
 
         items = [item for section in self.sections for item in section.items]
@@ -179,7 +183,8 @@ class ParseResponseV3(ContractModel):
             raise ValueError("totalItems must equal the number of priced derived items")
 
         calculated_total = checked_contributing_total(items)
-        if _decimal(self.reconciliation.itemTotal, "reconciliation.itemTotal") != calculated_total:
+        _, serialized_total = _checked_float_round_trip(calculated_total, "contributing item total")
+        if _decimal(self.reconciliation.itemTotal, "reconciliation.itemTotal") != serialized_total:
             raise ValueError("reconciliation.itemTotal does not match contributing items")
 
         response_source = _optional_decimal(self.sourceTotal, "sourceTotal")
@@ -189,12 +194,14 @@ class ParseResponseV3(ContractModel):
         if response_source != reconciliation_source:
             raise ValueError("sourceTotal must match reconciliation.sourceTotal")
 
-        expected_difference = calculated_total - response_source if response_source is not None else Decimal(0)
-        _ensure_float_representable(expected_difference, "reconciliation difference")
-        if _decimal(self.reconciliation.difference, "reconciliation.difference") != expected_difference:
+        expected_difference = serialized_total - response_source if response_source is not None else Decimal(0)
+        _, serialized_difference = _checked_float_round_trip(
+            expected_difference, "reconciliation difference"
+        )
+        if _decimal(self.reconciliation.difference, "reconciliation.difference") != serialized_difference:
             raise ValueError("reconciliation.difference is inconsistent")
         expected_reconciled = (
-            response_source is not None and abs(expected_difference) <= RECONCILIATION_TOLERANCE
+            response_source is not None and abs(serialized_difference) <= RECONCILIATION_TOLERANCE
         )
         if self.reconciliation.reconciled is not expected_reconciled:
             raise ValueError("reconciliation.reconciled is inconsistent")
@@ -220,6 +227,15 @@ def _ensure_float_representable(value: Decimal, name: str) -> None:
         raise ValueError(f"{name} exceeds finite float range")
 
 
+def _checked_float_round_trip(value: Decimal, name: str) -> tuple[float, Decimal]:
+    """Serialize a checked Decimal through the finite JSON-number representation used by v3."""
+    _ensure_float_representable(value, name)
+    serialized = float(value)
+    if not math.isfinite(serialized):
+        raise ValueError(f"{name} exceeds finite float range")
+    return serialized, Decimal(str(serialized))
+
+
 def checked_contributing_total(items: list[Any]) -> Decimal:
     total = Decimal(0)
     for item in items:
@@ -243,16 +259,21 @@ def build_reconciliation(sections: list[Any], source_total: float | None) -> tup
         for item in (section["items"] if isinstance(section, dict) else section.items)
     ]
     item_total = checked_contributing_total(items)
+    serialized_item_total, item_total_representation = _checked_float_round_trip(
+        item_total, "contributing item total"
+    )
     source = _optional_decimal(source_total, "sourceTotal")
-    difference = item_total - source if source is not None else Decimal(0)
-    _ensure_float_representable(difference, "reconciliation difference")
+    difference = item_total_representation - source if source is not None else Decimal(0)
+    serialized_difference, difference_representation = _checked_float_round_trip(
+        difference, "reconciliation difference"
+    )
     priced_count = sum(
         (item.pricingRole if hasattr(item, "pricingRole") else item["pricingRole"]) != "bundle_child"
         for item in items
     )
     return priced_count, {
-        "itemTotal": float(item_total),
+        "itemTotal": serialized_item_total,
         "sourceTotal": source_total,
-        "reconciled": source is not None and abs(difference) <= RECONCILIATION_TOLERANCE,
-        "difference": float(difference),
+        "reconciled": source is not None and abs(difference_representation) <= RECONCILIATION_TOLERANCE,
+        "difference": serialized_difference,
     }

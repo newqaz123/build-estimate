@@ -12,7 +12,7 @@ from pydantic import ValidationError
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from boq_parser import extract_boq_document, extract_boq_sections, extract_metadata, parse_number
-from boq_contract import DerivedItemV3, ParseResponseV3, RawCell, SourceRow
+from boq_contract import DerivedItemV3, ParseResponseV3, RawCell, SourceRow, build_reconciliation
 import boq_source_rows
 from boq_source_rows import build_source_rows
 
@@ -935,6 +935,20 @@ class LosslessContractV3Test(unittest.TestCase):
         self.assertEqual([row["rawText"] for row in rows[:4]], ["", "Pump", "", ""])
         self.assertEqual(len(rows), 6)
 
+    def test_large_table_uses_one_logical_row_index_and_preserves_order(self):
+        indexer = getattr(boq_source_rows, "_index_cells_by_row", None)
+        self.assertIsNotNone(indexer, "source row builder must pre-index cell coverage")
+        cells = [self._cell(f"Row {row}", row, 0) for row in range(2000)]
+        table = self._table(page=1, table=1, cells=cells, num_rows=2000, num_cols=1)
+
+        with patch.object(boq_source_rows, "_index_cells_by_row", wraps=indexer) as indexed:
+            rows = build_source_rows([table])
+
+        indexed.assert_called_once()
+        self.assertEqual(len(rows), 2000)
+        self.assertEqual(rows[0]["rawText"], "Row 0")
+        self.assertEqual(rows[-1]["rawText"], "Row 1999")
+
     def test_column_spanning_header_covers_each_logical_column(self):
         rows = build_source_rows([self._table(cells=[
             self._cell(
@@ -1170,6 +1184,11 @@ class ContractV3InvariantTest(unittest.TestCase):
                 item_total=200.0, source_total=200.0, total_items=2,
             ))
 
+    def test_response_rejects_duplicate_source_locations_even_when_ids_differ(self):
+        duplicate_location = {**self._row("row-2"), "id": "row-2"}
+        with self.assertRaises(ValidationError):
+            ParseResponseV3(**self._response(rows=[self._row(), duplicate_location]))
+
     def test_response_rejects_dangling_or_duplicate_item_source_rows(self):
         for row_ids in (["missing"], ["row-1", "row-1"]):
             with self.subTest(row_ids=row_ids):
@@ -1263,8 +1282,159 @@ class ContractV3InvariantTest(unittest.TestCase):
                 source_total=1e308, item_total=1e308, total_items=2,
             ))
 
+    def test_reconciliation_uses_one_checked_float_round_trip_policy(self):
+        items = [
+            self._item("large-1", total=523670355446.43616),
+            self._item("large-2", total=289969573728.65686),
+        ]
+        sections = [{"header": "Works", "items": items}]
+        total_items, reconciliation = build_reconciliation(sections, None)
+
+        response = ParseResponseV3(**self._response(
+            sections=sections, source_total=None,
+            item_total=reconciliation["itemTotal"], difference=0.0,
+            reconciled=False, total_items=total_items,
+        ))
+
+        self.assertEqual(response.reconciliation.itemTotal, 813639929175.093)
+
+    def test_reconciliation_preserves_small_non_cent_values_and_rejects_contradictions(self):
+        items = [self._item("small-1", total=0.004), self._item("small-2", total=0.004)]
+        sections = [{"header": "Works", "items": items}]
+        total_items, reconciliation = build_reconciliation(sections, 0.0)
+        payload = self._response(
+            sections=sections, source_total=0.0,
+            item_total=reconciliation["itemTotal"], difference=reconciliation["difference"],
+            reconciled=reconciliation["reconciled"], total_items=total_items,
+        )
+
+        response = ParseResponseV3(**payload)
+        self.assertEqual(response.reconciliation.itemTotal, 0.008)
+        self.assertTrue(response.reconciliation.reconciled)
+        payload["reconciliation"] = {**payload["reconciliation"], "difference": 0.02}
+        with self.assertRaises(ValidationError):
+            ParseResponseV3(**payload)
+
 
 class LegacyEvidenceBridgeTest(unittest.TestCase):
+    def test_computed_qty_rate_total_maps_through_endpoint_with_skewed_headers(self):
+        main = SidecarContractTest()._import_main()
+
+        class Values:
+            def tolist(self): return [["Pump", "set", "2", "100", ""]]
+        class Frame:
+            columns = ["Description", "Unit", "Qty", "Rate", "Amount"]
+            values = Values()
+            def fillna(self, _value): return self
+        class Prov: page_no = 1
+        class Data:
+            num_rows = 4
+            num_cols = 5
+            table_cells = [
+                LosslessContractV3Test._cell("Quotation title", 0, 0),
+                LosslessContractV3Test._cell(
+                    "Pricing", 1, 1, column_header=True, col_span=4, end_col_offset_idx=5,
+                ),
+                LosslessContractV3Test._cell("Description", 2, 0, column_header=True),
+                LosslessContractV3Test._cell("Unit", 2, 1, column_header=True),
+                LosslessContractV3Test._cell("Qty", 2, 2, column_header=True),
+                LosslessContractV3Test._cell("Rate", 2, 3, column_header=True),
+                LosslessContractV3Test._cell("Amount", 2, 4, column_header=True),
+                LosslessContractV3Test._cell("Pump", 3, 0),
+                LosslessContractV3Test._cell("set", 3, 1),
+                LosslessContractV3Test._cell("2", 3, 2),
+                LosslessContractV3Test._cell("100", 3, 3),
+                LosslessContractV3Test._cell("", 3, 4),
+            ]
+        class Table:
+            prov = [Prov()]
+            data = Data()
+            def export_to_dataframe(self, doc): return Frame()
+        class Document:
+            tables = [Table()]
+            pages = {1: object()}
+            def export_to_text(self, page_break_placeholder): return "Pump work"
+
+        response = main.build_parse_response("quote.pdf", Document())
+        class Upload:
+            filename = "quote.pdf"
+            async def read(self): return b"%PDF-1.7"
+        async def return_response(*_args): return response
+        with patch.object(main, "run_in_threadpool", return_response):
+            parsed = asyncio.run(main.parse_pdf(Upload()))
+
+        item = parsed.sections[0].items[0]
+        bound = next(row for row in parsed.sourceRows if row.id == item.sourceRowIds[0])
+        self.assertEqual((item.qty, item.rate, item.total), (2.0, 100.0, 200.0))
+        self.assertEqual(bound.row, 4)
+
+    def test_computed_qty_rate_evidence_remains_ambiguous_when_two_rows_match(self):
+        cells = []
+        for row in range(2):
+            for column, value in enumerate(("Pump", "set", "2", "100", "")):
+                cells.append(LosslessContractV3Test._cell(value, row, column))
+        rows = build_source_rows([
+            LosslessContractV3Test._table(page=1, table=1, cells=cells, num_rows=2, num_cols=5),
+        ])
+        normalized = {"sections": [{"header": "Works", "items": [{
+            "id": "legacy", "desc": "Pump", "unit": "set", "qty": 2.0,
+            "rate": 100.0, "total": 200.0, "costComponent": "combined",
+            "sourceRef": {"page": 1, "table": 1, "row": 2},
+        }]}], "warnings": []}
+
+        sections, warnings = boq_source_rows.bind_legacy_sections(normalized, rows)
+
+        self.assertEqual(sections[0]["items"], [])
+        self.assertEqual(warnings[0]["code"], "ambiguous_source_binding")
+
+    def test_warning_source_reference_is_remapped_from_flattened_to_raw_row(self):
+        legacy_tables = [{
+            "page": 1, "table": 1,
+            "rows": [
+                ["Description", "Unit", "Qty", "Rate", "Amount"],
+                ["Awaiting quotation", "", "", "TBC", ""],
+            ],
+        }]
+        source_rows = build_source_rows([LosslessContractV3Test._table(
+            page=1, table=1, num_rows=3, num_cols=5, cells=[
+                LosslessContractV3Test._cell("Quotation title", 0, 0),
+                LosslessContractV3Test._cell("Description", 1, 0, column_header=True),
+                LosslessContractV3Test._cell("Awaiting quotation", 2, 0),
+                LosslessContractV3Test._cell("TBC", 2, 3),
+            ],
+        )])
+        warning = {
+            "code": "unparsed_row", "message": "Could not parse row",
+            "sourceRef": {"page": 1, "table": 1, "row": 2},
+        }
+
+        mapped = boq_source_rows.remap_legacy_warnings([warning], legacy_tables, source_rows)
+
+        self.assertEqual(mapped[0]["sourceRef"], {"page": 1, "table": 1, "row": 3})
+
+    def test_ambiguous_warning_evidence_omits_source_reference(self):
+        legacy_tables = [{
+            "page": 1, "table": 1,
+            "rows": [["Description", "Rate"], ["Awaiting quotation", "TBC"]],
+        }]
+        cells = []
+        for row in range(2):
+            cells.extend([
+                LosslessContractV3Test._cell("Awaiting quotation", row, 0),
+                LosslessContractV3Test._cell("TBC", row, 1),
+            ])
+        source_rows = build_source_rows([
+            LosslessContractV3Test._table(page=1, table=1, cells=cells, num_rows=2, num_cols=2),
+        ])
+        warning = {
+            "code": "unparsed_row", "message": "Could not parse row",
+            "sourceRef": {"page": 1, "table": 1, "row": 2},
+        }
+
+        mapped = boq_source_rows.remap_legacy_warnings([warning], legacy_tables, source_rows)
+
+        self.assertNotIn("sourceRef", mapped[0])
+
     def test_skewed_raw_offsets_bind_by_canonical_evidence_not_legacy_row_number(self):
         main = SidecarContractTest()._import_main()
 

@@ -3,9 +3,10 @@ import json
 import re
 import unicodedata
 from collections import Counter
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from boq_contract import RawCell, SourceRow
+from boq_contract import RECONCILIATION_TOLERANCE, RawCell, SourceRow
 from boq_parser import parse_number
 
 
@@ -106,6 +107,22 @@ def _row_id(page: int, table: int, row: int, cells: list[dict[str, Any]], occurr
     return f"sr-{hashlib.sha256(provenance.encode('utf-8')).hexdigest()[:32]}"
 
 
+def _index_cells_by_row(
+    cells: list[dict[str, Any]], row_count: int
+) -> list[list[dict[str, Any]]]:
+    """Index each raw cell into its covered logical rows once."""
+    buckets: list[list[dict[str, Any]]] = [[] for _ in range(row_count)]
+    for cell in cells:
+        for row_offset in range(cell["startRowOffset"], cell["endRowOffset"]):
+            buckets[row_offset].append({
+                **cell,
+                "carried": cell["startRowOffset"] != row_offset,
+            })
+    for bucket in buckets:
+        bucket.sort(key=lambda cell: (cell["startColumnOffset"], cell["endColumnOffset"]))
+    return buckets
+
+
 def build_source_rows(tables: list[Any], *, document: Any | None = None) -> list[dict[str, Any]]:
     """Build lossless, run-local source rows directly from Docling table cells and dimensions."""
     if type(tables) is not list:
@@ -128,18 +145,9 @@ def build_source_rows(tables: list[Any], *, document: Any | None = None) -> list
 
         headers: dict[int, str] = {}
         section: str | None = None
-        for row_offset in range(row_count):
-            covered_cells: list[dict[str, Any]] = []
-            anchor_cells: list[dict[str, Any]] = []
-            for cell in cells:
-                if not cell["startRowOffset"] <= row_offset < cell["endRowOffset"]:
-                    continue
-                row_cell = {**cell, "carried": cell["startRowOffset"] != row_offset}
-                covered_cells.append(row_cell)
-                if not row_cell["carried"]:
-                    anchor_cells.append(row_cell)
-            covered_cells.sort(key=lambda cell: (cell["startColumnOffset"], cell["endColumnOffset"]))
-            anchor_cells.sort(key=lambda cell: (cell["startColumnOffset"], cell["endColumnOffset"]))
+        indexed_cells = _index_cells_by_row(cells, row_count)
+        for row_offset, covered_cells in enumerate(indexed_cells):
+            anchor_cells = [cell for cell in covered_cells if not cell["carried"]]
 
             for cell in anchor_cells:
                 if cell["columnHeader"] and cell["rawText"]:
@@ -195,12 +203,33 @@ def _number_present(expected: float, actual: list[float]) -> bool:
     return any(abs(expected - value) <= 0.01 for value in actual)
 
 
+def _numeric_evidence_reconciles(item: dict[str, Any], numbers: list[float]) -> bool:
+    total = item.get("total")
+    if type(total) not in (int, float):
+        return False
+    if _number_present(float(total), numbers):
+        return True
+    qty, rate = item.get("qty"), item.get("rate")
+    if type(qty) not in (int, float) or type(rate) not in (int, float):
+        return False
+    if not _number_present(float(qty), numbers) or not _number_present(float(rate), numbers):
+        return False
+    try:
+        quantity = Decimal(str(qty))
+        unit_rate = Decimal(str(rate))
+        derived_total = Decimal(str(total))
+    except (InvalidOperation, ValueError):
+        return False
+    if not all(value.is_finite() for value in (quantity, unit_rate, derived_total)):
+        return False
+    return abs(quantity * unit_rate - derived_total) <= RECONCILIATION_TOLERANCE
+
+
 def _candidate_rows(item: dict[str, Any], source_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     source_ref = item.get("sourceRef") or {}
     page, table = source_ref.get("page"), source_ref.get("table")
     description = _canonical_text(item.get("desc"))
     unit = _canonical_text(item.get("unit"))
-    total = item.get("total")
     candidates: list[dict[str, Any]] = []
     for row in source_rows:
         if row["page"] != page or row["table"] != table or not row["rawText"]:
@@ -225,7 +254,7 @@ def _candidate_rows(item: dict[str, Any], source_rows: list[dict[str, Any]]) -> 
             if index not in description_indexes or (len(anchor_cells) == 1 and unit != "l s")
         ]
         numbers = _numbers_from_cells(numeric_cells)
-        if type(total) not in (int, float) or not _number_present(float(total), numbers):
+        if not _numeric_evidence_reconciles(item, numbers):
             continue
         candidates.append(row)
     return candidates
@@ -278,3 +307,62 @@ def bind_legacy_sections(
             ordinal += 1
         sections.append({"header": section["header"], "items": items})
     return sections, warnings
+
+
+def _warning_evidence(values: list[Any]) -> Counter[str]:
+    return Counter(
+        canonical
+        for value in values
+        if (canonical := _canonical_text(value))
+    )
+
+
+def _source_row_evidence(row: dict[str, Any]) -> Counter[str]:
+    return Counter(
+        canonical
+        for cell in row["rawCells"]
+        if not cell["carried"] and (canonical := _canonical_text(cell["rawText"]))
+    )
+
+
+def remap_legacy_warnings(
+    warnings: list[dict[str, Any]],
+    legacy_tables: list[dict[str, Any]],
+    source_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Remap flattened warning coordinates only when row evidence identifies one raw row."""
+    tables_by_location = {
+        (table["page"], table["table"]): table for table in legacy_tables
+    }
+    remapped: list[dict[str, Any]] = []
+    for warning in warnings:
+        source_ref = warning.get("sourceRef")
+        output = {key: value for key, value in warning.items() if key != "sourceRef"}
+        if not isinstance(source_ref, dict):
+            remapped.append(output)
+            continue
+        page, table_number, legacy_row = (
+            source_ref.get("page"), source_ref.get("table"), source_ref.get("row")
+        )
+        table = tables_by_location.get((page, table_number))
+        table_rows = table.get("rows") if table else None
+        if type(legacy_row) is not int or not isinstance(table_rows, list) or not 1 <= legacy_row <= len(table_rows):
+            remapped.append(output)
+            continue
+        evidence = _warning_evidence(table_rows[legacy_row - 1])
+        candidates = [
+            row for row in source_rows
+            if row["page"] == page
+            and row["table"] == table_number
+            and evidence
+            and evidence <= _source_row_evidence(row)
+        ]
+        if len(candidates) == 1:
+            candidate = candidates[0]
+            output["sourceRef"] = {
+                "page": candidate["page"],
+                "table": candidate["table"],
+                "row": candidate["row"],
+            }
+        remapped.append(output)
+    return remapped

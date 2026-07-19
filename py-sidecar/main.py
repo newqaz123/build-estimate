@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, FiniteFloat, PositiveInt
 
 from boq_contract import ParseResponseV3, build_reconciliation
 from boq_parser import extract_boq_document
-from boq_source_rows import bind_legacy_sections, build_source_rows
+from boq_source_rows import bind_legacy_sections, build_source_rows, remap_legacy_warnings
 
 app = FastAPI(title="Docling Sidecar", version="0.1.0")
 logger = logging.getLogger("docling_sidecar")
@@ -163,6 +163,7 @@ def build_parse_response(filename: str, document: Any) -> ParseResponseV3:
     source_rows = build_source_rows(raw_tables, document=document)
     normalized = extract_boq_document(tables, document_text)
     sections, binding_warnings = bind_legacy_sections(normalized, source_rows)
+    extraction_warnings = remap_legacy_warnings(normalized["warnings"], tables, source_rows)
     source_total = normalized["sourceTotal"]
     total_items, reconciliation = build_reconciliation(sections, source_total)
     return ParseResponseV3(
@@ -173,7 +174,7 @@ def build_parse_response(filename: str, document: Any) -> ParseResponseV3:
         sourceRows=source_rows,
         sections=sections,
         metadata=normalized["metadata"],
-        warnings=[*normalized["warnings"], *binding_warnings],
+        warnings=[*extraction_warnings, *binding_warnings],
         sourceTotal=source_total,
         reconciliation=reconciliation,
         totalItems=total_items,
