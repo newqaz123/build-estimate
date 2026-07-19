@@ -9,13 +9,12 @@ export function contributesToBoqTotal(item: BoqItem): item is BoqPricedItem {
 }
 
 function diagnosticContext(
-  sectionHeader: string,
+  sectionIndex: number,
   item: BoqPricedItem,
   itemIndex: number,
 ): string {
-  const section = `section ${JSON.stringify(sectionHeader)}`
+  const section = `section index ${sectionIndex + 1}`
   if (item.id !== undefined) return `${section}, item id ${JSON.stringify(item.id)}`
-  if (item.code !== undefined) return `${section}, item code ${JSON.stringify(item.code)}`
   return `${section}, item index ${itemIndex + 1}`
 }
 
@@ -26,14 +25,14 @@ export function calculateBoqTotals(sections: BoqSection[]): {
   let totalItems = 0
   let grandTotal = 0
 
-  for (const section of sections) {
+  for (const [sectionIndex, section] of sections.entries()) {
     for (const [itemIndex, item] of section.items.entries()) {
       if (!isPricedBoqItem(item)) continue
 
       totalItems += 1
       if (!contributesToBoqTotal(item)) continue
 
-      const context = diagnosticContext(section.header, item, itemIndex)
+      const context = diagnosticContext(sectionIndex, item, itemIndex)
       if (!Number.isFinite(item.total)) {
         throw new RangeError(`Contributing BOQ item total must be finite (${context})`)
       }

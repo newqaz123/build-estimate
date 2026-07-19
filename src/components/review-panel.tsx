@@ -239,6 +239,8 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
             qty: item.qty,
             rate: item.rate,
             total: item.total,
+            optional: item.optional === true,
+            excludedFromTotal: item.excludedFromTotal === true,
           })),
           extractionWarnings: (boq.extractionWarnings ?? []).map((warning) => ({
             code: warning.code,

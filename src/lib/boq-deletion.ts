@@ -2,7 +2,7 @@ import type { Boq } from './boq-schema'
 import type { BoqItemRequestIdentity } from './boq-item-identity'
 import { resolveBoqItemIdentity } from './boq-item-identity'
 import type { StandardEntry, StandardSourceItem } from './standard-schema'
-import { calculateBoqTotals } from './boq-pricing'
+import { calculateBoqTotals, isPricedBoqItem } from './boq-pricing'
 
 function sourceMatches(source: StandardSourceItem, boqId: string, sectionIndex: number, identity: BoqItemRequestIdentity): boolean {
   if (source.boqId !== boqId || source.sectionIndex !== sectionIndex) return false
@@ -18,7 +18,7 @@ function withSources(standard: StandardEntry, sourceItems: StandardSourceItem[])
 }
 
 function stdStatus(sections: Boq['sections']): Boq['stdStatus'] {
-  const items = sections.flatMap((section) => section.items)
+  const items = sections.flatMap((section) => section.items).filter(isPricedBoqItem)
   if (items.every((item) => item.stdStatus !== 'matched')) return 'none'
   return items.every((item) => item.stdStatus === 'matched') ? 'complete' : 'partial'
 }

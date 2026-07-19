@@ -29,10 +29,17 @@ export function hasLinkedEstimateItems(estimates: Estimate[], standardId: string
 }
 
 function itemLinksToStandard(item: BoqItem, standard: StandardEntry, previousStandard?: StandardEntry): boolean {
+  if (!isPricedBoqItem(item)) return false
   return (
     item.stdId === standard.id ||
     itemMatchesStandardCanonically(item, standard) ||
     (previousStandard ? itemMatchesStandardCanonically(item, previousStandard) : false)
+  )
+}
+
+export function boqHasLinkedStandardItems(boq: Boq, standard: StandardEntry): boolean {
+  return boq.sections.some((section) =>
+    section.items.some((item) => itemLinksToStandard(item, standard)),
   )
 }
 
@@ -182,9 +189,7 @@ export async function DELETE(
       const boqsSnap = await transaction.get(db.collection('boqs'))
       const hasLinkedBoqItems = boqsSnap.docs.some((doc) => {
         const boq = { id: doc.id, ...doc.data() } as Boq
-        return boq.sections.some((section) =>
-          section.items.some((item) => item.stdId === id || itemMatchesStandardCanonically(item, standard)),
-        )
+        return boqHasLinkedStandardItems(boq, standard)
       })
 
       const estimatesSnap = await transaction.get(db.collection('estimates'))

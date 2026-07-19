@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { parseBoqListLimit } from '../boqs/route'
-import { computeBoqStdStatus, hasLinkedEstimateItems, itemMatchesStandardCanonically, updateLinkedBoqsForStandard } from './[id]/route'
+import { boqHasLinkedStandardItems, computeBoqStdStatus, hasLinkedEstimateItems, itemMatchesStandardCanonically, updateLinkedBoqsForStandard } from './[id]/route'
 import {
   applyStandardToBoqItem,
   enrichStandardsWithHistoricalPricing,
@@ -366,6 +366,27 @@ test('itemMatchesStandardCanonically detects legacy canonical links', () => {
     ),
     true,
   )
+})
+
+test('informational children with stale catalog IDs neither link nor update standards', () => {
+  const standard = {
+    id: 'std-1', description: 'Pump', unit: 'item', aliases: [], sourceItems: [], sourceBoqCount: 1,
+    createdAt: '', updatedAt: '',
+  }
+  const boq = {
+    id: 'boq-1', project: 'Plant', vendor: 'Vendor', workType: 'MEP' as const, date: '2026-07-19',
+    totalItems: 1, grandTotal: 100, status: 'active' as const, stdStatus: 'complete' as const,
+    sections: [{ header: 'Pump', items: [
+      { id: 'parent', desc: 'Pump package', unit: 'item', qty: 1, rate: 100, total: 100, type: 'unit' as const, stdStatus: 'matched' as const, stdId: 'std-other' },
+      { id: 'child', pricingRole: 'bundle_child' as const, parentBundleId: 'parent', desc: 'Pump body', stdStatus: 'matched' as const, stdId: 'std-1' },
+    ] }],
+    createdAt: '', updatedAt: '',
+  }
+
+  assert.equal(boqHasLinkedStandardItems(boq, standard), false)
+  const result = updateLinkedBoqsForStandard([boq], { ...standard, description: 'Renamed pump' }, standard)
+  assert.equal(result.affectedItems, 0)
+  assert.equal(result.boqs[0], boq)
 })
 
 test('hasLinkedEstimateItems protects standards referenced by estimate rows', () => {

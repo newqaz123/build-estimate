@@ -47,3 +47,19 @@ test('whole BOQ pruning removes every source entry and recomputes unique source 
   assert.deepEqual(result[0].sourceItems?.map((source) => source.boqId), ['boq-2'])
   assert.equal(result[0].sourceBoqCount, 1)
 })
+
+test('pending informational children do not leave a matched BOQ partially standardized after deletion', () => {
+  const input = boq()
+  input.sections[0].items.push({
+    id: 'bundle-child',
+    pricingRole: 'bundle_child',
+    parentBundleId: 'item-1',
+    desc: 'Included component',
+    stdStatus: 'pending',
+  })
+
+  const result = deleteBoqItemAndPruneStandards(input, [standard()], 0, { itemId: 'item-2' })
+
+  assert.equal(result.boq.totalItems, 1)
+  assert.equal(result.boq.stdStatus, 'complete')
+})

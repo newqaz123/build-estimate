@@ -90,20 +90,20 @@ test('rejects non-finite contributing totals instead of producing NaN', () => {
   for (const total of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
     assert.throws(
       () => calculateBoqTotals([{
-        header: 'Invalid totals',
+        header: 'SENTINEL-SOURCE-HEADER',
         items: [pricedItem({
           id: 'bad-total',
-          code: 'DO-NOT-USE',
-          desc: 'Sensitive source description',
+          code: 'SENTINEL-SOURCE-CODE',
+          desc: 'SENTINEL-SOURCE-DESCRIPTION',
           total,
         })],
       }]),
       (error: unknown) => {
         assert.ok(error instanceof RangeError)
         assert.match(error.message, /finite/i)
-        assert.match(error.message, /section "Invalid totals"/)
+        assert.match(error.message, /section index 1/)
         assert.match(error.message, /item id "bad-total"/)
-        assert.doesNotMatch(error.message, /DO-NOT-USE|Sensitive source description/)
+        assert.doesNotMatch(error.message, /SENTINEL-SOURCE-(?:HEADER|CODE|DESCRIPTION)/)
         return true
       },
     )
@@ -113,14 +113,15 @@ test('rejects non-finite contributing totals instead of producing NaN', () => {
 test('rejects negative contributing totals', () => {
   assert.throws(
     () => calculateBoqTotals([{
-      header: 'Allowances',
-      items: [pricedItem({ id: undefined, code: 'NEG-1', total: -1 })],
+      header: 'SENTINEL-NEGATIVE-HEADER',
+      items: [pricedItem({ id: undefined, code: 'SENTINEL-NEGATIVE-CODE', desc: 'SENTINEL-NEGATIVE-DESC', total: -1 })],
     }]),
     (error: unknown) => {
       assert.ok(error instanceof RangeError)
       assert.match(error.message, /non-negative/i)
-      assert.match(error.message, /section "Allowances"/)
-      assert.match(error.message, /item code "NEG-1"/)
+      assert.match(error.message, /section index 1/)
+      assert.match(error.message, /item index 1/)
+      assert.doesNotMatch(error.message, /SENTINEL-NEGATIVE-(?:HEADER|CODE|DESC)/)
       return true
     },
   )
@@ -133,12 +134,13 @@ test('rejects aggregate overflow with the section and 1-based item index', () =>
   ]
 
   assert.throws(
-    () => calculateBoqTotals([{ header: 'Overflow check', items }]),
+    () => calculateBoqTotals([{ header: 'SENTINEL-OVERFLOW-HEADER', items }]),
     (error: unknown) => {
       assert.ok(error instanceof RangeError)
       assert.match(error.message, /grand total.*finite/i)
-      assert.match(error.message, /section "Overflow check"/)
+      assert.match(error.message, /section index 1/)
       assert.match(error.message, /item index 2/)
+      assert.doesNotMatch(error.message, /SENTINEL-OVERFLOW-HEADER/)
       return true
     },
   )

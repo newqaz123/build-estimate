@@ -69,6 +69,11 @@ test('review exposes only normalized editable fields and derived approval blocke
   assert.match(reviewSource, /key=\{reviewItemKey\(boq\.id, item, idx\)\}/)
 })
 
+test('review verification request preserves intentional option exclusions', () => {
+  assert.match(reviewSource, /excludedFromTotal:\s*item\.excludedFromTotal\s*===\s*true/)
+  assert.match(reviewSource, /optional:\s*item\.optional\s*===\s*true/)
+})
+
 test('review distinguishes completed AI verification from actionable local fallback', () => {
   assert.match(reviewSource, /boqId: boq\.id/)
   assert.match(reviewSource, /extractionWarnings:/)
