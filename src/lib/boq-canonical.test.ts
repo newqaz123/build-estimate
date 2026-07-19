@@ -52,7 +52,7 @@ test('POST and PUT BOQ boundaries both invoke canonical section parsing', () => 
   const postSource = readFileSync(new URL('../app/api/boqs/route.ts', import.meta.url), 'utf8')
   const putSource = readFileSync(new URL('../app/api/boqs/[id]/handler.ts', import.meta.url), 'utf8')
   assert.match(postSource, /parseCanonicalBoqSections\(sections \?\? \[\]\)/)
-  assert.match(putSource, /parseCanonicalBoqSections\(body\.sections \?\? existing\.sections\)/)
+  assert.match(putSource, /parseCanonicalBoqSections\(hasSections \? body\.sections : existing\.sections\)/)
   assert.match(postSource, /BoqCanonicalValidationError/)
   assert.match(putSource, /BoqCanonicalValidationError/)
 })

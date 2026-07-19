@@ -353,6 +353,17 @@ test('PUT rejects malformed canonical section payloads before persistence', asyn
   }
 })
 
+test('PUT rejects explicit null sections instead of treating them as omitted', async () => {
+  const harness = detailHarness()
+  const response = await harness.handlers.PUT(new Request('http://localhost/api/boqs/boq-1', {
+    method: 'PUT', body: JSON.stringify({ status: 'draft', sections: null }),
+  }), detailContext)
+
+  assert.equal(response.status, 400)
+  assert.deepEqual(await response.json(), { error: 'sections must be an array.' })
+  assert.equal(harness.updates.length, 0)
+})
+
 test('DELETE caches exact source bytes before source and Firestore deletion', async () => {
   const harness = detailHarness()
   const response = await harness.handlers.DELETE(new Request('http://localhost/api/boqs/boq-1', { method: 'DELETE' }), detailContext)
