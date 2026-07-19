@@ -51,19 +51,20 @@ export interface BoqMetadataConfidence {
   workType: number
 }
 
-export interface BoqItem {
+export type BoqEntryOrigin = 'docling' | 'ai_accepted' | 'user'
+
+export interface BoqItemCommon {
   id?: string
   code?: string
   desc: string
-  unit: string
-  qty: number
-  rate: number
-  total: number
-  type: 'unit' | 'lump_sum' | 'job'
-  costComponent?: 'material' | 'labour' | 'combined' | 'lump_sum'
   sourceRef?: BoqSourceRef
-  sourceCosts?: BoqSourceCosts
-  costAllocation?: BoqCostAllocation
+  sourceRowId?: string
+  sourceRowIds?: string[]
+  parentBundleId?: string
+  entryOrigin?: BoqEntryOrigin
+  optional?: boolean
+  excludedFromTotal?: boolean
+  exclusionReason?: string
   extractionWarnings?: BoqExtractionWarning[]
   stdStatus: 'matched' | 'unmatched' | 'pending' | 'excluded'
   stdExclusionReason?: string
@@ -73,6 +74,25 @@ export interface BoqItem {
   sourceDesc?: string
   sourceUnit?: string
 }
+
+export interface BoqPricedItem extends BoqItemCommon {
+  pricingRole?: 'standard' | 'bundle_parent'
+  unit: string
+  qty: number
+  rate: number
+  total: number
+  type: 'unit' | 'lump_sum' | 'job'
+  costComponent?: 'material' | 'labour' | 'combined' | 'lump_sum'
+  sourceCosts?: BoqSourceCosts
+  costAllocation?: BoqCostAllocation
+}
+
+export interface BoqInformationalItem extends BoqItemCommon {
+  pricingRole: 'bundle_child'
+  parentBundleId: string
+}
+
+export type BoqItem = BoqPricedItem | BoqInformationalItem
 
 export interface Boq {
   id: string
