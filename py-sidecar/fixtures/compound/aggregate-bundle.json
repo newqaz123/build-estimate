@@ -1,0 +1,10 @@
+{
+  "sourceRows":[
+    {"id":"sr-h7","page":1,"table":1,"row":1,"section":"Package","headers":["Description","Amount"],"rawCells":[{"column":0,"rawText":"Description","lines":["Description"],"carried":false}],"rawText":"headers","classification":"header","confidence":1.0,"warnings":[]},
+    {"id":"sr-bundle","page":1,"table":1,"row":2,"section":"Package","headers":["Description","Amount"],"rawCells":[{"column":0,"rawText":"Pump body\nMotor and controls","lines":["Pump body","Motor and controls"],"carried":false},{"column":1,"rawText":"95200","lines":["95200"],"carried":false}],"rawText":"Pump body / Motor and controls | 95200","classification":"item","confidence":1.0,"warnings":[]},
+    {"id":"sr-total-b","page":1,"table":1,"row":3,"section":"Package","headers":["Description","Amount"],"rawCells":[{"column":0,"rawText":"TOTAL","lines":["TOTAL"],"carried":false},{"column":1,"rawText":"95200","lines":["95200"],"carried":false}],"rawText":"TOTAL | 95200","classification":"total","confidence":1.0,"warnings":[]}
+  ],
+  "expectedSections":[{"header":"Package","items":[{"id":"di-sr-bundle-bundle-1","desc":"Pump body + Motor and controls","pricingRole":"bundle_parent","sourceRowIds":["sr-bundle"],"entryOrigin":"docling","costComponent":"lump_sum","unit":"L/S","qty":1.0,"rate":95200.0,"total":95200.0},{"id":"di-sr-bundle-child-1","desc":"Pump body","pricingRole":"bundle_child","sourceRowIds":["sr-bundle"],"parentBundleId":"di-sr-bundle-bundle-1","entryOrigin":"docling"},{"id":"di-sr-bundle-child-2","desc":"Motor and controls","pricingRole":"bundle_child","sourceRowIds":["sr-bundle"],"parentBundleId":"di-sr-bundle-bundle-1","entryOrigin":"docling"}]}],
+  "expectedWarningCodes":[],
+  "expectedReconciliation":{"itemTotal":95200.0,"sourceTotal":95200.0,"reconciled":true,"difference":0.0}
+}

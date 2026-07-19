@@ -91,6 +91,18 @@ class SourceRow(ContractModel):
     warnings: list[ExtractionWarning]
 
 
+class SourceCostEvidence(ContractModel):
+    qty: NonNegativeFinite
+    unit: Annotated[str, Field(min_length=1)]
+    rate: NonNegativeFinite
+    total: NonNegativeFinite
+
+
+class SourceCostsEvidence(ContractModel):
+    material: SourceCostEvidence
+    labour: SourceCostEvidence
+
+
 class DerivedItemV3(ContractModel):
     id: Annotated[str, Field(min_length=1)]
     desc: Annotated[str, Field(min_length=1)]
@@ -99,6 +111,10 @@ class DerivedItemV3(ContractModel):
     parentBundleId: str | None = None
     optional: bool = False
     excludedFromTotal: bool = False
+    exclusionReason: str | None = None
+    entryOrigin: Literal["docling", "ai_accepted", "user"] = "docling"
+    costComponent: Literal["material", "labour", "combined", "lump_sum"] | None = None
+    sourceCosts: SourceCostsEvidence | None = None
     unit: str | None = None
     qty: NonNegativeFinite | None = None
     rate: NonNegativeFinite | None = None
@@ -114,13 +130,25 @@ class DerivedItemV3(ContractModel):
                 raise ValueError("bundle_child cannot carry priced fields")
             if self.excludedFromTotal:
                 raise ValueError("bundle_child is informational and cannot be excluded from totals")
+            if self.sourceCosts is not None:
+                raise ValueError("bundle_child cannot carry source costs")
+            if self.costComponent is not None:
+                raise ValueError("bundle_child cannot carry a cost component")
         else:
             if self.parentBundleId is not None:
                 raise ValueError("priced items cannot have parentBundleId")
             if not self.unit or any(value is None for value in (self.qty, self.rate, self.total)):
                 raise ValueError("standard and bundle_parent items require unit, qty, rate, and total")
+            if self.costComponent is None:
+                raise ValueError("priced items require costComponent")
         if self.excludedFromTotal and not self.optional:
             raise ValueError("excludedFromTotal requires optional")
+        if self.excludedFromTotal and not self.exclusionReason:
+            raise ValueError("excludedFromTotal requires exclusionReason")
+        if not self.excludedFromTotal and self.exclusionReason is not None:
+            raise ValueError("exclusionReason requires excludedFromTotal")
+        if self.sourceCosts is not None and self.costComponent != "combined":
+            raise ValueError("sourceCosts require the combined cost component")
         return self
 
 

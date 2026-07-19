@@ -1,0 +1,10 @@
+{
+  "sourceRows":[
+    {"id":"sr-h3","page":1,"table":1,"row":1,"section":"Concrete","headers":["Description","Qty","Unit","Material Rate","Material Total","Labour Rate","Labour Total","Amount"],"rawCells":[{"column":0,"rawText":"Description","lines":["Description"],"carried":false}],"rawText":"headers","classification":"header","confidence":1.0,"warnings":[]},
+    {"id":"sr-shared","page":1,"table":1,"row":2,"section":"Concrete","headers":["Description","Qty","Unit","Material Rate","Material Total","Labour Rate","Labour Total","Amount"],"rawCells":[{"column":0,"rawText":"Concrete slab","lines":["Concrete slab"],"carried":false},{"column":1,"rawText":"10","lines":["10"],"carried":false},{"column":2,"rawText":"m2","lines":["m2"],"carried":false},{"column":3,"rawText":"60","lines":["60"],"carried":false},{"column":4,"rawText":"600","lines":["600"],"carried":false},{"column":5,"rawText":"40","lines":["40"],"carried":false},{"column":6,"rawText":"400","lines":["400"],"carried":false},{"column":7,"rawText":"1000","lines":["1000"],"carried":false}],"rawText":"Concrete slab | 10 | m2 | 60 | 600 | 40 | 400 | 1000","classification":"item","confidence":1.0,"warnings":[]},
+    {"id":"sr-total-s","page":1,"table":1,"row":3,"section":"Concrete","headers":["Description","Qty","Unit","Material Rate","Material Total","Labour Rate","Labour Total","Amount"],"rawCells":[{"column":0,"rawText":"TOTAL","lines":["TOTAL"],"carried":false},{"column":7,"rawText":"1000","lines":["1000"],"carried":false}],"rawText":"TOTAL | 1000","classification":"total","confidence":1.0,"warnings":[]}
+  ],
+  "expectedSections":[{"header":"Concrete","items":[{"id":"di-sr-shared-combined-1","desc":"Concrete slab","pricingRole":"standard","sourceRowIds":["sr-shared"],"entryOrigin":"docling","costComponent":"combined","sourceCosts":{"material":{"qty":10.0,"unit":"m2","rate":60.0,"total":600.0},"labour":{"qty":10.0,"unit":"m2","rate":40.0,"total":400.0}},"unit":"m2","qty":10.0,"rate":100.0,"total":1000.0}]}],
+  "expectedWarningCodes":[],
+  "expectedReconciliation":{"itemTotal":1000.0,"sourceTotal":1000.0,"reconciled":true,"difference":0.0}
+}

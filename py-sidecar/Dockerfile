@@ -5,5 +5,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY boq_parser.py .
 COPY boq_contract.py .
 COPY boq_source_rows.py .
+COPY boq_compound_parser.py .
 COPY main.py .
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

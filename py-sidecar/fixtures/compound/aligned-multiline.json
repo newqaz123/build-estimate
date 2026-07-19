@@ -1,0 +1,10 @@
+{
+  "sourceRows": [
+    {"id":"sr-h1","page":1,"table":1,"row":1,"section":"Works","headers":["Description","Qty","Unit","Rate","Amount"],"rawCells":[{"column":0,"rawText":"Description","lines":["Description"],"carried":false}],"rawText":"Description | Qty | Unit | Rate | Amount","classification":"header","confidence":1.0,"warnings":[]},
+    {"id":"sr-aligned","page":1,"table":1,"row":2,"section":"Works","headers":["Description","Qty","Unit","Rate","Amount"],"rawCells":[{"column":0,"rawText":"Pump\nValve","lines":["Pump","Valve"],"carried":false},{"column":1,"rawText":"2\n3","lines":["2","3"],"carried":false},{"column":2,"rawText":"set\npcs","lines":["set","pcs"],"carried":false},{"column":3,"rawText":"100\n150","lines":["100","150"],"carried":false},{"column":4,"rawText":"200\n450","lines":["200","450"],"carried":false}],"rawText":"Pump / Valve","classification":"item","confidence":1.0,"warnings":[]},
+    {"id":"sr-total-a","page":1,"table":1,"row":3,"section":"Works","headers":["Description","Qty","Unit","Rate","Amount"],"rawCells":[{"column":0,"rawText":"GRAND TOTAL","lines":["GRAND TOTAL"],"carried":false},{"column":4,"rawText":"650","lines":["650"],"carried":false}],"rawText":"GRAND TOTAL | 650","classification":"total","confidence":1.0,"warnings":[]}
+  ],
+  "expectedSections":[{"header":"Works","items":[{"id":"di-sr-aligned-standard-1","desc":"Pump","pricingRole":"standard","sourceRowIds":["sr-aligned"],"entryOrigin":"docling","costComponent":"combined","unit":"set","qty":2.0,"rate":100.0,"total":200.0},{"id":"di-sr-aligned-standard-2","desc":"Valve","pricingRole":"standard","sourceRowIds":["sr-aligned"],"entryOrigin":"docling","costComponent":"combined","unit":"pcs","qty":3.0,"rate":150.0,"total":450.0}]}],
+  "expectedWarningCodes":[],
+  "expectedReconciliation":{"itemTotal":650.0,"sourceTotal":650.0,"reconciled":true,"difference":0.0}
+}

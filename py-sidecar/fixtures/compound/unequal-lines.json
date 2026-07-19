@@ -1,0 +1,9 @@
+{
+  "sourceRows":[
+    {"id":"sr-h2","page":1,"table":1,"row":1,"section":"Works","headers":["Description","Qty","Unit","Rate","Amount"],"rawCells":[{"column":0,"rawText":"Description","lines":["Description"],"carried":false}],"rawText":"Description | Qty | Unit | Rate | Amount","classification":"header","confidence":1.0,"warnings":[]},
+    {"id":"sr-unequal","page":1,"table":1,"row":2,"section":"Works","headers":["Description","Qty","Unit","Rate","Amount"],"rawCells":[{"column":0,"rawText":"Pump\nValve","lines":["Pump","Valve"],"carried":false},{"column":1,"rawText":"2","lines":["2"],"carried":false},{"column":2,"rawText":"set\npcs","lines":["set","pcs"],"carried":false},{"column":3,"rawText":"100\n150","lines":["100","150"],"carried":false},{"column":4,"rawText":"200\n450","lines":["200","450"],"carried":false}],"rawText":"Pump / Valve","classification":"item","confidence":0.8,"warnings":[]}
+  ],
+  "expectedSections":[{"header":"Works","items":[]}],
+  "expectedWarningCodes":["unequal_multiline_counts"],
+  "expectedReconciliation":{"itemTotal":0.0,"sourceTotal":null,"reconciled":false,"difference":0.0}
+}

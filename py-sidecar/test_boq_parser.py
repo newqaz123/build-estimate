@@ -1,5 +1,6 @@
 import asyncio
 import ast
+import json
 import math
 import re
 import sys
@@ -15,6 +16,11 @@ from boq_parser import extract_boq_document, extract_boq_sections, extract_metad
 from boq_contract import DerivedItemV3, ParseResponseV3, RawCell, SourceRow, build_reconciliation
 import boq_source_rows
 from boq_source_rows import build_source_rows
+
+try:
+    from boq_compound_parser import derive_document
+except ImportError:
+    derive_document = None
 
 
 class BoqParserTest(unittest.TestCase):
@@ -1157,7 +1163,7 @@ class ContractV3InvariantTest(unittest.TestCase):
         item = {
             "id": item_id, "desc": "Pump", "pricingRole": "standard",
             "sourceRowIds": row_ids or ["row-1"], "unit": "set",
-            "qty": 1.0, "rate": 100.0, "total": 100.0,
+            "qty": 1.0, "rate": 100.0, "total": 100.0, "costComponent": "combined",
         }
         item.update(overrides)
         return item
@@ -1235,6 +1241,7 @@ class ContractV3InvariantTest(unittest.TestCase):
         included = self._item("included", total=100.0)
         excluded = self._item(
             "excluded", total=900.0, optional=True, excludedFromTotal=True,
+            exclusionReason="fixture option",
         )
         child = {
             "id": "child", "desc": "Info", "pricingRole": "bundle_child",
@@ -1251,11 +1258,24 @@ class ContractV3InvariantTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             DerivedItemV3(**self._item("bad", optional=False, excludedFromTotal=True))
         with self.assertRaises(ValidationError):
+            DerivedItemV3(**self._item("bad-reason", optional=True, excludedFromTotal=True))
+        with self.assertRaises(ValidationError):
             DerivedItemV3(
                 id="child", desc="Info", pricingRole="bundle_child",
                 sourceRowIds=["row-1"], parentBundleId="parent",
                 optional=True, excludedFromTotal=True,
             )
+
+    def test_source_costs_are_complete_combined_priced_evidence(self):
+        costs = {
+            "material": {"qty": 1.0, "unit": "set", "rate": 40.0, "total": 40.0},
+            "labour": {"qty": 1.0, "unit": "set", "rate": 60.0, "total": 60.0},
+        }
+        DerivedItemV3(**self._item("combined", sourceCosts=costs))
+        with self.assertRaises(ValidationError):
+            DerivedItemV3(**self._item("incomplete", sourceCosts={"material": costs["material"]}))
+        with self.assertRaises(ValidationError):
+            DerivedItemV3(**self._item("wrong-component", sourceCosts=costs, costComponent="material"))
 
     def test_response_rejects_reconciliation_contradictions(self):
         contradictions = [
@@ -1614,6 +1634,121 @@ class LegacyEvidenceBridgeTest(unittest.TestCase):
 
         self.assertEqual(sections[0]["items"], [])
         self.assertEqual(warnings[0]["code"], "unmatched_source_binding")
+
+
+class CompoundDerivationTest(unittest.TestCase):
+    def test_compound_fixture_corpus(self):
+        self.assertIsNotNone(derive_document, "compound derivation API must exist")
+        fixture_dir = Path(__file__).resolve().parent / "fixtures" / "compound"
+        paths = sorted(fixture_dir.glob("*.json"))
+        self.assertEqual(len(paths), 8)
+        for path in paths:
+            with self.subTest(fixture=path.name):
+                fixture = json.loads(path.read_text())
+                original_rows = json.loads(json.dumps(fixture["sourceRows"]))
+                result = derive_document(fixture["sourceRows"])
+                self.assertEqual(result["sections"], fixture["expectedSections"])
+                self.assertEqual(result["warningCodes"], fixture["expectedWarningCodes"])
+                self.assertEqual(result["reconciliation"], fixture["expectedReconciliation"])
+                self.assertEqual(fixture["sourceRows"], original_rows)
+
+    def test_ids_are_stable_and_collision_safe_for_shared_evidence(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/separate-components.json").read_text())
+        first = derive_document(fixture["sourceRows"])
+        second = derive_document(fixture["sourceRows"])
+        first_ids = [item["id"] for section in first["sections"] for item in section["items"]]
+        self.assertEqual(first_ids, [item["id"] for section in second["sections"] for item in section["items"]])
+        self.assertEqual(len(first_ids), len(set(first_ids)))
+
+    def test_ids_do_not_collide_when_opaque_source_ids_share_a_safe_rendering(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/merged-and-repeated-headers.json").read_text())
+        first = json.loads(json.dumps(fixture["sourceRows"][2]))
+        second = json.loads(json.dumps(first))
+        first["id"] = "sr:a"
+        second["id"] = "sr/a"
+        second["page"] = 2
+        second["table"] = 2
+        result = derive_document([first, second])
+        ids = [item["id"] for section in result["sections"] for item in section["items"]]
+        self.assertEqual(len(ids), len(set(ids)))
+
+    def test_unknown_and_unpriced_rows_are_retained_with_attached_source_warning(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/unequal-lines.json").read_text())
+        result = derive_document(fixture["sourceRows"])
+        warning = next(warning for warning in result["warnings"] if warning["code"] == "unequal_multiline_counts")
+        self.assertEqual(warning["sourceRef"], {"page": 1, "table": 1, "row": 2})
+        self.assertEqual(result["reviewCandidateRowIds"], ["sr-unequal"])
+        retained = next(row for row in result["sourceRows"] if row["id"] == "sr-unequal")
+        self.assertEqual([warning["code"] for warning in retained["warnings"]], ["unequal_multiline_counts"])
+
+    def test_incompatible_cross_page_continuation_is_not_merged(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/continuation-cross-page.json").read_text())
+        rows = json.loads(json.dumps(fixture["sourceRows"]))
+        rows[2]["headers"] = ["Narrative", "Value"]
+        result = derive_document(rows)
+        item = result["sections"][0]["items"][0]
+        self.assertEqual(item["desc"], "Supply and install booster pump")
+        self.assertEqual(item["sourceRowIds"], ["sr-cont-base"])
+        self.assertIn("unsupported_row", result["warningCodes"])
+
+    def test_arithmetic_mismatch_is_warned_and_never_reconciled(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/aligned-multiline.json").read_text())
+        rows = json.loads(json.dumps(fixture["sourceRows"]))
+        rows[1]["rawCells"][4]["rawText"] = "201\n450"
+        rows[1]["rawCells"][4]["lines"] = ["201", "450"]
+        result = derive_document(rows)
+        self.assertIn("item_arithmetic_mismatch", result["warningCodes"])
+        self.assertFalse(result["reconciliation"]["reconciled"])
+
+    def test_parse_response_uses_deterministic_derivation(self):
+        main = SidecarContractTest()._import_main()
+        self.assertIs(getattr(main, "derive_document", None), derive_document)
+
+    def test_independent_section_totals_are_summed_without_double_counting(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/merged-and-repeated-headers.json").read_text())
+        rows = fixture["sourceRows"]
+        duplicate = json.loads(json.dumps(rows[2:]))
+        for row_number, row in enumerate(duplicate, start=1):
+            row["id"] += "-other"
+            row["page"] = 2
+            row["table"] = 2
+            row["row"] = row_number
+            row["section"] = "Other"
+        result = derive_document([*rows, *duplicate])
+        self.assertEqual(result["reconciliation"], {
+            "itemTotal": 100.0, "sourceTotal": 100.0,
+            "reconciled": True, "difference": 0.0,
+        })
+
+    def test_section_total_mismatch_attaches_to_the_total_source_row(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/merged-and-repeated-headers.json").read_text())
+        fixture["sourceRows"][-1]["rawCells"][1]["rawText"] = "60"
+        fixture["sourceRows"][-1]["rawCells"][1]["lines"] = ["60"]
+        result = derive_document(fixture["sourceRows"])
+        warning = next(warning for warning in result["warnings"] if warning["code"] == "section_total_mismatch")
+        self.assertEqual(warning["sourceRef"], {"page": 1, "table": 1, "row": 4})
+
+    def test_missing_component_price_is_not_inferred_from_aggregate(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/shared-components.json").read_text())
+        row = fixture["sourceRows"][1]
+        for column in (5, 6):
+            row["rawCells"][column]["rawText"] = ""
+            row["rawCells"][column]["lines"] = [""]
+        result = derive_document(fixture["sourceRows"])
+        items = result["sections"][0]["items"]
+        self.assertEqual([(item["costComponent"], item["total"]) for item in items], [("material", 600.0)])
+        self.assertIn("incomplete_component_evidence", result["warningCodes"])
+
+    def test_unrepresentable_numeric_evidence_is_warned_without_overflow(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/merged-and-repeated-headers.json").read_text())
+        huge = "9" * 400
+        row = fixture["sourceRows"][2]
+        for column in (1, 4):
+            row["rawCells"][column]["rawText"] = huge
+            row["rawCells"][column]["lines"] = [huge]
+        result = derive_document(fixture["sourceRows"])
+        self.assertEqual(result["sections"][0]["items"], [])
+        self.assertIn("unsupported_row", result["warningCodes"])
 
 
 if __name__ == "__main__":

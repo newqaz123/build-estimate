@@ -9,8 +9,9 @@ from typing import Annotated, Any, List, Literal, Optional
 from pydantic import BaseModel, Field, FiniteFloat, PositiveInt
 
 from boq_contract import ParseResponseV3, build_reconciliation
+from boq_compound_parser import derive_document
 from boq_parser import extract_boq_document
-from boq_source_rows import bind_legacy_sections, build_source_rows, remap_legacy_warnings
+from boq_source_rows import build_source_rows, remap_legacy_warnings
 
 app = FastAPI(title="Docling Sidecar", version="0.1.0")
 logger = logging.getLogger("docling_sidecar")
@@ -162,19 +163,26 @@ def build_parse_response(filename: str, document: Any) -> ParseResponseV3:
         })
     source_rows = build_source_rows(raw_tables, document=document)
     normalized = extract_boq_document(tables, document_text)
-    sections, binding_warnings = bind_legacy_sections(normalized, source_rows)
+    deterministic = derive_document(source_rows)
+    sections = deterministic["sections"]
     extraction_warnings = remap_legacy_warnings(normalized["warnings"], tables, source_rows)
-    source_total = normalized["sourceTotal"]
+    deterministic_warnings = [
+        {key: value for key, value in warning.items() if key != "sourceRowId"}
+        for warning in deterministic["warnings"]
+    ]
+    source_total = deterministic["sourceTotal"]
+    if source_total is None:
+        source_total = normalized["sourceTotal"]
     total_items, reconciliation = build_reconciliation(sections, source_total)
     return ParseResponseV3(
         contractVersion=3,
         documentName=filename,
         pageCount=len(document.pages),
         documentText=document_text,
-        sourceRows=source_rows,
+        sourceRows=deterministic["sourceRows"],
         sections=sections,
         metadata=normalized["metadata"],
-        warnings=[*extraction_warnings, *binding_warnings],
+        warnings=[*extraction_warnings, *deterministic_warnings],
         sourceTotal=source_total,
         reconciliation=reconciliation,
         totalItems=total_items,
@@ -189,7 +197,7 @@ def convert_pdf(filename: str, content: bytes):
     return build_parse_response(filename, result.document)
 
 
-@app.post("/parse", response_model=ParseResponseV3)
+@app.post("/parse", response_model=ParseResponseV3, response_model_exclude_none=True)
 async def parse_pdf(file: UploadFile = File(...)):
     filename = file.filename or "document.pdf"
     if not filename.lower().endswith(".pdf"):
