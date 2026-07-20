@@ -1,0 +1,202 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import type { BoqSection } from './boq-schema'
+import {
+  applyValidatedProposal,
+  fingerprintCanonicalItem,
+  isHighConfidenceProposal,
+  undoAcceptedProposal,
+  validateProposal,
+  validateProposalBatch,
+  type ProposalValidationContext,
+} from './boq-extraction-proposals'
+
+const sections: BoqSection[] = [{
+  header: 'Pump Works',
+  items: [{
+    id: 'combined-work', desc: 'Pump supply and installation', pricingRole: 'standard',
+    unit: 'set', qty: 1, rate: 100, total: 100, type: 'unit', costComponent: 'combined',
+    sourceRowIds: ['row-combined'], entryOrigin: 'docling', stdStatus: 'unmatched',
+  }, {
+    id: 'pump-accessory', desc: 'Pump accessory', pricingRole: 'standard',
+    unit: 'set', qty: 1, rate: 20, total: 20, type: 'unit', costComponent: 'combined',
+    sourceRowIds: ['row-extra'], entryOrigin: 'docling', stdStatus: 'unmatched',
+  }],
+}]
+
+function context(overrides: Partial<ProposalValidationContext> = {}): ProposalValidationContext {
+  return {
+    sourceRows: [{ id: 'row-combined' }, { id: 'row-extra' }],
+    sourceEvidence: {
+      'row-combined': {
+        quotedTotal: 100,
+        components: {
+          material: { qty: 1, unit: 'set', rate: 40, total: 40 },
+          labour: { qty: 1, unit: 'set', rate: 60, total: 60 },
+        },
+      },
+      'row-extra': { quotedTotal: 20 },
+    },
+    sections,
+    ...overrides,
+  }
+}
+
+function separateComponentsProposal(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'proposal-components', operation: 'separate_components', sourceRowIds: ['row-combined'],
+    targetItemIds: ['combined-work'],
+    affectedItemFingerprints: { 'combined-work': fingerprintCanonicalItem(sections[0].items[0]) },
+    confidence: 0.96, explanation: 'The quote lists distinct material and labour amounts.',
+    proposedItems: [
+      {
+        id: 'pump-material', desc: 'Pump material', pricingRole: 'standard', sourceRowIds: ['row-combined'],
+        entryOrigin: 'ai_accepted', unit: 'set', qty: 1, rate: 40, total: 40, costComponent: 'material',
+      },
+      {
+        id: 'pump-labour', desc: 'Pump labour', pricingRole: 'standard', sourceRowIds: ['row-combined'],
+        entryOrigin: 'ai_accepted', unit: 'set', qty: 1, rate: 60, total: 60, costComponent: 'labour',
+      },
+    ],
+    ...overrides,
+  }
+}
+
+test('accept then undo round-trips canonical sections', () => {
+  const proposal = validateProposal(separateComponentsProposal(), context())
+  assert.equal(proposal.valid, true)
+  if (!proposal.valid) return
+
+  const accepted = applyValidatedProposal(sections, proposal.proposal)
+  assert.deepEqual(accepted.sections[0].items.map((item) => item.id), ['pump-material', 'pump-labour', 'pump-accessory'])
+  assert.deepEqual(undoAcceptedProposal(accepted.sections, accepted.audit), sections)
+})
+
+test('rejects aggregate-price allocation without source component prices', () => {
+  const aggregateOnly = context({
+    sourceEvidence: { 'row-combined': { quotedTotal: 100 }, 'row-extra': { quotedTotal: 20 } },
+  })
+  assert.deepEqual(validateProposal(separateComponentsProposal(), aggregateOnly), {
+    valid: false,
+    code: 'invented_component_price',
+  })
+})
+
+test('validates all operation shapes without silently applying review-only proposals', () => {
+  const common = {
+    sourceRowIds: ['row-combined'], targetItemIds: ['combined-work'],
+    affectedItemFingerprints: { 'combined-work': fingerprintCanonicalItem(sections[0].items[0]) },
+    confidence: 0.91, explanation: 'Evidence checked.',
+  }
+  assert.equal(validateProposal({ id: 'keep', operation: 'keep', proposedItems: [], ...common }, context()).valid, true)
+  assert.equal(validateProposal({ id: 'human', operation: 'needs_human_review', proposedItems: [], ...common }, context()).valid, true)
+  const human = validateProposal({ id: 'human', operation: 'needs_human_review', proposedItems: [], ...common }, context())
+  assert.equal(human.valid, true)
+  if (human.valid) assert.throws(() => applyValidatedProposal(sections, human.proposal), /human review/)
+})
+
+test('keep records explicit acceptance without replacing the deterministic structure', () => {
+  const proposal = validateProposal({
+    id: 'keep-apply', operation: 'keep', sourceRowIds: ['row-combined'], targetItemIds: ['combined-work'],
+    affectedItemFingerprints: { 'combined-work': fingerprintCanonicalItem(sections[0].items[0]) },
+    confidence: 0.91, explanation: 'The deterministic item already matches the evidence.', proposedItems: [],
+  }, context())
+  assert.equal(proposal.valid, true)
+  if (!proposal.valid) return
+  assert.deepEqual(applyValidatedProposal(sections, proposal.proposal).sections, sections)
+})
+
+test('validates split, merge, and bundle totals against source evidence', () => {
+  const split = validateProposal({
+    id: 'split', operation: 'split', sourceRowIds: ['row-combined'], targetItemIds: ['combined-work'],
+    affectedItemFingerprints: { 'combined-work': fingerprintCanonicalItem(sections[0].items[0]) },
+    confidence: 0.91, explanation: 'Two priced source lines.',
+    proposedItems: [
+      { id: 'split-a', desc: 'Pump A', pricingRole: 'standard', sourceRowIds: ['row-combined'], entryOrigin: 'ai_accepted', unit: 'set', qty: 1, rate: 40, total: 40, costComponent: 'combined' },
+      { id: 'split-b', desc: 'Pump B', pricingRole: 'standard', sourceRowIds: ['row-combined'], entryOrigin: 'ai_accepted', unit: 'set', qty: 1, rate: 60, total: 60, costComponent: 'combined' },
+    ],
+  }, context())
+  assert.equal(split.valid, true)
+
+  const merge = validateProposal({
+    id: 'merge', operation: 'merge', sourceRowIds: ['row-combined', 'row-extra'], targetItemIds: ['combined-work', 'pump-accessory'],
+    affectedItemFingerprints: {
+      'combined-work': fingerprintCanonicalItem(sections[0].items[0]),
+      'pump-accessory': fingerprintCanonicalItem(sections[0].items[1]),
+    },
+    confidence: 0.91, explanation: 'A priced grouping.',
+    proposedItems: [
+      { id: 'merged', desc: 'Pump package', pricingRole: 'standard', sourceRowIds: ['row-combined', 'row-extra'], entryOrigin: 'ai_accepted', unit: 'set', qty: 1, rate: 120, total: 120, costComponent: 'combined' },
+    ],
+  }, context())
+  assert.equal(merge.valid, true)
+
+  const bundle = validateProposal({
+    id: 'bundle', operation: 'create_bundle', sourceRowIds: ['row-combined'], targetItemIds: ['combined-work'],
+    affectedItemFingerprints: { 'combined-work': fingerprintCanonicalItem(sections[0].items[0]) },
+    confidence: 0.91, explanation: 'One aggregate price with information-only children.',
+    proposedItems: [
+      { id: 'bundle-parent', desc: 'Pump package', pricingRole: 'bundle_parent', sourceRowIds: ['row-combined'], entryOrigin: 'ai_accepted', unit: 'set', qty: 1, rate: 100, total: 100, costComponent: 'combined' },
+      { id: 'bundle-child', desc: 'Pump body', pricingRole: 'bundle_child', parentBundleId: 'bundle-parent', sourceRowIds: ['row-combined'], entryOrigin: 'ai_accepted' },
+    ],
+  }, context())
+  assert.equal(bundle.valid, true)
+})
+
+test('rejects unknown evidence, bad arithmetic, stale edits, and duplicate batch targets', () => {
+  assert.deepEqual(validateProposal(separateComponentsProposal({ sourceRowIds: ['missing-row'] }), context()), {
+    valid: false, code: 'unknown_source_row',
+  })
+  const badMath = separateComponentsProposal()
+  badMath.proposedItems[0].total = 41
+  assert.deepEqual(validateProposal(badMath, context()), { valid: false, code: 'arithmetic_mismatch' })
+  assert.deepEqual(validateProposal(separateComponentsProposal({
+    affectedItemFingerprints: { 'combined-work': 'sha256:stale' },
+  }), context()), { valid: false, code: 'stale_item' })
+  const batch = validateProposalBatch([separateComponentsProposal(), separateComponentsProposal({ id: 'duplicate-target' })], context())
+  assert.equal(batch.valid, false)
+  assert.equal(batch.results[1].valid, false)
+  assert.equal(batch.results[1].code, 'overlapping_target')
+})
+
+test('high confidence requires valid evidence, reconciliation, a non-review operation, and fresh state', () => {
+  const result = validateProposal(separateComponentsProposal(), context())
+  assert.equal(result.valid, true)
+  if (!result.valid) return
+  assert.equal(isHighConfidenceProposal(result.proposal), true)
+  assert.equal(isHighConfidenceProposal({ ...result.proposal, confidence: 0.89 }), false)
+  assert.equal(isHighConfidenceProposal({ ...result.proposal, operation: 'needs_human_review' }), false)
+})
+
+test('rejects negative values, duplicate source rows, and merge totals that do not reconcile', () => {
+  const negative = separateComponentsProposal()
+  negative.proposedItems[0].rate = -1
+  assert.equal(validateProposal(negative, context()).valid, false)
+  assert.deepEqual(validateProposal(separateComponentsProposal({ sourceRowIds: ['row-combined', 'row-combined'] }), context()), {
+    valid: false, code: 'duplicate_source_row',
+  })
+  const badMerge = validateProposal({
+    id: 'bad-merge', operation: 'merge', sourceRowIds: ['row-combined', 'row-extra'],
+    targetItemIds: ['combined-work', 'pump-accessory'],
+    affectedItemFingerprints: {
+      'combined-work': fingerprintCanonicalItem(sections[0].items[0]),
+      'pump-accessory': fingerprintCanonicalItem(sections[0].items[1]),
+    },
+    confidence: 0.91, explanation: 'Bad total.',
+    proposedItems: [
+      { id: 'bad-merged', desc: 'Pump package', pricingRole: 'standard', sourceRowIds: ['row-combined', 'row-extra'], entryOrigin: 'ai_accepted', unit: 'set', qty: 1, rate: 119, total: 119, costComponent: 'combined' },
+    ],
+  }, context())
+  assert.deepEqual(badMerge, { valid: false, code: 'reconciliation_mismatch' })
+})
+
+test('a second application or modified accepted structure is refused instead of applying or undoing silently', () => {
+  const validated = validateProposal(separateComponentsProposal(), context())
+  assert.equal(validated.valid, true)
+  if (!validated.valid) return
+  const accepted = applyValidatedProposal(sections, validated.proposal)
+  assert.throws(() => applyValidatedProposal(accepted.sections, validated.proposal), /changed after acceptance/)
+  const modified = structuredClone(accepted.sections)
+  modified[0].items[0] = { ...modified[0].items[0], desc: 'Later user edit' }
+  assert.throws(() => undoAcceptedProposal(modified, accepted.audit), /changed after acceptance/)
+})
