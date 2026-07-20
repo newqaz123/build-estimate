@@ -18,7 +18,6 @@ function handler(overrides: Partial<ExtractionReviewHandlerDependencies> = {}) {
     authenticate: async () => ({ user: { id: 'user-1' } }),
     getReadyImport: async () => ({ boq, run }),
     getSourceRows: async () => rows,
-    saveValidatedProposals: async () => undefined,
     getReviewState: async () => ({ proposals: [], proposalStatuses: {}, auditEvents: [], reviewRun: { status: 'queued' } }),
     acquireReviewLease: async () => ({ kind: 'acquired', reviewRun: { status: 'running', leaseId: 'lease-1' } }),
     completeReviewLease: async (_boqId, _runId, _leaseId, status) => ({ status }),
@@ -195,7 +194,7 @@ test('durable snapshot preserves reason-specific source-row targeting', () => {
   assert.deepEqual(response.sourceRowIds, ['row-compound', 'row-ambiguous', 'row-unreconciled'])
 })
 
-test('a completed review refreshes every reviewed source row even when no proposal is returned', async () => {
+test('a completed review atomically refreshes every reviewed source row even when no proposal is returned', async () => {
   const selectedRun = {
     ...run,
     reviewTargeting: { candidateRowIds: ['row-1'], candidateCount: 1, unreconciled: false },
@@ -206,7 +205,10 @@ test('a completed review refreshes every reviewed source row even when no propos
     getReadyImport: async () => ({ boq, run: selectedRun }),
     getSettings: async () => ({ llm: { provider: 'openai', model: 'gpt-4o-mini' } } as never),
     env: { OPENAI_API_KEY: 'test-key' },
-    saveValidatedProposals: async (_boqId, _runId, _proposals, sourceRowIds) => { refreshedRows = sourceRowIds },
+    completeReviewLease: async (_boqId, _runId, _leaseId, status, _proposals, sourceRowIds) => {
+      refreshedRows = sourceRowIds
+      return { status }
+    },
   })(new Request('https://example.test', { method: 'POST', body: JSON.stringify({ manual: false }) }), {
     params: Promise.resolve({ id: 'boq-1', runId: 'run-1' }),
   })

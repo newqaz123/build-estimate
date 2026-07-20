@@ -20,10 +20,9 @@ export interface ExtractionReviewHandlerDependencies extends Omit<ExtractionRevi
   authenticate(): Promise<{ user?: unknown } | null>
   getReadyImport(boqId: string, runId: string): Promise<{ boq: Boq; run: BoqExtractionRun } | null>
   getSourceRows(boqId: string, runId: string): Promise<BoqSourceRowV3[]>
-  saveValidatedProposals(boqId: string, runId: string, proposals: readonly ValidatedProposal[], refreshedSourceRowIds: readonly string[]): Promise<void>
   getReviewState(boqId: string, runId: string): Promise<ExtractionProposalReviewState | null>
   acquireReviewLease(boqId: string, runId: string, requestKey: string, leaseId: string, leaseTtlMs: number, force: boolean): Promise<{ kind: 'acquired' | 'busy' | 'complete' | 'failed'; reviewRun: ExtractionReviewRunSummary }>
-  completeReviewLease(boqId: string, runId: string, leaseId: string, status: 'completed' | 'partial', proposals: readonly ValidatedProposal[]): Promise<ExtractionReviewRunSummary>
+  completeReviewLease(boqId: string, runId: string, leaseId: string, status: 'completed' | 'partial', proposals: readonly ValidatedProposal[], refreshedSourceRowIds: readonly string[]): Promise<ExtractionReviewRunSummary>
   failReviewLease(boqId: string, runId: string, leaseId: string, failureCode: string, retryDelayMs: number): Promise<ExtractionReviewRunSummary>
   createLeaseId(): string
 }
@@ -136,9 +135,8 @@ export function createExtractionReviewHandler(dependencies: ExtractionReviewHand
       if (result.body.mode === 'fallback') {
         finalRun = await dependencies.failReviewLease(id, runId, leaseId, result.body.aiStatus, REVIEW_FAILURE_BACKOFF_MS)
       } else {
-        if (result.body.mode === 'ai') await dependencies.saveValidatedProposals(id, runId, result.body.proposals, result.body.sourceRowIds)
         const status = result.body.rejectedProposals.length > 0 ? 'partial' : 'completed'
-        finalRun = await dependencies.completeReviewLease(id, runId, leaseId, status, result.body.proposals)
+        finalRun = await dependencies.completeReviewLease(id, runId, leaseId, status, result.body.proposals, result.body.sourceRowIds)
       }
       const snapshot = await loadSnapshot(finalRun, result.body.rejectedProposals)
       if (!snapshot) return Response.json({ error: 'Extraction run not found' }, { status: 404 })

@@ -3,7 +3,7 @@ import type { Boq } from './boq-schema'
 import { extractionRunPath, sourceRowPath, createFirestoreExtractionStore } from './boq-extraction-storage'
 import { checksumSourceRows, extractionRunIdentityFingerprint, fingerprintParserConfig, stableCanonicalJson, type BoqExtractionRun } from './boq-extraction-run'
 import type { BoqSourceRowV3 } from './boq-extraction-schema'
-import { fingerprintCanonicalItem, isHighConfidenceProposal, type ExtractionProposal, type ValidatedProposal } from './boq-extraction-proposals'
+import { fingerprintCanonicalItem, fingerprintCanonicalSections, isHighConfidenceProposal, type ExtractionProposal, type ValidatedProposal } from './boq-extraction-proposals'
 import {
   acceptExtractionProposal,
   proposalMatchesAudit,
@@ -169,6 +169,59 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
     return { ...imported, sourceRows }
   }
 
+  async function persistValidatedProposals(
+    transaction: FirebaseFirestore.Transaction,
+    boqId: string,
+    runId: string,
+    immutable: NonNullable<Awaited<ReturnType<typeof loadImmutable>>>,
+    boqSnap: FirebaseFirestore.DocumentSnapshot,
+    runSnap: FirebaseFirestore.DocumentSnapshot,
+    proposalPage: FirebaseFirestore.QuerySnapshot,
+    auditPage: FirebaseFirestore.QuerySnapshot,
+    proposals: readonly ValidatedProposal[],
+    refreshedSourceRowIds: readonly string[],
+  ): Promise<void> {
+    if (!boqSnap.exists || !runSnap.exists || runSnap.data()?.status !== 'ready'
+      || !await verifyImmutableContext(transaction, db, boqId, runId, runSnap, immutable)) {
+      throw new Error('Extraction run not found')
+    }
+    const boq = { id: boqSnap.id, ...boqSnap.data() } as Boq
+    const timestamp = now().toISOString()
+    const canonical = proposals.map((proposal) => {
+      const validation = validateExtractionProposal(boq, immutable.run, immutable.sourceRows, proposal)
+      if (!validation.valid) throw new Error(`Invalid proposal: ${validation.code}`)
+      const sameId = proposalPage.docs.find((snapshot) => snapshot.id === validation.proposal.id)
+      const sameValue = sameId ? storedProposal(sameId.data(), validation.proposal.id) : null
+      const safeModelId = validation.proposal.id.trim() !== '' && !validation.proposal.id.includes('/') && validation.proposal.id.length <= 240
+      const id = safeModelId && (!sameId || sameValue && stableCanonicalJson(sameValue) === stableCanonicalJson(validation.proposal))
+        ? validation.proposal.id
+        : canonicalProposalId(validation.proposal)
+      return { ...validation.proposal, id }
+    })
+    const incomingIds = new Set(canonical.map((proposal) => proposal.id))
+    const refreshedRows = new Set(refreshedSourceRowIds)
+    const auditedProposalIds = new Set(auditPage.docs.map((snapshot) => snapshot.id))
+    for (const existing of proposalPage.docs) {
+      const current = storedProposal(existing.data(), existing.id)
+      if (!current) throw new Error('Stored proposal record is invalid')
+      if (proposalRecordStatus(existing.data()) === 'pending' && !auditedProposalIds.has(current.id)
+        && current.sourceRowIds.some((sourceRowId) => refreshedRows.has(sourceRowId)) && !incomingIds.has(current.id)) {
+        transaction.update(existing.ref, { lifecycleStatus: 'superseded', supersededAt: timestamp, updatedAt: timestamp })
+      }
+    }
+    for (const proposal of canonical) {
+      const existing = proposalPage.docs.find((snapshot) => snapshot.id === proposal.id)
+      if (existing) {
+        const current = storedProposal(existing.data(), proposal.id)
+        if (!current || stableCanonicalJson(current) !== stableCanonicalJson(proposal)) throw new Error('Stored proposal identity conflict')
+        continue
+      }
+      transaction.create(db.doc(proposalPath(boqId, runId, proposal.id)), {
+        proposal: structuredClone(proposal), lifecycleStatus: 'pending', createdAt: timestamp, updatedAt: timestamp,
+      })
+    }
+  }
+
   return {
     async saveValidatedProposals(
       boqId: string,
@@ -186,46 +239,9 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
         const [boqSnap, runSnap, proposalPage, auditPage] = await Promise.all([
           transaction.get(boqRef), transaction.get(runRef), proposalPagePromise, auditPagePromise,
         ])
-        if (!boqSnap.exists || !runSnap.exists || runSnap.data()?.status !== 'ready'
-          || !await verifyImmutableContext(transaction, db, boqId, runId, runSnap, immutable)) {
-          throw new Error('Extraction run not found')
-        }
-        const boq = { id: boqSnap.id, ...boqSnap.data() } as Boq
-        const timestamp = now().toISOString()
-        const canonical = proposals.map((proposal) => {
-          const validation = validateExtractionProposal(boq, immutable.run, immutable.sourceRows, proposal)
-          if (!validation.valid) throw new Error(`Invalid proposal: ${validation.code}`)
-          const sameId = proposalPage.docs.find((snapshot) => snapshot.id === validation.proposal.id)
-          const sameValue = sameId ? storedProposal(sameId.data(), validation.proposal.id) : null
-          const safeModelId = validation.proposal.id.trim() !== '' && !validation.proposal.id.includes('/') && validation.proposal.id.length <= 240
-          const id = safeModelId && (!sameId || sameValue && stableCanonicalJson(sameValue) === stableCanonicalJson(validation.proposal))
-            ? validation.proposal.id
-            : canonicalProposalId(validation.proposal)
-          const normalized = { ...validation.proposal, id }
-          return normalized
-        })
-        const incomingIds = new Set(canonical.map((proposal) => proposal.id))
-        const refreshedRows = new Set(refreshedSourceRowIds)
-        const auditedProposalIds = new Set(auditPage.docs.map((snapshot) => snapshot.id))
-        for (const existing of proposalPage.docs) {
-          const current = storedProposal(existing.data(), existing.id)
-          if (!current) throw new Error('Stored proposal record is invalid')
-          if (proposalRecordStatus(existing.data()) === 'pending' && !auditedProposalIds.has(current.id)
-            && current.sourceRowIds.some((sourceRowId) => refreshedRows.has(sourceRowId)) && !incomingIds.has(current.id)) {
-            transaction.update(existing.ref, { lifecycleStatus: 'superseded', supersededAt: timestamp, updatedAt: timestamp })
-          }
-        }
-        for (const proposal of canonical) {
-          const existing = proposalPage.docs.find((snapshot) => snapshot.id === proposal.id)
-          if (existing) {
-            const current = storedProposal(existing.data(), proposal.id)
-            if (!current || stableCanonicalJson(current) !== stableCanonicalJson(proposal)) throw new Error('Stored proposal identity conflict')
-            continue
-          }
-          transaction.create(db.doc(proposalPath(boqId, runId, proposal.id)), {
-            proposal: structuredClone(proposal), lifecycleStatus: 'pending', createdAt: timestamp, updatedAt: timestamp,
-          })
-        }
+        await persistValidatedProposals(
+          transaction, boqId, runId, immutable, boqSnap, runSnap, proposalPage, auditPage, proposals, refreshedSourceRowIds,
+        )
       })
     },
 
@@ -247,6 +263,21 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
       const proposalStatuses: Record<string, ExtractionProposalStatusSummary> = {}
       const auditByProposal = new Map(audits.map((audit) => [audit!.proposalId, audit!]))
       const auditEvents: Array<ExtractionProposalAudit | ExtractionProposalUndoEvent> = audits as ExtractionProposalAudit[]
+      const undoneProposalIds = new Set(undoSnaps.flatMap((snapshot, index) => snapshot.exists ? [proposals[index]!.id] : []))
+      const currentSectionsFingerprint = fingerprintCanonicalSections(immutable.boq.sections)
+      const undoableProposalId = (audits as ExtractionProposalAudit[])
+        .filter((audit) => audit.status === 'accepted' && !undoneProposalIds.has(audit.proposalId)
+          && audit.afterSectionsFingerprint === currentSectionsFingerprint)
+        .sort((left, right) => {
+          const byTime = left.timestamp.localeCompare(right.timestamp)
+          if (byTime !== 0) return byTime
+          const leftBatch = (left as ExtractionProposalAudit & { batchProposalIds?: string[] }).batchProposalIds
+          const rightBatch = (right as ExtractionProposalAudit & { batchProposalIds?: string[] }).batchProposalIds
+          if (leftBatch && rightBatch && stableCanonicalJson(leftBatch) === stableCanonicalJson(rightBatch)) {
+            return leftBatch.indexOf(left.proposalId) - rightBatch.indexOf(right.proposalId)
+          }
+          return left.auditId.localeCompare(right.auditId)
+        }).at(-1)?.proposalId
       proposals.forEach((proposal, index) => {
         const undo = undoSnaps[index].exists ? undoSnaps[index].data() : null
         if (undo && !isUndoEvent(undo)) throw new Error('Proposal undo record is invalid')
@@ -266,7 +297,7 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
           return
         }
         proposalStatuses[proposal!.id] = audit
-          ? { status: audit.status, canUndo: audit.status === 'accepted' }
+          ? { status: audit.status, canUndo: audit.status === 'accepted' && audit.proposalId === undoableProposalId }
           : { status: 'pending', canUndo: false }
       })
       const runData = immutable.run as BoqExtractionRun & { reviewRun?: unknown }
@@ -333,15 +364,28 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
       runId: string,
       leaseId: string,
       status: 'completed' | 'partial',
-      _proposals: readonly ValidatedProposal[],
+      proposals: readonly ValidatedProposal[],
+      refreshedSourceRowIds: readonly string[] = proposals.flatMap((proposal) => proposal.sourceRowIds),
     ): Promise<ExtractionReviewRunSummary> {
-      void _proposals
+      const immutable = await loadImmutable(boqId, runId)
+      if (!immutable) throw new Error('Extraction run not found')
       return db.runTransaction(async (transaction) => {
+        const boqRef = db.collection('boqs').doc(boqId)
         const runRef = db.doc(extractionRunPath(boqId, runId))
-        const runSnap = await transaction.get(runRef)
+        const [boqSnap, runSnap, proposalPage, auditPage] = await Promise.all([
+          transaction.get(boqRef),
+          transaction.get(runRef),
+          transaction.get(runRef.collection('proposals')),
+          transaction.get(runRef.collection('proposalAudits')),
+        ])
         const current = reviewRunSummary(runSnap.data()?.reviewRun, runSnap.data()?.aiReviewStatus)
         if (!runSnap.exists || runSnap.data()?.status !== 'ready' || current.status !== 'running' || current.leaseId !== leaseId) {
           throw new Error('Extraction review lease was lost')
+        }
+        if (proposals.length > 0 || refreshedSourceRowIds.length > 0) {
+          await persistValidatedProposals(
+            transaction, boqId, runId, immutable, boqSnap, runSnap, proposalPage, auditPage, proposals, refreshedSourceRowIds,
+          )
         }
         const timestamp = now().toISOString()
         const reviewRun: ExtractionReviewRunSummary = {

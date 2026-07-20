@@ -234,13 +234,14 @@ test('batch acceptance is one transaction and leaves BOQ and audits unchanged on
   assert.equal(fixture.db.docs.has(`${fixture.runPath}/proposalAudits/proposal-1`), false)
 })
 
-test('batch acceptance applies every stored proposal in one transaction', async () => {
+test('batch acceptance exposes undo only in LIFO order and advances eligibility after reload', async () => {
   const fixture = harness()
   const bundle = fixture.boq.sections.flatMap((section) => section.items).find((item) => item.id === 'bundle')!
   const option = fixture.boq.sections.flatMap((section) => section.items).find((item) => item.id === 'option')!
   const proposals = [
     keepProposal('keep-bundle', 'row-1', 'bundle', bundle),
     keepProposal('keep-option', 'row-3', 'option', option),
+    fixture.proposal,
   ]
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', proposals as never)
   const beforeTransactions = fixture.db.transactionCount
@@ -249,6 +250,19 @@ test('batch acceptance applies every stored proposal in one transaction', async 
   assert.equal(fixture.db.transactionCount - beforeTransactions, 1)
   assert.equal(fixture.db.docs.has(`${fixture.runPath}/proposalAudits/keep-bundle`), true)
   assert.equal(fixture.db.docs.has(`${fixture.runPath}/proposalAudits/keep-option`), true)
+  assert.equal(fixture.db.docs.has(`${fixture.runPath}/proposalAudits/proposal-1`), true)
+
+  let state = await fixture.store.getReviewState('boq-1', 'run-1')
+  assert.deepEqual(Object.fromEntries(proposals.map((proposal) => [proposal.id, state?.proposalStatuses[proposal.id]?.canUndo])), {
+    'keep-bundle': false, 'keep-option': false, 'proposal-1': true,
+  })
+  assert.equal((await fixture.store.undo('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+  state = await fixture.store.getReviewState('boq-1', 'run-1')
+  assert.equal(state?.proposalStatuses['keep-option']?.canUndo, true)
+  assert.equal(state?.proposalStatuses['keep-bundle']?.canUndo, false)
+  assert.equal((await fixture.store.undo('boq-1', 'run-1', 'keep-option', 'user-1')).status, 200)
+  state = await fixture.store.getReviewState('boq-1', 'run-1')
+  assert.equal(state?.proposalStatuses['keep-bundle']?.canUndo, true)
 })
 
 test('a refreshed row supersedes old pending proposals and safely versions a reused model id', async () => {
@@ -322,6 +336,42 @@ test('review leases serialize dispatch, recover after expiry, and persist comple
   await fixture.store.completeReviewLease('boq-1', 'run-1', 'lease-3', 'completed', [])
   assert.equal((fixture.db.docs.get(fixture.runPath)!.reviewRun as { status: string }).status, 'completed')
   assert.equal((await fixture.store.acquireReviewLease('boq-1', 'run-1', 'request-1', 'lease-4', 1_000, false)).kind, 'complete')
+})
+
+test('late expired lease cannot persist or supersede proposals after the replacement lease completes', async () => {
+  let current = new Date('2026-07-20T12:00:00.000Z')
+  const fixture = harness(() => current)
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  const proposalB = { ...fixture.proposal, id: 'proposal-b', explanation: 'Replacement lease result.' }
+  const proposalA = { ...fixture.proposal, id: 'proposal-a', explanation: 'Expired lease result.' }
+
+  await fixture.store.acquireReviewLease('boq-1', 'run-1', 'request-1', 'lease-a', 1_000, false)
+  current = new Date('2026-07-20T12:00:02.000Z')
+  await fixture.store.acquireReviewLease('boq-1', 'run-1', 'request-1', 'lease-b', 1_000, false)
+  await fixture.store.completeReviewLease('boq-1', 'run-1', 'lease-b', 'completed', [proposalB], ['row-4'])
+
+  await assert.rejects(
+    fixture.store.completeReviewLease('boq-1', 'run-1', 'lease-a', 'completed', [proposalA], ['row-4']),
+    /lease was lost/,
+  )
+
+  const state = await fixture.store.getReviewState('boq-1', 'run-1')
+  assert.deepEqual(state?.proposals.map((entry) => entry.id), ['proposal-b'])
+  assert.equal(fixture.db.docs.has(`${fixture.runPath}/proposals/proposal-a`), false)
+  assert.equal(fixture.db.docs.get(`${fixture.runPath}/proposals/proposal-1`)?.lifecycleStatus, 'superseded')
+  assert.equal((fixture.db.docs.get(fixture.runPath)?.reviewRun as { status?: string }).status, 'completed')
+})
+
+test('lease completion with zero proposals still atomically supersedes refreshed-row suggestions', async () => {
+  const fixture = harness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  await fixture.store.acquireReviewLease('boq-1', 'run-1', 'request-1', 'lease-1', 1_000, false)
+
+  await fixture.store.completeReviewLease('boq-1', 'run-1', 'lease-1', 'completed', [], ['row-4'])
+
+  assert.deepEqual((await fixture.store.getReviewState('boq-1', 'run-1'))?.proposals, [])
+  assert.equal(fixture.db.docs.get(`${fixture.runPath}/proposals/proposal-1`)?.lifecycleStatus, 'superseded')
+  assert.equal((fixture.db.docs.get(fixture.runPath)?.reviewRun as { status?: string }).status, 'completed')
 })
 
 test('review leases preserve reason-specific targeting through completion and reload', async () => {
