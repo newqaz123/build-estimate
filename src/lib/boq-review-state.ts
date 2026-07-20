@@ -22,6 +22,17 @@ export function buildReviewFingerprint(edits: ReviewEdits): string {
   })
 }
 
+export function buildCanonicalRevisionKey(boq: Pick<Boq, 'vendor' | 'project' | 'workType' | 'date' | 'sections' | 'updatedAt'>): string {
+  return JSON.stringify({
+    vendor: boq.vendor,
+    project: boq.project,
+    workType: boq.workType,
+    date: boq.date,
+    sections: boq.sections,
+    updatedAt: boq.updatedAt,
+  })
+}
+
 export function updateReviewItem(
   items: BoqItem[],
   index: number,

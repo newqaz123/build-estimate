@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  buildCanonicalRevisionKey,
   buildReviewFingerprint,
   buildReviewVerification,
   reviewItemKey,
@@ -70,6 +71,17 @@ test('LLM verification fingerprint changes whenever reviewed metadata or items c
   const original = buildReviewFingerprint(edits)
   assert.notEqual(buildReviewFingerprint({ ...edits, vendor: 'Edited' }), original)
   assert.notEqual(buildReviewFingerprint({ ...edits, items: [{ ...item, rate: 6, total: 12 }] }), original)
+})
+
+test('canonical review revision follows only persisted BOQ metadata, sections, and updatedAt', () => {
+  const original = buildCanonicalRevisionKey(boq)
+  assert.equal(buildCanonicalRevisionKey({ ...boq }), original)
+  assert.notEqual(buildCanonicalRevisionKey({ ...boq, project: 'Persisted edit' }), original)
+  assert.notEqual(buildCanonicalRevisionKey({
+    ...boq,
+    sections: [{ header: 'Items', items: [{ ...item, rate: 6, total: 12 }] }],
+  }), original)
+  assert.notEqual(buildCanonicalRevisionKey({ ...boq, updatedAt: '2026-07-20T12:00:00Z' }), original)
 })
 
 test('review keeps informational bundle children read-only and excludes them from verification totals', () => {

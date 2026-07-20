@@ -21,6 +21,7 @@ import {
   type VerificationResponseIssue,
 } from "@/lib/boq-verification"
 import {
+  buildCanonicalRevisionKey,
   buildReviewFingerprint,
   buildReviewVerification,
   reviewItemKey,
@@ -109,6 +110,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
     vendor: boq.vendor, project: boq.project, workType: boq.workType, date: boq.date,
     items: boq.sections.flatMap((section) => section.items),
   }))
+  const [canonicalRevisionKey, setCanonicalRevisionKey] = useState(() => buildCanonicalRevisionKey(boq))
   const [verificationState, setVerificationState] = useState<{
     fingerprint: string
     result: VerificationApiResponse
@@ -294,6 +296,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
       const added = updated.sections.at(-1)?.items.at(-1)
       if (!added || added.entryOrigin !== "user") throw new Error("The server did not return the audited missing item.")
       setItems((current) => current.some((item) => item.id === added.id) ? current : [...current, added])
+      setCanonicalRevisionKey(buildCanonicalRevisionKey(updated))
       toast.success("Missing item added as a user-entered unpriced row")
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "The missing item could not be added.")
@@ -315,8 +318,9 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
         body: JSON.stringify({ updates: [{ sectionIndex, items: [{ ...getBoqItemRequestIdentity(item), excludedFromTotal: false }] }] }),
       })
       if (!response.ok) throw new Error(await readError(response, "The optional item could not be included."))
-      await response.json() as Boq
+      const updated = await response.json() as Boq
       setItems((current) => current.map((candidate, index) => index === itemIndex ? { ...candidate, excludedFromTotal: false, exclusionReason: undefined } : candidate))
+      setCanonicalRevisionKey(buildCanonicalRevisionKey(updated))
       toast.success("Optional item included in the BOQ total")
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "The optional item could not be included.")
@@ -326,7 +330,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
   }
 
   const handleApprove = async () => {
-    if (verification.hasBlockingIssues) return
+    if (busy || verification.hasBlockingIssues) return
     setApproveLoading(true)
     setSaveError(null)
     try {
@@ -379,6 +383,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
         vendor: updated.vendor, project: updated.project, workType: updated.workType, date: updated.date,
         items: updated.sections.flatMap((section) => section.items),
       }))
+      setCanonicalRevisionKey(buildCanonicalRevisionKey(updated))
       toast.success("Draft saved. Extraction corrections can now be applied safely.")
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "The draft could not be saved.")
@@ -465,6 +470,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
 
             <ExtractionReview
               boq={{ ...boq, vendor, project, workType, date, sections: reviewSections, grandTotal }}
+              canonicalRevisionKey={canonicalRevisionKey}
               readOnly={boq.status === "approved"}
               mutationBlockedReason={reviewDirty ? "You have unsaved comparison edits. Use Save draft before applying extraction corrections." : undefined}
               sourceAvailable={hasSource}
@@ -475,6 +481,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
                   vendor: updated.vendor, project: updated.project, workType: updated.workType, date: updated.date,
                   items: updated.sections.flatMap((section) => section.items),
                 }))
+                setCanonicalRevisionKey(buildCanonicalRevisionKey(updated))
               }}
               onNavigateToPage={(page) => setPdfPageRequest((current) => ({ page, key: current.key + 1 }))}
             />
@@ -605,7 +612,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
             <div className="review-actions">
               <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>Discard</Button>
               <Button variant="outline" size="sm" onClick={() => void handleSaveDraft()} disabled={busy || !reviewDirty}>{draftSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}Save draft</Button>
-              <Button size="sm" onClick={handleApprove} disabled={approveLoading || verification.hasBlockingIssues || (requireCatalogReadiness && catalogReadiness.blocking > 0)}>
+              <Button size="sm" onClick={handleApprove} disabled={busy || verification.hasBlockingIssues || (requireCatalogReadiness && catalogReadiness.blocking > 0)}>
                 {approveLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
                 {primaryActionLabel}
               </Button>

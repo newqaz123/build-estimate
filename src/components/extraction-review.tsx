@@ -33,6 +33,7 @@ import type { Boq } from "@/lib/boq-schema"
 
 interface ExtractionReviewProps {
   boq: Boq
+  canonicalRevisionKey: string
   onBack?: () => void
   onBoqChange: (boq: Boq) => void
   onNavigateToPage: (page: number) => void
@@ -129,12 +130,13 @@ const REVIEW_FILTERS: Array<{ value: ExtractionReviewFilter; label: string }> = 
   { value: "ai-pending", label: "AI pending" },
 ]
 
-export function ExtractionReview({ boq, onBack, onBoqChange, onNavigateToPage, sourceAvailable, readOnly = false, mutationBlockedReason }: ExtractionReviewProps) {
+export function ExtractionReview({ boq, canonicalRevisionKey, onBack, onBoqChange, onNavigateToPage, sourceAvailable, readOnly = false, mutationBlockedReason }: ExtractionReviewProps) {
   const [extractionRunId, setExtractionRunId] = useState(boq.activeExtractionRunId)
   const [state, dispatch] = useReducer(extractionReviewReducer, undefined, initialExtractionReviewState)
   const [reextracting, setReextracting] = useState(false)
   const autoReviewedRunRef = useRef<string | null>(null)
   const recoveryAttemptRef = useRef<string | null>(null)
+  const canonicalRevisionRef = useRef(canonicalRevisionKey)
   const { review, loading, error, proposalActions: actions, proposalStatuses: statuses } = state
 
   const runReview = useCallback(async (sourceRowId?: string) => {
@@ -237,6 +239,13 @@ export function ExtractionReview({ boq, onBack, onBoqChange, onNavigateToPage, s
     }
   }, [boq.id, extractionRunId])
 
+  useEffect(() => {
+    if (canonicalRevisionRef.current !== canonicalRevisionKey) {
+      canonicalRevisionRef.current = canonicalRevisionKey
+      void refreshStoredReview()
+    }
+  }, [canonicalRevisionKey, refreshStoredReview])
+
   const executeAction = useCallback(async (proposal: ValidatedProposal, action: "accept" | "reject" | "undo") => {
     if (!extractionRunId) return false
     const actionState: ExtractionProposalAction = action === "accept" ? "accepting" : action === "reject" ? "rejecting" : "undoing"
@@ -264,6 +273,7 @@ export function ExtractionReview({ boq, onBack, onBoqChange, onNavigateToPage, s
   }, [boq.id, extractionRunId, mutationBlockedReason, onBoqChange, readOnly, refreshStoredReview])
 
   const bulkProposalIds = useMemo(() => acceptAllValidatedProposalIds(review?.proposals ?? [], statuses), [review, statuses])
+  const hasStaleProposals = review?.proposals.some((proposal) => proposal.stale) === true
   const acceptAll = async () => {
     if (!extractionRunId || readOnly || mutationBlockedReason || bulkProposalIds.length === 0) return
     bulkProposalIds.forEach((proposalId) => dispatch({ type: "proposal_action_started", proposalId, action: "accepting" }))
@@ -355,6 +365,8 @@ export function ExtractionReview({ boq, onBack, onBoqChange, onNavigateToPage, s
       {error ? <div className="review-save-error" role="alert">{error}</div> : null}
 
       {mutationBlockedReason ? <div className="review-save-error" role="status"><strong>Save draft before applying or undoing extraction corrections</strong><span>{mutationBlockedReason}</span></div> : null}
+
+      {hasStaleProposals ? <div className="review-save-error" role="status"><strong>Canonical BOQ changed. Recheck with AI</strong><span>Saved item or detail changes made these suggestions stale. Recheck before accepting them.</span></div> : null}
 
       {review?.mode === "ai" && review.proposals.length === 0 ? <div className="extraction-review-empty"><Check aria-hidden="true" /><strong>No correction proposals</strong><span>The deterministic BOQ remains unchanged. You can recheck an individual source row below.</span></div> : null}
 

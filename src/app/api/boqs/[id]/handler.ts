@@ -7,11 +7,12 @@ import { calculateBoqTotals } from '@/lib/boq-pricing'
 import { BoqCanonicalValidationError, parseCanonicalBoqSections } from '@/lib/boq-canonical'
 
 export type BoqDetailRouteContext = { params: Promise<{ id: string }> }
+export type BoqUpdateResult = 'updated' | 'approved' | 'not-found'
 
 interface BoqDetailDependencies {
   authenticate(): Promise<{ user?: unknown } | null>
   getBoq(id: string): Promise<Boq | null>
-  updateBoq(id: string, updates: Record<string, unknown>): Promise<void>
+  updateBoq(id: string, updates: Record<string, unknown>): Promise<BoqUpdateResult>
   deleteBoq(id: string): Promise<void>
   loadSource(path: string): Promise<Buffer>
   deleteSource(path: string): Promise<void>
@@ -98,7 +99,13 @@ export function createBoqDetailHandlers(dependencies: BoqDetailDependencies) {
         }
       }
 
-      await dependencies.updateBoq(id, updates)
+      const updateResult = await dependencies.updateBoq(id, updates)
+      if (updateResult === 'approved') {
+        return Response.json({ error: 'Approved BOQs are read-only' }, { status: 409 })
+      }
+      if (updateResult === 'not-found') {
+        return Response.json({ error: 'BOQ not found' }, { status: 404 })
+      }
       const updated = await dependencies.getBoq(id)
       return Response.json(updated ? toPublicBoq(updated) : null)
     } catch (error) {

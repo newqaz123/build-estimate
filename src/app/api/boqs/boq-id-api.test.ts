@@ -153,6 +153,7 @@ function detailHarness(existing: Boq = detailBoq()) {
     updateBoq: async (_id, update) => {
       updates.push(update)
       current = current ? { ...current, ...update } as Boq : null
+      return 'updated'
     },
     loadSource: async () => {
       calls.push('load')
@@ -322,6 +323,42 @@ test('draft updates may explicitly save Unclassified work and retain verificatio
 
   assert.equal(response.status, 200)
   assert.equal(harness.updates[0]?.workType, 'Unclassified')
+})
+
+test('stale PUT after approval returns 409 without overwriting the approved BOQ', async () => {
+  const draft = detailBoq()
+  let stored = detailBoq({ status: 'approved', project: 'Approved project' })
+  let initialRead = true
+  const handlers = createBoqDetailHandlers({
+    authenticate: async () => ({ user: {} }),
+    getBoq: async () => {
+      if (initialRead) {
+        initialRead = false
+        return draft
+      }
+      return stored
+    },
+    updateBoq: async (_id, update) => {
+      if (stored.status === 'approved') return 'approved'
+      stored = { ...stored, ...update } as Boq
+      return 'updated'
+    },
+    deleteBoq: async () => {},
+    loadSource: async () => Buffer.from('%PDF'),
+    deleteSource: async () => {},
+    saveSource: async () => {},
+    logError: () => {},
+  })
+
+  const response = await handlers.PUT(new Request('http://localhost/api/boqs/boq-1', {
+    method: 'PUT',
+    body: JSON.stringify({ status: 'draft', project: 'Stale draft project' }),
+  }), detailContext)
+
+  assert.equal(response.status, 409)
+  assert.deepEqual(await response.json(), { error: 'Approved BOQs are read-only' })
+  assert.equal(stored.status, 'approved')
+  assert.equal(stored.project, 'Approved project')
 })
 
 test('invalid workType validation lists Unclassified as an accepted value', async () => {

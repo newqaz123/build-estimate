@@ -74,6 +74,27 @@ test("accepted and undone actions reload durable LIFO Undo eligibility", () => {
   assert.doesNotMatch(source, /bulkProposalIds\.forEach\(\(proposalId\) => dispatch\(\{ type: "proposal_status", proposalId, status: "accepted" \}\)\)/)
 })
 
+test("a saved canonical revision reloads durable staleness without dispatching another provider review", () => {
+  const componentSource = readFileSync(componentUrl, "utf8")
+  const detailSource = readFileSync(detailUrl, "utf8")
+  const compareSource = readFileSync(new URL("./review-panel.tsx", import.meta.url), "utf8")
+  assert.match(componentSource, /canonicalRevisionKey: string/)
+  assert.match(componentSource, /canonicalRevisionRef\.current !== canonicalRevisionKey/)
+  assert.match(componentSource, /canonicalRevisionRef\.current = canonicalRevisionKey[\s\S]*?void refreshStoredReview\(\)/)
+  assert.match(componentSource, /Canonical BOQ changed\. Recheck with AI/)
+  assert.match(detailSource, /const canonicalRevisionKey = useMemo\(\(\) => buildCanonicalRevisionKey\(boq\), \[boq\]\)/)
+  assert.match(detailSource, /canonicalRevisionKey=\{canonicalRevisionKey\}/)
+  assert.match(compareSource, /const \[canonicalRevisionKey, setCanonicalRevisionKey\] = useState\(\(\) => buildCanonicalRevisionKey\(boq\)\)/)
+  assert.match(compareSource, /setCanonicalRevisionKey\(buildCanonicalRevisionKey\(updated\)\)/)
+  assert.match(compareSource, /canonicalRevisionKey=\{canonicalRevisionKey\}/)
+})
+
+test("compare approval cannot start while a draft or item mutation is in flight", () => {
+  const source = readFileSync(new URL("./review-panel.tsx", import.meta.url), "utf8")
+  assert.match(source, /const handleApprove = async \(\) => \{\s*if \(busy \|\| verification\.hasBlockingIssues\) return/)
+  assert.match(source, /onClick=\{handleApprove\} disabled=\{busy \|\| verification\.hasBlockingIssues/)
+})
+
 test("responsive review follows the 920px and 520px Open Design breakpoints", () => {
   const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8")
   assert.match(css, /@media \(max-width: 920px\)[\s\S]*?\.review-body[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/)

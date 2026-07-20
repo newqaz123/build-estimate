@@ -44,7 +44,7 @@ import { reconcileBoqMutation, type BoqDetailEdits } from "@/lib/boq-detail-stat
 import { getBoqItemRequestIdentity } from "@/lib/boq-item-identity"
 import { calculateBoqTotals, isPricedBoqItem, parseNonNegativeBoqEditValue } from "@/lib/boq-pricing"
 import { boqDetailHref, isBoqReviewMode } from "@/lib/boq-review-route"
-import { buildReviewVerification } from "@/lib/boq-review-state"
+import { buildCanonicalRevisionKey, buildReviewVerification } from "@/lib/boq-review-state"
 import type { Boq, BoqItem, BoqPricedItem, WorkType } from "@/lib/boq-schema"
 import {
   buildUnifiedBoqSections,
@@ -208,6 +208,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   const [pdfPageRequest, setPdfPageRequest] = useState({ page: 1, key: 0 })
   const isReadOnly = boq.status === "approved"
   const mutationBusy = saving || approving || matching || deleting || addingItem
+  const canonicalRevisionKey = useMemo(() => buildCanonicalRevisionKey(boq), [boq])
 
   const replaceEdits = useCallback((next: EditsMap) => {
     editsRef.current = next
@@ -653,6 +654,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
           <div className="boq-extraction-mode" role="tabpanel" id="boq-extraction-panel" aria-labelledby="boq-extraction-tab" hidden={rightPaneMode !== "extraction"}>
             <ExtractionReview
               boq={boq}
+              canonicalRevisionKey={canonicalRevisionKey}
               readOnly={isReadOnly}
               mutationBlockedReason={pendingChanges > 0 ? "You have unsaved BOQ item or detail edits. Use Save draft before applying extraction corrections." : undefined}
               sourceAvailable={hasSource}
