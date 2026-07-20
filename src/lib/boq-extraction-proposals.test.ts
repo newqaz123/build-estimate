@@ -252,7 +252,19 @@ test('returns dedicated operation and confidence failures for malformed model ou
 })
 
 test('requires proposed provenance to cover every declared source row', () => {
-  const provenanceDrop = separateComponentsProposal({ sourceRowIds: ['row-combined', 'row-extra'] })
+  const provenanceDrop = {
+    id: 'provenance-drop', extractionRunId: 'run-1', operation: 'merge', sourceRowIds: ['row-combined', 'row-extra'],
+    targetItemIds: ['combined-work', 'pump-accessory'],
+    affectedItemFingerprints: {
+      'combined-work': fingerprintCanonicalItem(sections[0].items[0]),
+      'pump-accessory': fingerprintCanonicalItem(sections[0].items[1]),
+    },
+    confidence: 0.95, explanation: 'The second source row is silently dropped.',
+    proposedItems: [{
+      id: 'merged-provenance-drop', desc: 'Pump package', pricingRole: 'standard', sourceRowIds: ['row-combined'],
+      entryOrigin: 'ai_accepted', unit: 'set', qty: 1, rate: 120, total: 120, costComponent: 'combined',
+    }],
+  }
   assert.deepEqual(validateProposal(provenanceDrop, context()), {
     valid: false, code: 'source_provenance_mismatch',
   })
