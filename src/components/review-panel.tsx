@@ -11,7 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { StandardizationReview } from "./standardization-review"
-import { Check, Eye, ExternalLink, Loader2, TriangleAlert, X } from "lucide-react"
+import { Check, Eye, ExternalLink, Loader2, Plus, RotateCcw, Sparkles, TriangleAlert, Undo2, X } from "lucide-react"
 import { toast } from "sonner"
 import type { Boq, BoqItem, WorkType } from "@/lib/boq-schema"
 import {
@@ -32,6 +32,9 @@ import { getBoqCatalogReadiness } from "@/lib/boq-catalog-readiness"
 import { getBoqItemRequestIdentity } from "@/lib/boq-item-identity"
 import { CatalogMatchModal } from "./catalog-match-modal"
 import { calculateBoqTotals, isPricedBoqItem } from "@/lib/boq-pricing"
+import type { ExtractionReviewResponse } from "@/lib/boq-extraction-ai-review"
+import type { ValidatedProposal } from "@/lib/boq-extraction-proposals"
+import { proposalCanBeAccepted, proposalIsHighConfidence, sourceReferenceLabel } from "@/lib/boq-extraction-review-ui"
 
 interface ReviewPanelProps {
   boq: Boq
@@ -71,19 +74,22 @@ function verificationIssueTarget(issue: VerificationResponseIssue, items: BoqIte
   return issue.itemId ? `Item ID: ${issue.itemId}` : null
 }
 
-function sectionsWithItems(boq: Boq, items: BoqItem[]): Boq["sections"] {
+function sectionsWithItems(sectionTemplate: Boq["sections"], items: BoqItem[]): Boq["sections"] {
   let offset = 0
-  return boq.sections.map((section) => {
-    const sectionItems = items.slice(offset, offset + section.items.length)
+  return sectionTemplate.map((section, sectionIndex) => {
+    const isLastSection = sectionIndex === sectionTemplate.length - 1
+    const sectionItems = isLastSection
+      ? items.slice(offset)
+      : items.slice(offset, offset + section.items.length)
     offset += section.items.length
     return { ...section, items: sectionItems }
   })
 }
 
-function sectionIndexForItem(boq: Boq, itemIndex: number): number {
+function sectionIndexForItem(sections: Boq["sections"], itemIndex: number): number {
   let offset = 0
-  for (let sectionIndex = 0; sectionIndex < boq.sections.length; sectionIndex += 1) {
-    offset += boq.sections[sectionIndex].items.length
+  for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex += 1) {
+    offset += sections[sectionIndex].items.length
     if (itemIndex < offset) return sectionIndex
   }
   return -1
@@ -91,6 +97,7 @@ function sectionIndexForItem(boq: Boq, itemIndex: number): number {
 
 export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Approve & Save", requireCatalogReadiness = false }: ReviewPanelProps) {
   const [items, setItems] = useState<BoqItem[]>(() => boq.sections.flatMap((section) => section.items))
+  const [sectionTemplate, setSectionTemplate] = useState<Boq["sections"]>(boq.sections)
   const [vendor, setVendor] = useState(boq.vendor)
   const [project, setProject] = useState(boq.project)
   const [workType, setWorkType] = useState<WorkType>(boq.workType)
@@ -106,10 +113,17 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
   const [sourcePreviewFailed, setSourcePreviewFailed] = useState(false)
   const [catalogMatchIndex, setCatalogMatchIndex] = useState<number | null>(null)
   const [catalogBusyIndex, setCatalogBusyIndex] = useState<number | null>(null)
+  const [extractionRunId, setExtractionRunId] = useState(boq.activeExtractionRunId)
+  const [extractionReview, setExtractionReview] = useState<ExtractionReviewResponse | null>(null)
+  const [reviewLoading, setReviewLoading] = useState(false)
+  const [proposalAction, setProposalAction] = useState<Record<string, "accepting" | "rejecting" | "undoing">>({})
+  const [proposalStatus, setProposalStatus] = useState<Record<string, "accepted" | "rejected" | "undone">>({})
+  const [reextractLoading, setReextractLoading] = useState(false)
+  const autoReviewRunRef = useRef<string | null>(null)
   const reviewPanelRef = useRef<HTMLDivElement>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
 
-  const reviewSections = useMemo(() => sectionsWithItems(boq, items), [boq, items])
+  const reviewSections = useMemo(() => sectionsWithItems(sectionTemplate, items), [items, sectionTemplate])
   const grandTotal = useMemo(() => calculateBoqTotals(reviewSections).grandTotal, [reviewSections])
   const catalogReadiness = useMemo(
     () => getBoqCatalogReadiness({ sections: reviewSections }),
@@ -141,7 +155,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
   const verification = useMemo(() => buildReviewVerification(boq, reviewEdits), [boq, reviewEdits])
   const blockingIssues = verification.issues.filter((issue) => issue.severity === "blocking")
   const localWarnings = verification.issues.filter((issue) => issue.severity === "warning")
-  const busy = verifyLoading || approveLoading
+  const busy = verifyLoading || approveLoading || reviewLoading || reextractLoading || Object.keys(proposalAction).length > 0
 
   useEffect(() => {
     previousFocusRef.current = document.activeElement instanceof HTMLElement
@@ -187,7 +201,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
   }, [])
 
   const handleExcludeRequest = useCallback(async (item: BoqItem, itemIndex: number, reason: string) => {
-    const sectionIndex = sectionIndexForItem(boq, itemIndex)
+    const sectionIndex = sectionIndexForItem(reviewSections, itemIndex)
     if (sectionIndex < 0) return false
     setCatalogBusyIndex(itemIndex)
     setSaveError(null)
@@ -216,7 +230,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
     } finally {
       setCatalogBusyIndex(null)
     }
-  }, [boq])
+  }, [boq, reviewSections])
 
   const handleVerify = async () => {
     setVerifyLoading(true)
@@ -264,6 +278,118 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
     } finally {
       setVerifyLoading(false)
     }
+  }
+
+  const runExtractionReview = useCallback(async (sourceRowId?: string) => {
+    if (!extractionRunId) {
+      setSaveError("This BOQ has no immutable extraction evidence. Re-extract the source to review compound rows.")
+      return
+    }
+    setReviewLoading(true)
+    setSaveError(null)
+    try {
+      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/extraction-runs/${encodeURIComponent(extractionRunId)}/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(sourceRowId ? { manual: true, sourceRowIds: [sourceRowId] } : { manual: false }),
+      })
+      if (!response.ok) throw new Error(await readError(response, "AI extraction review could not be completed."))
+      const result = await response.json() as ExtractionReviewResponse
+      setExtractionReview(result)
+      if (result.mode === "ai") toast.success(`${result.proposals.length} AI suggestion${result.proposals.length === 1 ? "" : "s"} ready for review`)
+      else if (result.mode === "fallback") toast.warning(result.message)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "AI extraction review could not be completed."
+      setSaveError(message)
+      toast.error(message)
+    } finally {
+      setReviewLoading(false)
+    }
+  }, [boq.id, extractionRunId])
+
+  useEffect(() => {
+    if (!extractionRunId || autoReviewRunRef.current === extractionRunId) return
+    autoReviewRunRef.current = extractionRunId
+    void runExtractionReview()
+  }, [extractionRunId, runExtractionReview])
+
+  const executeProposalAction = useCallback(async (proposal: ValidatedProposal, action: "accept" | "reject" | "undo") => {
+    if (!extractionRunId) return false
+    const actionState = action === "accept" ? "accepting" : action === "reject" ? "rejecting" : "undoing"
+    setProposalAction((current) => ({ ...current, [proposal.id]: actionState }))
+    setSaveError(null)
+    try {
+      const endpoint = `/api/boqs/${encodeURIComponent(boq.id)}/extraction-runs/${encodeURIComponent(extractionRunId)}/proposals/${encodeURIComponent(proposal.id)}/${action}`
+      const response = await fetch(endpoint, {
+        method: "POST",
+        ...(action === "undo" ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ proposal }) }),
+      })
+      if (!response.ok) throw new Error(await readError(response, `Suggestion could not be ${action}ed.`))
+      const result = await response.json() as { boq?: Boq }
+      if (result.boq) {
+        setSectionTemplate(result.boq.sections)
+        setItems(result.boq.sections.flatMap((section) => section.items))
+      }
+      setProposalStatus((current) => ({ ...current, [proposal.id]: action === "accept" ? "accepted" : action === "reject" ? "rejected" : "undone" }))
+      toast.success(action === "accept" ? "Suggestion accepted" : action === "reject" ? "Suggestion rejected" : "Suggestion undone")
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : `Suggestion could not be ${action}ed.`
+      setSaveError(message)
+      toast.error(message)
+      return false
+    } finally {
+      setProposalAction((current) => {
+        const next = { ...current }
+        delete next[proposal.id]
+        return next
+      })
+    }
+  }, [boq.id, extractionRunId])
+
+  const handleAcceptAll = async () => {
+    const proposals = (extractionReview?.proposals ?? []).filter((proposal) => proposalIsHighConfidence(proposal) && !proposalStatus[proposal.id])
+    for (const proposal of proposals) {
+      const accepted = await executeProposalAction(proposal, "accept")
+      if (!accepted) break
+    }
+  }
+
+  const handleReextract = async () => {
+    setReextractLoading(true)
+    setSaveError(null)
+    try {
+      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/re-extract`, { method: "POST" })
+      if (!response.ok) throw new Error(await readError(response, "Source re-extraction could not be started."))
+      const result = await response.json() as { extractionRun?: { id?: string } }
+      if (!result.extractionRun?.id) throw new Error("Source re-extraction did not return review evidence.")
+      setExtractionRunId(result.extractionRun.id)
+      setExtractionReview(null)
+      toast.success("Source re-extracted. Your saved BOQ edits were not overwritten.")
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Source re-extraction could not be started."
+      setSaveError(message)
+      toast.error(message)
+    } finally {
+      setReextractLoading(false)
+    }
+  }
+
+  const handleAddMissingItem = () => {
+    setItems((current) => [...current, {
+      id: `user-${crypto.randomUUID()}`,
+      desc: "New missing item",
+      unit: "",
+      qty: 0,
+      rate: 0,
+      total: 0,
+      type: "unit",
+      pricingRole: "standard",
+      costComponent: "combined",
+      sourceRowIds: [],
+      entryOrigin: "user",
+      stdStatus: "unmatched",
+    }])
   }
 
   const handleApprove = async () => {
@@ -320,6 +446,10 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
           </div>
           <div className="review-header-actions">
             <span className="review-parsed-badge">Docling parsed</span>
+            {hasSource ? <Button type="button" variant="ghost" size="sm" onClick={handleReextract} disabled={busy} data-od-id="reextract-source">
+              {reextractLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+              Re-extract source
+            </Button> : null}
             <Button data-review-initial-focus variant="ghost" size="icon-sm" onClick={onClose} disabled={busy} aria-label="Close BOQ review">
               <X className="w-4 h-4" />
             </Button>
@@ -407,10 +537,97 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
               </div>
             ) : null}
 
+            <section className="extraction-review-workspace" data-od-id="extraction-review-workspace" aria-labelledby="extraction-review-title">
+              <div className="extraction-review-heading">
+                <div>
+                  <span className="review-eyebrow">Evidence review</span>
+                  <h3 id="extraction-review-title">Compound-cell extraction</h3>
+                  <p>Suggestions preserve the original row and only change the BOQ after you accept them.</p>
+                </div>
+                <div className="extraction-review-heading-actions">
+                  {extractionReview?.proposals.some((proposal) => proposalIsHighConfidence(proposal) && !proposalStatus[proposal.id]) ? (
+                    <Button type="button" size="sm" onClick={() => void handleAcceptAll()} disabled={busy} data-od-id="accept-all-high-confidence">
+                      <Check className="w-3.5 h-3.5" /> Accept all high-confidence
+                    </Button>
+                  ) : null}
+                  <Button type="button" variant="outline" size="sm" onClick={() => void runExtractionReview()} disabled={!extractionRunId || busy} data-od-id="recheck-extraction-ai">
+                    {reviewLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                    Recheck with AI
+                  </Button>
+                </div>
+              </div>
+
+              {!extractionRunId ? (
+                <div className="extraction-review-state" role="status">
+                  <TriangleAlert aria-hidden="true" />
+                  <span>This legacy BOQ has no immutable extraction evidence. Re-extract the source to create a review-only evidence run.</span>
+                </div>
+              ) : reviewLoading && !extractionReview ? (
+                <div className="extraction-review-state" role="status"><Loader2 className="animate-spin" aria-hidden="true" /> Checking ambiguous and compound source rows…</div>
+              ) : extractionReview ? (
+                <div className={`extraction-review-result ${extractionReview.mode}`} role="status">
+                  <div className="extraction-review-result-copy">
+                    <strong>{extractionReview.mode === "ai" ? "AI suggestions ready" : extractionReview.mode === "fallback" ? "AI review unavailable" : "No suggestions needed"}</strong>
+                    <span>{extractionReview.message}</span>
+                  </div>
+                  {extractionReview.rejectedProposals.length ? <small>{extractionReview.rejectedProposals.length} unsafe suggestion{extractionReview.rejectedProposals.length === 1 ? "" : "s"} blocked by server validation.</small> : null}
+                </div>
+              ) : null}
+
+              {extractionReview?.proposals.length ? (
+                <div className="extraction-proposal-list" aria-label="AI extraction suggestions">
+                  {extractionReview.proposals.map((proposal) => {
+                    const status = proposalStatus[proposal.id]
+                    const action = proposalAction[proposal.id]
+                    const highConfidence = proposalIsHighConfidence(proposal)
+                    const acceptEnabled = proposalCanBeAccepted(proposal) && !status
+                    const refs = extractionReview.sourceRefs.filter((reference) => proposal.sourceRowIds.includes(reference.sourceRowId))
+                    return (
+                      <article className={`extraction-proposal ${status ? `is-${status}` : ""}`} key={proposal.id} data-od-id={`extraction-proposal-${proposal.id}`}>
+                        <div className="extraction-proposal-main">
+                          <div className="extraction-proposal-labels">
+                            <span className={`extraction-operation ${proposal.operation}`}>{proposal.operation.replaceAll("_", " ")}</span>
+                            <span className={highConfidence ? "extraction-confidence high" : "extraction-confidence"}>{Math.round(proposal.confidence * 100)}% confidence</span>
+                            {proposal.evidenceValid && proposal.reconciled ? <span className="extraction-validated">Validated</span> : null}
+                          </div>
+                          <p>{proposal.explanation}</p>
+                          <div className="extraction-source-refs">
+                            {refs.map((reference) => <span key={reference.sourceRowId}>Source: {sourceReferenceLabel(reference)}</span>)}
+                          </div>
+                          {proposal.proposedItems.length ? (
+                            <div className="extraction-proposed-structure" aria-label="Proposed structure">
+                              <span>Proposed structure</span>
+                              <ul>
+                                {proposal.proposedItems.map((proposed) => <li key={proposed.id} className={proposed.pricingRole === "bundle_child" ? "bundle-child" : ""}>
+                                  <strong>{proposed.desc}</strong>
+                                  <small>{proposed.pricingRole === "bundle_child" ? "Informational bundle child" : `${proposed.qty} ${proposed.unit} × ฿${proposed.rate.toLocaleString()} = ฿${proposed.total.toLocaleString()}`}</small>
+                                </li>)}
+                              </ul>
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="extraction-proposal-actions">
+                          {status === "accepted" ? <Button type="button" variant="outline" size="sm" onClick={() => void executeProposalAction(proposal, "undo")} disabled={Boolean(action)}><Undo2 className="w-3.5 h-3.5" /> Undo</Button> : null}
+                          {!status ? <>
+                            <Button type="button" size="sm" onClick={() => void executeProposalAction(proposal, "accept")} disabled={!acceptEnabled || Boolean(action)}>{action === "accepting" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />} Accept</Button>
+                            <Button type="button" variant="ghost" size="sm" onClick={() => void executeProposalAction(proposal, "reject")} disabled={Boolean(action)}>{action === "rejecting" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null} Reject</Button>
+                          </> : <span className="extraction-action-status">{status === "rejected" ? "Rejected" : status === "undone" ? "Undone" : "Accepted"}</span>}
+                        </div>
+                      </article>
+                    )
+                  })}
+                </div>
+              ) : null}
+            </section>
+
             <div className="review-items-heading">
               <span className="text-sm font-medium">Parsed Items · {items.length} line items</span>
-              <span className="font-mono text-sm">Grand Total: ฿{grandTotal.toLocaleString()}</span>
+              <div className="review-items-heading-actions">
+                <span className="font-mono text-sm">Grand Total: ฿{grandTotal.toLocaleString()}</span>
+                <Button type="button" variant="outline" size="sm" onClick={handleAddMissingItem} disabled={busy} data-od-id="add-missing-item"><Plus className="w-3.5 h-3.5" /> Add missing item</Button>
+              </div>
             </div>
+            <p className="review-user-entry-note">New items are user-entered and remain unpriced until you add a rate.</p>
             <div className="overflow-x-auto border border-border rounded-lg">
               <table className="review-items-table" data-od-id="review-items-table">
                 <thead><tr>
@@ -421,23 +638,29 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
                     const rowKey = sourceRowKey(item)
                     if (!isPricedBoqItem(item)) {
                       return (
-                        <tr key={reviewItemKey(boq.id, item, idx)} data-ri={idx} className="bg-muted/20 text-muted-foreground">
+                        <tr key={reviewItemKey(boq.id, item, idx)} data-ri={idx} className="review-bundle-child-row bg-muted/20 text-muted-foreground">
                           <td className="pl-5">
-                            <span className="mr-2 inline-flex rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium">Included</span>
+                            <span className="mr-2 inline-flex rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium">Included child</span>
                             {item.desc}
                           </td>
-                          <td colSpan={6}>Informational bundle component · pricing is held by the parent item</td>
+                          <td colSpan={6}>Informational bundle child · pricing is held by bundle {item.parentBundleId}</td>
                           <td><span className="review-std-badge pending">Info</span></td>
                         </tr>
                       )
                     }
                     const showComponent = Boolean(rowKey && (sourceRowCounts.get(rowKey) ?? 0) > 1 && item.costComponent)
                     const allocation = deriveSourceCostAllocation(item)
+                    const sourceRowId = item.sourceRowId ?? item.sourceRowIds?.[0]
                     return (
-                      <tr key={reviewItemKey(boq.id, item, idx)} data-ri={idx}>
+                      <tr key={reviewItemKey(boq.id, item, idx)} data-ri={idx} className={item.pricingRole === "bundle_parent" ? "review-bundle-parent-row" : undefined}>
                         <td>
                           <Input aria-label={`Description for item ${idx + 1}`} value={item.desc} onChange={(event) => handleItemChange(idx, "desc", event.target.value)} />
-                          {showComponent ? <span className="review-component-badge">{item.costComponent}</span> : null}
+                          <div className="review-item-evidence">
+                            {item.pricingRole === "bundle_parent" ? <span className="review-component-badge">Priced bundle</span> : null}
+                            {showComponent ? <span className="review-component-badge">{item.costComponent}</span> : null}
+                            {item.sourceRef ? <span>Source: {sourceReferenceLabel(item.sourceRef)}</span> : null}
+                            {sourceRowId && extractionRunId ? <button type="button" onClick={() => void runExtractionReview(sourceRowId)} disabled={busy} data-od-id={`recheck-row-${sourceRowId}`}>Recheck with AI</button> : null}
+                          </div>
                           {item.extractionWarnings?.map((warning, warningIndex) => <span className="review-item-warning" key={`${warning.code}-${warningIndex}`}>{warning.message}</span>)}
                         </td>
                         <td><Input aria-label={`Unit for item ${idx + 1}`} value={item.unit} onChange={(event) => handleItemChange(idx, "unit", event.target.value)} /></td>
@@ -445,7 +668,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
                         <td><Input aria-label={`Rate for item ${idx + 1}`} type="number" value={item.rate} onChange={(event) => handleItemChange(idx, "rate", Number(event.target.value))} /></td>
                         <td className="num-col font-mono" title={allocation ? `${allocation.origin} ${allocation.basis}` : "No reliable split in source"}>{allocation ? `฿${allocation.material.toLocaleString()}` : "Not split"}</td>
                         <td className="num-col font-mono" title={allocation ? `${allocation.origin} ${allocation.basis}` : "No reliable split in source"}>{allocation ? `฿${allocation.labour.toLocaleString()}` : "Not split"}</td>
-                        <td className="num-col font-mono">฿{item.total.toLocaleString()}</td>
+                        <td className="num-col font-mono">฿{item.total.toLocaleString()}{item.optional ? <span className="review-optional-state">Optional · excluded from total</span> : null}</td>
                         <td><span className={`review-std-badge ${item.stdStatus}`}>{item.stdStatus === "matched" ? "Matched" : item.stdStatus === "excluded" ? "Excluded" : item.stdStatus === "pending" ? "Suggested" : "—"}</span></td>
                       </tr>
                     )
@@ -538,7 +761,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
             sourceVendor={vendor}
             matchContext={{
               boqId: boq.id,
-              sectionIndex: sectionIndexForItem(boq, catalogMatchIndex),
+              sectionIndex: sectionIndexForItem(reviewSections, catalogMatchIndex),
               ...getBoqItemRequestIdentity(items[catalogMatchIndex]),
             }}
             onClose={() => setCatalogMatchIndex(null)}
