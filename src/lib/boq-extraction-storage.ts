@@ -1,6 +1,7 @@
 import type { Boq } from './boq-schema'
 import type { BoqSourceRowV3 } from './boq-extraction-schema'
 import type { Firestore } from 'firebase-admin/firestore'
+import { randomUUID } from 'node:crypto'
 import {
   checksumSourceRows,
   extractionRunIdentity,
@@ -13,6 +14,7 @@ import {
 
 const SOURCE_ROW_BATCH_SIZE = 200
 const SECTION_ITEM_CHUNK_SIZE = 100
+const CLEANUP_LEASE_MS = 5 * 60 * 1000
 
 function validatePathPart(value: string, name: string): void {
   if (value.trim() === '' || value.includes('/')) throw new TypeError(`${name} must be one Firestore path segment`)
@@ -282,7 +284,9 @@ export function createFirestoreExtractionStore(
             throw new Error('Extraction run identity conflict')
           }
           if (data?.status === 'ready') return 'exists_ready'
-          if (data?.status === 'staging' && data?.cleanupState === 'deleting') return 'exists_deleting'
+          if (data?.status === 'staging' && (data?.cleanupState === 'deleting' || data?.cleanupState === 'cleanup_pending')) {
+            return 'exists_deleting'
+          }
           if (data?.status === 'staging') return 'exists_staging'
           throw new Error('Extraction run has an unsupported state')
         }
@@ -312,7 +316,7 @@ export function createFirestoreExtractionStore(
         const extractionRef = runRef(boqId, runId)
         const runSnapshot = await transaction.get(extractionRef)
         const runData = runSnapshot.data()
-        if (!runSnapshot.exists || runData?.status !== 'staging' || runData.cleanupState === 'deleting') {
+        if (!runSnapshot.exists || runData?.status !== 'staging' || runData.cleanupState) {
           throw new Error('Extraction run is not staged')
         }
         if (runData.verifiedSourceRowCount !== undefined || runData.verifiedSourceRowChecksum !== undefined) {
@@ -339,7 +343,7 @@ export function createFirestoreExtractionStore(
       const extractionRef = runRef(boqId, runId)
       const initialRun = await extractionRef.get()
       const initialData = initialRun.data()
-      if (!initialRun.exists || initialData?.status !== 'staging' || initialData.cleanupState === 'deleting') {
+      if (!initialRun.exists || initialData?.status !== 'staging' || initialData.cleanupState) {
         throw new Error('Extraction run is not staged')
       }
       const revision = initialData.sourceRowRevision ?? 0
@@ -353,7 +357,7 @@ export function createFirestoreExtractionStore(
       await db.runTransaction(async (transaction) => {
         const runSnapshot = await transaction.get(extractionRef)
         const runData = runSnapshot.data()
-        if (!runSnapshot.exists || runData?.status !== 'staging' || runData.cleanupState === 'deleting') {
+        if (!runSnapshot.exists || runData?.status !== 'staging' || runData.cleanupState) {
           throw new Error('Extraction run is not staged')
         }
         if ((runData.sourceRowRevision ?? 0) !== revision) {
@@ -376,7 +380,7 @@ export function createFirestoreExtractionStore(
         ])
         const runData = storedRun.data()
         if (runData?.status === 'ready' && storedBoq.exists) return 'already_finalized'
-        if (!storedRun.exists || runData?.status !== 'staging' || runData.cleanupState === 'deleting') {
+        if (!storedRun.exists || runData?.status !== 'staging' || runData.cleanupState) {
           throw new Error('Extraction run is not staged')
         }
         if (runData.identityFingerprint !== extractionRunIdentityFingerprint(run)
@@ -411,32 +415,72 @@ export function createFirestoreExtractionStore(
     async cleanupStagingIfSafe(boqId, runId) {
       const extractionRef = runRef(boqId, runId)
       const boqRef = db.collection('boqs').doc(boqId)
+      const cleanupToken = randomUUID()
+      const leaseExpiresAt = new Date(now().getTime() + CLEANUP_LEASE_MS).toISOString()
       const safe = await db.runTransaction(async (transaction) => {
         const [storedRun, storedBoq] = await Promise.all([
           transaction.get(extractionRef), transaction.get(boqRef),
         ])
         const runData = storedRun.data()
         if (!storedRun.exists || runData?.status !== 'staging' || storedBoq.exists) return false
-        // Mark first, then delete children, then delete the parent. A
-        // recoverable tombstone prevents finalization and lets a retry finish
-        // cleanup if a child batch fails.
-        if (runData.cleanupState !== 'deleting') {
-          transaction.update(extractionRef, { cleanupState: 'deleting', cleanupStartedAt: now().toISOString() })
+        if (runData.cleanupState === 'deleting') {
+          const existingLease = typeof runData.cleanupLeaseExpiresAt === 'string'
+            ? Date.parse(runData.cleanupLeaseExpiresAt)
+            : Number.NaN
+          if (Number.isFinite(existingLease) && existingLease > now().getTime()) return false
         }
+        // Mark first, then delete children, then delete the parent. The lease
+        // prevents competing retries from deleting a newly recreated run.
+        transaction.update(extractionRef, {
+          cleanupState: 'deleting',
+          cleanupToken,
+          cleanupLeaseExpiresAt: leaseExpiresAt,
+          cleanupStartedAt: now().toISOString(),
+        })
         return true
       })
       if (!safe) return false
-      for (const collectionName of ['sourceRows', 'sectionSnapshots']) {
-        while (true) {
-          const page = await extractionRef.collection(collectionName).limit(SOURCE_ROW_BATCH_SIZE).get()
-          if (page.empty) break
-          const batch = db.batch()
-          page.docs.forEach((doc) => batch.delete(doc.ref))
-          await batch.commit()
+      try {
+        for (const collectionName of ['sourceRows', 'sectionSnapshots']) {
+          while (true) {
+            const page = await extractionRef.collection(collectionName).limit(SOURCE_ROW_BATCH_SIZE).get()
+            if (page.empty) break
+            const batch = db.batch()
+            page.docs.forEach((doc) => batch.delete(doc.ref))
+            await batch.commit()
+          }
         }
+        return await db.runTransaction(async (transaction) => {
+          const [storedRun, storedBoq] = await Promise.all([
+            transaction.get(extractionRef), transaction.get(boqRef),
+          ])
+          const runData = storedRun.data()
+          if (!storedRun.exists || storedBoq.exists || runData?.status !== 'staging'
+            || runData.cleanupState !== 'deleting' || runData.cleanupToken !== cleanupToken) return false
+          transaction.delete(extractionRef)
+          return true
+        })
+      } catch (error) {
+        // Release only our own lease as retryable state while preserving the
+        // parent and any child evidence that remains.
+        try {
+          await db.runTransaction(async (transaction) => {
+            const storedRun = await transaction.get(extractionRef)
+            const runData = storedRun.data()
+            if (storedRun.exists && runData?.cleanupState === 'deleting' && runData.cleanupToken === cleanupToken) {
+              transaction.update(extractionRef, {
+                cleanupState: 'cleanup_pending',
+                cleanupToken: null,
+                cleanupLeaseExpiresAt: null,
+              })
+            }
+          })
+        } catch {
+          // Preserve the original deletion error; callers will report an
+          // uncertain cleanup outcome and keep source storage intact.
+        }
+        throw error
       }
-      await extractionRef.delete()
-      return true
     },
 
     async deleteRunTree(boqId, runId) {
