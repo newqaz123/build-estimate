@@ -101,7 +101,7 @@ test('keeps separate material and labour rows with independent quantity and unit
   assert.match(html, /aria-label="Unit for Stub-end 6B, row 2"[^>]*value="Db"/)
 })
 
-test('keeps separate component rows independently priced without duplicating their rate as evidence', () => {
+test('keeps separate component rows independently priced with explicit identity and read-only rate evidence', () => {
   const html = renderTable([{
     header: 'Valve work',
     items: [
@@ -112,6 +112,12 @@ test('keeps separate component rows independently priced without duplicating the
 
   assert.match(html, /aria-label="Rate for Material only, row 1"[^>]*value="2808"/)
   assert.match(html, /aria-label="Rate for Labour only, row 2"[^>]*value="300"/)
+  assert.match(html, /Material component/)
+  assert.match(html, /Labour component/)
+  assert.match(html, /Material row rate[^<]*<\/span><strong>฿2,808<\/strong>/)
+  assert.match(html, /Labour row rate[^<]*<\/span><strong>฿300<\/strong>/)
+  assert.match(html, /data-component="material"[\s\S]*?Material row rate[\s\S]*?data-component="labour"[^>]*>[\s\S]*?Labour not provided/)
+  assert.match(html, /data-component="material"[^>]*>[\s\S]*?Material not provided[\s\S]*?data-component="labour"[\s\S]*?Labour row rate/)
   assert.doesNotMatch(html, /aria-label="Material (?:rate|total)|aria-label="Labour (?:rate|total)/)
 })
 

@@ -1132,6 +1132,8 @@
 .boq-informational-description { padding: 7px 8px 0; color: var(--fg-2); font-size: 12px; }
 .unified-boq-informational-placeholder { padding-top: 10px !important; text-align: center; }
 .unified-boq-component-cell { color: var(--muted-text); }
+.unified-boq-component-badge { display: inline-flex; margin-top: 4px; padding: 2px 6px; border-radius: var(--radius-pill); background: color-mix(in oklab, var(--accent) 9%, transparent); color: var(--accent); font-size: 9px; font-weight: 700; line-height: 1.35; }
+.unified-boq-component-badge.labour { background: color-mix(in oklab, var(--fg-2) 7%, transparent); color: var(--fg-2); }
 .unified-boq-source-cost { display: inline-flex; min-height: 28px; align-items: center; justify-content: flex-end; color: var(--fg-2); font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .unified-boq-source-cost strong { font-weight: 500; }
 .unified-boq-source-cost-missing { display: inline-flex; min-height: 28px; align-items: center; color: var(--muted-text); }

@@ -38,15 +38,16 @@ function SourceCostEvidence({
   label: "Material" | "Labour"
   present: boolean
   value: number
-  basis: "rate" | "total"
+  basis: "rate" | "total" | "row rate"
 }) {
   if (!present) {
     return <span className="unified-boq-source-cost-missing" aria-label={`${label} not provided`}>—</span>
   }
+  const evidenceLabel = basis === "row rate" ? `${label} row rate` : `${label} source ${basis}`
 
   return (
-    <span className="unified-boq-source-cost" aria-label={`${label} source ${basis}`}>
-      <span className="sr-only">{label} source {basis}</span>
+    <span className="unified-boq-source-cost" aria-label={evidenceLabel}>
+      <span className="sr-only">{evidenceLabel}</span>
       <strong>{currency(value)}</strong>
     </span>
   )
@@ -157,6 +158,11 @@ function FragmentSection({
         const evidenceBasis = row.item.type === "lump_sum" ? "total" : "rate"
         const materialEvidence = row.item.sourceCosts?.material
         const labourEvidence = row.item.sourceCosts?.labour
+        const isMaterialRow = row.item.costComponent === "material"
+        const isLabourRow = row.item.costComponent === "labour"
+        const isSeparateComponentRow = isMaterialRow || isLabourRow
+        const materialPresent = isMaterialRow || (!isSeparateComponentRow && materialEvidence?.present === true)
+        const labourPresent = isLabourRow || (!isSeparateComponentRow && labourEvidence?.present === true)
 
         return (
           <tr key={row.key} data-row-key={row.key}>
@@ -167,6 +173,11 @@ function FragmentSection({
                 disabled={locked}
                 onChange={(event) => onFieldChange(row, "desc", event.target.value)}
               />
+              {isSeparateComponentRow ? (
+                <span className={`unified-boq-component-badge ${isMaterialRow ? "material" : "labour"}`}>
+                  {isMaterialRow ? "Material component" : "Labour component"}
+                </span>
+              ) : null}
               {row.item.extractionWarnings?.map((warning, warningIndex) => (
                 <span className="review-item-warning" key={`${warning.code}-${warningIndex}`}>{warning.message}</span>
               ))}
@@ -202,17 +213,17 @@ function FragmentSection({
             <td className="num-col unified-boq-component-cell" data-component="material">
               <SourceCostEvidence
                 label="Material"
-                present={materialEvidence?.present === true}
-                value={evidenceBasis === "total" ? materialEvidence?.total ?? 0 : materialEvidence?.rate ?? 0}
-                basis={evidenceBasis}
+                present={materialPresent}
+                value={isMaterialRow ? row.item.rate : evidenceBasis === "total" ? materialEvidence?.total ?? 0 : materialEvidence?.rate ?? 0}
+                basis={isMaterialRow ? "row rate" : evidenceBasis}
               />
             </td>
             <td className="num-col unified-boq-component-cell" data-component="labour">
               <SourceCostEvidence
                 label="Labour"
-                present={labourEvidence?.present === true}
-                value={evidenceBasis === "total" ? labourEvidence?.total ?? 0 : labourEvidence?.rate ?? 0}
-                basis={evidenceBasis}
+                present={labourPresent}
+                value={isLabourRow ? row.item.rate : evidenceBasis === "total" ? labourEvidence?.total ?? 0 : labourEvidence?.rate ?? 0}
+                basis={isLabourRow ? "row rate" : evidenceBasis}
               />
             </td>
             <td className="num-col unified-boq-total">{currency(row.item.total)}</td>
