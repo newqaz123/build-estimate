@@ -28,7 +28,12 @@ export async function reextractBoqSource(boqId: string, dependencies: ReextractD
   const canonicalBoq = await dependencies.getBoq(boqId)
   if (!canonicalBoq) throw new ReextractError('boq_not_found')
   if (!canonicalBoq.sourceStoragePath) throw new ReextractError('source_unavailable')
-  const bytes = await dependencies.loadSource(canonicalBoq.sourceStoragePath)
+  let bytes: Uint8Array
+  try {
+    bytes = await dependencies.loadSource(canonicalBoq.sourceStoragePath)
+  } catch {
+    throw new ReextractError('source_unavailable')
+  }
   const name = canonicalBoq.sourceFileName?.trim() || 'source.pdf'
   const sourceBytes = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
   const source = new File([sourceBytes], name, { type: 'application/pdf' })

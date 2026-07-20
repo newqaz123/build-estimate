@@ -49,5 +49,6 @@ test('re-extraction persists a new immutable run without changing saved BOQ edit
 
 test('re-extraction requires a retained source and a v3 parse without mutating canonical data', async () => {
   await assert.rejects(() => reextractBoqSource('boq-1', dependencies({ getBoq: async () => ({ ...boq, sourceStoragePath: undefined }) })), ReextractError)
+  await assert.rejects(() => reextractBoqSource('boq-1', dependencies({ loadSource: async () => { throw new Error('storage unavailable') } })), (error: unknown) => error instanceof ReextractError && error.code === 'source_unavailable')
   await assert.rejects(() => reextractBoqSource('boq-1', dependencies({ parsePdfWithDocling: async () => ({ contractVersion: 2 } as DoclingResult) })), /v3/)
 })

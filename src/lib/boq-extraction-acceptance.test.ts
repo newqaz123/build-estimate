@@ -66,7 +66,12 @@ test('undo restores exactly the recorded before state and refuses later edits', 
   if (accepted.kind !== 'accepted') return
   const undone = undoExtractionProposal({ boq: accepted.boq, audit: accepted.audit, actorId: 'user-1', now: '2026-07-20T10:02:00.000Z' })
   assert.equal(undone.kind, 'undone')
-  if (undone.kind === 'undone') assert.deepEqual(undone.boq.sections, sections)
+  if (undone.kind === 'undone') {
+    assert.deepEqual(undone.boq.sections, sections)
+    assert.equal(undone.audit.status, 'undone')
+    assert.equal(accepted.audit.status, 'accepted')
+    assert.notEqual(undone.audit.eventId, accepted.audit.auditId)
+  }
   const changed = { ...accepted.boq, sections: [{ header: 'Pumps', items: [{ ...accepted.boq.sections[0].items[0], desc: 'User changed' }] }] }
   assert.equal(undoExtractionProposal({ boq: changed, audit: accepted.audit, actorId: 'user-1', now: '2026-07-20T10:02:00.000Z' }).kind, 'conflict')
 })

@@ -14,7 +14,7 @@ import {
   type ValidatedProposal,
 } from './boq-extraction-proposals'
 
-export type ExtractionProposalAuditStatus = 'accepted' | 'rejected' | 'undone'
+export type ExtractionProposalAuditStatus = 'accepted' | 'rejected'
 
 /** Immutable audit payload stored with a proposal action, not with source evidence. */
 export interface ExtractionProposalAudit {
@@ -25,6 +25,8 @@ export interface ExtractionProposalAudit {
   actorId: string
   timestamp: string
   operation: ExtractionProposal['operation']
+  targetItemIds: string[]
+  affectedItemFingerprints: Record<string, string>
   confidence: number
   explanation: string
   sourceRowIds: string[]
@@ -33,8 +35,24 @@ export interface ExtractionProposalAudit {
   beforeSectionsFingerprint: string
   afterSections: BoqSection[]
   afterSectionsFingerprint: string
-  undoneAt?: string
-  undoneBy?: string
+}
+
+/** Append-only event written separately from the accepted proposal audit. */
+export interface ExtractionProposalUndoEvent {
+  eventId: string
+  proposalId: string
+  extractionRunId: string
+  status: 'undone'
+  actorId: string
+  timestamp: string
+  sourceRowIds: string[]
+  sourceRefs: Array<{ sourceRowId: string; page: number; table: number; row: number }>
+  beforeSections: BoqSection[]
+  beforeSectionsFingerprint: string
+  afterSections: BoqSection[]
+  afterSectionsFingerprint: string
+  resultTotalItems: number
+  resultGrandTotal: number
 }
 
 export type ProposalAcceptanceResult =
@@ -44,7 +62,7 @@ export type ProposalAcceptanceResult =
   | { kind: 'invalid'; code: ProposalValidationFailureCode | 'needs_human_review' }
 
 export type ProposalUndoResult =
-  | { kind: 'undone'; boq: Boq; audit: ExtractionProposalAudit }
+  | { kind: 'undone'; boq: Boq; audit: ExtractionProposalUndoEvent }
   | { kind: 'conflict' }
   | { kind: 'not_accepted' }
 
@@ -93,6 +111,8 @@ function toAudit(
     actorId: input.actorId,
     timestamp: input.now,
     operation: input.proposal.operation,
+    targetItemIds: [...input.proposal.targetItemIds],
+    affectedItemFingerprints: { ...input.proposal.affectedItemFingerprints },
     confidence: input.proposal.confidence,
     explanation: input.proposal.explanation,
     sourceRowIds: [...input.proposal.sourceRowIds],
@@ -122,6 +142,17 @@ export function validateExtractionProposal(
   })
 }
 
+export function proposalMatchesAudit(proposal: ExtractionProposal, audit: ExtractionProposalAudit): boolean {
+  return proposal.id === audit.proposalId
+    && proposal.extractionRunId === audit.extractionRunId
+    && proposal.operation === audit.operation
+    && proposal.confidence === audit.confidence
+    && proposal.explanation === audit.explanation
+    && JSON.stringify(proposal.sourceRowIds) === JSON.stringify(audit.sourceRowIds)
+    && JSON.stringify(proposal.targetItemIds) === JSON.stringify(audit.targetItemIds)
+    && JSON.stringify(proposal.affectedItemFingerprints) === JSON.stringify(audit.affectedItemFingerprints)
+}
+
 export function acceptExtractionProposal(input: {
   boq: Boq
   run: BoqExtractionRun
@@ -132,7 +163,8 @@ export function acceptExtractionProposal(input: {
   existingAudit: ExtractionProposalAudit | null
 }): ProposalAcceptanceResult {
   if (input.existingAudit) {
-    if (input.existingAudit.status === 'accepted') return { kind: 'already_accepted', boq: input.boq, audit: input.existingAudit }
+    if (!proposalMatchesAudit(input.proposal, input.existingAudit)) return { kind: 'invalid', code: 'run_identity_mismatch' }
+    if (input.existingAudit.status === 'accepted') return { kind: 'already_accepted', boq: withTotals(input.boq, input.existingAudit.afterSections), audit: input.existingAudit }
     if (input.existingAudit.status === 'rejected') return { kind: 'rejected', audit: input.existingAudit }
     return { kind: 'invalid', code: 'stale_item' }
   }
@@ -169,6 +201,7 @@ export function rejectExtractionProposal(input: {
     extractionRunId: input.proposal.extractionRunId,
     status: 'rejected', actorId: input.actorId, timestamp: input.now,
     operation: input.proposal.operation, confidence: input.proposal.confidence, explanation: input.proposal.explanation,
+    targetItemIds: [...input.proposal.targetItemIds], affectedItemFingerprints: { ...input.proposal.affectedItemFingerprints },
     sourceRowIds: [...input.proposal.sourceRowIds], sourceRefs: sourceRefs(input.sourceRows ?? [], input.proposal.sourceRowIds),
     beforeSections, afterSections: structuredClone(beforeSections),
     beforeSectionsFingerprint: fingerprintCanonicalSections(beforeSections),
@@ -182,6 +215,7 @@ export function undoExtractionProposal(input: {
   audit: ExtractionProposalAudit
   actorId: string
   now: string
+  sourceRefs?: ExtractionProposalUndoEvent['sourceRefs']
 }): ProposalUndoResult {
   if (input.audit.status !== 'accepted') return { kind: 'not_accepted' }
   try {
@@ -192,10 +226,26 @@ export function undoExtractionProposal(input: {
       beforeSectionsFingerprint: input.audit.beforeSectionsFingerprint,
       afterSectionsFingerprint: input.audit.afterSectionsFingerprint,
     })
+    const next = withTotals(input.boq, sections)
     return {
       kind: 'undone',
-      boq: withTotals(input.boq, sections),
-      audit: { ...input.audit, status: 'undone', undoneAt: input.now, undoneBy: input.actorId },
+      boq: next,
+      audit: {
+        eventId: `${input.audit.proposalId}:undo:${input.now}`,
+        proposalId: input.audit.proposalId,
+        extractionRunId: input.audit.extractionRunId,
+        status: 'undone',
+        actorId: input.actorId,
+        timestamp: input.now,
+        sourceRowIds: [...input.audit.sourceRowIds],
+        sourceRefs: structuredClone(input.sourceRefs ?? []),
+        beforeSections: structuredClone(input.boq.sections),
+        beforeSectionsFingerprint: fingerprintCanonicalSections(input.boq.sections),
+        afterSections: structuredClone(next.sections),
+        afterSectionsFingerprint: fingerprintCanonicalSections(next.sections),
+        resultTotalItems: next.totalItems,
+        resultGrandTotal: next.grandTotal,
+      },
     }
   } catch {
     return { kind: 'conflict' }
