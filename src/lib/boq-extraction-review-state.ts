@@ -1,8 +1,118 @@
 import type { ExtractionReviewResponse } from "./boq-extraction-ai-review"
-import type { ProposalOperation } from "./boq-extraction-proposals"
+import type { ProposalOperation, ValidatedProposal } from "./boq-extraction-proposals"
 
 export type ExtractionProposalStatus = "accepted" | "rejected" | "undone"
 export type ExtractionProposalStatusMap = Record<string, ExtractionProposalStatus | undefined>
+export type ExtractionReviewFilter = "all" | "pending" | "accepted" | "rejected" | "needs-attention"
+export type ExtractionProposalAction = "accepting" | "rejecting" | "undoing"
+
+export interface ExtractionReviewState {
+  review: ExtractionReviewResponse | null
+  proposalStatuses: ExtractionProposalStatusMap
+  proposalCanUndo: Record<string, boolean | undefined>
+  proposalActions: Record<string, ExtractionProposalAction | undefined>
+  expandedProposalIds: Record<string, boolean | undefined>
+  filter: ExtractionReviewFilter
+  loading: boolean
+  requestedSourceRowId?: string
+  error: string | null
+}
+
+export type ExtractionReviewAction =
+  | { type: "review_started"; sourceRowId?: string }
+  | { type: "review_succeeded"; response: ExtractionReviewResponse; sourceRowId?: string }
+  | { type: "review_failed"; error: string }
+  | { type: "proposal_action_started"; proposalId: string; action: ExtractionProposalAction }
+  | { type: "proposal_status"; proposalId: string; status: ExtractionProposalStatus }
+  | { type: "proposal_statuses"; statuses: Record<string, { status: "pending" | ExtractionProposalStatus; canUndo: boolean }> }
+  | { type: "proposal_action_failed"; proposalId: string; error: string }
+  | { type: "toggle_expanded"; proposalId: string }
+  | { type: "set_filter"; filter: ExtractionReviewFilter }
+
+export function initialExtractionReviewState(): ExtractionReviewState {
+  return {
+    review: null,
+    proposalStatuses: {},
+    proposalCanUndo: {},
+    proposalActions: {},
+    expandedProposalIds: {},
+    filter: "all",
+    loading: false,
+    error: null,
+  }
+}
+
+function mergeRowReview(current: ExtractionReviewResponse, incoming: ExtractionReviewResponse, sourceRowId: string): ExtractionReviewResponse {
+  const unrelatedProposals = current.proposals.filter((proposal) => !proposal.sourceRowIds.includes(sourceRowId))
+  const unrelatedRows = current.sourceRows.filter((row) => row.sourceRowId !== sourceRowId)
+  const unrelatedRefs = current.sourceRefs.filter((reference) => reference.sourceRowId !== sourceRowId)
+  const sourceRowIds = [...new Set([...unrelatedRows.map((row) => row.sourceRowId), ...incoming.sourceRowIds])]
+  return {
+    ...incoming,
+    sourceRowIds,
+    sourceRows: [...unrelatedRows, ...incoming.sourceRows],
+    sourceRefs: [...unrelatedRefs, ...incoming.sourceRefs],
+    proposals: [...unrelatedProposals, ...incoming.proposals],
+    rejectedProposals: [...current.rejectedProposals, ...incoming.rejectedProposals],
+    remainingCandidateRowIds: [...new Set([...current.remainingCandidateRowIds.filter((id) => id !== sourceRowId), ...incoming.remainingCandidateRowIds])],
+  }
+}
+
+export function extractionReviewReducer(state: ExtractionReviewState, action: ExtractionReviewAction): ExtractionReviewState {
+  switch (action.type) {
+    case "review_started":
+      return { ...state, loading: true, requestedSourceRowId: action.sourceRowId, error: null }
+    case "review_succeeded":
+      return {
+        ...state,
+        review: action.sourceRowId && state.review ? mergeRowReview(state.review, action.response, action.sourceRowId) : action.response,
+        loading: false,
+        requestedSourceRowId: undefined,
+        error: null,
+      }
+    case "review_failed":
+      return { ...state, loading: false, requestedSourceRowId: undefined, error: action.error }
+    case "proposal_action_started":
+      return { ...state, error: null, proposalActions: { ...state.proposalActions, [action.proposalId]: action.action } }
+    case "proposal_status":
+      return {
+        ...state,
+        proposalStatuses: { ...state.proposalStatuses, [action.proposalId]: action.status },
+        proposalCanUndo: { ...state.proposalCanUndo, [action.proposalId]: action.status === "accepted" },
+        proposalActions: { ...state.proposalActions, [action.proposalId]: undefined },
+      }
+    case "proposal_statuses":
+      return {
+        ...state,
+        proposalStatuses: {
+          ...state.proposalStatuses,
+          ...Object.fromEntries(Object.entries(action.statuses).map(([id, summary]) => [id, summary.status === "pending" ? undefined : summary.status])),
+        },
+        proposalCanUndo: { ...state.proposalCanUndo, ...Object.fromEntries(Object.entries(action.statuses).map(([id, summary]) => [id, summary.canUndo])) },
+      }
+    case "proposal_action_failed":
+      return { ...state, error: action.error, proposalActions: { ...state.proposalActions, [action.proposalId]: undefined } }
+    case "toggle_expanded":
+      return { ...state, expandedProposalIds: { ...state.expandedProposalIds, [action.proposalId]: state.expandedProposalIds[action.proposalId] === false } }
+    case "set_filter":
+      return { ...state, filter: action.filter }
+  }
+}
+
+export function filterReviewProposals(
+  proposals: readonly ValidatedProposal[],
+  statuses: ExtractionProposalStatusMap,
+  filter: ExtractionReviewFilter,
+): ValidatedProposal[] {
+  if (filter === "all") return [...proposals]
+  return proposals.filter((proposal) => {
+    const status = statuses[proposal.id]
+    if (filter === "pending") return !status && proposal.operation !== "needs_human_review"
+    if (filter === "accepted") return status === "accepted"
+    if (filter === "rejected") return status === "rejected"
+    return proposal.operation === "needs_human_review" || proposal.stale || !proposal.evidenceValid || !proposal.reconciled
+  })
+}
 
 type BulkProposal = {
   id: string
@@ -36,6 +146,14 @@ function isSourceRow(value: unknown): boolean {
     && Array.isArray(value.warnings)
 }
 
+function validProposalStatuses(value: unknown): boolean {
+  if (value === undefined) return true
+  if (!isRecord(value)) return false
+  return Object.values(value).every((summary) => isRecord(summary)
+    && ["pending", "accepted", "rejected", "undone"].includes(String(summary.status))
+    && typeof summary.canUndo === "boolean")
+}
+
 /** Rejects malformed client payloads instead of allowing a partial provider response into review state. */
 export function normalizeExtractionReviewResponse(value: unknown): ExtractionReviewResponse | null {
   if (!isRecord(value) || !["ai", "fallback", "not_required"].includes(String(value.mode))) return null
@@ -43,6 +161,7 @@ export function normalizeExtractionReviewResponse(value: unknown): ExtractionRev
   if (!isStringArray(value.sourceRowIds) || !isStringArray(value.remainingCandidateRowIds)) return null
   if (!Array.isArray(value.sourceRefs) || !Array.isArray(value.sourceRows) || !value.sourceRows.every(isSourceRow)) return null
   if (!Array.isArray(value.proposals) || !Array.isArray(value.rejectedProposals)) return null
+  if (!validProposalStatuses(value.proposalStatuses) || (value.auditEvents !== undefined && !Array.isArray(value.auditEvents))) return null
   return value as unknown as ExtractionReviewResponse
 }
 

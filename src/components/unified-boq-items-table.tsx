@@ -22,6 +22,7 @@ export interface UnifiedBoqItemsTableProps {
   onDismissSuggestion: (row: UnifiedBoqPricedRow) => void
   onFindMatch: (row: UnifiedBoqPricedRow) => void
   onExclude: (row: UnifiedBoqPricedRow) => void
+  onIncludeOptional?: (row: UnifiedBoqPricedRow) => void
   onClearCatalogError?: (key: string) => void
 }
 
@@ -64,6 +65,7 @@ export function UnifiedBoqItemsTable({
   onDismissSuggestion,
   onFindMatch,
   onExclude,
+  onIncludeOptional = () => undefined,
   onClearCatalogError = () => undefined,
 }: UnifiedBoqItemsTableProps) {
   const rowStarts: number[] = []
@@ -102,6 +104,7 @@ export function UnifiedBoqItemsTable({
               onDismissSuggestion={onDismissSuggestion}
               onFindMatch={onFindMatch}
               onExclude={onExclude}
+              onIncludeOptional={onIncludeOptional}
               onClearCatalogError={onClearCatalogError}
             />
           ))}
@@ -128,6 +131,7 @@ function FragmentSection({
   onDismissSuggestion,
   onFindMatch,
   onExclude,
+  onIncludeOptional = () => undefined,
   onClearCatalogError = () => undefined,
 }: FragmentSectionProps) {
   return (
@@ -182,6 +186,8 @@ function FragmentSection({
               {row.item.extractionWarnings?.map((warning, warningIndex) => (
                 <span className="review-item-warning" key={`${warning.code}-${warningIndex}`}>{warning.message}</span>
               ))}
+              {row.item.optional ? <span className="review-optional-state">{row.item.excludedFromTotal ? "Optional · excluded from total" : "Optional · included in total"}</span> : null}
+              {row.item.optional && row.item.excludedFromTotal && !readOnly ? <button type="button" className="unified-boq-include-option" disabled={disabled} onClick={() => onIncludeOptional(row)}>Include in total</button> : null}
             </td>
             <td>
               <Input

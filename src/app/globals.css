@@ -1075,6 +1075,12 @@
 .extraction-review-result strong { color: var(--fg-2); font-size: 11px; }
 .extraction-review-result small { color: #9a6b00; font-size: 10px; text-align: right; }
 .extraction-proposal-list { display: grid; gap: var(--space-2); margin-top: var(--space-3); }
+.extraction-review-filters { display: flex; gap: var(--space-1); margin-top: var(--space-3); overflow-x: auto; padding-bottom: 2px; }
+.extraction-review-filters .filter-chip { flex: 0 0 auto; background: var(--surface); }
+.extraction-remaining-rows { display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; margin-top: var(--space-2); color: var(--muted-text); font-size: 10px; }
+.extraction-remaining-rows button, .extraction-proposal-expand { padding: 2px 6px; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface); color: var(--accent); font-size: 10px; cursor: pointer; }
+.extraction-remaining-rows button:disabled { opacity: .5; cursor: not-allowed; }
+.extraction-proposal-expand { justify-self: start; margin-top: var(--space-2); }
 .extraction-proposal { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-left: 3px solid color-mix(in oklab, var(--accent) 70%, var(--border)); border-radius: var(--radius-sm); background: var(--surface); box-shadow: 0 1px 0 color-mix(in oklab, var(--fg) 4%, transparent); }
 .extraction-proposal.is-accepted { border-left-color: #006400; background: color-mix(in oklab, #006400 4%, var(--surface)); }
 .extraction-proposal.is-rejected { border-left-color: var(--muted-text); opacity: .72; }
@@ -1116,7 +1122,11 @@
 .extraction-proposal.focused > p { margin-top: var(--space-2); }
 .extraction-structure-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-3); margin-top: var(--space-3); }
 .extraction-original-list { display: grid; gap: var(--space-2); }
-.extraction-structure { min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-brand-sm); background: color-mix(in oklab, var(--muted) 22%, var(--surface)); }
+.extraction-structure, .extraction-current-structure { min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-brand-sm); background: color-mix(in oklab, var(--muted) 22%, var(--surface)); }
+.extraction-current-structure ul { display: grid; gap: var(--space-1); margin: var(--space-2) 0 0; padding: 0; list-style: none; }
+.extraction-current-structure li { display: grid; gap: 2px; padding-top: var(--space-1); border-top: 1px solid var(--border-soft); }
+.extraction-current-structure strong { color: var(--fg-2); font-size: 11px; }
+.extraction-current-structure small, .extraction-current-structure p { color: var(--muted-text); font-family: var(--font-mono); font-size: 10px; }
 .extraction-structure-heading { display: flex; justify-content: space-between; gap: var(--space-2); color: var(--muted-text); font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
 .extraction-source-raw { margin-top: var(--space-2) !important; padding: var(--space-2); border-radius: var(--radius-xs); background: var(--surface); color: var(--fg-2) !important; font-family: var(--font-mono); font-size: 10px !important; white-space: pre-wrap; overflow-wrap: anywhere; }
 .extraction-cell-evidence { display: grid; gap: 3px; margin-top: var(--space-2); }
@@ -1158,6 +1168,9 @@
 .review-bundle-parent-row td { background: color-mix(in oklab, var(--accent) 3%, var(--surface)); }
 .review-bundle-child-row td:first-child { padding-left: var(--space-4); }
 .review-optional-state { display: block; margin-top: 3px; color: #9a6b00; font-family: var(--font-body); font-size: 9px; font-weight: 600; white-space: nowrap; }
+.unified-boq-include-option { margin-top: 3px; padding: 0; border: 0; background: transparent; color: var(--accent); font-size: 10px; font-weight: 600; cursor: pointer; }
+.unified-boq-include-option:hover { text-decoration: underline; text-underline-offset: 2px; }
+.unified-boq-include-option:disabled { opacity: .5; cursor: not-allowed; }
 .review-std-badge.matched { background: color-mix(in oklab, #006400 12%, transparent); color: #006400; }
 .review-std-badge.unmatched { background: color-mix(in oklab, #dc2626 10%, transparent); color: #b91c1c; }
 .unified-boq-table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); }
@@ -1239,9 +1252,23 @@
 }
 
 @media (max-width: 920px) {
+  .review-body { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: minmax(280px, 36vh) minmax(0, 1fr); overflow: hidden; }
+  .review-pdf-col, .review-data-col { overflow: auto; padding: var(--space-3); }
+  .review-pdf-col { border-bottom: 1px solid var(--border); }
+  .review-resize-handle { display: none; }
   .focused-extraction-header { flex-direction: column; }
   .focused-extraction-header .extraction-review-heading-actions { width: 100%; justify-content: flex-start; }
   .extraction-structure-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 520px) {
+  .focused-extraction-review { padding: var(--space-3); }
+  .focused-extraction-header .extraction-review-heading-actions { align-items: stretch; flex-direction: column; }
+  .focused-extraction-header .extraction-review-heading-actions .btn { width: 100%; }
+  .extraction-cell-evidence { grid-template-columns: minmax(0, 1fr); }
+  .extraction-proposal-footer { align-items: stretch; flex-direction: column; position: static; }
+  .extraction-proposal-actions { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; }
+  .extraction-proposal-actions .btn { width: 100%; }
 }
 
 @media (max-width: 768px) {

@@ -3,23 +3,25 @@ import test from 'node:test'
 import { readFileSync } from 'node:fs'
 
 const source = readFileSync(new URL('./review-panel.tsx', import.meta.url), 'utf8')
+const extractionSource = readFileSync(new URL('./extraction-review.tsx', import.meta.url), 'utf8')
 
 test('the review panel keeps compound evidence and accepted suggestions visibly auditable', () => {
-  assert.match(source, /data-od-id="extraction-review-workspace"/)
-  assert.match(source, /data-od-id=\{`extraction-proposal-\$\{proposal\.id\}`\}/)
-  assert.match(source, /Informational bundle child/)
-  assert.match(source, /Source: \{sourceReferenceLabel\(reference\)\}/)
+  assert.match(source, /<ExtractionReview/)
+  assert.match(extractionSource, /data-od-id="focused-extraction-review"/)
+  assert.match(extractionSource, /Current BOQ structure/)
+  assert.match(extractionSource, /Informational child · no second total/)
+  assert.match(extractionSource, /sourceReferenceLabel\(source\)/)
   assert.match(source, /item\.optional \? <span[^>]*>\{item\.excludedFromTotal === true \? "Optional · excluded from total" : "Optional"\}/)
 })
 
 test('the review panel requires deliberate accept/reject actions and supports safe bulk accept and undo', () => {
-  assert.match(source, /Accept all high-confidence/)
-  assert.match(source, /proposalCanBeAccepted/)
-  assert.match(source, /\/proposals\/\$\{encodeURIComponent\(proposal\.id\)\}\/\$\{action\}/)
-  assert.match(source, /executeProposalAction\(proposal, "accept"\)/)
-  assert.match(source, /executeProposalAction\(proposal, "reject"\)/)
-  assert.match(source, /executeProposalAction\(proposal, "undo"\)/)
-  assert.match(source, /Recheck with AI/)
+  assert.match(extractionSource, /Accept all validated high-confidence/)
+  assert.match(extractionSource, /proposalCanBeAccepted/)
+  assert.match(extractionSource, /\/proposals\/accept-batch/)
+  assert.match(extractionSource, /executeAction\(proposal, "accept"\)/)
+  assert.match(extractionSource, /executeAction\(proposal, "reject"\)/)
+  assert.match(extractionSource, /executeAction\(proposal, "undo"\)/)
+  assert.match(extractionSource, /Recheck with AI/)
 })
 
 test('the review panel offers a user-entered missing-item path without manufacturing a source price', () => {

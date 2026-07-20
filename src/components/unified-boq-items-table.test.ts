@@ -40,6 +40,7 @@ function bundleChild(overrides: Partial<BoqInformationalItem> = {}): BoqInformat
 function renderTable(
   sections: BoqSection[],
   catalogState: (row: { item: BoqPricedItem }) => InlineCatalogRowState = () => ({ suggestion: null, busy: null, error: null }),
+  onIncludeOptional: (row: unknown) => void = () => undefined,
 ): string {
   const noopRow = () => undefined
   return renderToStaticMarkup(createElement(UnifiedBoqItemsTable, {
@@ -53,6 +54,7 @@ function renderTable(
     onDismissSuggestion: noopRow,
     onFindMatch: noopRow,
     onExclude: noopRow,
+    onIncludeOptional,
   }))
 }
 
@@ -65,6 +67,12 @@ test('keeps rate visible in the canonical BOQ columns and removes legacy row det
   assert.equal(headers.includes('Code'), false)
   assert.match(html, /aria-label="Rate for Valve installation, row 1"[^>]*min="0"[^>]*value="100"/)
   assert.doesNotMatch(html, /Row details|Aggregate rate|aria-label="Code|aria-label="Type/)
+})
+
+test('excluded optional rows expose an explicit include-in-total action while read-only rows do not', () => {
+  const html = renderTable([{ header: 'Options', items: [item({ optional: true, excludedFromTotal: true })] }])
+  assert.match(html, /Optional · excluded from total/)
+  assert.match(html, />Include in total</)
 })
 
 test('shows non-priced bundle children without matching or counting them twice', () => {

@@ -11,6 +11,7 @@ import {
   Loader2,
   Lock,
   MoreHorizontal,
+  Plus,
   Printer,
   Save,
   Search,
@@ -202,10 +203,11 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   const [approving, setApproving] = useState(false)
   const [matching, setMatching] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [addingItem, setAddingItem] = useState(false)
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("items")
   const [pdfPageRequest, setPdfPageRequest] = useState({ page: 1, key: 0 })
   const isReadOnly = boq.status === "approved"
-  const mutationBusy = saving || approving || matching || deleting
+  const mutationBusy = saving || approving || matching || deleting || addingItem
 
   const replaceEdits = useCallback((next: EditsMap) => {
     editsRef.current = next
@@ -304,6 +306,44 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
     }
     handleEdit(row, field, value)
   }, [handleEdit])
+
+  const handleAddMissingItem = async () => {
+    if (isReadOnly || mutationBusy || boq.sections.length === 0) return
+    setAddingItem(true)
+    try {
+      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sectionIndex: boq.sections.length - 1, desc: "New missing item" }),
+      })
+      if (!response.ok) throw new Error(await readError(response, "The missing item could not be added."))
+      applyMutationBoq(await response.json() as Boq)
+      toast.success("Missing item added as a user-entered unpriced row")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "The missing item could not be added.")
+    } finally {
+      setAddingItem(false)
+    }
+  }
+
+  const handleIncludeOptional = async (row: UnifiedBoqPricedRow) => {
+    if (isReadOnly || mutationBusy || !row.item.optional || !row.item.excludedFromTotal) return
+    setMatching(true)
+    try {
+      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/items`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ updates: [{ sectionIndex: row.sectionIndex, items: [{ ...getBoqItemRequestIdentity(row.item), excludedFromTotal: false }] }] }),
+      })
+      if (!response.ok) throw new Error(await readError(response, "The optional item could not be included."))
+      applyMutationBoq(await response.json() as Boq)
+      toast.success("Optional item included in the BOQ total")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "The optional item could not be included.")
+    } finally {
+      setMatching(false)
+    }
+  }
 
   const handleMetadataChange = useCallback((field: MetadataField, value: string) => {
     if (isReadOnly || mutationBusy) return
@@ -571,7 +611,10 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
 
           <div className="review-items-heading">
             <span className="text-sm font-medium">Parsed Items · {items.length} line items</span>
-            <span className="font-mono text-sm">Grand Total: ฿{grandTotal.toLocaleString()}</span>
+            <div className="review-items-heading-actions">
+              <span className="font-mono text-sm">Grand Total: ฿{grandTotal.toLocaleString()}</span>
+              {!isReadOnly ? <Button type="button" variant="outline" size="sm" onClick={() => void handleAddMissingItem()} disabled={mutationBusy || boq.sections.length === 0} data-od-id="add-missing-item">{addingItem ? <Loader2 className="animate-spin" /> : <Plus aria-hidden="true" />}Add missing item</Button> : null}
+            </div>
           </div>
           {unifiedSections.length > 0 ? (
             <UnifiedBoqItemsTable
@@ -585,6 +628,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
               onDismissSuggestion={catalogMatching.dismissSuggestion}
               onFindMatch={setCatalogMatchTarget}
               onExclude={(row) => { setExcludeTarget(row); setExcludeReason("") }}
+              onIncludeOptional={(row) => { void handleIncludeOptional(row) }}
               onClearCatalogError={catalogMatching.clearRowError}
             />
           ) : (
@@ -609,6 +653,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
           <div className="boq-extraction-mode" role="tabpanel" id="boq-extraction-panel" aria-labelledby="boq-extraction-tab" hidden={rightPaneMode !== "extraction"}>
             <ExtractionReview
               boq={boq}
+              readOnly={isReadOnly}
               sourceAvailable={hasSource}
               onBack={() => setRightPaneMode("items")}
               onBoqChange={applyMutationBoq}
