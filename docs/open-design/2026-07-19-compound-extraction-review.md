@@ -42,7 +42,7 @@ The PDF remains one mounted node while the right pane changes mode. It retains c
 - The production adaptation retains Material and Labour as two supplemental compact, read-only evidence columns because the application already preserves those source costs. They are not canonical pricing inputs and do not change the artifact's six-column editing model.
 - Rate is always the editable pricing field for a priced row; Total follows `quantity × rate`.
 - Remove Row details, Code, Type, Aggregate rate, and manual material/labour allocation from the UI.
-- Material and labour values are compact, read-only evidence. For a separate component row, its explicit `costComponent` identity and own row rate provide the applicable evidence while the opposite column remains unprovided. For a combined row, show a component value only when it exists in source evidence; an unknown combined split remains dashes/not-provided and is never inferred.
+- Material and labour values are compact, read-only evidence. For a separate component row, show the applicable value only from a preserved source-origin `costAllocation`; the opposite column remains unprovided. The editable canonical row rate is never relabelled as source evidence. For a combined row, show a component value only when it exists in source evidence; an unknown combined split remains dashes/not-provided and is never inferred.
 - A shared-quantity material/labour row stays one combined priced item with separate source evidence.
 - Components with different quantities, units, rates, or totals stay separate priced rows.
 - Bundle children remain informational and never contribute a second total.

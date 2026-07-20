@@ -38,12 +38,12 @@ function SourceCostEvidence({
   label: "Material" | "Labour"
   present: boolean
   value: number
-  basis: "rate" | "total" | "row rate"
+  basis: "rate" | "total"
 }) {
   if (!present) {
     return <span className="unified-boq-source-cost-missing" aria-label={`${label} not provided`}>—</span>
   }
-  const evidenceLabel = basis === "row rate" ? `${label} row rate` : `${label} source ${basis}`
+  const evidenceLabel = `${label} source ${basis}`
 
   return (
     <span className="unified-boq-source-cost" aria-label={evidenceLabel}>
@@ -161,8 +161,9 @@ function FragmentSection({
         const isMaterialRow = row.item.costComponent === "material"
         const isLabourRow = row.item.costComponent === "labour"
         const isSeparateComponentRow = isMaterialRow || isLabourRow
-        const materialPresent = isMaterialRow || (!isSeparateComponentRow && materialEvidence?.present === true)
-        const labourPresent = isLabourRow || (!isSeparateComponentRow && labourEvidence?.present === true)
+        const sourceAllocation = row.item.costAllocation?.origin === "source" ? row.item.costAllocation : undefined
+        const materialPresent = isMaterialRow ? sourceAllocation !== undefined : !isSeparateComponentRow && materialEvidence?.present === true
+        const labourPresent = isLabourRow ? sourceAllocation !== undefined : !isSeparateComponentRow && labourEvidence?.present === true
 
         return (
           <tr key={row.key} data-row-key={row.key}>
@@ -214,16 +215,16 @@ function FragmentSection({
               <SourceCostEvidence
                 label="Material"
                 present={materialPresent}
-                value={isMaterialRow ? row.item.rate : evidenceBasis === "total" ? materialEvidence?.total ?? 0 : materialEvidence?.rate ?? 0}
-                basis={isMaterialRow ? "row rate" : evidenceBasis}
+                value={isMaterialRow ? sourceAllocation?.material ?? 0 : evidenceBasis === "total" ? materialEvidence?.total ?? 0 : materialEvidence?.rate ?? 0}
+                basis={isMaterialRow && sourceAllocation ? sourceAllocation.basis : evidenceBasis}
               />
             </td>
             <td className="num-col unified-boq-component-cell" data-component="labour">
               <SourceCostEvidence
                 label="Labour"
                 present={labourPresent}
-                value={isLabourRow ? row.item.rate : evidenceBasis === "total" ? labourEvidence?.total ?? 0 : labourEvidence?.rate ?? 0}
-                basis={isLabourRow ? "row rate" : evidenceBasis}
+                value={isLabourRow ? sourceAllocation?.labour ?? 0 : evidenceBasis === "total" ? labourEvidence?.total ?? 0 : labourEvidence?.rate ?? 0}
+                basis={isLabourRow && sourceAllocation ? sourceAllocation.basis : evidenceBasis}
               />
             </td>
             <td className="num-col unified-boq-total">{currency(row.item.total)}</td>

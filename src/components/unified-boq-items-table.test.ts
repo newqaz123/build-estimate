@@ -105,20 +105,33 @@ test('keeps separate component rows independently priced with explicit identity 
   const html = renderTable([{
     header: 'Valve work',
     items: [
-      item({ id: 'material', desc: 'Material only', rate: 2808, total: 22464, costComponent: 'material' }),
-      item({ id: 'labour', desc: 'Labour only', rate: 300, total: 2400, costComponent: 'labour' }),
+      item({ id: 'material', desc: 'Valve component', rate: 999, total: 7992, costComponent: 'material', costAllocation: { basis: 'rate', material: 2808, labour: 0, origin: 'source' } }),
+      item({ id: 'labour', desc: 'Valve component', rate: 777, total: 6216, costComponent: 'labour', costAllocation: { basis: 'rate', material: 0, labour: 300, origin: 'source' } }),
     ],
   }])
 
-  assert.match(html, /aria-label="Rate for Material only, row 1"[^>]*value="2808"/)
-  assert.match(html, /aria-label="Rate for Labour only, row 2"[^>]*value="300"/)
+  assert.match(html, /aria-label="Rate for Valve component, row 1"[^>]*value="999"/)
+  assert.match(html, /aria-label="Rate for Valve component, row 2"[^>]*value="777"/)
   assert.match(html, /Material component/)
   assert.match(html, /Labour component/)
-  assert.match(html, /Material row rate[^<]*<\/span><strong>฿2,808<\/strong>/)
-  assert.match(html, /Labour row rate[^<]*<\/span><strong>฿300<\/strong>/)
-  assert.match(html, /data-component="material"[\s\S]*?Material row rate[\s\S]*?data-component="labour"[^>]*>[\s\S]*?Labour not provided/)
-  assert.match(html, /data-component="material"[^>]*>[\s\S]*?Material not provided[\s\S]*?data-component="labour"[\s\S]*?Labour row rate/)
+  assert.match(html, /Material source rate[^<]*<\/span><strong>฿2,808<\/strong>/)
+  assert.match(html, /Labour source rate[^<]*<\/span><strong>฿300<\/strong>/)
+  assert.match(html, /data-component="material"[\s\S]*?Material source rate[\s\S]*?data-component="labour"[^>]*>[\s\S]*?Labour not provided/)
+  assert.match(html, /data-component="material"[^>]*>[\s\S]*?Material not provided[\s\S]*?data-component="labour"[\s\S]*?Labour source rate/)
   assert.doesNotMatch(html, /aria-label="Material (?:rate|total)|aria-label="Labour (?:rate|total)/)
+})
+
+test('does not relabel an editable separate-component rate as source evidence', () => {
+  const html = renderTable([{
+    header: 'No preserved allocation',
+    items: [item({ desc: 'Editable material row', rate: 999, total: 7992, costComponent: 'material', costAllocation: undefined })],
+  }])
+
+  assert.match(html, /aria-label="Rate for Editable material row, row 1"[^>]*value="999"/)
+  assert.match(html, /Material component/)
+  assert.match(html, /Material not provided/)
+  assert.match(html, /Labour not provided/)
+  assert.doesNotMatch(html, /Material (?:source|row) rate/)
 })
 
 test('combined rows render shared source-cost evidence as compact read-only values', () => {
