@@ -149,6 +149,21 @@ test('pre-existing staging failure preserves recovery evidence', async () => {
   assert.equal(harness.events.includes('run:delete'), false)
 })
 
+test('a tombstoned staging run is cleaned and safely recreated on retry', async () => {
+  let attempts = 0
+  let cleanupCalls = 0
+  const harness = storeHarness({
+    createRun: async () => {
+      attempts += 1
+      return attempts === 1 ? 'exists_deleting' : 'created'
+    },
+    cleanupStagingIfSafe: async () => { cleanupCalls += 1; return true },
+  })
+  await persistStagedRun(harness, harness.store)
+  assert.equal(cleanupCalls, 1)
+  assert.equal(attempts, 2)
+})
+
 test('duplicate ready run is idempotent and skips evidence rewrites', async () => {
   const ready = { ...fixture().boq, createdAt: 'now', updatedAt: 'now' } as Boq
   const harness = storeHarness({

@@ -30,7 +30,7 @@ export function sourceRowPath(boqId: string, runId: string, rowId: string): stri
 }
 
 export interface ExtractionStore {
-  createRun(run: BoqExtractionRun): Promise<'created' | 'exists_staging' | 'exists_ready'>
+  createRun(run: BoqExtractionRun): Promise<'created' | 'exists_staging' | 'exists_deleting' | 'exists_ready'>
   writeSourceRows(boqId: string, runId: string, rows: readonly BoqSourceRowV3[]): Promise<void>
   verifySourceRows(boqId: string, runId: string): Promise<{ count: number; checksum: string }>
   finalizeBoqAndRun(
@@ -98,8 +98,23 @@ export async function persistStagedRun(
     } catch (error) {
       throw new ExtractionCleanupUncertainError({ cause: error })
     }
+    if (creation === 'exists_deleting') {
+      let cleaned = false
+      try {
+        cleaned = await store.cleanupStagingIfSafe(input.run.boqId, input.run.id)
+      } catch (error) {
+        throw new ExtractionCleanupUncertainError({ cause: error })
+      }
+      if (!cleaned) throw new ExtractionCleanupUncertainError()
+      try {
+        creation = await store.createRun(input.run)
+      } catch (error) {
+        throw new ExtractionCleanupUncertainError({ cause: error })
+      }
+      if (creation === 'exists_deleting') throw new ExtractionCleanupUncertainError()
+    }
     creationOutcome = creation
-    if (!['created', 'exists_staging', 'exists_ready'].includes(creationOutcome)) {
+    if (!['created', 'exists_staging', 'exists_deleting', 'exists_ready'].includes(creationOutcome)) {
       throw new ExtractionCleanupUncertainError({ cause: new Error('Extraction store result was malformed') })
     }
     if (creation === 'exists_ready') {
@@ -267,6 +282,7 @@ export function createFirestoreExtractionStore(
             throw new Error('Extraction run identity conflict')
           }
           if (data?.status === 'ready') return 'exists_ready'
+          if (data?.status === 'staging' && data?.cleanupState === 'deleting') return 'exists_deleting'
           if (data?.status === 'staging') return 'exists_staging'
           throw new Error('Extraction run has an unsupported state')
         }
