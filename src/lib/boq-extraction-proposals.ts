@@ -29,6 +29,7 @@ export type ProposalValidationFailureCode =
   | 'invalid_bundle'
   | 'invalid_operation_shape'
   | 'stale_item'
+  | 'target_state_mismatch'
   | 'overlapping_target'
   | 'overlapping_source_row'
   | 'duplicate_proposal'
@@ -302,6 +303,47 @@ function validateOperation(proposal: ExtractionProposal, context: ProposalValida
   return fail('unknown_operation')
 }
 
+function optionalState(value: {
+  optional?: boolean
+  excludedFromTotal?: boolean
+  exclusionReason?: string | null
+}): {
+  optional: boolean
+  excludedFromTotal: boolean
+  exclusionReason: string | null
+} {
+  return {
+    optional: value.optional === true,
+    excludedFromTotal: value.excludedFromTotal === true,
+    exclusionReason: value.exclusionReason ?? null,
+  }
+}
+
+function sameOptionalState(
+  left: ReturnType<typeof optionalState>,
+  right: ReturnType<typeof optionalState>,
+): boolean {
+  return left.optional === right.optional
+    && left.excludedFromTotal === right.excludedFromTotal
+    && left.exclusionReason === right.exclusionReason
+}
+
+function validateTargetOptionalState(
+  proposal: ExtractionProposal,
+  context: ProposalValidationContext,
+): ProposalValidationResult | null {
+  if (proposal.proposedItems.length === 0) return null
+  const known = knownItems(context.sections)
+  const targets = proposal.targetItemIds.map((id) => known.get(id)).filter((item): item is BoqItem => item !== undefined)
+  if (targets.length !== proposal.targetItemIds.length) return fail('unknown_target_item')
+  const states = targets.map(optionalState)
+  const expected = states[0]
+  if (!expected || states.some((state) => !sameOptionalState(state, expected))) return fail('target_state_mismatch')
+  const priced = proposal.proposedItems.filter((item) => item.pricingRole !== 'bundle_child')
+  if (priced.some((item) => !sameOptionalState(optionalState(item), expected))) return fail('target_state_mismatch')
+  return null
+}
+
 function sameComponent(item: ProposalPricedItem, evidence: ProposalSourceComponentEvidence): boolean {
   return item.unit === evidence.unit
     && approximatelyEqual(item.qty, evidence.qty)
@@ -370,6 +412,8 @@ export function validateProposal(value: unknown, context: ProposalValidationCont
   const proposedIds = proposal.proposedItems.map((item) => item.id)
   if (new Set(proposedIds).size !== proposedIds.length) return fail('duplicate_item_id')
   if (proposedIds.some((itemId) => known.has(itemId) && !proposal.targetItemIds.includes(itemId))) return fail('duplicate_item_id')
+  const targetStateFailure = validateTargetOptionalState(proposal, context)
+  if (targetStateFailure) return targetStateFailure
   return validateOperation(proposal, context)
 }
 

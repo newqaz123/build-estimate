@@ -19,6 +19,7 @@ const handler = createExtractionReviewHandler({
   logCategory: (category) => console.warn('BOQ extraction AI review fallback', { category }),
 })
 
+/** Canonical structured review endpoint; run evidence is immutable under extraction-runs. */
 export async function POST(request: Request, context: ExtractionReviewRouteContext) {
   return handler(request, context)
 }

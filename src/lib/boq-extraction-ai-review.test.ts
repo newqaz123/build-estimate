@@ -6,6 +6,7 @@ import type { BoqSourceRowV3 } from './boq-extraction-schema'
 import { fingerprintCanonicalItem } from './boq-extraction-proposals'
 import {
   executeExtractionReview,
+  parseExtractionReviewRequest,
   type ExtractionReviewDependencies,
 } from './boq-extraction-ai-review'
 
@@ -118,6 +119,14 @@ test('provider unavailable and timeout leave deterministic BOQ untouched and ret
   assert.equal(timeout.body.mode, 'fallback')
   assert.equal(timeout.body.aiStatus, 'timeout')
   assert.deepEqual(boq.sections, sections)
+
+  for (const [code, expected] of [[401, 'unauthorized'], [403, 'unauthorized'], [429, 'rate_limited']] as const) {
+    const providerFailure = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+      callProvider: async () => { throw new Error(`provider error ${code}`) },
+    }))
+    assert.equal(providerFailure.status, 200)
+    if (providerFailure.status === 200) assert.equal(providerFailure.body.aiStatus, expected)
+  }
 })
 
 test('malformed, unknown-source, and duplicate AI proposals are discarded server-side', async () => {
@@ -156,4 +165,58 @@ test('automatic review cannot escape its selected compound source row', async ()
   if (result.status !== 200) return
   assert.deepEqual(result.body.proposals, [])
   assert.deepEqual(result.body.rejectedProposals, [{ index: 0, code: 'unknown_source_row' }])
+})
+
+test('normalizes source row IDs before checking uniqueness', () => {
+  assert.throws(
+    () => parseExtractionReviewRequest({ sourceRowIds: [' row-compound ', 'row-compound'] }),
+    /unique non-empty strings/i,
+  )
+})
+
+test('automatic review caps candidate rows and exposes manual follow-up IDs', async () => {
+  const manyRows = Array.from({ length: 105 }, (_, index) => ({ ...rows[0]!, id: `row-${index}` }))
+  const manyItems = manyRows.map((row, index) => ({
+    ...run.sections[0].items[0]!, id: `item-${index}`, sourceRowIds: [row.id],
+  }))
+  const result = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+    getContext: async () => ({
+      boq: { ...boq, sections: [{ header: 'Pump Works', items: manyItems.map((item) => ({
+        ...sections[0].items[0], id: item.id, sourceRowIds: item.sourceRowIds,
+      })) }] },
+      run: { ...run, sourceRowCount: manyRows.length, sections: [{ header: 'Pump Works', items: manyItems }], reviewTargeting: { candidateRowIds: manyRows.map((row) => row.id), candidateCount: manyRows.length, unreconciled: false } },
+      sourceRows: manyRows,
+    }),
+    callProvider: async (messages, provider, model) => {
+      const payload = JSON.parse(messages[1].content.split('<UNTRUSTED_SOURCE_ROWS>\n')[1].split('\n</UNTRUSTED_SOURCE_ROWS>')[0]) as { allowedSourceRowIds: string[] }
+      assert.equal(payload.allowedSourceRowIds.length, 100)
+      return { content: '{"proposals":[]}', provider, model }
+    },
+  }))
+  assert.equal(result.status, 200)
+  if (result.status === 200) assert.equal(result.body.remainingCandidateRowIds.length, 5)
+})
+
+test('AI proposals cannot drop target optional/excluded state', async () => {
+  const optionalBoq = structuredClone(boq)
+  const target = optionalBoq.sections[0]!.items[0]!
+  target.optional = true
+  target.excludedFromTotal = true
+  target.exclusionReason = 'Source option'
+  const dropped = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+    getContext: async () => ({ boq: optionalBoq, run, sourceRows: rows }),
+    callProvider: async (_messages, provider, model) => ({ content: JSON.stringify({ proposals: [componentProposal({ affectedItemFingerprints: { combined: fingerprintCanonicalItem(target) } })] }), provider, model }),
+  }))
+  assert.equal(dropped.status, 200)
+  if (dropped.status === 200) assert.deepEqual(dropped.body.rejectedProposals, [{ index: 0, code: 'target_state_mismatch' }])
+
+  const carried = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+    getContext: async () => ({ boq: optionalBoq, run, sourceRows: rows }),
+    callProvider: async (_messages, provider, model) => ({ content: JSON.stringify({ proposals: [componentProposal({
+      proposedItems: componentProposal().proposedItems.map((item) => ({ ...item, optional: true, excludedFromTotal: true, exclusionReason: 'Source option' })),
+      affectedItemFingerprints: { combined: fingerprintCanonicalItem(target) },
+    })] }), provider, model }),
+  }))
+  assert.equal(carried.status, 200)
+  if (carried.status === 200) assert.equal(carried.body.proposals.length, 1)
 })
