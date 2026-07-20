@@ -161,3 +161,10 @@ test("request and proposal mutation state preserve loaded review evidence", () =
   assert.equal(mutating.loading, true)
   assert.equal(mutating.proposalActions.p1, "accepting")
 })
+
+test("optimistic accepted state never exposes Undo before durable LIFO eligibility reloads", () => {
+  const loaded = extractionReviewReducer(initialExtractionReviewState(), { type: "review_succeeded", response: response([proposal("p1", "row-1")]) })
+  const accepted = extractionReviewReducer(loaded, { type: "proposal_status", proposalId: "p1", status: "accepted", canUndo: false })
+  assert.equal(accepted.proposalStatuses.p1, "accepted")
+  assert.equal(accepted.proposalCanUndo.p1, false)
+})

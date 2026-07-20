@@ -654,6 +654,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
             <ExtractionReview
               boq={boq}
               readOnly={isReadOnly}
+              mutationBlockedReason={pendingChanges > 0 ? "You have unsaved BOQ item or detail edits. Use Save draft before applying extraction corrections." : undefined}
               sourceAvailable={hasSource}
               onBack={() => setRightPaneMode("items")}
               onBoqChange={applyMutationBoq}

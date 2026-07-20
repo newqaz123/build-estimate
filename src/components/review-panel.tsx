@@ -104,6 +104,11 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
   const [date, setDate] = useState(boq.date)
   const [verifyLoading, setVerifyLoading] = useState(false)
   const [approveLoading, setApproveLoading] = useState(false)
+  const [draftSaving, setDraftSaving] = useState(false)
+  const [savedReviewFingerprint, setSavedReviewFingerprint] = useState(() => buildReviewFingerprint({
+    vendor: boq.vendor, project: boq.project, workType: boq.workType, date: boq.date,
+    items: boq.sections.flatMap((section) => section.items),
+  }))
   const [verificationState, setVerificationState] = useState<{
     fingerprint: string
     result: VerificationApiResponse
@@ -141,6 +146,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
     items,
   }), [date, items, project, vendor, workType])
   const reviewFingerprint = useMemo(() => buildReviewFingerprint(reviewEdits), [reviewEdits])
+  const reviewDirty = reviewFingerprint !== savedReviewFingerprint
   const verificationResult = verificationState?.fingerprint === reviewFingerprint
     ? verificationState.result
     : null
@@ -148,7 +154,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
   const verification = useMemo(() => buildReviewVerification(boq, reviewEdits), [boq, reviewEdits])
   const blockingIssues = verification.issues.filter((issue) => issue.severity === "blocking")
   const localWarnings = verification.issues.filter((issue) => issue.severity === "warning")
-  const busy = verifyLoading || approveLoading || itemMutationBusy
+  const busy = verifyLoading || approveLoading || draftSaving || itemMutationBusy
 
   useEffect(() => {
     previousFocusRef.current = document.activeElement instanceof HTMLElement
@@ -354,6 +360,33 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
     }
   }
 
+  const handleSaveDraft = async () => {
+    if (!reviewDirty || busy || boq.status === "approved") return
+    setDraftSaving(true)
+    setSaveError(null)
+    try {
+      const sections = sectionsWithItems(sectionTemplate, items)
+      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project, vendor, workType, date, status: "draft", sections }),
+      })
+      if (!response.ok) throw new Error(await readError(response, "The draft could not be saved."))
+      const updated = await response.json() as Boq
+      setSectionTemplate(updated.sections)
+      setItems(updated.sections.flatMap((section) => section.items))
+      setSavedReviewFingerprint(buildReviewFingerprint({
+        vendor: updated.vendor, project: updated.project, workType: updated.workType, date: updated.date,
+        items: updated.sections.flatMap((section) => section.items),
+      }))
+      toast.success("Draft saved. Extraction corrections can now be applied safely.")
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "The draft could not be saved.")
+    } finally {
+      setDraftSaving(false)
+    }
+  }
+
   const confidence = boq.metadataConfidence
   return (
     <div className="modal-overlay review-overlay open" data-od-id="review-modal" role="dialog" aria-modal="true" aria-labelledby="review-dialog-title">
@@ -433,10 +466,15 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
             <ExtractionReview
               boq={{ ...boq, vendor, project, workType, date, sections: reviewSections, grandTotal }}
               readOnly={boq.status === "approved"}
+              mutationBlockedReason={reviewDirty ? "You have unsaved comparison edits. Use Save draft before applying extraction corrections." : undefined}
               sourceAvailable={hasSource}
               onBoqChange={(updated) => {
                 setSectionTemplate(updated.sections)
                 setItems(updated.sections.flatMap((section) => section.items))
+                setSavedReviewFingerprint(buildReviewFingerprint({
+                  vendor: updated.vendor, project: updated.project, workType: updated.workType, date: updated.date,
+                  items: updated.sections.flatMap((section) => section.items),
+                }))
               }}
               onNavigateToPage={(page) => setPdfPageRequest((current) => ({ page, key: current.key + 1 }))}
             />
@@ -566,6 +604,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
             </div>
             <div className="review-actions">
               <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>Discard</Button>
+              <Button variant="outline" size="sm" onClick={() => void handleSaveDraft()} disabled={busy || !reviewDirty}>{draftSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}Save draft</Button>
               <Button size="sm" onClick={handleApprove} disabled={approveLoading || verification.hasBlockingIssues || (requireCatalogReadiness && catalogReadiness.blocking > 0)}>
                 {approveLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
                 {primaryActionLabel}

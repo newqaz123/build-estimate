@@ -51,6 +51,29 @@ test("approved review receives a read-only contract", () => {
   assert.match(readFileSync(componentUrl, "utf8"), /readOnly/)
 })
 
+test("unsaved detail and compare edits block structural extraction mutations until Save draft", () => {
+  const componentSource = readFileSync(componentUrl, "utf8")
+  const detailSource = readFileSync(detailUrl, "utf8")
+  const compareSource = readFileSync(new URL("./review-panel.tsx", import.meta.url), "utf8")
+  assert.match(componentSource, /mutationBlockedReason\?: string/)
+  assert.match(componentSource, /mutationBlockedReason && \(action === "accept" \|\| action === "undo"\)/)
+  assert.match(componentSource, /Save draft before applying or undoing extraction corrections/)
+  assert.match(componentSource, /disabled=\{readOnly \|\| Boolean\(mutationBlockedReason\)/)
+  assert.match(detailSource, /mutationBlockedReason=\{pendingChanges > 0 \? /)
+  assert.match(compareSource, /const reviewDirty = reviewFingerprint !== savedReviewFingerprint/)
+  assert.match(compareSource, /mutationBlockedReason=\{reviewDirty \? /)
+  assert.match(compareSource, /Save draft<\/Button>/)
+  assert.match(compareSource, /status: "draft"/)
+})
+
+test("accepted and undone actions reload durable LIFO Undo eligibility", () => {
+  const source = readFileSync(componentUrl, "utf8")
+  assert.match(source, /const refreshStoredReview = useCallback/)
+  assert.match(source, /action === "accept" \|\| action === "undo"[\s\S]*?await refreshStoredReview\(\)/)
+  assert.match(source, /proposal_status", proposalId, status: "accepted", canUndo: false/)
+  assert.doesNotMatch(source, /bulkProposalIds\.forEach\(\(proposalId\) => dispatch\(\{ type: "proposal_status", proposalId, status: "accepted" \}\)\)/)
+})
+
 test("responsive review follows the 920px and 520px Open Design breakpoints", () => {
   const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8")
   assert.match(css, /@media \(max-width: 920px\)[\s\S]*?\.review-body[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/)

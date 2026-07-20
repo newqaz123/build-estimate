@@ -24,7 +24,7 @@ export type ExtractionReviewAction =
   | { type: "review_succeeded"; response: ExtractionReviewResponse; sourceRowId?: string }
   | { type: "review_failed"; error: string }
   | { type: "proposal_action_started"; proposalId: string; action: ExtractionProposalAction }
-  | { type: "proposal_status"; proposalId: string; status: ExtractionProposalStatus }
+  | { type: "proposal_status"; proposalId: string; status: ExtractionProposalStatus; canUndo?: boolean }
   | { type: "proposal_statuses"; statuses: Record<string, { status: "pending" | ExtractionProposalStatus; canUndo: boolean }> }
   | { type: "proposal_action_failed"; proposalId: string; error: string }
   | { type: "toggle_expanded"; proposalId: string }
@@ -90,7 +90,7 @@ export function extractionReviewReducer(state: ExtractionReviewState, action: Ex
       return {
         ...state,
         proposalStatuses: { ...state.proposalStatuses, [action.proposalId]: action.status },
-        proposalCanUndo: { ...state.proposalCanUndo, [action.proposalId]: action.status === "accepted" },
+        proposalCanUndo: { ...state.proposalCanUndo, [action.proposalId]: action.canUndo ?? false },
         proposalActions: { ...state.proposalActions, [action.proposalId]: undefined },
       }
     case "proposal_statuses":

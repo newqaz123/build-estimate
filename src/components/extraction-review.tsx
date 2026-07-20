@@ -38,6 +38,7 @@ interface ExtractionReviewProps {
   onNavigateToPage: (page: number) => void
   sourceAvailable: boolean
   readOnly?: boolean
+  mutationBlockedReason?: string
 }
 
 async function readError(response: Response, fallback: string): Promise<string> {
@@ -128,7 +129,7 @@ const REVIEW_FILTERS: Array<{ value: ExtractionReviewFilter; label: string }> = 
   { value: "ai-pending", label: "AI pending" },
 ]
 
-export function ExtractionReview({ boq, onBack, onBoqChange, onNavigateToPage, sourceAvailable, readOnly = false }: ExtractionReviewProps) {
+export function ExtractionReview({ boq, onBack, onBoqChange, onNavigateToPage, sourceAvailable, readOnly = false, mutationBlockedReason }: ExtractionReviewProps) {
   const [extractionRunId, setExtractionRunId] = useState(boq.activeExtractionRunId)
   const [state, dispatch] = useReducer(extractionReviewReducer, undefined, initialExtractionReviewState)
   const [reextracting, setReextracting] = useState(false)
@@ -220,10 +221,30 @@ export function ExtractionReview({ boq, onBack, onBoqChange, onNavigateToPage, s
     return () => { active = false; window.clearTimeout(timer) }
   }, [boq.id, extractionRunId, readOnly, review, runReview])
 
+  const refreshStoredReview = useCallback(async () => {
+    if (!extractionRunId) return false
+    try {
+      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/extraction-runs/${encodeURIComponent(extractionRunId)}/review`)
+      if (!response.ok) throw new Error(await readError(response, "Extraction review state could not be refreshed."))
+      const normalized = normalizeExtractionReviewResponse(await response.json())
+      if (!normalized) throw new Error("Saved extraction review returned an unsupported response.")
+      dispatch({ type: "review_succeeded", response: normalized })
+      if (normalized.proposalStatuses) dispatch({ type: "proposal_statuses", statuses: normalized.proposalStatuses })
+      return true
+    } catch (cause) {
+      dispatch({ type: "review_failed", error: cause instanceof Error ? cause.message : "Extraction review state could not be refreshed." })
+      return false
+    }
+  }, [boq.id, extractionRunId])
+
   const executeAction = useCallback(async (proposal: ValidatedProposal, action: "accept" | "reject" | "undo") => {
     if (!extractionRunId) return false
     const actionState: ExtractionProposalAction = action === "accept" ? "accepting" : action === "reject" ? "rejecting" : "undoing"
     if (readOnly) return false
+    if (mutationBlockedReason && (action === "accept" || action === "undo")) {
+      toast.warning(mutationBlockedReason)
+      return false
+    }
     dispatch({ type: "proposal_action_started", proposalId: proposal.id, action: actionState })
     try {
       const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/extraction-runs/${encodeURIComponent(extractionRunId)}/proposals/${encodeURIComponent(proposal.id)}/${action}`, {
@@ -232,18 +253,19 @@ export function ExtractionReview({ boq, onBack, onBoqChange, onNavigateToPage, s
       if (!response.ok) throw new Error(await readError(response, `Suggestion could not be ${action}ed.`))
       const result = await response.json() as { boq?: Boq }
       if (result.boq) onBoqChange(result.boq)
-      dispatch({ type: "proposal_status", proposalId: proposal.id, status: action === "accept" ? "accepted" : action === "reject" ? "rejected" : "undone" })
+      dispatch({ type: "proposal_status", proposalId: proposal.id, status: action === "accept" ? "accepted" : action === "reject" ? "rejected" : "undone", canUndo: false })
+      if (action === "accept" || action === "undo") await refreshStoredReview()
       toast.success(action === "accept" ? "Suggestion accepted" : action === "reject" ? "Suggestion rejected" : "Suggestion undone")
       return true
     } catch (cause) {
       dispatch({ type: "proposal_action_failed", proposalId: proposal.id, error: cause instanceof Error ? cause.message : `Suggestion could not be ${action}ed.` })
       return false
     }
-  }, [boq.id, extractionRunId, onBoqChange, readOnly])
+  }, [boq.id, extractionRunId, mutationBlockedReason, onBoqChange, readOnly, refreshStoredReview])
 
   const bulkProposalIds = useMemo(() => acceptAllValidatedProposalIds(review?.proposals ?? [], statuses), [review, statuses])
   const acceptAll = async () => {
-    if (!extractionRunId || readOnly || bulkProposalIds.length === 0) return
+    if (!extractionRunId || readOnly || mutationBlockedReason || bulkProposalIds.length === 0) return
     bulkProposalIds.forEach((proposalId) => dispatch({ type: "proposal_action_started", proposalId, action: "accepting" }))
     try {
       const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/extraction-runs/${encodeURIComponent(extractionRunId)}/proposals/accept-batch`, {
@@ -254,7 +276,8 @@ export function ExtractionReview({ boq, onBack, onBoqChange, onNavigateToPage, s
       if (!response.ok) throw new Error(await readError(response, "Validated suggestions could not be accepted atomically."))
       const result = await response.json() as { boq?: Boq }
       if (result.boq) onBoqChange(result.boq)
-      bulkProposalIds.forEach((proposalId) => dispatch({ type: "proposal_status", proposalId, status: "accepted" }))
+      bulkProposalIds.forEach((proposalId) => dispatch({ type: "proposal_status", proposalId, status: "accepted", canUndo: false }))
+      await refreshStoredReview()
       toast.success(`${bulkProposalIds.length} validated suggestions accepted`)
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "Validated suggestions could not be accepted atomically."
@@ -304,7 +327,7 @@ export function ExtractionReview({ boq, onBack, onBoqChange, onNavigateToPage, s
           <p>Nothing changes until you accept a validated correction.</p>
         </div>
         <div className="extraction-review-heading-actions">
-          {bulkProposalIds.length > 0 && !readOnly ? <Button type="button" size="sm" onClick={() => void acceptAll()} disabled={busy}><Check aria-hidden="true" />Accept all validated high-confidence</Button> : null}
+          {bulkProposalIds.length > 0 && !readOnly ? <Button type="button" size="sm" onClick={() => void acceptAll()} disabled={busy || Boolean(mutationBlockedReason)}><Check aria-hidden="true" />Accept all validated high-confidence</Button> : null}
           <Button type="button" variant="outline" size="sm" onClick={() => void runReview()} disabled={readOnly || !extractionRunId || busy}>{loading || reviewRunStatus === "running" ? <Loader2 className="animate-spin" /> : <Sparkles aria-hidden="true" />}{reviewRunStatus === "running" ? "AI review running" : "Recheck with AI"}</Button>
         </div>
       </header>
@@ -330,6 +353,8 @@ export function ExtractionReview({ boq, onBack, onBoqChange, onNavigateToPage, s
       {review?.remainingCandidateRowIds.length ? <div className="extraction-remaining-rows" aria-label="Additional candidate source rows"><span>Follow-up rows:</span>{review.remainingCandidateRowIds.map((sourceRowId) => <button type="button" key={sourceRowId} onClick={() => void runReview(sourceRowId)} disabled={readOnly || busy}>{sourceRowId}</button>)}</div> : null}
 
       {error ? <div className="review-save-error" role="alert">{error}</div> : null}
+
+      {mutationBlockedReason ? <div className="review-save-error" role="status"><strong>Save draft before applying or undoing extraction corrections</strong><span>{mutationBlockedReason}</span></div> : null}
 
       {review?.mode === "ai" && review.proposals.length === 0 ? <div className="extraction-review-empty"><Check aria-hidden="true" /><strong>No correction proposals</strong><span>The deterministic BOQ remains unchanged. You can recheck an individual source row below.</span></div> : null}
 
@@ -365,9 +390,9 @@ export function ExtractionReview({ boq, onBack, onBoqChange, onNavigateToPage, s
                 <div className="extraction-proposal-footer">
                   {humanReview ? <span className="extraction-human-review"><TriangleAlert aria-hidden="true" />Needs human review · acceptance disabled</span> : <span />}
                   <div className="extraction-proposal-actions">
-                    {status === "accepted" && state.proposalCanUndo[proposal.id] && !readOnly ? <Button type="button" variant="outline" size="sm" onClick={() => void executeAction(proposal, "undo")} disabled={Boolean(action)}>Undo{action === "undoing" ? <Loader2 className="animate-spin" /> : <Undo2 aria-hidden="true" />}</Button> : null}
+                    {status === "accepted" && state.proposalCanUndo[proposal.id] && !readOnly ? <Button type="button" variant="outline" size="sm" onClick={() => void executeAction(proposal, "undo")} disabled={Boolean(action) || Boolean(mutationBlockedReason)}>Undo{action === "undoing" ? <Loader2 className="animate-spin" /> : <Undo2 aria-hidden="true" />}</Button> : null}
                     {!status ? <>
-                      <Button type="button" size="sm" onClick={() => void executeAction(proposal, "accept")} disabled={readOnly || !canAccept || Boolean(action)}>Accept{action === "accepting" ? <Loader2 className="animate-spin" /> : <Check aria-hidden="true" />}</Button>
+                      <Button type="button" size="sm" onClick={() => void executeAction(proposal, "accept")} disabled={readOnly || Boolean(mutationBlockedReason) || !canAccept || Boolean(action)}>Accept{action === "accepting" ? <Loader2 className="animate-spin" /> : <Check aria-hidden="true" />}</Button>
                       <Button type="button" variant="ghost" size="sm" onClick={() => void executeAction(proposal, "reject")} disabled={readOnly || Boolean(action)}>Reject{action === "rejecting" ? <Loader2 className="animate-spin" /> : <X aria-hidden="true" />}</Button>
                     </> : status !== "accepted" ? <span className="extraction-action-status">{status === "rejected" ? "Rejected" : "Undone"}</span> : null}
                   </div>
