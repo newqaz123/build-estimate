@@ -65,6 +65,20 @@ export interface ExtractionReviewRejectedProposal {
   code: string
 }
 
+export interface ExtractionReviewSourceRow {
+  sourceRowId: string
+  page: number
+  table: number
+  row: number
+  section: string | null
+  headers: string[]
+  rawText: string
+  rawCells: BoqSourceRowV3['rawCells']
+  classification: BoqSourceRowV3['classification']
+  confidence: number
+  warnings: BoqSourceRowV3['warnings']
+}
+
 export interface ExtractionReviewResponse {
   mode: 'ai' | 'fallback' | 'not_required'
   aiStatus: ExtractionReviewAiStatus
@@ -72,6 +86,7 @@ export interface ExtractionReviewResponse {
   sourceRowIds: string[]
   remainingCandidateRowIds: string[]
   sourceRefs: Array<{ sourceRowId: string; page: number; table: number; row: number }>
+  sourceRows: ExtractionReviewSourceRow[]
   proposals: ValidatedProposal[]
   rejectedProposals: ExtractionReviewRejectedProposal[]
   provider?: string
@@ -174,6 +189,22 @@ function sourceRefs(rows: readonly BoqSourceRowV3[]) {
   return rows.map((row) => ({ sourceRowId: row.id, page: row.page, table: row.table, row: row.row }))
 }
 
+function sourceRowDisplays(rows: readonly BoqSourceRowV3[]): ExtractionReviewSourceRow[] {
+  return rows.map((row) => ({
+    sourceRowId: row.id,
+    page: row.page,
+    table: row.table,
+    row: row.row,
+    section: row.section,
+    headers: [...row.headers],
+    rawText: row.rawText,
+    rawCells: row.rawCells.map((cell) => ({ ...cell, lines: [...cell.lines] })),
+    classification: row.classification,
+    confidence: row.confidence,
+    warnings: row.warnings.map((warning) => ({ ...warning })),
+  }))
+}
+
 function fallback(
   status: Exclude<ExtractionReviewAiStatus, 'completed' | 'not_required'>,
   rows: readonly BoqSourceRowV3[],
@@ -182,7 +213,7 @@ function fallback(
   return {
     mode: 'fallback', aiStatus: status,
     message: 'AI review is unavailable. The deterministic extraction remains unchanged; review this row manually.',
-    sourceRowIds: rows.map((row) => row.id), remainingCandidateRowIds: [...remainingCandidateRowIds], sourceRefs: sourceRefs(rows), proposals: [], rejectedProposals: [],
+    sourceRowIds: rows.map((row) => row.id), remainingCandidateRowIds: [...remainingCandidateRowIds], sourceRefs: sourceRefs(rows), sourceRows: sourceRowDisplays(rows), proposals: [], rejectedProposals: [],
   }
 }
 
@@ -190,7 +221,7 @@ function noReview(rows: readonly BoqSourceRowV3[], remainingCandidateRowIds: rea
   return {
     mode: 'not_required', aiStatus: 'not_required',
     message: 'No ambiguous, unreconciled, or compound source rows need automatic AI review.',
-    sourceRowIds: rows.map((row) => row.id), remainingCandidateRowIds: [...remainingCandidateRowIds], sourceRefs: sourceRefs(rows), proposals: [], rejectedProposals: [],
+    sourceRowIds: rows.map((row) => row.id), remainingCandidateRowIds: [...remainingCandidateRowIds], sourceRefs: sourceRefs(rows), sourceRows: sourceRowDisplays(rows), proposals: [], rejectedProposals: [],
   }
 }
 
@@ -374,7 +405,7 @@ export async function executeExtractionReview(
       status: 200,
       body: {
         mode: 'ai', aiStatus: 'completed', message: 'AI suggestions are ready for explicit review and acceptance.',
-        sourceRowIds: selection.rows.map((row) => row.id), remainingCandidateRowIds: selection.remainingCandidateRowIds, sourceRefs: sourceRefs(selection.rows),
+        sourceRowIds: selection.rows.map((row) => row.id), remainingCandidateRowIds: selection.remainingCandidateRowIds, sourceRefs: sourceRefs(selection.rows), sourceRows: sourceRowDisplays(selection.rows),
         proposals: accepted, rejectedProposals: rejected, provider: result.provider, model: result.model,
       },
     }

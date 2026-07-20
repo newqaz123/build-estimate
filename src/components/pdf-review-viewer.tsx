@@ -33,6 +33,8 @@ interface PdfReviewViewerProps {
   sourceUrl: string
   sourceFileName: string
   resetKey: string
+  requestedPage?: number
+  requestedPageKey?: string | number
 }
 
 async function loadPdf(sourceUrl: string) {
@@ -44,7 +46,7 @@ async function loadPdf(sourceUrl: string) {
 
 const INITIAL_PAN: PdfPoint = { x: 0, y: 0 }
 
-export function PdfReviewViewer({ sourceUrl, sourceFileName, resetKey }: PdfReviewViewerProps) {
+export function PdfReviewViewer({ sourceUrl, sourceFileName, resetKey, requestedPage, requestedPageKey }: PdfReviewViewerProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const dragStartRef = useRef<PdfPoint | null>(null)
@@ -114,6 +116,21 @@ export function PdfReviewViewer({ sourceUrl, sourceFileName, resetKey }: PdfRevi
       void loadedDocument?.destroy()
     }
   }, [attempt, clearInteraction, resetKey, sourceUrl])
+
+  useEffect(() => {
+    if (typeof requestedPage !== "number" || !Number.isFinite(requestedPage) || pageCount < 1) return
+    const clampedPage = Math.min(pageCount, Math.max(1, Math.trunc(requestedPage)))
+    let active = true
+    void Promise.resolve().then(() => {
+      if (!active) return
+      clearInteraction()
+      setPageNumber(clampedPage)
+      setZoom(1)
+      setPan(INITIAL_PAN)
+      setTool("pan")
+    })
+    return () => { active = false }
+  }, [clearInteraction, pageCount, requestedPage, requestedPageKey])
 
   useEffect(() => {
     const viewport = viewportRef.current

@@ -73,3 +73,12 @@ test("PDF pan is unavailable at fit and every movement is constrained to the ren
     /\.pdf-review-viewport\.is-pan\s*\{[^}]*cursor:\s*grab;[^}]*\}\s*\.pdf-review-viewport\.is-pan-disabled\s*\{[^}]*cursor:\s*default;/,
   )
 })
+
+test("PDF source navigation accepts a controlled page request and clamps it after load", () => {
+  const source = readFileSync(viewerUrl, "utf8")
+
+  assert.match(source, /requestedPage\?: number/)
+  assert.match(source, /requestedPageKey\?: string \| number/)
+  assert.match(source, /Math\.min\(pageCount, Math\.max\(1, Math\.trunc\(requestedPage\)\)\)/)
+  assert.match(source, /setPageNumber\(clampedPage\)/)
+})

@@ -17,7 +17,8 @@ test("upload opens the unified BOQ detail and matching workspace", () => {
   assert.match(detailSource, /<UnifiedBoqItemsTable/)
   assert.match(detailSource, /<PdfReviewViewer/)
   assert.match(detailSource, /Extraction review/)
-  assert.match(detailSource, /<ReviewPanel/)
+  assert.match(detailSource, /<ExtractionReview/)
+  assert.doesNotMatch(detailSource, /<ReviewPanel/)
 })
 
 test("the unified workspace restores resizable and collapsible PDF controls", () => {

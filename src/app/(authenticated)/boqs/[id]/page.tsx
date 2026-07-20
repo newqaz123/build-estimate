@@ -20,9 +20,9 @@ import {
 import { toast } from "sonner"
 
 import { CatalogMatchModal } from "@/components/catalog-match-modal"
+import { ExtractionReview } from "@/components/extraction-review"
 import { PdfReviewViewer } from "@/components/pdf-review-viewer"
 import { ProtoBadge } from "@/components/proto-badge"
-import { ReviewPanel } from "@/components/review-panel"
 import { ReviewWorkspace } from "@/components/review-workspace"
 import { UnifiedBoqItemsTable } from "@/components/unified-boq-items-table"
 import { useInlineCatalogMatching } from "@/components/use-inline-catalog-matching"
@@ -55,6 +55,7 @@ type EditsMap = BoqDetailEdits
 type LoadState = "loading" | "loaded" | "not-found" | "error"
 type MetadataField = "vendor" | "project" | "workType" | "date"
 type MetadataEdits = Partial<Pick<Boq, MetadataField>>
+type RightPaneMode = "items" | "extraction"
 
 const FILTERS = ["All", "Unit", "Lump Sum", "Job"] as const
 const requireCatalogReadiness = true
@@ -201,7 +202,8 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   const [approving, setApproving] = useState(false)
   const [matching, setMatching] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const [extractionReviewOpen, setExtractionReviewOpen] = useState(false)
+  const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("items")
+  const [pdfPageRequest, setPdfPageRequest] = useState({ page: 1, key: 0 })
   const isReadOnly = boq.status === "approved"
   const mutationBusy = saving || approving || matching || deleting
 
@@ -270,15 +272,6 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
     applyMutationBoq(updated)
   }, [applyMutationBoq])
 
-  const reloadCanonicalBoq = useCallback(async () => {
-    try {
-      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}`)
-      if (!response.ok) return
-      applyMutationBoq(await response.json() as Boq)
-    } catch {
-      // Keep the current workspace intact; a later navigation will fetch the latest BOQ.
-    }
-  }, [applyMutationBoq, boq.id])
   const catalogMatching = useInlineCatalogMatching({
     boq: displayBoq,
     onBoqChange: handleCatalogBoqChange,
@@ -505,8 +498,8 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
           <div className="review-header-actions boq-unified-actions">
             {!isReadOnly ? (
               <>
-                {hasSource ? (
-                  <Button type="button" variant="outline" size="sm" onClick={() => setExtractionReviewOpen(true)} disabled={mutationBusy || pendingChanges > 0}>
+                {hasSource || boq.activeExtractionRunId ? (
+                  <Button type="button" variant="outline" size="sm" onClick={() => setRightPaneMode("extraction")} disabled={mutationBusy} aria-pressed={rightPaneMode === "extraction"}>
                     <Sparkles aria-hidden="true" />Extraction review
                   </Button>
                 ) : null}
@@ -537,9 +530,16 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
               sourceUrl={`/api/boqs/${encodeURIComponent(boq.id)}/source`}
               sourceFileName={boq.sourceFileName || "source.pdf"}
               resetKey={boq.id}
+              requestedPage={pdfPageRequest.page}
+              requestedPageKey={pdfPageRequest.key}
             />
           ) : null}
         >
+          <div className="boq-right-pane-mode" role="tablist" aria-label="BOQ review mode">
+            <button type="button" id="boq-items-tab" role="tab" aria-controls="boq-items-panel" aria-selected={rightPaneMode === "items"} tabIndex={rightPaneMode === "items" ? 0 : -1} onClick={() => setRightPaneMode("items")}>BOQ items</button>
+            <button type="button" id="boq-extraction-tab" role="tab" aria-controls="boq-extraction-panel" aria-selected={rightPaneMode === "extraction"} tabIndex={rightPaneMode === "extraction" ? 0 : -1} onClick={() => setRightPaneMode("extraction")}>Extraction review</button>
+          </div>
+          <div className="boq-items-mode" role="tabpanel" id="boq-items-panel" aria-labelledby="boq-items-tab" hidden={rightPaneMode !== "items"}>
           <div className="review-metadata">
             <h2 className="text-sm font-medium mb-3">BOQ Details</h2>
             <div className="grid grid-cols-2 gap-3">
@@ -605,6 +605,16 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
           {blockingIssues.length ? (
             <div className="review-blockers mt-3" role="alert"><strong>Resolve before approval</strong><ul>{blockingIssues.map((issue, index) => <li key={`${issue.code}-${index}`}>{issue.message}</li>)}</ul></div>
           ) : null}
+          </div>
+          <div className="boq-extraction-mode" role="tabpanel" id="boq-extraction-panel" aria-labelledby="boq-extraction-tab" hidden={rightPaneMode !== "extraction"}>
+            <ExtractionReview
+              boq={boq}
+              sourceAvailable={hasSource}
+              onBack={() => setRightPaneMode("items")}
+              onBoqChange={applyMutationBoq}
+              onNavigateToPage={(page) => setPdfPageRequest((current) => ({ page, key: current.key + 1 }))}
+            />
+          </div>
         </ReviewWorkspace>
       </div>
 
@@ -635,18 +645,6 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
         </DialogContent>
       </Dialog>
 
-      {extractionReviewOpen ? (
-        <ReviewPanel
-          boq={boq}
-          primaryActionLabel="Approve & return"
-          requireCatalogReadiness
-          onApproved={applyMutationBoq}
-          onClose={() => {
-            setExtractionReviewOpen(false)
-            void reloadCanonicalBoq()
-          }}
-        />
-      ) : null}
     </div>
   )
 }
