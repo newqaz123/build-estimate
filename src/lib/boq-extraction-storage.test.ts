@@ -49,7 +49,7 @@ function storeHarness(overrides: Partial<ExtractionStore> = {}) {
     verifySourceRows: async () => { events.push('rows:verify'); return { count: data.run.sourceRowCount, checksum: data.run.sourceRowChecksum } },
     finalizeBoqAndRun: async () => { events.push('boq+run:finalize'); return 'finalized' },
     getReadyImport: async () => null,
-    cleanupStagingIfSafe: async () => true,
+    cleanupStagingIfSafe: async () => { events.push('run:delete'); return true },
     deleteRunTree: async () => { events.push('run:delete') },
     listExpiredStagingRuns: async () => [],
     ...overrides,
@@ -106,6 +106,35 @@ test('unreconciled already-finalized outcome preserves staging evidence', async 
   assert.equal(harness.events.includes('run:delete'), false)
 })
 
+test('create-run commit rejection never directly deletes an existing ready run', async () => {
+  const harness = storeHarness({
+    createRun: async () => { throw new Error('deadline after ready commit') },
+    cleanupStagingIfSafe: async () => false,
+    deleteRunTree: async () => { harness.events.push('run:delete') },
+  })
+  await assert.rejects(() => persistStagedRun(harness, harness.store), ExtractionCleanupUncertainError)
+  assert.equal(harness.events.includes('run:delete'), false)
+})
+
+test('identity conflict against a pre-existing run preserves that run tree', async () => {
+  const harness = storeHarness({
+    createRun: async () => { throw new Error('Extraction run identity conflict') },
+    cleanupStagingIfSafe: async () => false,
+    deleteRunTree: async () => { harness.events.push('run:delete') },
+  })
+  await assert.rejects(
+    () => persistStagedRun(harness, harness.store),
+    (error) => error instanceof ExtractionCleanupUncertainError,
+  )
+  assert.equal(harness.events.includes('run:delete'), false)
+})
+
+test('pre-existing staging run remains resumable and does not trigger cleanup', async () => {
+  const harness = storeHarness({ createRun: async () => 'exists_staging' })
+  await persistStagedRun(harness, harness.store)
+  assert.equal(harness.events.includes('run:delete'), false)
+})
+
 test('duplicate ready run is idempotent and skips evidence rewrites', async () => {
   const ready = { ...fixture().boq, createdAt: 'now', updatedAt: 'now' } as Boq
   const harness = storeHarness({
@@ -116,12 +145,12 @@ test('duplicate ready run is idempotent and skips evidence rewrites', async () =
   assert.equal(await persistStagedRun(harness, harness.store), ready)
 })
 
-test('unknown store creation result fails closed and cleans staging evidence', async () => {
+test('unknown store creation result fails closed without deleting unknown evidence', async () => {
   const harness = storeHarness({
     createRun: async () => 'malformed' as 'created',
   })
   await assert.rejects(() => persistStagedRun(harness, harness.store), /store result/i)
-  assert.equal(harness.events.at(-1), 'run:delete')
+  assert.equal(harness.events.includes('run:delete'), false)
 })
 
 test('unknown finalize outcome and failed cleanup preserves recovery evidence', async () => {
@@ -220,4 +249,13 @@ test('expired staging cleanup is bounded and delegates complete run-tree deletio
   })
   assert.equal(await cleanupExpiredStagingRuns(harness.store, '2026-07-20T00:00:00Z', 2), 2)
   assert.deepEqual(deleted, ['b1/r1', 'b2/r2'])
+})
+
+test('expired staging cleanup counts only runs safely removed before a ready race', async () => {
+  let calls = 0
+  const harness = storeHarness({
+    listExpiredStagingRuns: async () => [{ boqId: 'b1', runId: 'r1' }, { boqId: 'b2', runId: 'r2' }],
+    cleanupStagingIfSafe: async () => { calls += 1; return calls === 1 },
+  })
+  assert.equal(await cleanupExpiredStagingRuns(harness.store, '2026-07-20T00:00:00Z', 2), 1)
 })

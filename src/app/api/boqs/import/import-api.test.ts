@@ -383,7 +383,7 @@ test('v3 staging failure cleans run then source, but uncertain cleanup preserves
     extractionStore: extractionStore({
       createRun: async () => 'created',
       writeSourceRows: async () => { throw new Error('write failed') },
-      deleteRunTree: async () => { calls.push('run:delete') },
+      cleanupStagingIfSafe: async () => { calls.push('run:delete'); return true },
     }),
     deleteSourcePdf: async () => { calls.push('source:delete') },
   })))
@@ -395,7 +395,7 @@ test('v3 staging failure cleans run then source, but uncertain cleanup preserves
     extractionStore: extractionStore({
       createRun: async () => 'created',
       writeSourceRows: async () => { throw new Error('write failed') },
-      deleteRunTree: async () => { throw new Error('cleanup unknown') },
+      cleanupStagingIfSafe: async () => { throw new Error('cleanup unknown') },
     }),
     deleteSourcePdf: async () => { calls.push('source:delete') },
   })))

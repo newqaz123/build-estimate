@@ -67,9 +67,11 @@ function isMatchingReadyImport(
 
 async function cleanupOrThrow(store: ExtractionStore, boqId: string, runId: string): Promise<void> {
   try {
-    await store.deleteRunTree(boqId, runId)
-  } catch {
-    throw new ExtractionCleanupUncertainError()
+    const safe = await store.cleanupStagingIfSafe(boqId, runId)
+    if (!safe) throw new ExtractionCleanupUncertainError()
+  } catch (error) {
+    if (error instanceof ExtractionCleanupUncertainError) throw error
+    throw new ExtractionCleanupUncertainError({ cause: error })
   }
 }
 
@@ -83,13 +85,18 @@ export async function persistStagedRun(
   signal?: AbortSignal,
 ): Promise<Omit<Boq, 'createdAt' | 'updatedAt'> | Boq> {
   throwIfCancelled(signal)
-  let staged = false
+  let ownsStaging = false
   let safeCleanupCompleted = false
   try {
-    // Creation can commit and still reject. Treat its outcome as potentially
-    // staged until nested cleanup proves otherwise.
-    staged = true
-    const creation = await store.createRun(input.run)
+    // A rejected create can have committed, or can have collided with a
+    // pre-existing run. Until the store returns an explicit outcome we do not
+    // own the run and must preserve its evidence rather than deleting it.
+    let creation: Awaited<ReturnType<ExtractionStore['createRun']>>
+    try {
+      creation = await store.createRun(input.run)
+    } catch (error) {
+      throw new ExtractionCleanupUncertainError({ cause: error })
+    }
     if (!['created', 'exists_staging', 'exists_ready'].includes(creation)) {
       throw new Error('Extraction store result was malformed')
     }
@@ -103,6 +110,7 @@ export async function persistStagedRun(
       if (isMatchingReadyImport(existing, input.run)) return existing.boq
       throw new ExtractionCleanupUncertainError()
     }
+    ownsStaging = creation === 'created'
     throwIfCancelled(signal)
     for (let index = 0; index < input.rows.length; index += SOURCE_ROW_BATCH_SIZE) {
       await store.writeSourceRows(input.run.boqId, input.run.id, input.rows.slice(index, index + SOURCE_ROW_BATCH_SIZE))
@@ -130,6 +138,7 @@ export async function persistStagedRun(
       try {
         const existing = await store.getReadyImport(input.run.boqId, input.run.id)
         if (isMatchingReadyImport(existing, input.run)) return existing.boq
+        if (!ownsStaging) throw new ExtractionCleanupUncertainError({ cause: finalizeError })
         const safe = await store.cleanupStagingIfSafe(input.run.boqId, input.run.id)
         if (!safe) throw new ExtractionCleanupUncertainError({ cause: finalizeError })
         safeCleanupCompleted = true
@@ -141,7 +150,7 @@ export async function persistStagedRun(
       throw finalizeError
     }
   } catch (error) {
-    if (staged && !safeCleanupCompleted && !(error instanceof ExtractionCleanupUncertainError)) {
+    if (ownsStaging && !safeCleanupCompleted && !(error instanceof ExtractionCleanupUncertainError)) {
       await cleanupOrThrow(store, input.run.boqId, input.run.id)
     }
     throw error
@@ -156,8 +165,11 @@ export async function cleanupExpiredStagingRuns(
   if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new TypeError('Cleanup limit must be between 1 and 200')
   const expired = await store.listExpiredStagingRuns(cutoff, limit)
   if (!Array.isArray(expired) || expired.length > limit) throw new Error('Extraction cleanup store result was malformed')
-  for (const run of expired) await store.cleanupStagingIfSafe(run.boqId, run.runId)
-  return expired.length
+  let deleted = 0
+  for (const run of expired) {
+    if (await store.cleanupStagingIfSafe(run.boqId, run.runId)) deleted += 1
+  }
+  return deleted
 }
 
 export interface SectionSnapshotChunk {
