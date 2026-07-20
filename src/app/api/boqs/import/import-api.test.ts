@@ -106,6 +106,7 @@ function extractionStore(overrides: Partial<ExtractionStore> = {}): ExtractionSt
     verifySourceRows: async () => ({ count: 4, checksum: '' }),
     finalizeBoqAndRun: async () => 'finalized',
     getReadyImport: async () => null,
+    cleanupStagingIfSafe: async () => true,
     deleteRunTree: async () => undefined,
     listExpiredStagingRuns: async () => [],
     ...overrides,
@@ -430,6 +431,16 @@ test('invalid caller-generated v3 run identity rolls back the saved source', asy
     createRunId: () => '',
     deleteSourcePdf: async () => { calls.push('source:delete') },
   })), /runId/i)
+  assert.deepEqual(calls, ['source:delete'])
+})
+
+test('v3 run build failure rolls back the saved source', async () => {
+  const calls: string[] = []
+  await assert.rejects(() => importPdfAtomically(pdfFile(), 'boq-1', serviceDependencies({
+    parsePdfWithDocling: async () => validV3Payload(),
+    now: () => { throw new Error('clock unavailable') },
+    deleteSourcePdf: async () => { calls.push('source:delete') },
+  })), /clock unavailable/i)
   assert.deepEqual(calls, ['source:delete'])
 })
 

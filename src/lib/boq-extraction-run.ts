@@ -59,6 +59,44 @@ function digest(value: string): string {
   return `sha256:${createHash('sha256').update(value).digest('hex')}`
 }
 
+export interface BoqExtractionRunIdentity {
+  boqId: string
+  contractVersion: 3
+  sourceFile: BoqExtractionRun['sourceFile']
+  parser: BoqExtractionRun['parser']
+  metadataCandidates: BoqExtractionRun['metadataCandidates']
+  metadataConfidence: BoqExtractionRun['metadataConfidence']
+  sourceRowCount: number
+  sourceRowChecksum: string
+  reconciliation: BoqExtractionRun['reconciliation']
+  warnings: BoqExtractionRun['warnings']
+  sectionsChecksum: string
+  totalItems: number
+  reviewTargeting: BoqExtractionRun['reviewTargeting']
+}
+
+export function extractionRunIdentity(run: BoqExtractionRun): BoqExtractionRunIdentity {
+  return {
+    boqId: run.boqId,
+    contractVersion: run.contractVersion,
+    sourceFile: structuredClone(run.sourceFile),
+    parser: structuredClone(run.parser),
+    metadataCandidates: structuredClone(run.metadataCandidates),
+    metadataConfidence: structuredClone(run.metadataConfidence),
+    sourceRowCount: run.sourceRowCount,
+    sourceRowChecksum: run.sourceRowChecksum,
+    reconciliation: structuredClone(run.reconciliation),
+    warnings: structuredClone(run.warnings),
+    sectionsChecksum: fingerprintParserConfig(run.sections),
+    totalItems: run.totalItems,
+    reviewTargeting: structuredClone(run.reviewTargeting),
+  }
+}
+
+export function extractionRunIdentityFingerprint(run: BoqExtractionRun): string {
+  return digest(stableCanonicalJson(extractionRunIdentity(run)))
+}
+
 export function stableSourceRowFingerprint(row: BoqSourceRowV3): string {
   return digest(stableCanonicalJson(row))
 }

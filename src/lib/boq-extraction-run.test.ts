@@ -6,6 +6,7 @@ import { v3Fixture } from './boq-extraction-test-fixtures'
 import {
   buildExtractionRun,
   checksumSourceRows,
+  extractionRunIdentityFingerprint,
   stableCanonicalJson,
 } from './boq-extraction-run'
 
@@ -59,4 +60,25 @@ test('clean reconciled extraction without ambiguous evidence needs no AI review'
     now: new Date('2026-07-19T00:00:00Z'),
   })
   assert.equal(run.aiReviewStatus, 'not_required')
+})
+
+test('extraction identity changes when immutable source or parser metadata changes', () => {
+  const parsed = parseDoclingResult(v3Fixture())
+  const draft = buildDraftImport('boq-1', 'source.pdf', parsed, 'run-1')
+  const run = buildExtractionRun({
+    seed: draft.run!, sourceDigest: 'digest', parserConfigFingerprint: 'config',
+    now: new Date('2026-07-19T00:00:00Z'),
+  })
+  assert.notEqual(
+    extractionRunIdentityFingerprint(run),
+    extractionRunIdentityFingerprint({ ...run, sourceFile: { ...run.sourceFile, digest: 'different' } }),
+  )
+  assert.notEqual(
+    extractionRunIdentityFingerprint(run),
+    extractionRunIdentityFingerprint({ ...run, parser: { ...run.parser, configFingerprint: 'different' } }),
+  )
+  assert.notEqual(
+    extractionRunIdentityFingerprint(run),
+    extractionRunIdentityFingerprint({ ...run, sections: [{ header: 'Changed', items: [] }] }),
+  )
 })

@@ -6,7 +6,9 @@ import type { BoqExtractionRun } from './boq-extraction-run'
 import {
   ExtractionCleanupUncertainError,
   cleanupExpiredStagingRuns,
+  createFirestoreExtractionStore,
   extractionRunPath,
+  mergeSectionChunks,
   persistStagedRun,
   sourceRowPath,
   type ExtractionStore,
@@ -47,6 +49,7 @@ function storeHarness(overrides: Partial<ExtractionStore> = {}) {
     verifySourceRows: async () => { events.push('rows:verify'); return { count: data.run.sourceRowCount, checksum: data.run.sourceRowChecksum } },
     finalizeBoqAndRun: async () => { events.push('boq+run:finalize'); return 'finalized' },
     getReadyImport: async () => null,
+    cleanupStagingIfSafe: async () => true,
     deleteRunTree: async () => { events.push('run:delete') },
     listExpiredStagingRuns: async () => [],
     ...overrides,
@@ -81,6 +84,28 @@ test('commit-then-reject returns the stored ready BOQ without cleanup', async ()
   assert.equal(harness.events.includes('run:delete'), false)
 })
 
+test('already-finalized outcome reconciles the stored canonical BOQ', async () => {
+  const ready = { ...fixture().boq, createdAt: 'stored', updatedAt: 'stored' } as Boq
+  const harness = storeHarness({
+    finalizeBoqAndRun: async () => 'already_finalized',
+    getReadyImport: async () => ({ boq: ready, run: { ...fixture().run, status: 'ready' } }),
+  })
+  const result = await persistStagedRun(harness, harness.store)
+  assert.equal(result, ready)
+  assert.notEqual(result, harness.boq)
+})
+
+test('unreconciled already-finalized outcome preserves staging evidence', async () => {
+  const harness = storeHarness({
+    finalizeBoqAndRun: async () => 'already_finalized',
+    getReadyImport: async () => null,
+    cleanupStagingIfSafe: async () => { harness.events.push('safe-cleanup'); return true },
+  })
+  await assert.rejects(() => persistStagedRun(harness, harness.store), ExtractionCleanupUncertainError)
+  assert.equal(harness.events.includes('safe-cleanup'), false)
+  assert.equal(harness.events.includes('run:delete'), false)
+})
+
 test('duplicate ready run is idempotent and skips evidence rewrites', async () => {
   const ready = { ...fixture().boq, createdAt: 'now', updatedAt: 'now' } as Boq
   const harness = storeHarness({
@@ -111,6 +136,69 @@ test('unknown finalize outcome and failed cleanup preserves recovery evidence', 
   )
 })
 
+test('unknown finalize outcome preserves the run tree when reconciliation reads fail', async () => {
+  const harness = storeHarness({
+    finalizeBoqAndRun: async () => { throw new Error('deadline after commit') },
+    getReadyImport: async () => { throw new Error('read unavailable') },
+    deleteRunTree: async () => { harness.events.push('run:delete') },
+  })
+  await assert.rejects(
+    () => persistStagedRun(harness, harness.store),
+    (error) => error instanceof ExtractionCleanupUncertainError,
+  )
+  assert.equal(harness.events.includes('run:delete'), false)
+})
+
+test('an unknown finalize outcome can be retried after preserving evidence', async () => {
+  const ready = { ...fixture().boq, createdAt: 'stored', updatedAt: 'stored' } as Boq
+  let reconciliationReads = 0
+  const harness = storeHarness({
+    createRun: async () => reconciliationReads > 0 ? 'exists_ready' : 'created',
+    finalizeBoqAndRun: async () => { throw new Error('deadline after commit') },
+    getReadyImport: async () => {
+      reconciliationReads += 1
+      if (reconciliationReads === 1) throw new Error('read unavailable')
+      return { boq: ready, run: { ...fixture().run, status: 'ready' } }
+    },
+    deleteRunTree: async () => { harness.events.push('run:delete') },
+  })
+  await assert.rejects(() => persistStagedRun(harness, harness.store), ExtractionCleanupUncertainError)
+  assert.equal(harness.events.includes('run:delete'), false)
+  assert.equal(await persistStagedRun(harness, harness.store), ready)
+})
+
+test('section snapshot merge preserves duplicate headers while joining split chunks', () => {
+  const sections = mergeSectionChunks([
+    { order: 1, sectionIndex: 1, sectionChunkIndex: 1, sections: [{ header: 'Electrical', items: [{ id: 'b' }] as never[] }] },
+    { order: 0, sectionIndex: 0, sectionChunkIndex: 0, sections: [{ header: 'Electrical', items: [{ id: 'a' }] as never[] }] },
+    { order: 2, sectionIndex: 1, sectionChunkIndex: 0, sections: [{ header: 'Electrical', items: [{ id: 'a2' }] as never[] }] },
+    { order: 3, sectionIndex: 2, sectionChunkIndex: 0, sections: [{ header: 'Mechanical', items: [] }] },
+  ])
+  assert.deepEqual(sections.map((section) => section.header), ['Electrical', 'Electrical', 'Mechanical'])
+  assert.deepEqual(sections[0]?.items.map((item) => item.id), ['a'])
+  assert.deepEqual(sections[1]?.items.map((item) => item.id), ['a2', 'b'])
+})
+
+test('Firestore source-row writes refuse a ready run before touching row documents', async () => {
+  let rowReads = 0
+  const db = {
+    doc: () => ({}),
+    runTransaction: async (callback: (transaction: {
+      get: () => Promise<{ exists: boolean; data: () => Record<string, unknown> }>
+      getAll: () => Promise<never[]>
+    }) => Promise<unknown>) => callback({
+      get: async () => ({ exists: true, data: () => ({ status: 'ready' }) }),
+      getAll: async () => { rowReads += 1; return [] },
+    }),
+  }
+  const store = createFirestoreExtractionStore(db as never)
+  await assert.rejects(
+    () => store.writeSourceRows('boq-1', 'run-1', [fixture().rows[0]!]),
+    /not staged/i,
+  )
+  assert.equal(rowReads, 0)
+})
+
 test('cancellation after row verification cleans staging before finalize', async () => {
   const controller = new AbortController()
   const harness = storeHarness({
@@ -128,7 +216,7 @@ test('expired staging cleanup is bounded and delegates complete run-tree deletio
       assert.equal(limit, 2)
       return [{ boqId: 'b1', runId: 'r1' }, { boqId: 'b2', runId: 'r2' }]
     },
-    deleteRunTree: async (boqId, runId) => { deleted.push(`${boqId}/${runId}`) },
+    cleanupStagingIfSafe: async (boqId, runId) => { deleted.push(`${boqId}/${runId}`); return true },
   })
   assert.equal(await cleanupExpiredStagingRuns(harness.store, '2026-07-20T00:00:00Z', 2), 2)
   assert.deepEqual(deleted, ['b1/r1', 'b2/r2'])

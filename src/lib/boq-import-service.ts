@@ -87,15 +87,15 @@ export async function importPdfAtomically(
   }
 
   if (parsed.contractVersion === 3) {
-    const seed = draftImport.run
-    if (!seed) throw new Error('Extraction run seed missing')
-    const run = buildExtractionRun({
-      seed,
-      sourceDigest: digestBytes(bytes),
-      parserConfigFingerprint: fingerprintParserConfig({ endpoint, contractVersion: 3 }),
-      now: dependencies.now(),
-    })
     try {
+      const seed = draftImport.run
+      if (!seed) throw new Error('Extraction run seed missing')
+      const run = buildExtractionRun({
+        seed,
+        sourceDigest: digestBytes(bytes),
+        parserConfigFingerprint: fingerprintParserConfig({ endpoint, contractVersion: 3 }),
+        now: dependencies.now(),
+      })
       return await persistStagedRun({ boq: draftImport.boq, run, rows: seed.sourceRows }, dependencies.extractionStore, signal)
     } catch (error) {
       if (error instanceof ExtractionCleanupUncertainError) throw error

@@ -3,7 +3,10 @@ import type { BoqSourceRowV3 } from './boq-extraction-schema'
 import type { Firestore } from 'firebase-admin/firestore'
 import {
   checksumSourceRows,
+  extractionRunIdentity,
+  extractionRunIdentityFingerprint,
   fingerprintParserConfig,
+  stableCanonicalJson,
   stableSourceRowFingerprint,
   type BoqExtractionRun,
 } from './boq-extraction-run'
@@ -35,13 +38,14 @@ export interface ExtractionStore {
     run: BoqExtractionRun,
   ): Promise<'finalized' | 'already_finalized'>
   getReadyImport(boqId: string, runId: string): Promise<{ boq: Boq; run: BoqExtractionRun } | null>
+  cleanupStagingIfSafe(boqId: string, runId: string): Promise<boolean>
   deleteRunTree(boqId: string, runId: string): Promise<void>
   listExpiredStagingRuns(cutoff: string, limit: number): Promise<Array<{ boqId: string; runId: string }>>
 }
 
 export class ExtractionCleanupUncertainError extends Error {
-  constructor() {
-    super('Extraction staging cleanup outcome is unknown; recovery evidence was preserved')
+  constructor(options?: { cause?: unknown }) {
+    super('Extraction staging cleanup outcome is unknown; recovery evidence was preserved', options)
     this.name = 'ExtractionCleanupUncertainError'
   }
 }
@@ -52,13 +56,13 @@ function throwIfCancelled(signal?: AbortSignal): void {
 
 function isMatchingReadyImport(
   value: { boq: Boq; run: BoqExtractionRun } | null,
-  boqId: string,
-  runId: string,
+  expected: BoqExtractionRun,
 ): value is { boq: Boq; run: BoqExtractionRun } {
-  return value?.boq?.id === boqId
-    && value.run?.id === runId
-    && value.run.boqId === boqId
+  return value?.boq?.id === expected.boqId
+    && value.run?.id === expected.id
+    && value.run.boqId === expected.boqId
     && value.run.status === 'ready'
+    && extractionRunIdentityFingerprint(value.run) === extractionRunIdentityFingerprint(expected)
 }
 
 async function cleanupOrThrow(store: ExtractionStore, boqId: string, runId: string): Promise<void> {
@@ -80,6 +84,7 @@ export async function persistStagedRun(
 ): Promise<Omit<Boq, 'createdAt' | 'updatedAt'> | Boq> {
   throwIfCancelled(signal)
   let staged = false
+  let safeCleanupCompleted = false
   try {
     // Creation can commit and still reject. Treat its outcome as potentially
     // staged until nested cleanup proves otherwise.
@@ -89,9 +94,14 @@ export async function persistStagedRun(
       throw new Error('Extraction store result was malformed')
     }
     if (creation === 'exists_ready') {
-      const existing = await store.getReadyImport(input.run.boqId, input.run.id)
-      if (isMatchingReadyImport(existing, input.run.boqId, input.run.id)) return existing.boq
-      throw new Error('Extraction ready-state reconciliation failed')
+      let existing: { boq: Boq; run: BoqExtractionRun } | null
+      try {
+        existing = await store.getReadyImport(input.run.boqId, input.run.id)
+      } catch (error) {
+        throw new ExtractionCleanupUncertainError({ cause: error })
+      }
+      if (isMatchingReadyImport(existing, input.run)) return existing.boq
+      throw new ExtractionCleanupUncertainError()
     }
     throwIfCancelled(signal)
     for (let index = 0; index < input.rows.length; index += SOURCE_ROW_BATCH_SIZE) {
@@ -104,19 +114,36 @@ export async function persistStagedRun(
     }
     throwIfCancelled(signal)
     try {
-      await store.finalizeBoqAndRun(input.boq, input.run)
-      return input.boq
+      const outcome = await store.finalizeBoqAndRun(input.boq, input.run)
+      if (outcome === 'finalized') return input.boq
+      if (outcome !== 'already_finalized') throw new Error('Extraction finalize result was malformed')
+      let existing: { boq: Boq; run: BoqExtractionRun } | null
+      try {
+        existing = await store.getReadyImport(input.run.boqId, input.run.id)
+      } catch (error) {
+        throw new ExtractionCleanupUncertainError({ cause: error })
+      }
+      if (isMatchingReadyImport(existing, input.run)) return existing.boq
+      throw new ExtractionCleanupUncertainError()
     } catch (finalizeError) {
+      if (finalizeError instanceof ExtractionCleanupUncertainError) throw finalizeError
       try {
         const existing = await store.getReadyImport(input.run.boqId, input.run.id)
-        if (isMatchingReadyImport(existing, input.run.boqId, input.run.id)) return existing.boq
-      } catch {
-        // A failed reconciliation still enters conservative run-tree cleanup.
+        if (isMatchingReadyImport(existing, input.run)) return existing.boq
+        const safe = await store.cleanupStagingIfSafe(input.run.boqId, input.run.id)
+        if (!safe) throw new ExtractionCleanupUncertainError({ cause: finalizeError })
+        safeCleanupCompleted = true
+      } catch (reconciliationError) {
+        if (reconciliationError instanceof ExtractionCleanupUncertainError) throw reconciliationError
+        // A failed reconciliation must preserve the run tree and source.
+        throw new ExtractionCleanupUncertainError({ cause: reconciliationError })
       }
       throw finalizeError
     }
   } catch (error) {
-    if (staged) await cleanupOrThrow(store, input.run.boqId, input.run.id)
+    if (staged && !safeCleanupCompleted && !(error instanceof ExtractionCleanupUncertainError)) {
+      await cleanupOrThrow(store, input.run.boqId, input.run.id)
+    }
     throw error
   }
 }
@@ -129,30 +156,64 @@ export async function cleanupExpiredStagingRuns(
   if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new TypeError('Cleanup limit must be between 1 and 200')
   const expired = await store.listExpiredStagingRuns(cutoff, limit)
   if (!Array.isArray(expired) || expired.length > limit) throw new Error('Extraction cleanup store result was malformed')
-  for (const run of expired) await store.deleteRunTree(run.boqId, run.runId)
+  for (const run of expired) await store.cleanupStagingIfSafe(run.boqId, run.runId)
   return expired.length
 }
 
-function sectionChunks(run: BoqExtractionRun) {
-  const chunks: Array<{ order: number; sections: BoqExtractionRun['sections'] }> = []
-  for (const section of run.sections) {
+export interface SectionSnapshotChunk {
+  order: number
+  sectionIndex: number
+  sectionChunkIndex: number
+  sections: BoqExtractionRun['sections']
+}
+
+function sectionChunks(run: BoqExtractionRun): SectionSnapshotChunk[] {
+  const chunks: SectionSnapshotChunk[] = []
+  run.sections.forEach((section, sectionIndex) => {
     if (section.items.length === 0) {
-      chunks.push({ order: chunks.length, sections: [{ header: section.header, items: [] }] })
-      continue
+      chunks.push({ order: chunks.length, sectionIndex, sectionChunkIndex: 0, sections: [{ header: section.header, items: [] }] })
+      return
     }
     for (let index = 0; index < section.items.length; index += SECTION_ITEM_CHUNK_SIZE) {
       chunks.push({
         order: chunks.length,
+        sectionIndex,
+        sectionChunkIndex: Math.floor(index / SECTION_ITEM_CHUNK_SIZE),
         sections: [{ header: section.header, items: section.items.slice(index, index + SECTION_ITEM_CHUNK_SIZE) }],
       })
     }
-  }
+  })
   return chunks
 }
 
-function mergeSectionChunks(chunks: Array<{ order: number; sections: BoqExtractionRun['sections'] }>): BoqExtractionRun['sections'] {
+export function mergeSectionChunks(
+  chunks: Array<SectionSnapshotChunk | { order: number; sections: BoqExtractionRun['sections'] }>,
+): BoqExtractionRun['sections'] {
+  if (chunks.some((chunk) => 'sectionIndex' in chunk)) {
+    const sections = new Map<number, {
+      header: string
+      parts: Array<{ chunkIndex: number; items: BoqExtractionRun['sections'][number]['items'] }>
+    }>()
+    for (const chunk of chunks.slice().sort((left, right) => left.order - right.order)) {
+      if (!('sectionIndex' in chunk)) throw new Error('Mixed section snapshot boundary formats')
+      const incoming = chunk.sections[0]
+      if (!incoming) continue
+      const existing = sections.get(chunk.sectionIndex)
+      if (existing) existing.parts.push({ chunkIndex: chunk.sectionChunkIndex, items: structuredClone(incoming.items) })
+      else sections.set(chunk.sectionIndex, {
+        header: incoming.header,
+        parts: [{ chunkIndex: chunk.sectionChunkIndex, items: structuredClone(incoming.items) }],
+      })
+    }
+    return [...sections.entries()].sort(([left], [right]) => left - right).map(([, section]) => ({
+      header: section.header,
+      items: section.parts
+        .sort((left, right) => left.chunkIndex - right.chunkIndex)
+        .flatMap((part) => part.items),
+    }))
+  }
   const sections: BoqExtractionRun['sections'] = []
-  for (const chunk of chunks.sort((left, right) => left.order - right.order)) {
+  for (const chunk of chunks.slice().sort((left, right) => left.order - right.order)) {
     for (const incoming of chunk.sections) {
       const previous = sections.at(-1)
       if (previous?.header === incoming.header) previous.items.push(...incoming.items)
@@ -180,7 +241,8 @@ export function createFirestoreExtractionStore(
         const existing = await transaction.get(ref)
         if (existing.exists) {
           const data = existing.data()
-          if (data?.boqId !== run.boqId || data?.sourceRowChecksum !== run.sourceRowChecksum) {
+          if (data?.identityFingerprint !== extractionRunIdentityFingerprint(run)
+            || stableCanonicalJson(data?.extractionIdentity) !== stableCanonicalJson(extractionRunIdentity(run))) {
             throw new Error('Extraction run identity conflict')
           }
           if (data?.status === 'ready') return 'exists_ready'
@@ -192,6 +254,8 @@ export function createFirestoreExtractionStore(
         const metadata = Object.fromEntries(Object.entries(run).filter(([key]) => key !== 'sections'))
         transaction.create(ref, {
           ...metadata,
+          extractionIdentity: extractionRunIdentity(run),
+          identityFingerprint: extractionRunIdentityFingerprint(run),
           deterministicSections: {
             checksum: fingerprintParserConfig(run.sections),
             reference: `${extractionRunPath(run.boqId, run.id)}/sectionSnapshots`,
@@ -206,19 +270,24 @@ export function createFirestoreExtractionStore(
     async writeSourceRows(boqId, runId, rows) {
       if (rows.length > SOURCE_ROW_BATCH_SIZE) throw new TypeError('Source-row batch exceeds 200 records')
       const refs = rows.map((row) => db.doc(sourceRowPath(boqId, runId, row.id)))
-      const existing = refs.length > 0 ? await db.getAll(...refs) : []
-      const batch = db.batch()
-      rows.forEach((row, index) => {
-        const snapshot = existing[index]
-        if (snapshot?.exists) {
-          if (snapshot.data()?.fingerprint !== stableSourceRowFingerprint(row)) {
-            throw new Error('Extraction source-row identity conflict')
-          }
-          return
+      await db.runTransaction(async (transaction) => {
+        const extractionRef = runRef(boqId, runId)
+        const runSnapshot = await transaction.get(extractionRef)
+        if (!runSnapshot.exists || runSnapshot.data()?.status !== 'staging') {
+          throw new Error('Extraction run is not staged')
         }
-        batch.create(refs[index], { ...row, fingerprint: stableSourceRowFingerprint(row) })
+        const existing = refs.length > 0 ? await transaction.getAll(...refs) : []
+        rows.forEach((row, index) => {
+          const snapshot = existing[index]
+          if (snapshot?.exists) {
+            if (snapshot.data()?.fingerprint !== stableSourceRowFingerprint(row)) {
+              throw new Error('Extraction source-row identity conflict')
+            }
+            return
+          }
+          transaction.create(refs[index], { ...row, fingerprint: stableSourceRowFingerprint(row) })
+        })
       })
-      await batch.commit()
     },
 
     async verifySourceRows(boqId, runId) {
@@ -229,9 +298,16 @@ export function createFirestoreExtractionStore(
         return data as unknown as BoqSourceRowV3
       })
       const verified = { count: rows.length, checksum: checksumSourceRows(rows) }
-      await runRef(boqId, runId).update({
-        verifiedSourceRowCount: verified.count,
-        verifiedSourceRowChecksum: verified.checksum,
+      await db.runTransaction(async (transaction) => {
+        const extractionRef = runRef(boqId, runId)
+        const runSnapshot = await transaction.get(extractionRef)
+        if (!runSnapshot.exists || runSnapshot.data()?.status !== 'staging') {
+          throw new Error('Extraction run is not staged')
+        }
+        transaction.update(extractionRef, {
+          verifiedSourceRowCount: verified.count,
+          verifiedSourceRowChecksum: verified.checksum,
+        })
       })
       return verified
     },
@@ -246,7 +322,8 @@ export function createFirestoreExtractionStore(
         const runData = storedRun.data()
         if (runData?.status === 'ready' && storedBoq.exists) return 'already_finalized'
         if (!storedRun.exists || runData?.status !== 'staging') throw new Error('Extraction run is not staged')
-        if (runData.sourceRowCount !== run.sourceRowCount || runData.sourceRowChecksum !== run.sourceRowChecksum) {
+        if (runData.identityFingerprint !== extractionRunIdentityFingerprint(run)
+          || stableCanonicalJson(runData.extractionIdentity) !== stableCanonicalJson(extractionRunIdentity(run))) {
           throw new Error('Extraction run verification metadata changed')
         }
         if (runData.verifiedSourceRowCount !== run.sourceRowCount
@@ -267,11 +344,37 @@ export function createFirestoreExtractionStore(
       const [storedRun, storedBoq] = await Promise.all([extractionRef.get(), boqRef.get()])
       if (!storedRun.exists || storedRun.data()?.status !== 'ready' || !storedBoq.exists) return null
       const snapshot = await snapshots(boqId, runId).orderBy('order', 'asc').get()
-      const sections = mergeSectionChunks(snapshot.docs.map((doc) => doc.data() as { order: number; sections: BoqExtractionRun['sections'] }))
+      const sections = mergeSectionChunks(snapshot.docs.map((doc) => doc.data() as SectionSnapshotChunk))
       return {
         boq: { id: storedBoq.id, ...storedBoq.data() } as Boq,
         run: { id: storedRun.id, ...storedRun.data(), sections } as unknown as BoqExtractionRun,
       }
+    },
+
+    async cleanupStagingIfSafe(boqId, runId) {
+      const extractionRef = runRef(boqId, runId)
+      const boqRef = db.collection('boqs').doc(boqId)
+      const safe = await db.runTransaction(async (transaction) => {
+        const [storedRun, storedBoq] = await Promise.all([
+          transaction.get(extractionRef), transaction.get(boqRef),
+        ])
+        if (!storedRun.exists || storedRun.data()?.status !== 'staging' || storedBoq.exists) return false
+        // Removing the run document in the same transaction closes the race
+        // with finalization; a finalizer cannot create a BOQ without this run.
+        transaction.delete(extractionRef)
+        return true
+      })
+      if (!safe) return false
+      for (const collectionName of ['sourceRows', 'sectionSnapshots']) {
+        while (true) {
+          const page = await extractionRef.collection(collectionName).limit(SOURCE_ROW_BATCH_SIZE).get()
+          if (page.empty) break
+          const batch = db.batch()
+          page.docs.forEach((doc) => batch.delete(doc.ref))
+          await batch.commit()
+        }
+      }
+      return true
     },
 
     async deleteRunTree(boqId, runId) {
