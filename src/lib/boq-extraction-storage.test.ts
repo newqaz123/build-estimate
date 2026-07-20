@@ -49,6 +49,7 @@ function storeHarness(overrides: Partial<ExtractionStore> = {}) {
     verifySourceRows: async () => { events.push('rows:verify'); return { count: data.run.sourceRowCount, checksum: data.run.sourceRowChecksum } },
     finalizeBoqAndRun: async () => { events.push('boq+run:finalize'); return 'finalized' },
     getReadyImport: async () => null,
+    getSourceRows: async () => [],
     cleanupStagingIfSafe: async () => { events.push('run:delete'); return true },
     deleteRunTree: async () => { events.push('run:delete') },
     listExpiredStagingRuns: async () => [],
@@ -280,6 +281,25 @@ test('Firestore source-row writes refuse evidence changes after verification', a
     /already verified/i,
   )
   assert.equal(rowReads, 0)
+})
+
+test('Firestore review evidence reads only ready rows and verifies the immutable checksum', async () => {
+  const data = fixture(1)
+  const row = data.rows[0]!
+  const runRef = {
+    get: async () => ({
+      exists: true,
+      data: () => ({ status: 'ready', sourceRowCount: 1, sourceRowChecksum: 'wrong-checksum' }),
+    }),
+    collection: (name: string) => {
+      assert.equal(name, 'sourceRows')
+      return {
+        orderBy: () => ({ get: async () => ({ docs: [{ data: () => ({ ...row, fingerprint: 'internal' }) }] }) }),
+      }
+    },
+  }
+  const store = createFirestoreExtractionStore({ doc: () => runRef } as never)
+  await assert.rejects(() => store.getSourceRows('boq-1', 'run-1'), /evidence verification failed/i)
 })
 
 test('cancellation after row verification cleans staging before finalize', async () => {

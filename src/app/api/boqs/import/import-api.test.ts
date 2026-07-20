@@ -106,6 +106,7 @@ function extractionStore(overrides: Partial<ExtractionStore> = {}): ExtractionSt
     verifySourceRows: async () => ({ count: 4, checksum: '' }),
     finalizeBoqAndRun: async () => 'finalized',
     getReadyImport: async () => null,
+    getSourceRows: async () => [],
     cleanupStagingIfSafe: async () => true,
     deleteRunTree: async () => undefined,
     listExpiredStagingRuns: async () => [],

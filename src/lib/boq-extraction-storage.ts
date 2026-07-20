@@ -40,6 +40,7 @@ export interface ExtractionStore {
     run: BoqExtractionRun,
   ): Promise<'finalized' | 'already_finalized'>
   getReadyImport(boqId: string, runId: string): Promise<{ boq: Boq; run: BoqExtractionRun } | null>
+  getSourceRows(boqId: string, runId: string): Promise<BoqSourceRowV3[]>
   cleanupStagingIfSafe(boqId: string, runId: string): Promise<boolean>
   deleteRunTree(boqId: string, runId: string): Promise<void>
   listExpiredStagingRuns(cutoff: string, limit: number): Promise<Array<{ boqId: string; runId: string }>>
@@ -410,6 +411,25 @@ export function createFirestoreExtractionStore(
         boq: { id: storedBoq.id, ...storedBoq.data() } as Boq,
         run: { id: storedRun.id, ...storedRun.data(), sections } as unknown as BoqExtractionRun,
       }
+    },
+
+    async getSourceRows(boqId, runId) {
+      const extractionRef = runRef(boqId, runId)
+      const runSnapshot = await extractionRef.get()
+      if (!runSnapshot.exists || runSnapshot.data()?.status !== 'ready') {
+        throw new Error('Extraction run is not ready')
+      }
+      const snapshot = await extractionRef.collection('sourceRows').orderBy('__name__', 'asc').get()
+      const rows = snapshot.docs.map((doc) => {
+        const data = { ...doc.data() }
+        delete data.fingerprint
+        return data as unknown as BoqSourceRowV3
+      })
+      if (rows.length !== runSnapshot.data()?.sourceRowCount
+        || checksumSourceRows(rows) !== runSnapshot.data()?.sourceRowChecksum) {
+        throw new Error('Extraction source-row evidence verification failed')
+      }
+      return rows
     },
 
     async cleanupStagingIfSafe(boqId, runId) {
