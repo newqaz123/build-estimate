@@ -2,16 +2,17 @@
 
 import { useEffect, useState, useCallback, useRef } from "react"
 import Link from "next/link"
-import { Eye, Trash2, Upload as UploadIcon } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { Trash2, Upload as UploadIcon } from "lucide-react"
 import { toast } from "sonner"
 import { UploadModal } from "@/components/upload-modal"
-import { ReviewPanel } from "@/components/review-panel"
 import type { Boq } from "@/lib/boq-schema"
 import { ProtoBadge } from "@/components/proto-badge"
 import { ProtoFilterChip } from "@/components/proto-filter-chip"
 import { ProtoDataTable } from "@/components/proto-data-table"
 import { ProtoPagination } from "@/components/proto-pagination"
 import { buildBoqCsv } from "@/lib/boq-csv"
+import { boqDetailHref } from "@/lib/boq-review-route"
 
 const typeFilters = ["All", "Structural", "MEP", "Finishing"] as const
 const statusFilters = ["Draft", "Active", "Review", "Approved", "Parsed"] as const
@@ -28,6 +29,7 @@ function exportBoqCsv(boq: Boq): void {
 }
 
 export default function BoqsPage() {
+  const router = useRouter()
   const [boqs, setBoqs] = useState<Boq[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -37,7 +39,6 @@ export default function BoqsPage() {
   const [search, setSearch] = useState("")
   const [activeFilter, setActiveFilter] = useState<string>("All")
   const [uploadOpen, setUploadOpen] = useState(false)
-  const [reviewBoq, setReviewBoq] = useState<Boq | null>(null)
   const requestControllerRef = useRef<AbortController | null>(null)
 
   const fetchBoqs = useCallback(async () => {
@@ -88,8 +89,7 @@ export default function BoqsPage() {
   }, [fetchBoqs])
 
   const handleUploadComplete = (boq: Boq) => {
-    setReviewBoq(boq)
-    fetchBoqs()
+    router.push(boqDetailHref(boq.id))
   }
 
   const handleDeleteBoq = async (boq: Boq) => {
@@ -236,7 +236,7 @@ export default function BoqsPage() {
               const std = computeStdStats(boq)
               return (
                 <tr key={boq.id} data-boq-id={boq.id}>
-                  <td className="boq-name-cell"><Link href={`/boqs/${boq.id}`} className="boq-cell-truncate font-medium text-foreground hover:text-accent no-underline" title={boq.project}>{boq.project}</Link></td>
+                  <td className="boq-name-cell"><Link href={boqDetailHref(boq.id)} className="boq-cell-truncate font-medium text-foreground hover:text-accent no-underline" title={boq.project}>{boq.project}</Link></td>
                   <td className="boq-name-cell text-muted-foreground"><span className="boq-cell-truncate" title={boq.vendor}>{boq.vendor}</span></td>
                   <td>{boq.workType}</td>
                   <td className="text-muted-foreground">{boq.date}</td>
@@ -253,12 +253,7 @@ export default function BoqsPage() {
                     </div>
                   </td>
                   <td className="text-right whitespace-nowrap">
-                    {boq.status !== "approved" && boq.sourceAvailable ? (
-                      <button type="button" onClick={() => setReviewBoq(boq)} className="btn btn-ghost btn-xs">
-                        <Eye className="w-3.5 h-3.5" /> Review
-                      </button>
-                    ) : null}
-                    <Link href={`/boqs/${boq.id}`} className="btn btn-ghost btn-xs">View</Link>
+                    <Link href={boqDetailHref(boq.id)} className="btn btn-ghost btn-xs">View</Link>
                     <button
                       onClick={() => exportBoqCsv(boq)}
                       className="btn btn-ghost btn-xs"
@@ -287,13 +282,6 @@ export default function BoqsPage() {
         onUploadComplete={handleUploadComplete}
       />
 
-      {reviewBoq && (
-        <ReviewPanel
-          boq={reviewBoq}
-          onClose={() => setReviewBoq(null)}
-          onApproved={() => { void fetchBoqs() }}
-        />
-      )}
     </>
   )
 }

@@ -17,6 +17,7 @@ const boqDetailSource = readFileSync(
   new URL('../app/(authenticated)/boqs/[id]/page.tsx', import.meta.url),
   'utf8',
 )
+const unifiedItemsSource = readFileSync(new URL('./unified-boq-items-table.tsx', import.meta.url), 'utf8')
 
 test('BOQ upload uses the atomic multipart import API and consumes its returned BOQ', () => {
   assert.doesNotMatch(uploadSource, /MOCK_PARSED_ITEMS/)
@@ -108,7 +109,7 @@ test('BOQ detail totals use the shared pricing calculator after applying edits',
   assert.match(boqDetailSource, /calculateBoqTotals/)
   assert.doesNotMatch(boqDetailSource, /contributesToBoqTotal/)
   assert.match(boqDetailSource, /parseNonNegativeBoqEditValue/)
-  assert.match(boqDetailSource, /min="0"/)
+  assert.match(unifiedItemsSource, /min="0"/)
 })
 
 test('a failed review save reports the safe error without resetting edited items', () => {

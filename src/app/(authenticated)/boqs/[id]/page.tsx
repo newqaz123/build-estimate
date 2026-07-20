@@ -1,586 +1,164 @@
 "use client"
 
-import { useEffect, useState, useCallback, useRef } from "react"
-import { useParams } from "next/navigation"
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
-import { Input } from "@/components/ui/input"
-import { CollapsibleSection } from "@/components/collapsible-section"
-import { CatalogMatchModal } from "@/components/catalog-match-modal"
-import { ReviewPanel } from "@/components/review-panel"
+import { useParams, useRouter, useSearchParams } from "next/navigation"
+import {
+  AlertCircle,
+  Check,
+  ChevronLeft,
+  FileDown,
+  Loader2,
+  Lock,
+  MoreHorizontal,
+  Printer,
+  Save,
+  Search,
+  Sparkles,
+  Trash2,
+} from "lucide-react"
 import { toast } from "sonner"
-import { AlertCircle, ChevronLeft, Search, Sparkles, Save, FileDown, Loader2, Lock, Eye, Trash2 } from "lucide-react"
-import { ProtoBadge } from "@/components/proto-badge"
-import type { Boq, BoqItem } from "@/lib/boq-schema"
-import { getBoqItemIdentityKey, getBoqItemRequestIdentity } from "@/lib/boq-item-identity"
-import { applyManualCostAllocation, deriveSourceCostAllocation } from "@/lib/boq-cost-allocation"
-import { calculateBoqTotals, isPricedBoqItem, parseNonNegativeBoqEditValue } from "@/lib/boq-pricing"
 
-type EditsMap = Record<string, Record<string, string | number | undefined>>
+import { CatalogMatchModal } from "@/components/catalog-match-modal"
+import { PdfReviewViewer } from "@/components/pdf-review-viewer"
+import { ProtoBadge } from "@/components/proto-badge"
+import { ReviewPanel } from "@/components/review-panel"
+import { ReviewWorkspace } from "@/components/review-workspace"
+import { UnifiedBoqItemsTable } from "@/components/unified-boq-items-table"
+import { useInlineCatalogMatching } from "@/components/use-inline-catalog-matching"
+import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { buildBoqCsv } from "@/lib/boq-csv"
+import { getBoqCatalogReadiness } from "@/lib/boq-catalog-readiness"
+import { applyManualCostAllocation, deriveSourceCostAllocation } from "@/lib/boq-cost-allocation"
+import { reconcileBoqMutation, type BoqDetailEdits } from "@/lib/boq-detail-state"
+import { getBoqItemRequestIdentity } from "@/lib/boq-item-identity"
+import { calculateBoqTotals, isPricedBoqItem, parseNonNegativeBoqEditValue } from "@/lib/boq-pricing"
+import { boqDetailHref, isBoqReviewMode } from "@/lib/boq-review-route"
+import { buildReviewVerification } from "@/lib/boq-review-state"
+import type { Boq, BoqItem, BoqPricedItem, WorkType } from "@/lib/boq-schema"
+import {
+  buildUnifiedBoqSections,
+  componentCostView,
+  type UnifiedBoqPricedRow,
+} from "@/lib/boq-unified-rows"
+
+type ItemEdit = Record<string, string | number | undefined>
+type EditsMap = BoqDetailEdits
 type LoadState = "loading" | "loaded" | "not-found" | "error"
+type MetadataField = "vendor" | "project" | "workType" | "date"
+type MetadataEdits = Partial<Pick<Boq, MetadataField>>
 
 const FILTERS = ["All", "Unit", "Lump Sum", "Job"] as const
+const requireCatalogReadiness = true
 
-function mergeItemEdits(item: BoqItem, edited: EditsMap[string] = {}): BoqItem {
-  if (!isPricedBoqItem(item)) return item
-  let merged = { ...item, ...edited } as BoqItem
-  if (edited.materialCost !== undefined || edited.labourCost !== undefined) {
+function rowEditKey(row: Pick<UnifiedBoqPricedRow, "sectionIndex" | "itemIndex">): string {
+  return `${row.sectionIndex}-${row.itemIndex}`
+}
+
+function mergeItemEdits(item: BoqItem, edited: ItemEdit = {}): BoqItem {
+  const { materialCost, labourCost, ...directEdits } = edited
+  if (!isPricedBoqItem(item)) {
+    return typeof directEdits.desc === "string" ? { ...item, desc: directEdits.desc } : item
+  }
+  let merged = { ...item, ...directEdits } as BoqPricedItem
+  if (materialCost !== undefined || labourCost !== undefined) {
     const allocation = deriveSourceCostAllocation(item)
     merged = applyManualCostAllocation(
       merged,
-      Number(edited.materialCost ?? allocation?.material ?? 0),
-      Number(edited.labourCost ?? allocation?.labour ?? 0),
+      Number(materialCost ?? allocation?.material ?? 0),
+      Number(labourCost ?? allocation?.labour ?? 0),
     )
   }
-  if (edited.qty !== undefined || edited.rate !== undefined) {
-    if (isPricedBoqItem(merged)) merged.total = merged.qty * merged.rate
-  }
+  if (directEdits.qty !== undefined || directEdits.rate !== undefined) merged.total = merged.qty * merged.rate
   return merged
 }
 
-function reindexEditsAfterDelete(edits: EditsMap, sectionIndex: number, itemIndex: number, sectionRemoved: boolean) {
-  const next: EditsMap = {}
-  for (const [key, value] of Object.entries(edits)) {
-    const [si, ii] = key.split("-").map(Number)
-    if (si === sectionIndex && ii === itemIndex) continue
-    if (sectionRemoved && si > sectionIndex) next[`${si - 1}-${ii}`] = value
-    else if (!sectionRemoved && si === sectionIndex && ii > itemIndex) next[`${si}-${ii - 1}`] = value
-    else next[key] = value
-  }
-  return next
+function confidenceLabel(value: number | undefined): string | null {
+  if (!Number.isFinite(value)) return null
+  return `${Math.round((value ?? 0) * 100)}% confidence`
 }
 
-function StdContent({
-  item,
-  onMatch,
-  onAccept,
-  onReject,
-  disabled,
-}: {
-  item: BoqItem
-  onMatch: () => void
-  onAccept: () => void
-  onReject: () => void
-  disabled: boolean
-}) {
-  const status = item.stdStatus === 'matched' && !item.stdId
-    ? 'unmatched'
-    : (item.stdStatus || 'unmatched') as string
-  if (status === 'matched') {
-    return (
-      <div className="flex flex-col gap-0.5">
-        <ProtoBadge status="matched" />
-        {item.stdMatch && <span className="text-[11px] text-muted-foreground truncate max-w-[140px]">{item.stdMatch}</span>}
-      </div>
-    )
+async function readError(response: Response, fallback: string): Promise<string> {
+  try {
+    const body = await response.json() as { error?: unknown }
+    return typeof body.error === "string" ? body.error : fallback
+  } catch {
+    return fallback
   }
-  if (status === 'fuzzy' || status === 'llm') {
-    const badgeStatus = status === 'fuzzy' ? 'fuzzy' : 'llm'
-    return (
-      <div className="flex flex-col gap-1">
-        <ProtoBadge status={badgeStatus} />
-        {item.stdMatch && <span className="text-[11px] text-foreground truncate max-w-[140px]">{item.stdMatch}</span>}
-        <div className="flex gap-1">
-          <button onClick={onAccept} disabled={disabled} className="text-[10px] px-1.5 py-0.5 rounded bg-accent text-accent-foreground hover:bg-accent/80 disabled:opacity-50">Accept</button>
-          <button onClick={onReject} disabled={disabled} aria-label="Reject suggestion" className="text-[10px] px-1.5 py-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-50">×</button>
-        </div>
-      </div>
-    )
-  }
-  return (
-    <div className="flex flex-col gap-1">
-      <ProtoBadge status="unmatched" />
-      <button onClick={onMatch} disabled={disabled} className="text-[10px] px-2 py-0.5 rounded border border-border hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-50">Match…</button>
-    </div>
-  )
 }
 
 export default function BoqDetailPage() {
-  const params = useParams()
-  const id = params.id as string
+  return (
+    <Suspense fallback={<div className="proto-loading-state"><div><Loader2 className="animate-spin" />Loading BOQ…</div></div>}>
+      <BoqDetailContent />
+    </Suspense>
+  )
+}
 
+function BoqDetailContent() {
+  const params = useParams()
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const id = params.id as string
+  const legacyReviewMode = isBoqReviewMode(searchParams)
   const [boq, setBoq] = useState<Boq | null>(null)
   const [loadState, setLoadState] = useState<LoadState>("loading")
-  const [edits, setEdits] = useState<EditsMap>({})
-  const editsRef = useRef<EditsMap>({})
   const fetchControllerRef = useRef<AbortController | null>(null)
-  const routeGenerationRef = useRef(0)
-  const [activeFilter, setActiveFilter] = useState<string>("All")
-  const [search, setSearch] = useState("")
-  const [catalogMatchTarget, setCatalogMatchTarget] = useState<{
-    si: number
-    ii: number
-    itemId?: string
-    itemCode?: string
-    desc: string
-    unit: string
-  } | null>(null)
-
-  const [editingKey, setEditingKey] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [approving, setApproving] = useState(false)
-  const [matching, setMatching] = useState(false)
-  const [deletingItem, setDeletingItem] = useState<string | null>(null)
-  const [reviewOpen, setReviewOpen] = useState(false)
-  const [updatingMeta, setUpdatingMeta] = useState<string | null>(null)
-  const mutationBusy = saving || approving || matching || deletingItem !== null || updatingMeta !== null
-
-  const replaceEdits = useCallback((next: EditsMap) => {
-    editsRef.current = next
-    setEdits(next)
-  }, [])
 
   const fetchBoq = useCallback(async () => {
     fetchControllerRef.current?.abort()
     const controller = new AbortController()
     fetchControllerRef.current = controller
-    const { signal } = controller
     setLoadState("loading")
     try {
-      const res = await fetch(`/api/boqs/${id}`, { signal })
-      if (signal.aborted || fetchControllerRef.current !== controller) return
-      if (res.status === 404) {
+      const response = await fetch(`/api/boqs/${encodeURIComponent(id)}`, { signal: controller.signal })
+      if (controller.signal.aborted || fetchControllerRef.current !== controller) return
+      if (response.status === 404) {
         setBoq(null)
         setLoadState("not-found")
         return
       }
-      if (!res.ok) throw new Error("Failed to fetch")
-      const data = await res.json()
-      if (signal.aborted || fetchControllerRef.current !== controller) return
-      setBoq(data)
+      if (!response.ok) throw new Error("Failed to fetch")
+      const result = await response.json() as Boq
+      if (controller.signal.aborted || fetchControllerRef.current !== controller) return
+      setBoq(result)
       setLoadState("loaded")
     } catch (error) {
-      if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return
+      if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return
       setBoq(null)
       setLoadState("error")
     }
   }, [id])
 
   useEffect(() => {
-    const generation = ++routeGenerationRef.current
-    let disposed = false
+    if (!legacyReviewMode) return
+    router.replace(boqDetailHref(id), { scroll: false })
+  }, [id, legacyReviewMode, router])
+
+  useEffect(() => {
+    let active = true
     void Promise.resolve().then(() => {
-      if (disposed) return
-      replaceEdits({})
-      setEditingKey(null)
-      setCatalogMatchTarget(null)
-      setSaving(false)
-      setApproving(false)
-      setDeletingItem(null)
-      setUpdatingMeta(null)
-      return fetchBoq()
+      if (active) void fetchBoq()
     })
     return () => {
-      disposed = true
+      active = false
       fetchControllerRef.current?.abort()
-      if (routeGenerationRef.current === generation) routeGenerationRef.current += 1
     }
-  }, [fetchBoq, replaceEdits])
-
-  const handleEdit = (key: string, field: string, value: string | number | undefined) => {
-    if (!boq || mutationBusy) return
-    if (boq.status === "approved" && field !== "stdStatus" && field !== "stdMatch") return
-    const current = editsRef.current
-    replaceEdits({ ...current, [key]: { ...current[key], [field]: value } })
-  }
-
-  const handleNumericEdit = (key: string, field: string, rawValue: string) => {
-    const value = parseNonNegativeBoqEditValue(rawValue)
-    if (value !== undefined) handleEdit(key, field, value)
-  }
-
-  const handleSaveAll = async () => {
-    if (!boq || boq.status === "approved" || mutationBusy) return
-    const editSnapshot = editsRef.current
-    const keys = Object.keys(editSnapshot)
-    if (keys.length === 0) {
-      toast.info("No changes to save")
-      return
-    }
-
-    const updates = new Map<number, { sectionIndex: number; items: Array<Record<string, string | number | undefined>> }>()
-    const linkedCanonicalEdits: Array<{ item: BoqItem; standardId: string; description?: string; unit?: string }> = []
-
-    for (const key of keys) {
-      const [sectionIndex, itemIndex] = key.split("-").map(Number)
-      const item = boq.sections[sectionIndex]?.items[itemIndex]
-      const edit = editSnapshot[key]
-      if (!item || !edit) continue
-
-      const sectionUpdates = updates.get(sectionIndex) ?? { sectionIndex, items: [] }
-      const itemUpdate = { ...getBoqItemRequestIdentity(item), ...edit }
-      sectionUpdates.items.push(itemUpdate)
-      updates.set(sectionIndex, sectionUpdates)
-
-      if (isPricedBoqItem(item) && item.stdId && ((edit.desc !== undefined && edit.desc !== item.desc) || (edit.unit !== undefined && edit.unit !== item.unit))) {
-        linkedCanonicalEdits.push({
-          item,
-          standardId: item.stdId,
-          description: typeof edit.desc === "string" ? edit.desc : undefined,
-          unit: typeof edit.unit === "string" ? edit.unit : undefined,
-        })
-      }
-    }
-
-    if (linkedCanonicalEdits.length > 0) {
-      const standardIds = Array.from(new Set(linkedCanonicalEdits.map(({ standardId }) => standardId)))
-      const impacts = await Promise.all(standardIds.map(async (standardId) => {
-        try {
-          const response = await fetch(`/api/boqs/${id}/items?stdId=${encodeURIComponent(standardId)}`)
-          if (!response.ok) return { standardId }
-          const data = await response.json() as {
-            standard?: { description?: string }
-            affectedLinkCount?: number
-            affectedBoqCount?: number
-          }
-          return {
-            standardId,
-            description: data.standard?.description,
-            affectedLinkCount: data.affectedLinkCount,
-            affectedBoqCount: data.affectedBoqCount,
-          }
-        } catch {
-          return { standardId }
-        }
-      }))
-      const impactByStandardId = new Map(impacts.map((impact) => [impact.standardId, impact]))
-
-      const impactLines = linkedCanonicalEdits.map(({ item, standardId }) => {
-        const impact = impactByStandardId.get(standardId)
-        const knownImpact = typeof impact?.affectedLinkCount === "number"
-          ? `${impact.affectedLinkCount} affected linked BOQ row${impact.affectedLinkCount === 1 ? "" : "s"}${typeof impact.affectedBoqCount === "number" ? ` across ${impact.affectedBoqCount} BOQ${impact.affectedBoqCount === 1 ? "" : "s"}` : ""}`
-          : "affected-link count unavailable; this row is linked"
-        return `• ${impact?.description || item.stdMatch || item.desc}: ${knownImpact}`
-      })
-      const confirmed = window.confirm(
-        `This edit changes a shared catalog item and will update its canonical description/unit on every linked BOQ row. Quantities, rates, and source provenance stay unchanged.\n\nKnown impact:\n${impactLines.join("\n")}\n\nContinue?`,
-      )
-      if (!confirmed) return
-    }
-
-    const generation = routeGenerationRef.current
-    setSaving(true)
-    try {
-      const res = await fetch(`/api/boqs/${id}/items`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ updates: Array.from(updates.values()) }),
-      })
-      if (!res.ok) {
-        const errorBody = await res.json().catch(() => null) as { error?: string } | null
-        throw new Error(errorBody?.error || "Failed to save")
-      }
-      const data = await res.json() as { boq?: Boq; sync?: { affectedItems?: number; affectedLinkCount?: number } } & Boq
-      const updated = data.boq ?? data
-      if (generation !== routeGenerationRef.current) return
-      setBoq(updated)
-      replaceEdits({})
-      const syncedItems = data.sync?.affectedItems ?? 0
-      toast.success(syncedItems > 0 ? `All changes saved · synced ${syncedItems} linked item${syncedItems === 1 ? "" : "s"}` : "All changes saved")
-    } catch (error) {
-      if (generation !== routeGenerationRef.current) return
-      toast.error(error instanceof Error ? error.message : "Failed to save changes")
-    } finally {
-      if (generation === routeGenerationRef.current) setSaving(false)
-    }
-  }
-
-  const handleMetaEdit = async (field: string, value: string) => {
-    if (!boq || boq.status === "approved" || mutationBusy) return
-    const generation = routeGenerationRef.current
-    setUpdatingMeta(field)
-    try {
-      const res = await fetch(`/api/boqs/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ [field]: value }),
-      })
-      if (!res.ok) throw new Error("Failed to update")
-      const updated = await res.json()
-      if (generation !== routeGenerationRef.current) return
-      setBoq(updated)
-      toast.success(`${field.charAt(0).toUpperCase() + field.slice(1)} updated`)
-    } catch {
-      if (generation !== routeGenerationRef.current) return
-      toast.error("Failed to update")
-    } finally {
-      if (generation === routeGenerationRef.current) setUpdatingMeta(null)
-    }
-  }
-
-  const handleApprove = async () => {
-    if (!boq || mutationBusy) return
-    if (Object.keys(editsRef.current).length > 0) {
-      toast.error("Save pending item changes before approving")
-      return
-    }
-    const generation = routeGenerationRef.current
-    setApproving(true)
-    try {
-      const res = await fetch(`/api/boqs/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "approved" }),
-      })
-      if (!res.ok) throw new Error("Failed to approve")
-      const updated = await res.json()
-      if (generation !== routeGenerationRef.current) return
-      setBoq(updated)
-      const reviewCount = updated.sections.flatMap((section: Boq["sections"][number]) => section.items)
-        .filter((item: Boq["sections"][number]["items"][number]) => item.stdStatus !== "matched").length
-      toast.success(
-        reviewCount > 0
-          ? `BOQ approved · ${reviewCount} ${reviewCount === 1 ? "item" : "items"} sent to Catalog review`
-          : "BOQ approved and linked to the Standard Catalog",
-      )
-    } catch {
-      if (generation !== routeGenerationRef.current) return
-      toast.error("Failed to approve")
-    } finally {
-      if (generation === routeGenerationRef.current) setApproving(false)
-    }
-  }
-
-  const handleStdAccept = (si: number, ii: number) => {
-    if (!boq || mutationBusy) return
-    const item = boq.sections[si]?.items[ii]
-    if (!item) return
-    handleStdMatch(si, ii, item.stdMatch || item.desc)
-    toast.info("Choose a verified catalog entry to accept this suggestion")
-  }
-
-  const handleStdReject = (si: number, ii: number) => {
-    if (!boq || mutationBusy) return
-    const key = `${si}-${ii}`
-    handleEdit(key, "stdStatus", "unmatched")
-    handleEdit(key, "stdMatch", undefined)
-    toast.info("Suggestion dismissed")
-  }
-
-  const handleStdMatch = (si: number, ii: number, descriptionOverride?: string) => {
-    if (!boq || mutationBusy) return
-    const item = boq.sections[si].items[ii]
-    if (!isPricedBoqItem(item)) return
-    const edited = edits[`${si}-${ii}`]
-    setCatalogMatchTarget({
-      si,
-      ii,
-      ...getBoqItemRequestIdentity(item),
-      desc: descriptionOverride || (edited?.desc as string) || item.desc,
-      unit: (edited?.unit as string) || item.unit,
-    })
-  }
-
-  const handleCatalogMatch = async (standardId: string, standardDesc: string) => {
-    if (!catalogMatchTarget || !boq || mutationBusy) return
-    if (!standardId.trim()) {
-      toast.error("The catalog match did not return a valid standard ID")
-      return
-    }
-
-    const key = `${catalogMatchTarget.si}-${catalogMatchTarget.ii}`
-    setMatching(true)
-    try {
-      const res = await fetch(`/api/boqs/${id}`)
-      if (!res.ok) {
-        const errorBody = await res.json().catch(() => null) as { error?: string } | null
-        throw new Error(errorBody?.error || "The updated BOQ could not be loaded")
-      }
-
-      const updated = await res.json() as Boq
-      setBoq(updated)
-
-      const currentEdit = editsRef.current[key]
-      if (currentEdit) {
-        const unrelatedEdits = { ...currentEdit }
-        delete unrelatedEdits.desc
-        delete unrelatedEdits.unit
-        delete unrelatedEdits.stdMatch
-        delete unrelatedEdits.stdStatus
-        const nextEdits = { ...editsRef.current }
-        if (Object.keys(unrelatedEdits).length > 0) nextEdits[key] = unrelatedEdits
-        else delete nextEdits[key]
-        replaceEdits(nextEdits)
-      }
-
-      setCatalogMatchTarget(null)
-      toast.success(`Matched to: "${standardDesc}"`)
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "The catalog match could not be applied")
-    } finally {
-      setMatching(false)
-    }
-  }
-
-  const handleLlmSuggest = async () => {
-    if (!boq || mutationBusy) return
-    const candidates = boq.sections.flatMap((section, si) => section.items.flatMap((item, ii) =>
-      isPricedBoqItem(item) ? [{ item, si, ii }] : [],
-    ))
-      .filter(({ item, si, ii }) => {
-        const status = edits[`${si}-${ii}`]?.stdStatus ?? item.stdStatus
-        return status === "unmatched" || status === "pending"
-      })
-    if (candidates.length === 0) return void toast.info("No unmatched items to suggest")
-    setMatching(true)
-    try {
-      const response = await fetch("/api/llm/standardize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          items: candidates.map(({ item, si, ii }) => ({ key: `${si}-${ii}`, description: item.desc, unit: item.unit })),
-        }),
-      })
-      if (!response.ok) throw new Error("LLM suggestions are unavailable")
-      const result = await response.json() as { suggestions?: Array<{ key: string; description: string }> }
-      for (const suggestion of result.suggestions ?? []) {
-        handleEdit(suggestion.key, "stdStatus", "llm")
-        handleEdit(suggestion.key, "stdMatch", suggestion.description)
-      }
-      toast.success(`${result.suggestions?.length ?? 0} catalog suggestion${result.suggestions?.length === 1 ? "" : "s"} ready to review`)
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "LLM suggestions are unavailable")
-    } finally {
-      setMatching(false)
-    }
-  }
-
-  const handleAcceptAll = () => {
-    if (!boq || mutationBusy) return
-    for (let si = 0; si < boq.sections.length; si += 1) {
-      for (let ii = 0; ii < boq.sections[si].items.length; ii += 1) {
-        const item = boq.sections[si].items[ii]
-        const key = `${si}-${ii}`
-        const current = edits[key]
-        const stdStatus = ((current?.stdStatus ?? item.stdStatus) || "") as string
-        if (stdStatus === "fuzzy" || stdStatus === "llm") {
-          handleStdMatch(si, ii, item.stdMatch || item.desc)
-          toast.info("Choose a verified catalog entry; each accepted match is saved immediately")
-          return
-        }
-      }
-    }
-    toast.info("No suggestions to accept")
-  }
-
-  const handleExportCsv = () => {
-    if (!boq) return
-    const rows = [["Section", "Code", "Description", "Unit", "Qty", "Rate", "Total", "Type", "Std Status", "Std Match"]]
-    boq.sections.forEach((section) => {
-      section.items.forEach((item) => {
-        const numeric = isPricedBoqItem(item)
-        rows.push([
-          section.header,
-          item.code ?? "",
-          item.desc,
-          numeric ? item.unit : "",
-          numeric ? String(item.qty) : "",
-          numeric ? String(item.rate) : "",
-          numeric ? String(item.total) : "",
-          numeric ? item.type : "",
-          item.stdStatus,
-          item.stdMatch || "",
-        ])
-      })
-    })
-    const csv = rows.map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n")
-    const blob = new Blob([csv], { type: "text/csv" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `${boq.project || "boq"}-detail.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-    toast.success("CSV exported")
-  }
-
-  const handleDeleteItem = async (si: number, ii: number) => {
-    const key = `${si}-${ii}`
-    if (!boq || mutationBusy) return
-    const item = boq.sections[si]?.items[ii]
-    if (!item) return
-    const confirmation = boq.status === "approved"
-      ? window.prompt("This BOQ is approved. Type DELETE to remove this item.") === "DELETE"
-      : window.confirm("Remove this item from the BOQ?")
-    if (!confirmation) return
-    const sectionRemoved = boq.sections[si].items.length === 1
-    const generation = routeGenerationRef.current
-    setDeletingItem(key)
-    try {
-      const res = await fetch(`/api/boqs/${id}/items`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sectionIndex: si, ...getBoqItemRequestIdentity(item) }),
-      })
-      if (!res.ok) {
-        const body = await res.json().catch(() => null) as { error?: string } | null
-        throw new Error(body?.error || "Failed to delete")
-      }
-      const updated = await res.json()
-      if (generation !== routeGenerationRef.current) return
-      setBoq(updated)
-      replaceEdits(reindexEditsAfterDelete(editsRef.current, si, ii, sectionRemoved))
-      setEditingKey(null)
-      toast.success("Item removed")
-    } catch (error) {
-      if (generation !== routeGenerationRef.current) return
-      toast.error(error instanceof Error ? error.message : "Failed to remove item")
-    } finally {
-      if (generation === routeGenerationRef.current) setDeletingItem(null)
-    }
-  }
-
-  const filteredSections = boq
-    ? boq.sections
-        .map((section, si) => ({
-          realSi: si,
-          header: section.header,
-          items: section.items
-            .map((item, ii) => ({ item, ii }))
-            .filter(({ item, ii }) => {
-              const edited = edits[`${si}-${ii}`] || {}
-              const type = isPricedBoqItem(item) ? ((edited.type as string) || item.type) : undefined
-              if (activeFilter !== "All") {
-                const filterMap: Record<string, string> = { "Unit": "unit", "Lump Sum": "lump_sum", "Job": "job" }
-                if (type !== filterMap[activeFilter]) return false
-              }
-              if (search) {
-                const q = search.toLowerCase()
-                const desc = (edited.desc as string) || item.desc
-                const code = (edited.code as string) || item.code || ""
-                if (!desc.toLowerCase().includes(q) && !code.toLowerCase().includes(q)) return false
-              }
-              return true
-            }),
-        }))
-        .filter((s) => s.items.length > 0)
-    : []
-
-  const grandTotal = boq
-    ? calculateBoqTotals(boq.sections.map((section, si) => ({
-        ...section,
-        items: section.items.map((item, ii) => mergeItemEdits(item, edits[`${si}-${ii}`])),
-      }))).grandTotal
-    : 0
-
-  const editsCount = Object.keys(edits).length
-  const isReadOnly = boq?.status === "approved"
-
-  const handleDeleteBoq = async () => {
-    if (!boq || mutationBusy) return
-    const typed = window.prompt(`Delete the entire BOQ and source PDF? Type “${boq.project}” to confirm.`)
-    if (typed !== boq.project) return
-    const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}`, { method: "DELETE" })
-    if (!response.ok) return void toast.error("The BOQ could not be deleted")
-    window.location.assign("/boqs")
-  }
+  }, [fetchBoq])
 
   if (loadState === "loading") {
     return (
       <div className="proto-empty-state boq-detail-state" data-od-id="loading-state" role="status">
-        <div className="flex items-center gap-2">
-          <span className="proto-spinner" aria-hidden="true" />
-          Loading BOQ…
-        </div>
+        <div className="flex items-center gap-2"><span className="proto-spinner" aria-hidden="true" />Loading BOQ…</div>
       </div>
     )
   }
@@ -607,436 +185,483 @@ export default function BoqDetailPage() {
     )
   }
 
+  return <CanonicalBoqWorkspace key={boq.id} boq={boq} onBoqChange={setBoq} />
+}
+
+function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (next: Boq) => void }) {
+  const [edits, setEdits] = useState<EditsMap>({})
+  const editsRef = useRef<EditsMap>({})
+  const [metadataEdits, setMetadataEdits] = useState<MetadataEdits>({})
+  const metadataEditsRef = useRef<MetadataEdits>({})
+  const [activeFilter, setActiveFilter] = useState<string>("All")
+  const [search, setSearch] = useState("")
+  const [catalogMatchTarget, setCatalogMatchTarget] = useState<UnifiedBoqPricedRow | null>(null)
+  const [excludeTarget, setExcludeTarget] = useState<UnifiedBoqPricedRow | null>(null)
+  const [excludeReason, setExcludeReason] = useState("")
+  const [saving, setSaving] = useState(false)
+  const [approving, setApproving] = useState(false)
+  const [matching, setMatching] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [extractionReviewOpen, setExtractionReviewOpen] = useState(false)
+  const isReadOnly = boq.status === "approved"
+  const mutationBusy = saving || approving || matching || deleting
+
+  const replaceEdits = useCallback((next: EditsMap) => {
+    editsRef.current = next
+    setEdits(next)
+  }, [])
+
+  const replaceMetadataEdits = useCallback((next: MetadataEdits) => {
+    metadataEditsRef.current = next
+    setMetadataEdits(next)
+  }, [])
+
+  const applyMutationBoq = useCallback((updated: Boq) => {
+    const reconciled = reconcileBoqMutation(boq, updated, editsRef.current)
+    replaceEdits(reconciled.edits)
+    onBoqChange(reconciled.boq)
+  }, [boq, onBoqChange, replaceEdits])
+
+  const displayBoq = useMemo<Boq>(() => ({
+    ...boq,
+    ...metadataEdits,
+    sections: boq.sections.map((section, sectionIndex) => ({
+      ...section,
+      items: section.items.map((item, itemIndex) => mergeItemEdits(item, edits[`${sectionIndex}-${itemIndex}`])),
+    })),
+  }), [boq, edits, metadataEdits])
+
+  const allUnifiedSections = useMemo(
+    () => buildUnifiedBoqSections(displayBoq.sections),
+    [displayBoq.sections],
+  )
+  const unifiedSections = useMemo(() => allUnifiedSections
+    .map((section) => ({
+      ...section,
+      rows: section.rows.filter((row) => {
+        if (activeFilter !== "All") {
+          const filterType: Record<string, BoqPricedItem["type"]> = { Unit: "unit", "Lump Sum": "lump_sum", Job: "job" }
+          if (!isPricedBoqItem(row.item) || row.item.type !== filterType[activeFilter]) return false
+        }
+        const query = search.trim().toLowerCase()
+        if (!query) return true
+        return row.item.desc.toLowerCase().includes(query) || (row.item.code ?? "").toLowerCase().includes(query)
+      }),
+    }))
+    .filter((section) => section.rows.length > 0), [activeFilter, allUnifiedSections, search])
+
+  const items = useMemo(() => displayBoq.sections.flatMap((section) => section.items), [displayBoq.sections])
+  const grandTotal = useMemo(() => calculateBoqTotals(displayBoq.sections).grandTotal, [displayBoq.sections])
+  const catalogReadiness = useMemo(() => getBoqCatalogReadiness(displayBoq), [displayBoq])
+  const verification = useMemo(() => buildReviewVerification(displayBoq, {
+    vendor: displayBoq.vendor,
+    project: displayBoq.project,
+    workType: displayBoq.workType,
+    date: displayBoq.date,
+    items,
+  }), [displayBoq, items])
+  const blockingIssues = verification.issues.filter((issue) => issue.severity === "blocking")
+  const localWarnings = verification.issues.filter((issue) => issue.severity === "warning")
+  const editsCount = Object.keys(edits).length
+  const metadataEditCount = Object.keys(metadataEdits).length
+  const pendingChanges = editsCount + metadataEditCount
+  const hasSource = boq.sourceAvailable ?? Boolean(boq.sourceFileName)
+
+  const handleCatalogBoqChange = useCallback((updated: Boq) => {
+    applyMutationBoq(updated)
+  }, [applyMutationBoq])
+
+  const reloadCanonicalBoq = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}`)
+      if (!response.ok) return
+      applyMutationBoq(await response.json() as Boq)
+    } catch {
+      // Keep the current workspace intact; a later navigation will fetch the latest BOQ.
+    }
+  }, [applyMutationBoq, boq.id])
+  const catalogMatching = useInlineCatalogMatching({
+    boq: displayBoq,
+    onBoqChange: handleCatalogBoqChange,
+    disabled: isReadOnly || mutationBusy,
+  })
+
+  const handleAcceptCatalogSuggestion = async (row: UnifiedBoqPricedRow) => {
+    if (isReadOnly || mutationBusy) return
+    setMatching(true)
+    try {
+      await catalogMatching.acceptSuggestion(row)
+    } finally {
+      setMatching(false)
+    }
+  }
+
+  const handleEdit = useCallback((row: UnifiedBoqPricedRow, field: string, value: string | number | undefined) => {
+    if (isReadOnly || mutationBusy) return
+    const key = rowEditKey(row)
+    const current = editsRef.current
+    replaceEdits({ ...current, [key]: { ...current[key], [field]: value } })
+  }, [isReadOnly, mutationBusy, replaceEdits])
+
+  const handleFieldChange = useCallback((row: UnifiedBoqPricedRow, field: "code" | "desc" | "unit" | "qty" | "rate" | "type", value: string | number | undefined) => {
+    if (field === "qty" || field === "rate") {
+      const parsed = parseNonNegativeBoqEditValue(String(value))
+      if (parsed === undefined) return
+      handleEdit(row, field, parsed)
+      return
+    }
+    handleEdit(row, field, value)
+  }, [handleEdit])
+
+  const handleComponentChange = useCallback((row: UnifiedBoqPricedRow, component: "material" | "labour", value: number) => {
+    if (componentCostView(row.item).allocationRequired) return
+    const parsed = parseNonNegativeBoqEditValue(String(value))
+    if (parsed === undefined) return
+    handleEdit(row, component === "material" ? "materialCost" : "labourCost", parsed)
+  }, [handleEdit])
+
+  const handleAllocate = useCallback((row: UnifiedBoqPricedRow, material: number, labour: number) => {
+    if (isReadOnly || mutationBusy) return
+    const key = rowEditKey(row)
+    const current = editsRef.current
+    replaceEdits({ ...current, [key]: { ...current[key], materialCost: material, labourCost: labour } })
+  }, [isReadOnly, mutationBusy, replaceEdits])
+
+  const handleMetadataChange = useCallback((field: MetadataField, value: string) => {
+    if (isReadOnly || mutationBusy) return
+    const current = metadataEditsRef.current
+    if (value === boq[field]) {
+      const remaining = { ...current }
+      delete remaining[field]
+      replaceMetadataEdits(remaining)
+      return
+    }
+    replaceMetadataEdits({
+      ...current,
+      [field]: field === "workType" ? value as WorkType : value,
+    })
+  }, [boq, isReadOnly, mutationBusy, replaceMetadataEdits])
+
+  const handleSaveAll = async () => {
+    if (isReadOnly || mutationBusy) return
+    const editSnapshot = editsRef.current
+    const metadataSnapshot = metadataEditsRef.current
+    const keys = Object.keys(editSnapshot)
+    if (keys.length === 0 && Object.keys(metadataSnapshot).length === 0) {
+      toast.info("No changes to save")
+      return
+    }
+
+    const updates = new Map<number, { sectionIndex: number; items: Array<Record<string, string | number | undefined>> }>()
+    const linkedCanonicalEdits: Array<{ item: BoqItem; standardId: string }> = []
+    for (const key of keys) {
+      const [sectionIndex, itemIndex] = key.split("-").map(Number)
+      const item = boq.sections[sectionIndex]?.items[itemIndex]
+      const edit = editSnapshot[key]
+      if (!item || !edit) continue
+      const group = updates.get(sectionIndex) ?? { sectionIndex, items: [] }
+      group.items.push({ ...getBoqItemRequestIdentity(item), ...edit })
+      updates.set(sectionIndex, group)
+      if (isPricedBoqItem(item) && item.stdId && ((edit.desc !== undefined && edit.desc !== item.desc) || (edit.unit !== undefined && edit.unit !== item.unit))) {
+        linkedCanonicalEdits.push({ item, standardId: item.stdId })
+      }
+    }
+
+    if (linkedCanonicalEdits.length > 0) {
+      const labels = linkedCanonicalEdits.map(({ item }) => `• ${item.stdMatch || item.desc}`).join("\n")
+      const confirmed = window.confirm(
+        `This edit changes a shared catalog item and will update its canonical description or unit on linked BOQ rows. Quantities, rates, and source provenance stay unchanged.\n\n${labels}\n\nContinue?`,
+      )
+      if (!confirmed) return
+    }
+
+    setSaving(true)
+    try {
+      if (Object.keys(metadataSnapshot).length > 0) {
+        const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(metadataSnapshot),
+        })
+        if (!response.ok) throw new Error(await readError(response, "Failed to save BOQ details"))
+        applyMutationBoq(await response.json() as Boq)
+        replaceMetadataEdits({})
+      }
+
+      let synced = 0
+      if (keys.length > 0) {
+        const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/items`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ updates: Array.from(updates.values()) }),
+        })
+        if (!response.ok) throw new Error(await readError(response, "Failed to save changes"))
+        const result = await response.json() as { boq?: Boq; sync?: { affectedItems?: number } } & Boq
+        applyMutationBoq(result.boq ?? result)
+        replaceEdits({})
+        synced = result.sync?.affectedItems ?? 0
+      }
+      toast.success(synced > 0 ? `All changes saved · synced ${synced} linked item${synced === 1 ? "" : "s"}` : "All changes saved")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to save changes")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleApprove = async () => {
+    if (isReadOnly || mutationBusy) return
+    if (pendingChanges > 0) return void toast.error("Save pending changes before approving")
+    if (verification.hasBlockingIssues) return void toast.error("Resolve the review blockers before approving")
+    if (requireCatalogReadiness && catalogReadiness.blocking > 0) return void toast.error("Resolve catalog matching before approving")
+    setApproving(true)
+    try {
+      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "approved" }),
+      })
+      if (!response.ok) throw new Error(await readError(response, "Failed to approve BOQ"))
+      applyMutationBoq(await response.json() as Boq)
+      toast.success("BOQ approved and linked to the Standard Catalog")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to approve BOQ")
+    } finally {
+      setApproving(false)
+    }
+  }
+
+  const reloadAfterManualMatch = async (_standardId: string, standardDescription: string) => {
+    setMatching(true)
+    try {
+      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}`)
+      if (!response.ok) throw new Error(await readError(response, "The updated BOQ could not be loaded"))
+      applyMutationBoq(await response.json() as Boq)
+      setCatalogMatchTarget(null)
+      toast.success(`Matched to: “${standardDescription}”`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "The catalog match could not be applied")
+    } finally {
+      setMatching(false)
+    }
+  }
+
+  const handleExclude = async () => {
+    if (!excludeTarget || !excludeReason.trim() || isReadOnly || mutationBusy) return
+    setMatching(true)
+    try {
+      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/items`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          updates: [{
+            sectionIndex: excludeTarget.sectionIndex,
+            items: [{
+              ...getBoqItemRequestIdentity(excludeTarget.item),
+              stdStatus: "excluded",
+              stdExclusionReason: excludeReason.trim(),
+            }],
+          }],
+        }),
+      })
+      if (!response.ok) throw new Error(await readError(response, "The item could not be excluded"))
+      const result = await response.json() as { boq?: Boq } & Boq
+      applyMutationBoq(result.boq ?? result)
+      setExcludeTarget(null)
+      setExcludeReason("")
+      toast.success("Item excluded from catalog matching")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "The item could not be excluded")
+    } finally {
+      setMatching(false)
+    }
+  }
+
+  const handleExportCsv = () => {
+    const csv = buildBoqCsv(displayBoq)
+    const blob = new Blob([csv], { type: "text/csv" })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement("a")
+    anchor.href = url
+    anchor.download = `${boq.project || "boq"}-detail.csv`
+    anchor.click()
+    URL.revokeObjectURL(url)
+    toast.success("CSV exported")
+  }
+
+  const handleDeleteBoq = async () => {
+    if (mutationBusy) return
+    const confirmation = window.prompt(`Delete the entire BOQ and source PDF? Type “${boq.project}” to confirm.`)
+    if (confirmation !== boq.project) return
+    setDeleting(true)
+    try {
+      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}`, { method: "DELETE" })
+      if (!response.ok) throw new Error(await readError(response, "The BOQ could not be deleted"))
+      window.location.assign("/boqs")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "The BOQ could not be deleted")
+      setDeleting(false)
+    }
+  }
+
   return (
-    <div className="boq-detail-page" data-od-id="boq-detail">
-      <header className="boq-detail-header" data-od-id="detail-header">
-        <div className="boq-detail-heading">
-          <Link
-            href="/boqs"
-            className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground no-underline"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            Back
-          </Link>
-          <h1>{boq.project}</h1>
-          <ProtoBadge status={boq.status} />
-          {isReadOnly && <span className="boq-readonly-note"><Lock aria-hidden="true" /> Approved · read only</span>}
-        </div>
-        <div className="boq-detail-actions">
-          {boq.status !== "approved" && boq.sourceAvailable ? (
-            <button onClick={() => setReviewOpen(true)} className="btn btn-ghost btn-sm">
-              <Eye className="w-3.5 h-3.5" /> Review source
-            </button>
-          ) : null}
-          <button onClick={() => window.print()} className="btn btn-ghost btn-sm">
-            <FileDown className="w-3.5 h-3.5" />
-            Download PDF
-          </button>
-          <button onClick={handleExportCsv} className="btn btn-ghost btn-sm">
-            <FileDown className="w-3.5 h-3.5" />
-            Export CSV
-          </button>
-          {boq.status !== "approved" && (
-            <button onClick={handleApprove} className="btn btn-primary btn-sm" disabled={mutationBusy || editsCount > 0}>
-              {approving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              {approving ? "Approving…" : "Approve"}
-            </button>
-          )}
-          <button onClick={() => void handleDeleteBoq()} className="btn btn-ghost btn-sm text-destructive" disabled={mutationBusy}>
-            <Trash2 className="w-3.5 h-3.5" /> Delete BOQ
-          </button>
-        </div>
-      </header>
-
-      <div
-        className="boq-meta-grid"
-        data-od-id="boq-meta"
-      >
-        {([
-          { key: "vendor", label: "Vendor", value: boq.vendor, editable: true },
-          { key: "workType", label: "Work Type", value: boq.workType, editable: true, type: "select", options: ["Structural", "MEP", "Finishing"] },
-          { key: "date", label: "Date", value: boq.date, editable: true, type: "date" },
-          { key: null, label: "Total Items", value: String(boq.totalItems), editable: false },
-          { key: null, label: "Grand Total", value: `฿${grandTotal.toLocaleString()}`, editable: false },
-          { key: null, label: "BOQ ID", value: boq.id.slice(0, 8), editable: false },
-        ] as Array<{
-          key: string | null
-          label: string
-          value: string
-          editable: boolean
-          type?: "text" | "select" | "date"
-          options?: string[]
-        }>).map((meta) => (
-          <MetaField
-            key={meta.label}
-            label={meta.label}
-            value={meta.value}
-            editable={meta.editable}
-            disabled={isReadOnly || mutationBusy}
-            saving={updatingMeta === meta.key}
-            field={meta.key}
-            onSave={handleMetaEdit}
-            type={meta.type}
-            options={meta.options}
-          />
-        ))}
-      </div>
-
-      <div className="boq-detail-toolbar" data-od-id="toolbar">
-        <div className="boq-detail-toolbar-main">
-          <div className="search-wrap">
-            <Search />
-            <Input
-              placeholder="Search items…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="proto-input"
-            />
+    <div className="review-embedded boq-unified-workspace" data-od-id="boq-detail">
+      <div className="review-panel">
+        <header className="review-header boq-unified-header" data-od-id="detail-header">
+          <div className="review-header-title">
+            <Link href="/boqs" className="boq-back-link"><ChevronLeft aria-hidden="true" />Back to BOQs</Link>
+            <div className="boq-unified-title">
+              <strong>{boq.project || "Untitled BOQ"}</strong>
+              <span>{boq.vendor}</span>
+            </div>
+            <ProtoBadge status={boq.status} />
+            {isReadOnly ? <span className="boq-readonly-note"><Lock aria-hidden="true" />Approved · read only</span> : null}
           </div>
-          <div className="boq-detail-filters" aria-label="Filter BOQ items">
-            {FILTERS.map((f) => (
-              <button
-                key={f}
-                data-filter={f.toLowerCase().replace(/\s+/g, "_")}
-                onClick={() => setActiveFilter(f)}
-                aria-pressed={activeFilter === f}
-                className={`filter-chip ${activeFilter === f ? "active" : ""}`}
-              >
-                {f}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="boq-detail-toolbar-actions">
-          <button className="btn btn-ghost btn-sm" onClick={handleLlmSuggest} disabled={mutationBusy}>
-            <Sparkles className="w-3 h-3" />
-            LLM Suggest
-          </button>
-          <button className="btn btn-primary btn-sm" onClick={handleAcceptAll} disabled={mutationBusy}>
-            Accept All
-          </button>
-          {editsCount > 0 && (
-            <button className="btn btn-primary btn-sm" onClick={handleSaveAll} disabled={mutationBusy || isReadOnly}>
-              <Save className="w-3 h-3" />
-              {saving ? "Saving…" : `Save all changes (${editsCount})`}
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div data-od-id="boq-sections" className="boq-detail-sections">
-          {filteredSections.map((section) => {
-          const si = section.realSi
-          const sectionTotal = calculateBoqTotals([{
-            header: section.header,
-            items: section.items.map(({ item, ii }) => mergeItemEdits(item, edits[`${si}-${ii}`])),
-          }]).grandTotal
-          return (
-            <CollapsibleSection
-              key={si}
-              title={section.header}
-              subtitle={`${section.items.length} items · ฿${sectionTotal.toLocaleString()}`}
-            >
-              <div className="data-table-wrap boq-items-table-wrap">
-                <table className="data-table boq-items-table">
-                  <thead>
-                    <tr className="border-b border-border bg-muted/30">
-                      <th className="text-left p-2.5 font-medium text-xs text-muted-foreground">Code</th>
-                      <th className="text-left p-2.5 font-medium text-xs text-muted-foreground">Description</th>
-                      <th className="text-left p-2.5 font-medium text-xs text-muted-foreground">Unit</th>
-                      <th className="text-right p-2.5 font-medium text-xs text-muted-foreground">Qty</th>
-                      <th className="text-right p-2.5 font-medium text-xs text-muted-foreground">Rate</th>
-                      <th className="text-right p-2.5 font-medium text-xs text-muted-foreground">Material</th>
-                      <th className="text-right p-2.5 font-medium text-xs text-muted-foreground">Labour</th>
-                      <th className="text-right p-2.5 font-medium text-xs text-muted-foreground">Total</th>
-                      <th className="text-left p-2.5 font-medium text-xs text-muted-foreground">Type</th>
-                      <th className="text-left p-2.5 font-medium text-xs text-muted-foreground">Std</th>
-                      <th className="text-left p-2.5 font-medium text-xs text-muted-foreground w-16"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {section.items.map(({ item, ii }) => {
-                      const key = `${si}-${ii}`
-                      if (!isPricedBoqItem(item)) {
-                        return (
-                          <tr key={getBoqItemIdentityKey(item) ?? key} data-item-id={key} className="boq-item-row bg-muted/20 text-muted-foreground">
-                            <td className="p-2.5 font-mono text-xs">{item.code || "—"}</td>
-                            <td className="p-2.5 text-xs pl-5">
-                              <span className="mr-2 inline-flex rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium">Included</span>
-                              {item.desc}
-                            </td>
-                            <td className="p-2.5 text-xs" colSpan={7}>Informational bundle component · pricing is held by the parent item</td>
-                            <td className="p-2.5"><ProtoBadge status="pending" /></td>
-                            <td className="p-2.5" />
-                          </tr>
-                        )
-                      }
-                      const edited = edits[key] || {}
-                      const display = mergeItemEdits(item, edited)
-                      if (!isPricedBoqItem(display)) return null
-                      const hasEdits = key in edits
-                      const isEditing = editingKey === key
-
-                      return (
-                        <tr
-                          key={getBoqItemIdentityKey(item) ?? `${si}-${ii}`}
-                          data-item-id={key}
-                          className={`boq-item-row ${
-                            hasEdits ? "bg-[#eab308]/6" : ""
-                          } ${isEditing ? "bg-accent/6" : ""} ${display.excludedFromTotal ? "opacity-70" : ""}`}
-                        >
-                          <td className="p-2.5">
-                            {isEditing && !isReadOnly ? (
-                              <Input
-                                disabled={mutationBusy}
-                                defaultValue={display.code}
-                                className="h-7 w-20 font-mono text-xs"
-                                onBlur={(e) => handleEdit(key, "code", e.target.value)}
-                                onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-                              />
-                            ) : (
-                              <span className="font-mono text-xs">{display.code || "—"}</span>
-                            )}
-                          </td>
-                          <td className="p-2.5 max-w-[240px]">
-                            {isEditing && !isReadOnly ? (
-                              <Input
-                                disabled={mutationBusy}
-                                defaultValue={display.desc}
-                                className="h-7 text-xs"
-                                onBlur={(e) => handleEdit(key, "desc", e.target.value)}
-                                onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-                              />
-                            ) : (
-                              <span className="text-xs">{display.desc}</span>
-                            )}
-                          </td>
-                          <td className="p-2.5">
-                            {isEditing && !isReadOnly ? (
-                              <Input
-                                disabled={mutationBusy}
-                                defaultValue={display.unit || ""}
-                                className="h-7 w-16 text-xs"
-                                onBlur={(e) => handleEdit(key, "unit", e.target.value)}
-                                onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-                              />
-                            ) : (
-                              <span className="text-xs">{display.unit || "—"}</span>
-                            )}
-                          </td>
-                          <td className="p-2.5 text-right font-mono text-xs">
-                            {isEditing && !isReadOnly ? (
-                              <Input
-                                disabled={mutationBusy}
-                                type="number"
-                                min="0"
-                                step="any"
-                                defaultValue={display.qty ?? ""}
-                                className="h-7 w-20 text-xs text-right"
-                                onBlur={(e) => handleNumericEdit(key, "qty", e.target.value)}
-                                onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-                              />
-                            ) : (
-                              <span>{display.qty != null ? display.qty.toLocaleString() : "—"}</span>
-                            )}
-                          </td>
-                          <td className="p-2.5 text-right font-mono text-xs">
-                            {isEditing && !isReadOnly ? (
-                              <Input
-                                disabled={mutationBusy}
-                                type="number"
-                                min="0"
-                                step="any"
-                                defaultValue={display.rate ?? ""}
-                                className="h-7 w-24 text-xs text-right"
-                                onBlur={(e) => handleNumericEdit(key, "rate", e.target.value)}
-                                onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-                              />
-                            ) : (
-                              <span>{display.rate != null ? `฿${display.rate.toLocaleString()}` : "—"}</span>
-                            )}
-                          </td>
-                          {(["material", "labour"] as const).map((component) => {
-                            const allocation = deriveSourceCostAllocation(display)
-                            const field = component === "material" ? "materialCost" : "labourCost"
-                            const value = allocation?.[component]
-                            return (
-                              <td key={component} className="p-2.5 text-right font-mono text-xs">
-                                {isEditing && !isReadOnly ? (
-                                  <Input
-                                    disabled={mutationBusy}
-                                    type="number"
-                                    min="0"
-                                    step="0.01"
-                                    defaultValue={value ?? 0}
-                                    aria-label={`${component} cost for ${display.desc}`}
-                                    className="h-7 w-24 text-xs text-right"
-                                    onBlur={(event) => handleNumericEdit(key, field, event.target.value)}
-                                  />
-                                ) : value !== undefined ? (
-                                  <span title={`${allocation?.origin === "source" ? "Parsed from source" : "Manual"} · ${allocation?.basis === "total" ? "total allocation" : "unit rate"}`}>฿{value.toLocaleString()}</span>
-                                ) : (
-                                  <span className="text-muted-foreground" title="No reliable split was present in the source. Edit this row to allocate material and labour.">Not split</span>
-                                )}
-                              </td>
-                            )
-                          })}
-                          <td className="p-2.5 text-right font-mono text-xs">
-                            ฿{display.total.toLocaleString()}
-                          </td>
-                          <td className="p-2.5">
-                            {isEditing && !isReadOnly ? (
-                              <select
-                                disabled={mutationBusy}
-                                defaultValue={display.type}
-                                className="h-7 text-xs rounded-lg border border-input bg-transparent px-2"
-                                onChange={(e) => handleEdit(key, "type", e.target.value)}
-                              >
-                                <option value="unit">Unit</option>
-                                <option value="lump_sum">L/S</option>
-                                <option value="job">Job</option>
-                              </select>
-                            ) : (
-                              <span className="text-xs">
-                                {display.type === "lump_sum" ? (
-                                  <span className="inline-flex text-xs font-medium px-2 py-0.5 rounded-full bg-[#666666]/10 text-[#666666]">L/S</span>
-                                ) : display.type === "job" ? (
-                                  <span className="inline-flex text-xs font-medium px-2 py-0.5 rounded-full bg-[#666666]/10 text-[#666666]">Job</span>
-                                ) : (
-                                  "—"
-                                )}
-                              </span>
-                            )}
-                          </td>
-                          <td className="p-2.5">
-                            <StdContent
-                              item={display}
-                              onMatch={() => handleStdMatch(si, ii)}
-                              onAccept={() => handleStdAccept(si, ii)}
-                              onReject={() => handleStdReject(si, ii)}
-                              disabled={mutationBusy}
-                            />
-                          </td>
-                          <td className="p-2.5">
-                            {isEditing && !isReadOnly ? (
-                              <div className="flex gap-1">
-                                <button
-                                  onClick={() => {
-                                    setEditingKey(null)
-                                  }}
-                                  className="btn btn-primary btn-xs"
-                                  disabled={mutationBusy}
-                                >
-                                  Done
-                                </button>
-                                <button
-                                  onClick={() => void handleDeleteItem(si, ii)}
-                                  className="text-xs px-2 py-1 rounded text-destructive hover:bg-destructive/10"
-                                  disabled={mutationBusy}
-                                >
-                                  {deletingItem === key ? "Deleting…" : "Delete"}
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="flex items-center gap-1">
-                                {hasEdits && (
-                                  <span className="text-[10px] text-muted-foreground flex items-center gap-1">
-                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3 h-3">
-                                      <circle cx="8" cy="8" r="6.5" /><polyline points="8 4 8 8 11 11" />
-                                    </svg>
-                                    Unsaved
-                                  </span>
-                                )}
-                                {!isReadOnly && (
-                                  <button
-                                    onClick={() => setEditingKey(key)}
-                                    className="btn btn-ghost btn-xs boq-item-edit"
-                                    disabled={mutationBusy}
-                                  >
-                                    Edit
-                                  </button>
-                                )}
-                                {isReadOnly && (
-                                  <button onClick={() => void handleDeleteItem(si, ii)} className="btn btn-ghost btn-xs text-destructive" disabled={mutationBusy}>
-                                    {deletingItem === key ? "Deleting…" : "Delete"}
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
+          <div className="review-header-actions boq-unified-actions">
+            {!isReadOnly ? (
+              <>
+                {hasSource ? (
+                  <Button type="button" variant="outline" size="sm" onClick={() => setExtractionReviewOpen(true)} disabled={mutationBusy || pendingChanges > 0}>
+                    <Sparkles aria-hidden="true" />Extraction review
+                  </Button>
+                ) : null}
+                <Button type="button" variant="outline" size="sm" onClick={() => void handleSaveAll()} disabled={mutationBusy}>
+                  {saving ? <Loader2 className="animate-spin" /> : <Save aria-hidden="true" />}Save draft
+                </Button>
+                <Button type="button" size="sm" onClick={() => void handleApprove()} disabled={mutationBusy || pendingChanges > 0 || verification.hasBlockingIssues || (requireCatalogReadiness && catalogReadiness.blocking > 0)}>
+                  {approving ? <Loader2 className="animate-spin" /> : <Check aria-hidden="true" />}Approve BOQ
+                </Button>
+              </>
+            ) : null}
+            <details className="boq-overflow-menu">
+              <summary className="btn btn-ghost btn-sm" aria-label="More BOQ actions"><MoreHorizontal aria-hidden="true" /><span className="sr-only">More BOQ actions</span></summary>
+              <div className="boq-overflow-menu-content" role="menu">
+                <button type="button" role="menuitem" onClick={handleExportCsv}><FileDown aria-hidden="true" />Export CSV</button>
+                <button type="button" role="menuitem" onClick={() => window.print()}><Printer aria-hidden="true" />Print / download</button>
+                <button type="button" role="menuitem" className="text-destructive" disabled={mutationBusy} onClick={() => void handleDeleteBoq()}><Trash2 aria-hidden="true" />Delete BOQ</button>
               </div>
-            </CollapsibleSection>
-          )
-        })}
-        {filteredSections.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-32 gap-2 text-sm text-muted-foreground" data-od-id="empty-state">
-            <p>No items match your filter</p>
+            </details>
           </div>
-        )}
+        </header>
+
+        <ReviewWorkspace
+          hasSource={hasSource}
+          sourceFileName={boq.sourceFileName || "source.pdf"}
+          pdf={hasSource ? (
+            <PdfReviewViewer
+              sourceUrl={`/api/boqs/${encodeURIComponent(boq.id)}/source`}
+              sourceFileName={boq.sourceFileName || "source.pdf"}
+              resetKey={boq.id}
+            />
+          ) : null}
+        >
+          <div className="review-metadata">
+            <h2 className="text-sm font-medium mb-3">BOQ Details</h2>
+            <div className="grid grid-cols-2 gap-3">
+              <MetaField label="Vendor" value={displayBoq.vendor} field="vendor" disabled={isReadOnly || mutationBusy} confidence={confidenceLabel(boq.metadataConfidence?.vendor)} onChange={handleMetadataChange} />
+              <MetaField label="Project" value={displayBoq.project} field="project" disabled={isReadOnly || mutationBusy} confidence={confidenceLabel(boq.metadataConfidence?.project)} onChange={handleMetadataChange} />
+              <MetaField label="Work Type" value={displayBoq.workType} field="workType" type="select" options={["Unclassified", "Structural", "MEP", "Finishing"]} disabled={isReadOnly || mutationBusy} confidence={confidenceLabel(boq.metadataConfidence?.workType)} onChange={handleMetadataChange} />
+              <MetaField label="Document Date" value={displayBoq.date} field="date" type="date" disabled={isReadOnly || mutationBusy} confidence={confidenceLabel(boq.metadataConfidence?.date)} onChange={handleMetadataChange} />
+            </div>
+          </div>
+
+          {boq.extractionWarnings?.length ? (
+            <div className="review-warning-list" role="status">
+              <strong>Document extraction notes</strong>
+              {boq.extractionWarnings.map((warning, index) => <span key={`${warning.code}-${index}`}>{warning.message}</span>)}
+            </div>
+          ) : null}
+
+          <div className="boq-detail-toolbar" data-od-id="toolbar">
+            <div className="search-wrap">
+              <Search aria-hidden="true" />
+              <Input placeholder="Search items…" value={search} onChange={(event) => setSearch(event.target.value)} className="proto-input" />
+            </div>
+            <div className="boq-detail-filters" aria-label="Filter BOQ items">
+              {FILTERS.map((filter) => (
+                <button type="button" key={filter} onClick={() => setActiveFilter(filter)} aria-pressed={activeFilter === filter} className={`filter-chip ${activeFilter === filter ? "active" : ""}`}>{filter}</button>
+              ))}
+            </div>
+          </div>
+
+          <div className="review-items-heading">
+            <span className="text-sm font-medium">Parsed Items · {items.length} line items</span>
+            <span className="font-mono text-sm">Grand Total: ฿{grandTotal.toLocaleString()}</span>
+          </div>
+          {unifiedSections.length > 0 ? (
+            <UnifiedBoqItemsTable
+              sections={unifiedSections}
+              readOnly={isReadOnly}
+              disabled={isReadOnly || mutationBusy}
+              catalogState={catalogMatching.rowState}
+              onFieldChange={handleFieldChange}
+              onComponentChange={handleComponentChange}
+              onAllocate={handleAllocate}
+              onAcceptSuggestion={(row) => { void handleAcceptCatalogSuggestion(row) }}
+              onAiSuggest={(row) => { void catalogMatching.suggestWithAi(row) }}
+              onDismissSuggestion={catalogMatching.dismissSuggestion}
+              onFindMatch={setCatalogMatchTarget}
+              onExclude={(row) => { setExcludeTarget(row); setExcludeReason("") }}
+              onClearCatalogError={catalogMatching.clearRowError}
+            />
+          ) : (
+            <div className="proto-empty-state boq-filter-empty"><p>No items match your filter</p></div>
+          )}
+
+          {requireCatalogReadiness ? (
+            <div className="rounded-lg border border-accent/25 bg-accent/5 p-3 mt-3" data-od-id="catalog-readiness">
+              <div className="flex items-center justify-between gap-3 text-sm"><strong>Catalog readiness</strong><span className="font-mono">{catalogReadiness.resolved}/{catalogReadiness.total} resolved</span></div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden="true"><div className="h-full bg-accent" style={{ width: `${catalogReadiness.total ? (catalogReadiness.resolved / catalogReadiness.total) * 100 : 100}%` }} /></div>
+              <p className="mt-2 text-xs text-muted-foreground">Match an existing item, create a catalog entry, or exclude a one-off line with a reason before approval.</p>
+            </div>
+          ) : null}
+
+          {localWarnings.length ? (
+            <div className="review-warning-list review-local-warnings mt-3" role="status"><strong>Review recommended</strong>{localWarnings.map((warning, index) => <span key={`${warning.code}-${index}`}>{warning.message}</span>)}</div>
+          ) : null}
+          {blockingIssues.length ? (
+            <div className="review-blockers mt-3" role="alert"><strong>Resolve before approval</strong><ul>{blockingIssues.map((issue, index) => <li key={`${issue.code}-${index}`}>{issue.message}</li>)}</ul></div>
+          ) : null}
+        </ReviewWorkspace>
       </div>
 
-      <div
-        className="mt-3 text-xs text-muted-foreground flex items-center gap-2"
-        data-od-id="edit-history"
-      >
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3.5 h-3.5">
-          <circle cx="8" cy="8" r="6.5" />
-          <polyline points="8 4 8 8 11 11" />
-        </svg>
-        <span>
-          {editsCount > 0
-            ? `${editsCount} item${editsCount > 1 ? "s" : ""} with unsaved changes`
-            : "All changes saved"}
-        </span>
-      </div>
-
-      <div
-        className="estimate-summary boq-detail-summary"
-        data-od-id="summary-bar"
-      >
-        <div>
-          <div className="total-label">{boq.totalItems} items</div>
-          <div className="total-value">฿{grandTotal.toLocaleString()}</div>
-        </div>
-        <div className="total-actions">
-          <button
-            className="btn btn-primary"
-            disabled
-            title="No estimator import workflow is available in this prototype yet"
-            aria-describedby="estimate-import-note"
-          >
-            Add to Estimate
-          </button>
-          <span id="estimate-import-note" className="sr-only">No estimator import workflow is available in this prototype yet.</span>
-        </div>
-      </div>
-
-      {catalogMatchTarget && (
+      {catalogMatchTarget ? (
         <CatalogMatchModal
-          itemDesc={catalogMatchTarget.desc}
-          itemUnit={catalogMatchTarget.unit}
-          itemCode={catalogMatchTarget.itemCode}
+          itemDesc={catalogMatchTarget.item.desc}
+          itemUnit={catalogMatchTarget.item.unit}
+          itemCode={catalogMatchTarget.item.code}
           sourceProject={boq.project}
           sourceVendor={boq.vendor}
-          onMatch={handleCatalogMatch}
+          matchContext={{ boqId: boq.id, sectionIndex: catalogMatchTarget.sectionIndex, ...getBoqItemRequestIdentity(catalogMatchTarget.item) }}
+          onMatch={reloadAfterManualMatch}
           onClose={() => setCatalogMatchTarget(null)}
-          matchContext={{
-            boqId: id,
-            sectionIndex: catalogMatchTarget.si,
-            ...(catalogMatchTarget.itemId ? { itemId: catalogMatchTarget.itemId } : { itemCode: catalogMatchTarget.itemCode }),
-          }}
         />
-      )}
-      {reviewOpen ? (
+      ) : null}
+
+      <Dialog open={Boolean(excludeTarget)} onOpenChange={(open) => { if (!open && !matching) { setExcludeTarget(null); setExcludeReason("") } }}>
+        <DialogContent showCloseButton={!matching}>
+          <DialogHeader>
+            <DialogTitle>Exclude from catalog matching</DialogTitle>
+            <DialogDescription>Add a reason so reviewers understand why {excludeTarget?.item.desc ?? "this item"} should not use catalog pricing.</DialogDescription>
+          </DialogHeader>
+          <Input value={excludeReason} onChange={(event) => setExcludeReason(event.target.value)} placeholder="Reason this line should not use catalog pricing" aria-label={`Exclusion reason for ${excludeTarget?.item.desc ?? "item"}`} disabled={matching} autoFocus />
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={matching} onClick={() => { setExcludeTarget(null); setExcludeReason("") }}>Cancel</Button>
+            <Button type="button" disabled={!excludeReason.trim() || matching} onClick={() => void handleExclude()}>{matching ? <Loader2 className="animate-spin" /> : null}Exclude item</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {extractionReviewOpen ? (
         <ReviewPanel
           boq={boq}
-          onClose={() => setReviewOpen(false)}
-          onApproved={(updated) => { setBoq(updated); setReviewOpen(false) }}
+          primaryActionLabel="Approve & return"
+          requireCatalogReadiness
+          onApproved={applyMutationBoq}
+          onClose={() => {
+            setExtractionReviewOpen(false)
+            void reloadCanonicalBoq()
+          }}
         />
       ) : null}
     </div>
@@ -1046,85 +671,48 @@ export default function BoqDetailPage() {
 function MetaField({
   label,
   value,
-  editable,
   field,
-  onSave,
+  onChange,
   disabled,
-  saving,
+  confidence,
   type = "text",
   options,
 }: {
   label: string
   value: string
-  editable: boolean
-  field: string | null
-  onSave: (field: string, value: string) => void
+  field: MetadataField
+  onChange: (field: MetadataField, value: string) => void
   disabled: boolean
-  saving: boolean
+  confidence: string | null
   type?: "text" | "select" | "date"
-  options?: string[]
+  options?: WorkType[]
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
 
-  const handleSave = () => {
-    if (field && draft !== value) {
-      onSave(field, draft)
-    }
+  const commit = () => {
+    if (draft !== value) onChange(field, draft)
     setEditing(false)
   }
 
   return (
-    <div className="boq-meta-item" data-meta={field || undefined}>
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-[11px] text-muted-foreground uppercase tracking-wider font-medium">
-          {label}
+    <div className="space-y-1" data-meta={field}>
+      <div className="review-field-label">
+        <span>{label}</span>
+        <span className="flex items-center gap-2">
+          {confidence ? <small>{confidence}</small> : null}
+          {!disabled && !editing ? <button type="button" className="boq-meta-edit" onClick={() => { setDraft(value); setEditing(true) }}>Edit</button> : null}
         </span>
-        {editable && !editing && (
-          <button
-            onClick={() => {
-              setDraft(value)
-              setEditing(true)
-            }}
-            className="boq-meta-edit"
-            disabled={disabled}
-          >
-            {saving ? "Saving…" : "Edit"}
-          </button>
-        )}
       </div>
       {editing ? (
         type === "select" ? (
-          <select
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={handleSave}
-            className="h-7 text-sm mt-0.5 rounded-lg border border-input bg-transparent px-2"
-            autoFocus
-          >
-            {options?.map((o) => (
-              <option key={o} value={o}>
-                {o}
-              </option>
-            ))}
+          <select value={draft} disabled={disabled} onChange={(event) => setDraft(event.target.value)} onBlur={commit} className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm" autoFocus>
+            {options?.map((option) => <option key={option} value={option}>{option}</option>)}
           </select>
         ) : (
-          <Input
-            type={type === "date" ? "date" : "text"}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={handleSave}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleSave()
-              if (e.key === "Escape") setEditing(false)
-            }}
-            className="proto-input"
-            autoFocus
-          />
+          <Input type={type === "date" ? "date" : "text"} value={draft} disabled={disabled} onChange={(event) => setDraft(event.target.value)} onBlur={commit} onKeyDown={(event) => { if (event.key === "Enter") commit(); if (event.key === "Escape") setEditing(false) }} autoFocus />
         )
-      ) : (
-        <div className="text-sm font-medium">{value}</div>
-      )}
+      ) : <div className="boq-meta-readonly-value">{value || "—"}</div>}
     </div>
   )
 }

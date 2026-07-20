@@ -479,7 +479,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
             ) : (
               <object
                 key={sourceAttempt}
-                className="review-pdf-object"
+                className="review-legacy-pdf-object"
                 data={sourceUrl}
                 type="application/pdf"
                 aria-label={`Source PDF: ${boq.sourceFileName || "source.pdf"}`}
