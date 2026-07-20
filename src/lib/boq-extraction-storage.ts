@@ -275,6 +275,7 @@ export function createFirestoreExtractionStore(
         const metadata = Object.fromEntries(Object.entries(run).filter(([key]) => key !== 'sections'))
         transaction.create(ref, {
           ...metadata,
+          sourceRowRevision: 0,
           extractionIdentity: extractionRunIdentity(run),
           identityFingerprint: extractionRunIdentityFingerprint(run),
           deterministicSections: {
@@ -294,10 +295,15 @@ export function createFirestoreExtractionStore(
       await db.runTransaction(async (transaction) => {
         const extractionRef = runRef(boqId, runId)
         const runSnapshot = await transaction.get(extractionRef)
-        if (!runSnapshot.exists || runSnapshot.data()?.status !== 'staging') {
+        const runData = runSnapshot.data()
+        if (!runSnapshot.exists || runData?.status !== 'staging' || runData.cleanupState === 'deleting') {
           throw new Error('Extraction run is not staged')
         }
+        if (runData.verifiedSourceRowCount !== undefined || runData.verifiedSourceRowChecksum !== undefined) {
+          throw new Error('Extraction source rows are already verified')
+        }
         const existing = refs.length > 0 ? await transaction.getAll(...refs) : []
+        let changed = false
         rows.forEach((row, index) => {
           const snapshot = existing[index]
           if (snapshot?.exists) {
@@ -306,13 +312,22 @@ export function createFirestoreExtractionStore(
             }
             return
           }
+          changed = true
           transaction.create(refs[index], { ...row, fingerprint: stableSourceRowFingerprint(row) })
         })
+        if (changed) transaction.update(extractionRef, { sourceRowRevision: (runData.sourceRowRevision ?? 0) + 1 })
       })
     },
 
     async verifySourceRows(boqId, runId) {
-      const result = await runRef(boqId, runId).collection('sourceRows').get()
+      const extractionRef = runRef(boqId, runId)
+      const initialRun = await extractionRef.get()
+      const initialData = initialRun.data()
+      if (!initialRun.exists || initialData?.status !== 'staging' || initialData.cleanupState === 'deleting') {
+        throw new Error('Extraction run is not staged')
+      }
+      const revision = initialData.sourceRowRevision ?? 0
+      const result = await extractionRef.collection('sourceRows').get()
       const rows = result.docs.map((row) => {
         const data = { ...row.data() }
         delete data.fingerprint
@@ -320,10 +335,13 @@ export function createFirestoreExtractionStore(
       })
       const verified = { count: rows.length, checksum: checksumSourceRows(rows) }
       await db.runTransaction(async (transaction) => {
-        const extractionRef = runRef(boqId, runId)
         const runSnapshot = await transaction.get(extractionRef)
-        if (!runSnapshot.exists || runSnapshot.data()?.status !== 'staging') {
+        const runData = runSnapshot.data()
+        if (!runSnapshot.exists || runData?.status !== 'staging' || runData.cleanupState === 'deleting') {
           throw new Error('Extraction run is not staged')
+        }
+        if ((runData.sourceRowRevision ?? 0) !== revision) {
+          throw new Error('Extraction source rows changed during verification')
         }
         transaction.update(extractionRef, {
           verifiedSourceRowCount: verified.count,
@@ -342,7 +360,9 @@ export function createFirestoreExtractionStore(
         ])
         const runData = storedRun.data()
         if (runData?.status === 'ready' && storedBoq.exists) return 'already_finalized'
-        if (!storedRun.exists || runData?.status !== 'staging') throw new Error('Extraction run is not staged')
+        if (!storedRun.exists || runData?.status !== 'staging' || runData.cleanupState === 'deleting') {
+          throw new Error('Extraction run is not staged')
+        }
         if (runData.identityFingerprint !== extractionRunIdentityFingerprint(run)
           || stableCanonicalJson(runData.extractionIdentity) !== stableCanonicalJson(extractionRunIdentity(run))) {
           throw new Error('Extraction run verification metadata changed')
@@ -379,10 +399,14 @@ export function createFirestoreExtractionStore(
         const [storedRun, storedBoq] = await Promise.all([
           transaction.get(extractionRef), transaction.get(boqRef),
         ])
-        if (!storedRun.exists || storedRun.data()?.status !== 'staging' || storedBoq.exists) return false
-        // Removing the run document in the same transaction closes the race
-        // with finalization; a finalizer cannot create a BOQ without this run.
-        transaction.delete(extractionRef)
+        const runData = storedRun.data()
+        if (!storedRun.exists || runData?.status !== 'staging' || storedBoq.exists) return false
+        // Mark first, then delete children, then delete the parent. A
+        // recoverable tombstone prevents finalization and lets a retry finish
+        // cleanup if a child batch fails.
+        if (runData.cleanupState !== 'deleting') {
+          transaction.update(extractionRef, { cleanupState: 'deleting', cleanupStartedAt: now().toISOString() })
+        }
         return true
       })
       if (!safe) return false
@@ -395,6 +419,7 @@ export function createFirestoreExtractionStore(
           await batch.commit()
         }
       }
+      await extractionRef.delete()
       return true
     },
 

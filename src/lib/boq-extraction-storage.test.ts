@@ -247,6 +247,26 @@ test('Firestore source-row writes refuse a ready run before touching row documen
   assert.equal(rowReads, 0)
 })
 
+test('Firestore source-row writes refuse evidence changes after verification', async () => {
+  let rowReads = 0
+  const db = {
+    doc: () => ({}),
+    runTransaction: async (callback: (transaction: {
+      get: () => Promise<{ exists: boolean; data: () => Record<string, unknown> }>
+      getAll: () => Promise<never[]>
+    }) => Promise<unknown>) => callback({
+      get: async () => ({ exists: true, data: () => ({ status: 'staging', verifiedSourceRowCount: 1, verifiedSourceRowChecksum: 'checksum' }) }),
+      getAll: async () => { rowReads += 1; return [] },
+    }),
+  }
+  const store = createFirestoreExtractionStore(db as never)
+  await assert.rejects(
+    () => store.writeSourceRows('boq-1', 'run-1', [fixture().rows[0]!]),
+    /already verified/i,
+  )
+  assert.equal(rowReads, 0)
+})
+
 test('cancellation after row verification cleans staging before finalize', async () => {
   const controller = new AbortController()
   const harness = storeHarness({
