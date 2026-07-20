@@ -86,6 +86,7 @@ export async function persistStagedRun(
 ): Promise<Omit<Boq, 'createdAt' | 'updatedAt'> | Boq> {
   throwIfCancelled(signal)
   let ownsStaging = false
+  let creationOutcome: Awaited<ReturnType<ExtractionStore['createRun']>> | undefined
   let safeCleanupCompleted = false
   try {
     // A rejected create can have committed, or can have collided with a
@@ -97,8 +98,9 @@ export async function persistStagedRun(
     } catch (error) {
       throw new ExtractionCleanupUncertainError({ cause: error })
     }
-    if (!['created', 'exists_staging', 'exists_ready'].includes(creation)) {
-      throw new Error('Extraction store result was malformed')
+    creationOutcome = creation
+    if (!['created', 'exists_staging', 'exists_ready'].includes(creationOutcome)) {
+      throw new ExtractionCleanupUncertainError({ cause: new Error('Extraction store result was malformed') })
     }
     if (creation === 'exists_ready') {
       let existing: { boq: Boq; run: BoqExtractionRun } | null
@@ -150,6 +152,13 @@ export async function persistStagedRun(
       throw finalizeError
     }
   } catch (error) {
+    if (creationOutcome === 'exists_staging'
+      && !ownsStaging
+      && !(error instanceof ExtractionCleanupUncertainError)) {
+      // This run may belong to another worker. Preserve its source/evidence
+      // and make the import service treat the outcome as uncertain.
+      throw new ExtractionCleanupUncertainError({ cause: error })
+    }
     if (ownsStaging && !safeCleanupCompleted && !(error instanceof ExtractionCleanupUncertainError)) {
       await cleanupOrThrow(store, input.run.boqId, input.run.id)
     }

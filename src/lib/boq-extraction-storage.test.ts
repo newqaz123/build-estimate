@@ -135,6 +135,20 @@ test('pre-existing staging run remains resumable and does not trigger cleanup', 
   assert.equal(harness.events.includes('run:delete'), false)
 })
 
+test('pre-existing staging failure preserves recovery evidence', async () => {
+  const harness = storeHarness({
+    createRun: async () => 'exists_staging',
+    writeSourceRows: async () => { throw new Error('shared run write failed') },
+  })
+  await assert.rejects(
+    () => persistStagedRun(harness, harness.store),
+    (error) => error instanceof ExtractionCleanupUncertainError
+      && error.cause instanceof Error
+      && /shared run write failed/i.test(error.cause.message),
+  )
+  assert.equal(harness.events.includes('run:delete'), false)
+})
+
 test('duplicate ready run is idempotent and skips evidence rewrites', async () => {
   const ready = { ...fixture().boq, createdAt: 'now', updatedAt: 'now' } as Boq
   const harness = storeHarness({
@@ -149,7 +163,12 @@ test('unknown store creation result fails closed without deleting unknown eviden
   const harness = storeHarness({
     createRun: async () => 'malformed' as 'created',
   })
-  await assert.rejects(() => persistStagedRun(harness, harness.store), /store result/i)
+  await assert.rejects(
+    () => persistStagedRun(harness, harness.store),
+    (error) => error instanceof ExtractionCleanupUncertainError
+      && error.cause instanceof Error
+      && /store result/i.test(error.cause.message),
+  )
   assert.equal(harness.events.includes('run:delete'), false)
 })
 
