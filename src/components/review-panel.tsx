@@ -11,7 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { StandardizationReview } from "./standardization-review"
-import { Check, Eye, ExternalLink, Loader2, Plus, TriangleAlert, X } from "lucide-react"
+import { Check, Eye, Loader2, Plus, TriangleAlert, X } from "lucide-react"
 import { toast } from "sonner"
 import type { Boq, BoqItem, WorkType } from "@/lib/boq-schema"
 import {
@@ -34,6 +34,7 @@ import { CatalogMatchModal } from "./catalog-match-modal"
 import { calculateBoqTotals, isPricedBoqItem } from "@/lib/boq-pricing"
 import { sourceReferenceLabel } from "@/lib/boq-extraction-review-ui"
 import { ExtractionReview } from "./extraction-review"
+import { PdfReviewViewer } from "./pdf-review-viewer"
 
 interface ReviewPanelProps {
   boq: Boq
@@ -108,8 +109,8 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
     result: VerificationApiResponse
   } | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
-  const [sourceAttempt, setSourceAttempt] = useState(0)
-  const [sourcePreviewFailed, setSourcePreviewFailed] = useState(false)
+  const [pdfPageRequest, setPdfPageRequest] = useState({ page: 1, key: 0 })
+  const [itemMutationBusy, setItemMutationBusy] = useState(false)
   const [catalogMatchIndex, setCatalogMatchIndex] = useState<number | null>(null)
   const [catalogBusyIndex, setCatalogBusyIndex] = useState<number | null>(null)
   const reviewPanelRef = useRef<HTMLDivElement>(null)
@@ -123,7 +124,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
   )
   const hasSource = boq.sourceAvailable ?? Boolean(boq.sourceFileName)
   const sourceBaseUrl = `/api/boqs/${encodeURIComponent(boq.id)}/source`
-  const sourceUrl = sourceAttempt > 0 ? `${sourceBaseUrl}?retry=${sourceAttempt}` : sourceBaseUrl
+  const sourceUrl = sourceBaseUrl
   const sourceRowCounts = useMemo(() => {
     const counts = new Map<string, number>()
     for (const item of items) {
@@ -147,7 +148,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
   const verification = useMemo(() => buildReviewVerification(boq, reviewEdits), [boq, reviewEdits])
   const blockingIssues = verification.issues.filter((issue) => issue.severity === "blocking")
   const localWarnings = verification.issues.filter((issue) => issue.severity === "warning")
-  const busy = verifyLoading || approveLoading
+  const busy = verifyLoading || approveLoading || itemMutationBusy
 
   useEffect(() => {
     previousFocusRef.current = document.activeElement instanceof HTMLElement
@@ -272,21 +273,50 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
     }
   }
 
-  const handleAddMissingItem = () => {
-    setItems((current) => [...current, {
-      id: `user-${crypto.randomUUID()}`,
-      desc: "New missing item",
-      unit: "",
-      qty: 0,
-      rate: 0,
-      total: 0,
-      type: "unit",
-      pricingRole: "standard",
-      costComponent: "combined",
-      sourceRowIds: [],
-      entryOrigin: "user",
-      stdStatus: "unmatched",
-    }])
+  const handleAddMissingItem = async () => {
+    if (itemMutationBusy || reviewSections.length === 0 || boq.status === "approved") return
+    setItemMutationBusy(true)
+    setSaveError(null)
+    try {
+      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sectionIndex: reviewSections.length - 1, desc: "New missing item" }),
+      })
+      if (!response.ok) throw new Error(await readError(response, "The missing item could not be added."))
+      const updated = await response.json() as Boq
+      const added = updated.sections.at(-1)?.items.at(-1)
+      if (!added || added.entryOrigin !== "user") throw new Error("The server did not return the audited missing item.")
+      setItems((current) => current.some((item) => item.id === added.id) ? current : [...current, added])
+      toast.success("Missing item added as a user-entered unpriced row")
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "The missing item could not be added.")
+    } finally {
+      setItemMutationBusy(false)
+    }
+  }
+
+  const handleIncludeOptional = async (item: BoqItem, itemIndex: number) => {
+    if (!isPricedBoqItem(item) || !item.optional || !item.excludedFromTotal || itemMutationBusy || boq.status === "approved") return
+    const sectionIndex = sectionIndexForItem(reviewSections, itemIndex)
+    if (sectionIndex < 0) return
+    setItemMutationBusy(true)
+    setSaveError(null)
+    try {
+      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/items`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ updates: [{ sectionIndex, items: [{ ...getBoqItemRequestIdentity(item), excludedFromTotal: false }] }] }),
+      })
+      if (!response.ok) throw new Error(await readError(response, "The optional item could not be included."))
+      await response.json() as Boq
+      setItems((current) => current.map((candidate, index) => index === itemIndex ? { ...candidate, excludedFromTotal: false, exclusionReason: undefined } : candidate))
+      toast.success("Optional item included in the BOQ total")
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "The optional item could not be included.")
+    } finally {
+      setItemMutationBusy(false)
+    }
   }
 
   const handleApprove = async () => {
@@ -325,11 +355,6 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
   }
 
   const confidence = boq.metadataConfidence
-  const retrySourcePreview = () => {
-    setSourcePreviewFailed(false)
-    setSourceAttempt((attempt) => attempt + 1)
-  }
-
   return (
     <div className="modal-overlay review-overlay open" data-od-id="review-modal" role="dialog" aria-modal="true" aria-labelledby="review-dialog-title">
       <div ref={reviewPanelRef} className="review-panel" data-od-id="review-panel">
@@ -361,32 +386,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
                 <strong>No source PDF is available for this legacy BOQ.</strong>
                 <span>The BOQ was created before source files were retained.</span>
               </div>
-            ) : sourcePreviewFailed ? (
-              <div className="review-pdf-fallback" role="alert">
-                <TriangleAlert aria-hidden="true" />
-                <strong>The PDF preview could not be loaded.</strong>
-                <span>{boq.sourceFileName || "source.pdf"}</span>
-                <Button type="button" variant="outline" size="sm" onClick={retrySourcePreview}>Retry preview</Button>
-                <a href={sourceUrl} target="_blank" rel="noreferrer">Open PDF <ExternalLink aria-hidden="true" /></a>
-              </div>
-            ) : (
-              <object
-                key={sourceAttempt}
-                className="review-legacy-pdf-object"
-                data={sourceUrl}
-                type="application/pdf"
-                aria-label={`Source PDF: ${boq.sourceFileName || "source.pdf"}`}
-                onError={() => setSourcePreviewFailed(true)}
-              >
-                <div className="review-pdf-fallback" role="alert">
-                  <TriangleAlert aria-hidden="true" />
-                  <strong>PDF preview isn’t available in this browser.</strong>
-                  <span>{boq.sourceFileName || "source.pdf"}</span>
-                  <Button type="button" variant="outline" size="sm" onClick={retrySourcePreview}>Retry preview</Button>
-                  <a href={sourceUrl} target="_blank" rel="noreferrer">Open PDF <ExternalLink aria-hidden="true" /></a>
-                </div>
-              </object>
-            )}
+            ) : <PdfReviewViewer sourceUrl={sourceUrl} sourceFileName={boq.sourceFileName || "source.pdf"} resetKey={`${boq.id}:${sourceUrl}`} requestedPage={pdfPageRequest.page} requestedPageKey={pdfPageRequest.key} />}
           </section>
 
           <div className="review-resize-handle" aria-hidden="true"><span /></div>
@@ -438,14 +438,14 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
                 setSectionTemplate(updated.sections)
                 setItems(updated.sections.flatMap((section) => section.items))
               }}
-              onNavigateToPage={() => undefined}
+              onNavigateToPage={(page) => setPdfPageRequest((current) => ({ page, key: current.key + 1 }))}
             />
 
             <div className="review-items-heading">
               <span className="text-sm font-medium">Parsed Items · {items.length} line items</span>
               <div className="review-items-heading-actions">
                 <span className="font-mono text-sm">Grand Total: ฿{grandTotal.toLocaleString()}</span>
-                <Button type="button" variant="outline" size="sm" onClick={handleAddMissingItem} disabled={busy} data-od-id="add-missing-item"><Plus className="w-3.5 h-3.5" /> Add missing item</Button>
+                <Button type="button" variant="outline" size="sm" onClick={() => void handleAddMissingItem()} disabled={busy} data-od-id="add-missing-item"><Plus className="w-3.5 h-3.5" /> Add missing item</Button>
               </div>
             </div>
             <p className="review-user-entry-note">New items are user-entered and remain unpriced until you add a rate.</p>
@@ -460,12 +460,12 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
                     if (!isPricedBoqItem(item)) {
                       return (
                         <tr key={reviewItemKey(boq.id, item, idx)} data-ri={idx} className="review-bundle-child-row bg-muted/20 text-muted-foreground">
-                          <td className="pl-5">
+                          <td className="pl-5" data-label="Description">
                             <span className="mr-2 inline-flex rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium">Included child</span>
                             {item.desc}
                           </td>
-                          <td colSpan={6}>Informational bundle child · pricing is held by bundle {item.parentBundleId}</td>
-                          <td><span className="review-std-badge pending">Info</span></td>
+                          <td colSpan={6} data-label="Pricing">Informational bundle child · pricing is held by bundle {item.parentBundleId}</td>
+                          <td data-label="Catalog"><span className="review-std-badge pending">Info</span></td>
                         </tr>
                       )
                     }
@@ -474,7 +474,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
                     const sourceRowId = item.sourceRowId ?? item.sourceRowIds?.[0]
                     return (
                       <tr key={reviewItemKey(boq.id, item, idx)} data-ri={idx} className={item.pricingRole === "bundle_parent" ? "review-bundle-parent-row" : undefined}>
-                        <td>
+                        <td data-label="Description">
                           <Input aria-label={`Description for item ${idx + 1}`} value={item.desc} onChange={(event) => handleItemChange(idx, "desc", event.target.value)} />
                           <div className="review-item-evidence">
                             {item.pricingRole === "bundle_parent" ? <span className="review-component-badge">Priced bundle</span> : null}
@@ -484,13 +484,13 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
                           </div>
                           {item.extractionWarnings?.map((warning, warningIndex) => <span className="review-item-warning" key={`${warning.code}-${warningIndex}`}>{warning.message}</span>)}
                         </td>
-                        <td><Input aria-label={`Unit for item ${idx + 1}`} value={item.unit} onChange={(event) => handleItemChange(idx, "unit", event.target.value)} /></td>
-                        <td><Input aria-label={`Quantity for item ${idx + 1}`} type="number" value={item.qty} onChange={(event) => handleItemChange(idx, "qty", Number(event.target.value))} /></td>
-                        <td><Input aria-label={`Rate for item ${idx + 1}`} type="number" value={item.rate} onChange={(event) => handleItemChange(idx, "rate", Number(event.target.value))} /></td>
-                        <td className="num-col font-mono" title={allocation ? `${allocation.origin} ${allocation.basis}` : "No reliable split in source"}>{allocation ? `฿${allocation.material.toLocaleString()}` : "Not split"}</td>
-                        <td className="num-col font-mono" title={allocation ? `${allocation.origin} ${allocation.basis}` : "No reliable split in source"}>{allocation ? `฿${allocation.labour.toLocaleString()}` : "Not split"}</td>
-                        <td className="num-col font-mono">฿{item.total.toLocaleString()}{item.optional ? <span className="review-optional-state">{item.excludedFromTotal === true ? "Optional · excluded from total" : "Optional"}</span> : null}</td>
-                        <td><span className={`review-std-badge ${item.stdStatus}`}>{item.stdStatus === "matched" ? "Matched" : item.stdStatus === "excluded" ? "Excluded" : item.stdStatus === "pending" ? "Suggested" : "—"}</span></td>
+                        <td data-label="Unit"><Input aria-label={`Unit for item ${idx + 1}`} value={item.unit} onChange={(event) => handleItemChange(idx, "unit", event.target.value)} /></td>
+                        <td data-label="Quantity"><Input aria-label={`Quantity for item ${idx + 1}`} type="number" value={item.qty} onChange={(event) => handleItemChange(idx, "qty", Number(event.target.value))} /></td>
+                        <td data-label="Rate"><Input aria-label={`Rate for item ${idx + 1}`} type="number" value={item.rate} onChange={(event) => handleItemChange(idx, "rate", Number(event.target.value))} /></td>
+                        <td className="num-col font-mono" data-label="Material" title={allocation ? `${allocation.origin} ${allocation.basis}` : "No reliable split in source"}>{allocation ? `฿${allocation.material.toLocaleString()}` : "Not split"}</td>
+                        <td className="num-col font-mono" data-label="Labour" title={allocation ? `${allocation.origin} ${allocation.basis}` : "No reliable split in source"}>{allocation ? `฿${allocation.labour.toLocaleString()}` : "Not split"}</td>
+                        <td className="num-col font-mono" data-label="Total">฿{item.total.toLocaleString()}{item.optional ? <span className="review-optional-state">{item.excludedFromTotal === true ? "Optional · excluded from total" : "Optional"}</span> : null}{item.optional && item.excludedFromTotal ? <button type="button" className="unified-boq-include-option" disabled={busy} onClick={() => void handleIncludeOptional(item, idx)}>Include in total</button> : null}</td>
+                        <td data-label="Catalog"><span className={`review-std-badge ${item.stdStatus}`}>{item.stdStatus === "matched" ? "Matched" : item.stdStatus === "excluded" ? "Excluded" : item.stdStatus === "pending" ? "Suggested" : "—"}</span></td>
                       </tr>
                     )
                   })}

@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs'
 
 const uploadSource = readFileSync(new URL('./upload-modal.tsx', import.meta.url), 'utf8')
 const reviewSource = readFileSync(new URL('./review-panel.tsx', import.meta.url), 'utf8')
+const pdfViewerSource = readFileSync(new URL('./pdf-review-viewer.tsx', import.meta.url), 'utf8')
 const dataTableSource = readFileSync(new URL('./proto-data-table.tsx', import.meta.url), 'utf8')
 const standardizationSource = readFileSync(
   new URL('./standardization-review.tsx', import.meta.url),
@@ -54,9 +55,10 @@ test('BOQ upload rejects invalid files with actionable feedback and has no unper
 
 test('review embeds the authenticated source PDF and does not manufacture source content', () => {
   assert.match(reviewSource, /`\/api\/boqs\/\$\{encodeURIComponent\(boq\.id\)\}\/source`/)
-  assert.match(reviewSource, /<object[^>]+data=\{sourceUrl\}/)
-  assert.match(reviewSource, /Open PDF/)
-  assert.match(reviewSource, /Retry preview/)
+  assert.match(reviewSource, /<PdfReviewViewer[^>]+sourceUrl=\{sourceUrl\}/)
+  assert.match(pdfViewerSource, /href=\{sourceUrl\}/)
+  assert.match(pdfViewerSource, /Open PDF/)
+  assert.match(pdfViewerSource, /Retry preview/)
   assert.match(reviewSource, /No source PDF is available for this legacy BOQ/)
   assert.doesNotMatch(reviewSource, /pdfZoom|ZoomIn|ZoomOut/)
   assert.doesNotMatch(reviewSource, /Sino-Thai|Ratchaphruek|GRAND TOTAL|Prepared by/)

@@ -144,16 +144,16 @@ function FragmentSection({
         if (!isPricedUnifiedBoqRow(row)) {
           return (
             <tr key={row.key} data-row-key={row.key} className="unified-boq-informational-row">
-              <td className="unified-boq-description-cell">
+              <td className="unified-boq-description-cell" data-label="Description">
                 <div className="boq-informational-description">{row.item.desc}</div>
                 <span className="review-item-warning">Bundle component · included in the parent price</span>
                 {row.item.extractionWarnings?.map((warning, warningIndex) => (
                   <span className="review-item-warning" key={`${warning.code}-${warningIndex}`}>{warning.message}</span>
                 ))}
               </td>
-              <td colSpan={5} className="unified-boq-informational-placeholder">—</td>
-              <td className="num-col unified-boq-total">Included</td>
-              <td className="unified-boq-catalog-cell"><span className="inline-catalog-status">Informational</span></td>
+              <td colSpan={5} className="unified-boq-informational-placeholder" data-label="Pricing">—</td>
+              <td className="num-col unified-boq-total" data-label="Total">Included</td>
+              <td className="unified-boq-catalog-cell" data-label="Catalog"><span className="inline-catalog-status">Informational</span></td>
             </tr>
           )
         }
@@ -171,7 +171,7 @@ function FragmentSection({
 
         return (
           <tr key={row.key} data-row-key={row.key}>
-            <td className="unified-boq-description-cell">
+            <td className="unified-boq-description-cell" data-label="Description">
               <Input
                 aria-label={`Description for ${row.item.desc}, row ${rowNumber}`}
                 value={row.item.desc}
@@ -189,7 +189,7 @@ function FragmentSection({
               {row.item.optional ? <span className="review-optional-state">{row.item.excludedFromTotal ? "Optional · excluded from total" : "Optional · included in total"}</span> : null}
               {row.item.optional && row.item.excludedFromTotal && !readOnly ? <button type="button" className="unified-boq-include-option" disabled={disabled} onClick={() => onIncludeOptional(row)}>Include in total</button> : null}
             </td>
-            <td>
+            <td data-label="Unit">
               <Input
                 aria-label={`Unit for ${row.item.desc}, row ${rowNumber}`}
                 value={row.item.unit}
@@ -197,7 +197,7 @@ function FragmentSection({
                 onChange={(event) => onFieldChange(row, "unit", event.target.value)}
               />
             </td>
-            <td className="num-col">
+            <td className="num-col" data-label="Quantity">
               <Input
                 aria-label={`Quantity for ${row.item.desc}, row ${rowNumber}`}
                 type="number"
@@ -207,7 +207,7 @@ function FragmentSection({
                 onChange={(event) => onFieldChange(row, "qty", Number(event.target.value))}
               />
             </td>
-            <td className="num-col">
+            <td className="num-col" data-label="Rate">
               <Input
                 aria-label={`Rate for ${row.item.desc}, row ${rowNumber}`}
                 type="number"
@@ -217,7 +217,7 @@ function FragmentSection({
                 onChange={(event) => onFieldChange(row, "rate", Number(event.target.value))}
               />
             </td>
-            <td className="num-col unified-boq-component-cell" data-component="material">
+            <td className="num-col unified-boq-component-cell" data-component="material" data-label="Material">
               <SourceCostEvidence
                 label="Material"
                 present={materialPresent}
@@ -225,7 +225,7 @@ function FragmentSection({
                 basis={isMaterialRow && sourceAllocation ? sourceAllocation.basis : evidenceBasis}
               />
             </td>
-            <td className="num-col unified-boq-component-cell" data-component="labour">
+            <td className="num-col unified-boq-component-cell" data-component="labour" data-label="Labour">
               <SourceCostEvidence
                 label="Labour"
                 present={labourPresent}
@@ -233,8 +233,8 @@ function FragmentSection({
                 basis={isLabourRow && sourceAllocation ? sourceAllocation.basis : evidenceBasis}
               />
             </td>
-            <td className="num-col unified-boq-total">{currency(row.item.total)}</td>
-            <td className="unified-boq-catalog-cell">
+            <td className="num-col unified-boq-total" data-label="Total">{currency(row.item.total)}</td>
+            <td className="unified-boq-catalog-cell" data-label="Catalog">
               <InlineCatalogCell
                 locator={row}
                 state={rowCatalogState}

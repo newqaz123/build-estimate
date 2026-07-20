@@ -5,8 +5,10 @@ import {
   acceptAllValidatedProposalIds,
   extractionReviewReducer,
   filterReviewProposals,
+  filterReviewSourceRows,
   initialExtractionReviewState,
   normalizeExtractionReviewResponse,
+  shouldDispatchAutomaticReview,
 } from "./boq-extraction-review-state"
 import type { ExtractionReviewResponse } from "./boq-extraction-ai-review"
 import type { ProposalOperation, ValidatedProposal } from "./boq-extraction-proposals"
@@ -43,6 +45,9 @@ test("normalizes AI, fallback, and not-required review responses without trustin
   assert.equal(normalizeExtractionReviewResponse({ ...base, mode: "ai", sourceRows: [{ ...sourceRow, rawText: 123 }] }), null)
   assert.equal(normalizeExtractionReviewResponse({ ...base, mode: "surprise" }), null)
   assert.equal(normalizeExtractionReviewResponse({ ...base, mode: "ai", proposalStatuses: { p1: { status: "accepted", canUndo: "yes" } } }), null)
+  assert.equal(normalizeExtractionReviewResponse({ ...base, mode: "ai", snapshotMode: "merge" }), null)
+  assert.equal(normalizeExtractionReviewResponse({ ...base, mode: "ai", reviewRun: { status: "running", reviewTargeting: { candidateRowIds: "row-1", unreconciled: false } } }), null)
+  assert.equal(normalizeExtractionReviewResponse({ ...base, mode: "ai", proposalStatuses: { p1: { status: "pending", canUndo: false, stale: "no", eligible: true } } }), null)
 })
 
 test("bulk acceptance selects only validated, evidenced, reconciled, high-confidence, non-stale proposals", () => {
@@ -86,6 +91,26 @@ test("row recheck replaces only that source row and preserves unrelated proposal
   assert.equal(state.expandedProposalIds["row-2"], false)
 })
 
+test("durable full-snapshot row recheck replaces active proposals without duplicating stored unrelated rows", () => {
+  const initial = extractionReviewReducer(initialExtractionReviewState(), { type: "review_succeeded", response: response([
+    proposal("old-row-1", "row-1"), proposal("row-2", "row-2"),
+  ], [sourceRow, { ...sourceRow, sourceRowId: "row-2", row: 5 }]) })
+  const storedPostSnapshot = {
+    ...response([proposal("new-row-1", "row-1"), proposal("row-2", "row-2")], [sourceRow, { ...sourceRow, sourceRowId: "row-2", row: 5 }]),
+    snapshotMode: "replace" as const,
+    proposalStatuses: {
+      "new-row-1": { status: "pending" as const, canUndo: false, stale: false, eligible: true },
+      "row-2": { status: "pending" as const, canUndo: false, stale: false, eligible: true },
+    },
+  }
+  const state = extractionReviewReducer(initial, { type: "review_succeeded", sourceRowId: "row-1", response: storedPostSnapshot })
+  assert.deepEqual(state.review?.proposals.map((entry) => entry.id), ["new-row-1", "row-2"])
+  assert.equal(new Set(state.review?.proposals.map((entry) => entry.id)).size, 2)
+  assert.equal(state.review?.sourceRows.length, 2)
+  assert.equal(state.proposalStatuses["old-row-1"], undefined)
+  assert.deepEqual(Object.keys(state.proposalCanUndo).sort(), ["new-row-1", "row-2"])
+})
+
 test("review filters expose pending, accepted, rejected, and needs-attention proposals", () => {
   const proposals = [proposal("pending", "row-1"), proposal("accepted", "row-2"), proposal("rejected", "row-3"), proposal("human", "row-4", "needs_human_review")]
   const statuses = { accepted: "accepted", rejected: "rejected" } as const
@@ -93,6 +118,26 @@ test("review filters expose pending, accepted, rejected, and needs-attention pro
   assert.deepEqual(filterReviewProposals(proposals, statuses, "accepted").map((entry) => entry.id), ["accepted"])
   assert.deepEqual(filterReviewProposals(proposals, statuses, "rejected").map((entry) => entry.id), ["rejected"])
   assert.deepEqual(filterReviewProposals(proposals, statuses, "needs-attention").map((entry) => entry.id), ["human"])
+})
+
+test("source-row filters expose ambiguous, unreconciled, and durable AI-pending rows even without proposals", () => {
+  const review = {
+    ...response([proposal("p1", "row-1")], [sourceRow, { ...sourceRow, sourceRowId: "row-2", confidence: 0.96, warnings: [] }]),
+    remainingCandidateRowIds: ["row-2"],
+    reviewRun: { status: "partial" as const, reviewTargeting: { candidateRowIds: ["row-1", "row-2"], unreconciled: true } },
+  }
+  assert.deepEqual(filterReviewSourceRows(review, "ambiguous").map((row) => row.sourceRowId), ["row-1", "row-2"])
+  assert.deepEqual(filterReviewSourceRows(review, "unreconciled").map((row) => row.sourceRowId), ["row-1", "row-2"])
+  assert.deepEqual(filterReviewSourceRows(review, "ai-pending").map((row) => row.sourceRowId), ["row-2"])
+})
+
+test("automatic dispatch runs only for queued drafts and never loops on durable running or failed states", () => {
+  const base = response([]) as ExtractionReviewResponse & { reviewRun: { status: "queued" | "running" | "failed"; reviewTargeting: { candidateRowIds: string[]; unreconciled: boolean } } }
+  base.reviewRun = { status: "queued", reviewTargeting: { candidateRowIds: ["row-1"], unreconciled: false } }
+  assert.equal(shouldDispatchAutomaticReview(base, false), true)
+  assert.equal(shouldDispatchAutomaticReview({ ...base, reviewRun: { ...base.reviewRun, status: "running" } }, false), false)
+  assert.equal(shouldDispatchAutomaticReview({ ...base, reviewRun: { ...base.reviewRun, status: "failed" } }, false), false)
+  assert.equal(shouldDispatchAutomaticReview(base, true), false)
 })
 
 test("request and proposal mutation state preserve loaded review evidence", () => {

@@ -1256,6 +1256,28 @@
   .review-pdf-col, .review-data-col { overflow: auto; padding: var(--space-3); }
   .review-pdf-col { border-bottom: 1px solid var(--border); }
   .review-resize-handle { display: none; }
+  .pdf-review-viewer { min-width: 0; min-height: 320px; }
+  .unified-boq-table-scroll { overflow: visible; border: 0; background: transparent; }
+  .unified-boq-items-table { display: block; min-width: 0; }
+  .unified-boq-items-table thead { display: none; }
+  .unified-boq-items-table tbody { display: grid; gap: var(--space-3); }
+  .unified-boq-items-table tbody tr { border: 1px solid var(--border); border-radius: var(--radius-brand-sm); background: var(--surface); box-shadow: var(--elev-raised); overflow: hidden; }
+  .unified-boq-items-table tbody tr:not(.unified-boq-section-row) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .unified-boq-items-table tbody tr:not(.unified-boq-section-row) > td { display: grid; grid-template-columns: 88px minmax(0, 1fr); align-items: center; gap: var(--space-1); min-width: 0; padding: var(--space-3); border: 0; border-bottom: 1px solid var(--border-soft); text-align: left; }
+  .unified-boq-items-table tbody tr:not(.unified-boq-section-row) > td::before { content: attr(data-label); color: var(--muted-text); font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+  .unified-boq-items-table tbody tr:not(.unified-boq-section-row) > td > * { grid-column: 2; }
+  .unified-boq-items-table .unified-boq-description-cell,
+  .unified-boq-items-table .unified-boq-catalog-cell { grid-column: 1 / -1; }
+  .unified-boq-items-table .unified-boq-section-row { display: block; box-shadow: none; }
+  .unified-boq-items-table .unified-boq-section-row td { display: block; width: 100%; border: 0; }
+  .review-items-table { display: block; min-width: 0; }
+  .review-items-table thead { display: none; }
+  .review-items-table tbody { display: grid; gap: var(--space-3); }
+  .review-items-table tbody tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: var(--radius-brand-sm); background: var(--surface); overflow: hidden; }
+  .review-items-table tbody td { display: grid; grid-template-columns: 88px minmax(0, 1fr); align-items: center; gap: var(--space-1); min-width: 0; padding: var(--space-3); border: 0; border-bottom: 1px solid var(--border-soft); text-align: left; }
+  .review-items-table tbody td::before { content: attr(data-label); color: var(--muted-text); font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+  .review-items-table tbody td > * { grid-column: 2; }
+  .review-items-table tbody td[data-label="Description"], .review-items-table tbody td[data-label="Catalog"] { grid-column: 1 / -1; }
   .focused-extraction-header { flex-direction: column; }
   .focused-extraction-header .extraction-review-heading-actions { width: 100%; justify-content: flex-start; }
   .extraction-structure-grid { grid-template-columns: minmax(0, 1fr); }
@@ -1269,6 +1291,12 @@
   .extraction-proposal-footer { align-items: stretch; flex-direction: column; position: static; }
   .extraction-proposal-actions { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; }
   .extraction-proposal-actions .btn { width: 100%; }
+  .unified-boq-items-table tbody tr:not(.unified-boq-section-row) { grid-template-columns: minmax(0, 1fr); }
+  .unified-boq-items-table .unified-boq-description-cell,
+  .unified-boq-items-table .unified-boq-catalog-cell { grid-column: auto; }
+  .review-items-table tbody tr { grid-template-columns: minmax(0, 1fr); }
+  .review-items-table tbody td[data-label="Description"], .review-items-table tbody td[data-label="Catalog"] { grid-column: auto; }
+  .pdf-review-viewer { min-width: 280px; }
 }
 
 @media (max-width: 768px) {
@@ -1295,7 +1323,6 @@
   .extraction-proposal-actions { justify-content: flex-end; }
   .extraction-proposal-footer { align-items: flex-start; flex-direction: column; }
   .unified-boq-table-scroll { overflow-x: auto; }
-  .unified-boq-items-table { min-width: 760px; }
   .boq-unified-header { align-items: flex-start; flex-direction: column; }
   .boq-unified-header .review-header-title,
   .boq-unified-actions { width: 100%; }

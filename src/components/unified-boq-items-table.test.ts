@@ -180,10 +180,22 @@ test('renders each section as one full-width row and catalog controls inline wit
   assert.match(html, />Unmatched</)
 })
 
-test('keeps the eight-column table scrollable at split-pane widths without changing the mobile override', () => {
+test('keeps the eight-column table scrollable on desktop and releases its fixed width for mobile cards', () => {
   assert.match(globalsSource, /\.unified-boq-table-scroll\s*\{[^}]*overflow-x:\s*auto;/)
   assert.match(globalsSource, /\.unified-boq-items-table\s*\{[^}]*min-width:\s*900px;/)
-  assert.match(globalsSource, /@media \(max-width:\s*768px\)[\s\S]*?\.unified-boq-items-table\s*\{\s*min-width:\s*760px;/)
+  assert.match(globalsSource, /@media \(max-width: 920px\)[\s\S]*?\.unified-boq-items-table\s*\{[^}]*min-width:\s*0;/)
+  assert.doesNotMatch(globalsSource, /@media \(max-width:\s*768px\)[\s\S]*?\.unified-boq-items-table\s*\{\s*min-width:\s*760px;/)
+})
+
+test('converts BOQ rows to labelled two-column cards at 920px and one-column cards at 520px', () => {
+  assert.match(tableSource, /data-label="Description"/)
+  assert.match(tableSource, /data-label="Material"/)
+  assert.match(tableSource, /data-label="Catalog"/)
+  assert.match(globalsSource, /@media \(max-width: 920px\)[\s\S]*?\.unified-boq-items-table tbody tr:not\(\.unified-boq-section-row\)[\s\S]*?grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/)
+  assert.match(globalsSource, /@media \(max-width: 920px\)[\s\S]*?td \{[^}]*grid-template-columns:\s*88px minmax\(0, 1fr\)/)
+  assert.match(globalsSource, /@media \(max-width: 520px\)[\s\S]*?\.unified-boq-items-table tbody tr:not\(\.unified-boq-section-row\)[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/)
+  assert.match(globalsSource, /@media \(max-width: 920px\)[\s\S]*?\.pdf-review-viewer[^{]*\{[^}]*min-width:\s*0;[^}]*min-height:\s*320px/)
+  assert.match(globalsSource, /@media \(max-width: 520px\)[\s\S]*?\.pdf-review-viewer[^{]*\{[^}]*min-width:\s*280px/)
 })
 
 test('disables only an active catalog row while its suggestion request is in flight', () => {

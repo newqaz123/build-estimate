@@ -3,7 +3,8 @@ import type { ProposalOperation, ValidatedProposal } from "./boq-extraction-prop
 
 export type ExtractionProposalStatus = "accepted" | "rejected" | "undone"
 export type ExtractionProposalStatusMap = Record<string, ExtractionProposalStatus | undefined>
-export type ExtractionReviewFilter = "all" | "pending" | "accepted" | "rejected" | "needs-attention"
+export type ExtractionReviewFilter = "all" | "pending" | "accepted" | "rejected" | "needs-attention" | "ambiguous" | "unreconciled" | "ai-pending"
+export type ExtractionReviewSourceFilter = Extract<ExtractionReviewFilter, "ambiguous" | "unreconciled" | "ai-pending">
 export type ExtractionProposalAction = "accepting" | "rejecting" | "undoing"
 
 export interface ExtractionReviewState {
@@ -58,14 +59,25 @@ function mergeRowReview(current: ExtractionReviewResponse, incoming: ExtractionR
   }
 }
 
+function isReplacementSnapshot(response: ExtractionReviewResponse): boolean {
+  return (response as ExtractionReviewResponse & { snapshotMode?: string }).snapshotMode === "replace"
+}
+
 export function extractionReviewReducer(state: ExtractionReviewState, action: ExtractionReviewAction): ExtractionReviewState {
   switch (action.type) {
     case "review_started":
       return { ...state, loading: true, requestedSourceRowId: action.sourceRowId, error: null }
     case "review_succeeded":
+      const replacementStatuses = isReplacementSnapshot(action.response) ? action.response.proposalStatuses ?? {} : null
       return {
         ...state,
-        review: action.sourceRowId && state.review ? mergeRowReview(state.review, action.response, action.sourceRowId) : action.response,
+        review: action.sourceRowId && state.review && !isReplacementSnapshot(action.response) ? mergeRowReview(state.review, action.response, action.sourceRowId) : action.response,
+        ...(replacementStatuses ? {
+          proposalStatuses: Object.fromEntries(Object.entries(replacementStatuses)
+            .map(([id, summary]) => [id, summary.status === "pending" ? undefined : summary.status])),
+          proposalCanUndo: Object.fromEntries(Object.entries(replacementStatuses).map(([id, summary]) => [id, summary.canUndo])),
+          proposalActions: {},
+        } : {}),
         loading: false,
         requestedSourceRowId: undefined,
         error: null,
@@ -104,7 +116,7 @@ export function filterReviewProposals(
   statuses: ExtractionProposalStatusMap,
   filter: ExtractionReviewFilter,
 ): ValidatedProposal[] {
-  if (filter === "all") return [...proposals]
+  if (filter === "all" || filter === "ambiguous" || filter === "unreconciled" || filter === "ai-pending") return [...proposals]
   return proposals.filter((proposal) => {
     const status = statuses[proposal.id]
     if (filter === "pending") return !status && proposal.operation !== "needs_human_review"
@@ -112,6 +124,31 @@ export function filterReviewProposals(
     if (filter === "rejected") return status === "rejected"
     return proposal.operation === "needs_human_review" || proposal.stale || !proposal.evidenceValid || !proposal.reconciled
   })
+}
+
+type ReviewWithRunState = ExtractionReviewResponse & {
+  reviewRun?: {
+    status: string
+    reviewTargeting: { candidateRowIds: string[]; unreconciled: boolean }
+  }
+}
+
+export function filterReviewSourceRows(review: ReviewWithRunState, filter: ExtractionReviewSourceFilter) {
+  const candidateIds = new Set(review.reviewRun?.reviewTargeting.candidateRowIds ?? review.sourceRows
+    .filter((row) => row.confidence < 0.9 || row.warnings.length > 0 || ["continuation", "option", "unknown"].includes(row.classification))
+    .map((row) => row.sourceRowId))
+  if (filter === "ambiguous") return review.sourceRows.filter((row) => candidateIds.has(row.sourceRowId))
+  if (filter === "unreconciled") return review.reviewRun?.reviewTargeting.unreconciled ? [...review.sourceRows] : []
+  const pendingIds = new Set(review.remainingCandidateRowIds)
+  if (["queued", "running"].includes(review.reviewRun?.status ?? "")) candidateIds.forEach((id) => pendingIds.add(id))
+  return review.sourceRows.filter((row) => pendingIds.has(row.sourceRowId))
+}
+
+export function shouldDispatchAutomaticReview(review: ExtractionReviewResponse, readOnly: boolean): boolean {
+  if (readOnly) return false
+  const status = (review as ReviewWithRunState).reviewRun?.status
+  if (status) return status === "queued"
+  return review.proposals.length === 0
 }
 
 type BulkProposal = {
@@ -151,17 +188,30 @@ function validProposalStatuses(value: unknown): boolean {
   if (!isRecord(value)) return false
   return Object.values(value).every((summary) => isRecord(summary)
     && ["pending", "accepted", "rejected", "undone"].includes(String(summary.status))
-    && typeof summary.canUndo === "boolean")
+    && typeof summary.canUndo === "boolean"
+    && (summary.stale === undefined || typeof summary.stale === "boolean")
+    && (summary.eligible === undefined || typeof summary.eligible === "boolean"))
+}
+
+function validReviewRun(value: unknown): boolean {
+  if (value === undefined) return true
+  if (!isRecord(value) || !["queued", "running", "completed", "partial", "failed"].includes(String(value.status))) return false
+  if (!isRecord(value.reviewTargeting) || !isStringArray(value.reviewTargeting.candidateRowIds)
+    || typeof value.reviewTargeting.unreconciled !== "boolean") return false
+  return ["requestKey", "leaseId", "leaseExpiresAt", "failureCode", "retryAfter", "updatedAt"]
+    .every((key) => value[key] === undefined || typeof value[key] === "string")
 }
 
 /** Rejects malformed client payloads instead of allowing a partial provider response into review state. */
 export function normalizeExtractionReviewResponse(value: unknown): ExtractionReviewResponse | null {
   if (!isRecord(value) || !["ai", "fallback", "not_required"].includes(String(value.mode))) return null
+  if (value.snapshotMode !== undefined && value.snapshotMode !== "replace") return null
   if (typeof value.aiStatus !== "string" || typeof value.message !== "string") return null
   if (!isStringArray(value.sourceRowIds) || !isStringArray(value.remainingCandidateRowIds)) return null
   if (!Array.isArray(value.sourceRefs) || !Array.isArray(value.sourceRows) || !value.sourceRows.every(isSourceRow)) return null
   if (!Array.isArray(value.proposals) || !Array.isArray(value.rejectedProposals)) return null
-  if (!validProposalStatuses(value.proposalStatuses) || (value.auditEvents !== undefined && !Array.isArray(value.auditEvents))) return null
+  if (!validProposalStatuses(value.proposalStatuses) || !validReviewRun(value.reviewRun)
+    || (value.auditEvents !== undefined && !Array.isArray(value.auditEvents))) return null
   return value as unknown as ExtractionReviewResponse
 }
 

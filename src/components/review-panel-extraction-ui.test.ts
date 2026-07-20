@@ -7,6 +7,9 @@ const extractionSource = readFileSync(new URL('./extraction-review.tsx', import.
 
 test('the review panel keeps compound evidence and accepted suggestions visibly auditable', () => {
   assert.match(source, /<ExtractionReview/)
+  assert.match(source, /<PdfReviewViewer/)
+  assert.match(source, /requestedPage=\{pdfPageRequest\.page\}/)
+  assert.match(source, /onNavigateToPage=\{\(page\) => setPdfPageRequest/)
   assert.match(extractionSource, /data-od-id="focused-extraction-review"/)
   assert.match(extractionSource, /Current BOQ structure/)
   assert.match(extractionSource, /Informational child · no second total/)
@@ -26,7 +29,24 @@ test('the review panel requires deliberate accept/reject actions and supports sa
 
 test('the review panel offers a user-entered missing-item path without manufacturing a source price', () => {
   assert.match(source, /Add missing item/)
-  assert.match(source, /entryOrigin: "user"/)
-  assert.match(source, /sourceRowIds: \[\]/)
+  assert.match(source, /\/items`, \{[\s\S]{0,100}method: "POST"/)
+  assert.doesNotMatch(source, /setItems\(\(current\) => \[\.\.\.current, \{/)
+  assert.match(source, /current\.some\(\(item\) => item\.id === added\.id\)[\s\S]*?\[\.\.\.current, added\]/)
   assert.match(source, /New items are user-entered and remain unpriced until you add a rate\./)
+})
+
+test('compare review can include an excluded optional row through the canonical audited endpoint', () => {
+  assert.match(source, /handleIncludeOptional/)
+  assert.match(source, /excludedFromTotal: false/)
+  assert.match(source, /method: "PATCH"/)
+  assert.match(source, /Include in total/)
+  assert.match(source, /current\.map\(\(candidate, index\) => index === itemIndex/)
+})
+
+test('compare review rows use the same labelled two-column and single-column mobile card handoff', () => {
+  const css = readFileSync(new URL('../app/globals.css', import.meta.url), 'utf8')
+  assert.match(source, /data-label="Description"/)
+  assert.match(source, /data-label="Material"/)
+  assert.match(css, /@media \(max-width: 920px\)[\s\S]*?\.review-items-table tbody tr[^{]*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/)
+  assert.match(css, /@media \(max-width: 520px\)[\s\S]*?\.review-items-table tbody tr[^{]*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/)
 })
