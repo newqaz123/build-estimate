@@ -1,6 +1,7 @@
 import { auth } from '@/lib/auth'
 import { getDocument, getDb } from '@/lib/db'
 import type { Boq } from '@/lib/boq-schema'
+import type { WorkspaceSettings } from '@/lib/settings-schema'
 import { loadSourcePdf } from '@/lib/boq-source-storage'
 import { parsePdfWithDocling } from '@/lib/docling-client'
 import { createFirestoreReextractionPersistence } from '@/lib/boq-reextract-persistence'
@@ -15,7 +16,10 @@ const handler = createReextractHandler({
   parsePdfWithDocling: (file, endpoint) => parsePdfWithDocling(file, endpoint),
   createRunId: () => crypto.randomUUID(),
   now: () => new Date(),
-  get endpoint() { return DEFAULT_DOCLING_ENDPOINT },
+  getEndpoint: async () => {
+    const settings = await getDocument<WorkspaceSettings>('settings', 'workspace')
+    return settings?.docling?.endpoint?.trim() || DEFAULT_DOCLING_ENDPOINT
+  },
   persistRun: (input) => createFirestoreReextractionPersistence(getDb())(input),
 })
 

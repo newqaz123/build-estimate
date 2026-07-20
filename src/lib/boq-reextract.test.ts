@@ -30,7 +30,7 @@ function dependencies(overrides: Partial<ReextractDependencies> = {}): Reextract
     parsePdfWithDocling: async () => parsed,
     createRunId: () => 'run-reextracted',
     now: () => new Date('2026-07-20T10:00:00.000Z'),
-    endpoint: 'http://docling.test',
+    getEndpoint: async () => 'http://docling.test',
     persistRun: async (input) => ({ ...input.run, status: 'ready' } as BoqExtractionRun),
     ...overrides,
   }
@@ -45,6 +45,19 @@ test('re-extraction persists a new immutable run without changing saved BOQ edit
   assert.notEqual(result.run.id, before.activeExtractionRunId)
   assert.ok(persisted)
   assert.equal((persisted as BoqExtractionRun).boqId, 'boq-1')
+})
+
+test('re-extraction resolves the current workspace Docling endpoint before parsing', async () => {
+  let parsedEndpoint = ''
+  const result = await reextractBoqSource('boq-1', dependencies({
+    getEndpoint: async () => 'http://docling-v3.test',
+    parsePdfWithDocling: async (_file, endpoint) => {
+      parsedEndpoint = endpoint
+      return parsed
+    },
+  }))
+  assert.equal(parsedEndpoint, 'http://docling-v3.test')
+  assert.equal(result.run.parser.configFingerprint.length > 0, true)
 })
 
 test('re-extraction requires a retained source and a v3 parse without mutating canonical data', async () => {

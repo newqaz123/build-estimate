@@ -9,7 +9,7 @@ function deps(overrides: Partial<ReextractHandlerDependencies> = {}): ReextractH
     getBoq: async () => null,
     loadSource: async () => new Uint8Array(),
     parsePdfWithDocling: async () => ({ contractVersion: 2 }) as never,
-    createRunId: () => 'run-1', now: () => new Date(), endpoint: 'http://docling.test',
+    createRunId: () => 'run-1', now: () => new Date(), getEndpoint: async () => 'http://docling.test',
     persistRun: async () => { throw new Error('not called') },
     ...overrides,
   }

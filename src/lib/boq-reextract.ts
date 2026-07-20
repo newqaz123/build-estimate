@@ -16,7 +16,7 @@ export interface ReextractDependencies {
   parsePdfWithDocling(file: File, endpoint: string): Promise<DoclingResult>
   createRunId(): string
   now(): Date
-  endpoint: string
+  getEndpoint(): Promise<string>
   /** Persists only immutable run evidence; it must never write the canonical BOQ. */
   persistRun(input: { run: BoqExtractionRun; rows: readonly BoqSourceRowV3[] }): Promise<BoqExtractionRun>
 }
@@ -37,14 +37,15 @@ export async function reextractBoqSource(boqId: string, dependencies: ReextractD
   const name = canonicalBoq.sourceFileName?.trim() || 'source.pdf'
   const sourceBytes = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
   const source = new File([sourceBytes], name, { type: 'application/pdf' })
-  const parsed = await dependencies.parsePdfWithDocling(source, dependencies.endpoint)
+  const endpoint = await dependencies.getEndpoint()
+  const parsed = await dependencies.parsePdfWithDocling(source, endpoint)
   if (parsed.contractVersion !== 3) throw new ReextractError('v3_required')
   const draft = buildDraftImport(boqId, canonicalBoq.sourceStoragePath, parsed, dependencies.createRunId())
   if (!draft.run) throw new ReextractError('v3_required')
   const run = buildExtractionRun({
     seed: draft.run,
     sourceDigest: digestBytes(bytes),
-    parserConfigFingerprint: fingerprintParserConfig({ endpoint: dependencies.endpoint, contractVersion: 3 }),
+    parserConfigFingerprint: fingerprintParserConfig({ endpoint, contractVersion: 3 }),
     now: dependencies.now(),
   })
   let persisted: BoqExtractionRun
