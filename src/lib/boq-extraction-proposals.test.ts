@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { BoqSection } from './boq-schema'
+import type { BoqPricedItem, BoqSection } from './boq-schema'
 import {
   applyValidatedProposal,
   fingerprintCanonicalItem,
@@ -72,7 +72,34 @@ test('accept then undo round-trips canonical sections', () => {
 
   const accepted = applyValidatedProposal(sections, proposal.proposal)
   assert.deepEqual(accepted.sections[0].items.map((item) => item.id), ['pump-material', 'pump-labour', 'pump-accessory'])
+  assert.deepEqual((accepted.sections[0].items[0] as BoqPricedItem).costAllocation, {
+    basis: 'rate', material: 40, labour: 0, origin: 'source',
+  })
+  assert.deepEqual((accepted.sections[0].items[1] as BoqPricedItem).costAllocation, {
+    basis: 'rate', material: 0, labour: 60, origin: 'source',
+  })
   assert.deepEqual(undoAcceptedProposal(accepted.sections, accepted.audit), sections)
+})
+
+test('does not persist component allocation for a generic split without component evidence', () => {
+  const aggregateOnlyContext = context({
+    sourceEvidence: { 'row-combined': { quotedTotal: 100 }, 'row-extra': { quotedTotal: 20 } },
+  })
+  const split = validateProposal({
+    id: 'split-with-labels', extractionRunId: 'run-1', operation: 'split', sourceRowIds: ['row-combined'], targetItemIds: ['combined-work'],
+    affectedItemFingerprints: { 'combined-work': fingerprintCanonicalItem(sections[0].items[0]) },
+    confidence: 0.91, explanation: 'Two aggregate children with no component price evidence.',
+    proposedItems: [
+      { id: 'split-material', desc: 'Labelled material', pricingRole: 'standard', sourceRowIds: ['row-combined'], entryOrigin: 'ai_accepted', unit: 'set', qty: 1, rate: 40, total: 40, costComponent: 'material' },
+      { id: 'split-labour', desc: 'Labelled labour', pricingRole: 'standard', sourceRowIds: ['row-combined'], entryOrigin: 'ai_accepted', unit: 'set', qty: 1, rate: 60, total: 60, costComponent: 'labour' },
+    ],
+  }, aggregateOnlyContext)
+  assert.equal(split.valid, true)
+  if (!split.valid) return
+
+  const accepted = applyValidatedProposal(sections, split.proposal)
+  assert.equal('costAllocation' in accepted.sections[0].items[0], false)
+  assert.equal('costAllocation' in accepted.sections[0].items[1], false)
 })
 
 test('rejects aggregate-price allocation without source component prices', () => {

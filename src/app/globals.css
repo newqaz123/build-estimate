@@ -1110,8 +1110,8 @@
 .review-optional-state { display: block; margin-top: 3px; color: #9a6b00; font-family: var(--font-body); font-size: 9px; font-weight: 600; white-space: nowrap; }
 .review-std-badge.matched { background: color-mix(in oklab, #006400 12%, transparent); color: #006400; }
 .review-std-badge.unmatched { background: color-mix(in oklab, #dc2626 10%, transparent); color: #b91c1c; }
-.unified-boq-table-scroll { overflow: visible; border: 1px solid var(--border); border-radius: var(--radius-sm); }
-.unified-boq-items-table { width: 100%; table-layout: fixed; border-collapse: separate; border-spacing: 0; font-size: 12px; }
+.unified-boq-table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.unified-boq-items-table { width: 100%; min-width: 900px; table-layout: fixed; border-collapse: separate; border-spacing: 0; font-size: 12px; }
 .unified-boq-items-table th { padding: var(--space-2); border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--muted) 50%, transparent); color: var(--fg-2); font-weight: 600; text-align: left; }
 .unified-boq-items-table td { padding: var(--space-1); border-bottom: 1px solid var(--border); vertical-align: top; }
 .unified-boq-items-table tbody tr:last-child td { border-bottom: 0; }

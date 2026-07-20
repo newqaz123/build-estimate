@@ -9,6 +9,7 @@ import type { InlineCatalogRowState } from './use-inline-catalog-matching'
 import { UnifiedBoqItemsTable } from './unified-boq-items-table'
 
 const tableSource = readFileSync(new URL('./unified-boq-items-table.tsx', import.meta.url), 'utf8')
+const globalsSource = readFileSync(new URL('../app/globals.css', import.meta.url), 'utf8')
 
 function item(overrides: Partial<BoqPricedItem> = {}): BoqPricedItem {
   return {
@@ -169,6 +170,12 @@ test('renders each section as one full-width row and catalog controls inline wit
   assert.match(html, /class="unified-boq-section-row"[\s\S]*?<td colSpan="8">ON-OFF VALVE INSTALLATION<\/td>/)
   assert.match(html, /data-od-id="inline-catalog-section:0:id:item-1"/)
   assert.match(html, />Unmatched</)
+})
+
+test('keeps the eight-column table scrollable at split-pane widths without changing the mobile override', () => {
+  assert.match(globalsSource, /\.unified-boq-table-scroll\s*\{[^}]*overflow-x:\s*auto;/)
+  assert.match(globalsSource, /\.unified-boq-items-table\s*\{[^}]*min-width:\s*900px;/)
+  assert.match(globalsSource, /@media \(max-width:\s*768px\)[\s\S]*?\.unified-boq-items-table\s*\{\s*min-width:\s*760px;/)
 })
 
 test('disables only an active catalog row while its suggestion request is in flight', () => {

@@ -443,7 +443,7 @@ export function isHighConfidenceProposal(proposal: ValidatedProposal): boolean {
     && proposal.stale !== true
 }
 
-function toCanonicalItem(item: ProposedExtractionItem): BoqItem {
+function toCanonicalItem(item: ProposedExtractionItem, operation: ProposalOperation): BoqItem {
   const common = {
     id: item.id,
     desc: item.desc,
@@ -466,6 +466,12 @@ function toCanonicalItem(item: ProposedExtractionItem): BoqItem {
     total: item.total,
     type: item.costComponent === 'lump_sum' ? 'lump_sum' : 'unit',
     costComponent: item.costComponent,
+    ...(operation === 'separate_components' && item.costComponent === 'material' ? {
+      costAllocation: { basis: 'rate' as const, material: item.rate, labour: 0, origin: 'source' as const },
+    } : {}),
+    ...(operation === 'separate_components' && item.costComponent === 'labour' ? {
+      costAllocation: { basis: 'rate' as const, material: 0, labour: item.rate, origin: 'source' as const },
+    } : {}),
     stdStatus: item.excludedFromTotal === true ? 'excluded' : 'unmatched',
   }
   return priced
@@ -498,7 +504,9 @@ export function applyValidatedProposal(
   const nextItems = proposal.operation === 'keep'
     ? [...beforeSections[sectionIndex].items]
     : beforeSections[sectionIndex].items.filter((item) => !targetIds.has(item.id ?? ''))
-  if (proposal.operation !== 'keep') nextItems.splice(insertAt, 0, ...proposal.proposedItems.map(toCanonicalItem))
+  if (proposal.operation !== 'keep') {
+    nextItems.splice(insertAt, 0, ...proposal.proposedItems.map((item) => toCanonicalItem(item, proposal.operation)))
+  }
   const nextSections = beforeSections.map((section, index) => index === sectionIndex ? { ...section, items: nextItems } : section)
   const audit: ProposalAcceptanceAudit = {
     proposalId: proposal.id,
