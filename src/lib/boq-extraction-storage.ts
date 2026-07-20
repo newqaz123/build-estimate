@@ -443,11 +443,24 @@ export function createFirestoreExtractionStore(
       try {
         for (const collectionName of ['sourceRows', 'sectionSnapshots']) {
           while (true) {
-            const page = await extractionRef.collection(collectionName).limit(SOURCE_ROW_BATCH_SIZE).get()
-            if (page.empty) break
-            const batch = db.batch()
-            page.docs.forEach((doc) => batch.delete(doc.ref))
-            await batch.commit()
+            const hasMore = await db.runTransaction(async (transaction) => {
+              const [storedRun, storedBoq] = await Promise.all([
+                transaction.get(extractionRef), transaction.get(boqRef),
+              ])
+              const runData = storedRun.data()
+              if (!storedRun.exists || storedBoq.exists || runData?.status !== 'staging'
+                || runData.cleanupState !== 'deleting' || runData.cleanupToken !== cleanupToken) {
+                throw new Error('Extraction cleanup lease lost')
+              }
+              const page = await transaction.get(extractionRef.collection(collectionName).limit(SOURCE_ROW_BATCH_SIZE))
+              if (page.empty) return false
+              page.docs.forEach((doc) => transaction.delete(doc.ref))
+              transaction.update(extractionRef, {
+                cleanupLeaseExpiresAt: new Date(now().getTime() + CLEANUP_LEASE_MS).toISOString(),
+              })
+              return true
+            })
+            if (!hasMore) break
           }
         }
         return await db.runTransaction(async (transaction) => {
