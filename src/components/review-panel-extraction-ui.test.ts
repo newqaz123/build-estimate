@@ -27,6 +27,13 @@ test('the review panel requires deliberate accept/reject actions and supports sa
   assert.match(extractionSource, /Recheck with AI/)
 })
 
+test('the extraction review recovers expired durable leases once while live leases continue polling', () => {
+  assert.match(extractionSource, /extractionReviewRefreshAction/)
+  assert.match(extractionSource, /refreshAction === "dispatch"/)
+  assert.match(extractionSource, /recoveryAttemptRef\.current/)
+  assert.match(extractionSource, /refreshAction !== "poll"/)
+})
+
 test('the review panel offers a user-entered missing-item path without manufacturing a source price', () => {
   assert.match(source, /Add missing item/)
   assert.match(source, /\/items`, \{[\s\S]{0,100}method: "POST"/)

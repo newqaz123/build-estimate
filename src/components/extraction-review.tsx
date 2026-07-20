@@ -18,12 +18,12 @@ import { Button } from "@/components/ui/button"
 import type { ExtractionReviewResponse, ExtractionReviewSourceRow } from "@/lib/boq-extraction-ai-review"
 import {
   acceptAllValidatedProposalIds,
+  extractionReviewRefreshAction,
   extractionReviewReducer,
   filterReviewProposals,
   filterReviewSourceRows,
   initialExtractionReviewState,
   normalizeExtractionReviewResponse,
-  shouldDispatchAutomaticReview,
   type ExtractionProposalAction,
   type ExtractionReviewFilter,
 } from "@/lib/boq-extraction-review-state"
@@ -38,11 +38,6 @@ interface ExtractionReviewProps {
   onNavigateToPage: (page: number) => void
   sourceAvailable: boolean
   readOnly?: boolean
-}
-
-type DurableReviewResponse = ExtractionReviewResponse & {
-  snapshotMode?: "replace"
-  reviewRun?: { status: "queued" | "running" | "completed" | "partial" | "failed" }
 }
 
 async function readError(response: Response, fallback: string): Promise<string> {
@@ -138,6 +133,7 @@ export function ExtractionReview({ boq, onBack, onBoqChange, onNavigateToPage, s
   const [state, dispatch] = useReducer(extractionReviewReducer, undefined, initialExtractionReviewState)
   const [reextracting, setReextracting] = useState(false)
   const autoReviewedRunRef = useRef<string | null>(null)
+  const recoveryAttemptRef = useRef<string | null>(null)
   const { review, loading, error, proposalActions: actions, proposalStatuses: statuses } = state
 
   const runReview = useCallback(async (sourceRowId?: string) => {
@@ -158,7 +154,7 @@ export function ExtractionReview({ boq, onBack, onBoqChange, onNavigateToPage, s
       dispatch({ type: "review_succeeded", response: normalized, sourceRowId })
       if (normalized.proposalStatuses) dispatch({ type: "proposal_statuses", statuses: normalized.proposalStatuses })
       if (normalized.mode === "fallback") toast.warning(normalized.message)
-      return normalized as DurableReviewResponse
+      return normalized
     } catch (cause) {
       dispatch({ type: "review_failed", error: cause instanceof Error ? cause.message : "AI extraction review could not be completed. The imported BOQ remains unchanged." })
       return null
@@ -180,9 +176,12 @@ export function ExtractionReview({ boq, onBack, onBoqChange, onNavigateToPage, s
         }
         const normalized = normalizeExtractionReviewResponse(await response.json())
         if (!normalized) throw new Error("Saved extraction review returned an unsupported response.")
+        const refreshAction = extractionReviewRefreshAction(normalized, readOnly)
+        const recoveryKey = `${extractionRunId}:${normalized.reviewRun?.status ?? "legacy"}:${normalized.reviewRun?.requestKey ?? ""}:${normalized.reviewRun?.leaseExpiresAt ?? "missing"}`
+        if (refreshAction === "dispatch") recoveryAttemptRef.current = recoveryKey
         dispatch({ type: "review_succeeded", response: normalized })
         if (normalized.proposalStatuses) dispatch({ type: "proposal_statuses", statuses: normalized.proposalStatuses })
-        if (shouldDispatchAutomaticReview(normalized, readOnly)) void runReview()
+        if (refreshAction === "dispatch") void runReview()
       } catch (cause) {
         if (active) dispatch({ type: "review_failed", error: cause instanceof Error ? cause.message : "Saved extraction review could not be loaded." })
       }
@@ -191,8 +190,17 @@ export function ExtractionReview({ boq, onBack, onBoqChange, onNavigateToPage, s
   }, [boq.id, extractionRunId, readOnly, runReview])
 
   useEffect(() => {
-    const durable = review as DurableReviewResponse | null
-    if (!extractionRunId || durable?.reviewRun?.status !== "running") return
+    if (!extractionRunId || !review) return
+    const refreshAction = extractionReviewRefreshAction(review, readOnly)
+    const recoveryKey = `${extractionRunId}:${review.reviewRun?.status ?? "legacy"}:${review.reviewRun?.requestKey ?? ""}:${review.reviewRun?.leaseExpiresAt ?? "missing"}`
+    if (refreshAction === "dispatch") {
+      if (recoveryAttemptRef.current === recoveryKey) return
+      recoveryAttemptRef.current = recoveryKey
+      void runReview()
+      return
+    }
+    if (refreshAction !== "poll") return
+    recoveryAttemptRef.current = null
     let active = true
     const timer = window.setTimeout(() => {
       void fetch(`/api/boqs/${encodeURIComponent(boq.id)}/extraction-runs/${encodeURIComponent(extractionRunId)}/review`)
@@ -210,7 +218,7 @@ export function ExtractionReview({ boq, onBack, onBoqChange, onNavigateToPage, s
         })
     }, 1_000)
     return () => { active = false; window.clearTimeout(timer) }
-  }, [boq.id, extractionRunId, review])
+  }, [boq.id, extractionRunId, readOnly, review, runReview])
 
   const executeAction = useCallback(async (proposal: ValidatedProposal, action: "accept" | "reject" | "undo") => {
     if (!extractionRunId) return false
@@ -271,7 +279,7 @@ export function ExtractionReview({ boq, onBack, onBoqChange, onNavigateToPage, s
     }
   }
 
-  const reviewRunStatus = (review as DurableReviewResponse | null)?.reviewRun?.status
+  const reviewRunStatus = review?.reviewRun?.status
   const busy = loading || reextracting || reviewRunStatus === "running" || Object.values(actions).some(Boolean)
   const filteredSourceRows = useMemo(() => review && ["ambiguous", "unreconciled", "ai-pending"].includes(state.filter)
     ? filterReviewSourceRows(review, state.filter as "ambiguous" | "unreconciled" | "ai-pending") : [], [review, state.filter])

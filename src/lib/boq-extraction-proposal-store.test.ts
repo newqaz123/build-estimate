@@ -324,6 +324,25 @@ test('review leases serialize dispatch, recover after expiry, and persist comple
   assert.equal((await fixture.store.acquireReviewLease('boq-1', 'run-1', 'request-1', 'lease-4', 1_000, false)).kind, 'complete')
 })
 
+test('review leases preserve reason-specific targeting through completion and reload', async () => {
+  const fixture = harness()
+  fixture.db.docs.get(fixture.runPath)!.reviewTargeting = {
+    candidateRowIds: ['row-compound', 'row-ambiguous', 'row-unreconciled'], candidateCount: 3,
+    ambiguousRowIds: ['row-ambiguous'], unreconciledRowIds: ['row-unreconciled'], unreconciled: true,
+  }
+
+  const acquired = await fixture.store.acquireReviewLease('boq-1', 'run-1', 'request-1', 'lease-1', 1_000, false)
+  assert.deepEqual(acquired.reviewRun.reviewTargeting, {
+    candidateRowIds: ['row-compound', 'row-ambiguous', 'row-unreconciled'],
+    ambiguousRowIds: ['row-ambiguous'], unreconciledRowIds: ['row-unreconciled'], unreconciled: true,
+  })
+  await fixture.store.completeReviewLease('boq-1', 'run-1', 'lease-1', 'completed', [])
+  assert.deepEqual((await fixture.store.getReviewState('boq-1', 'run-1'))?.reviewRun.reviewTargeting, {
+    candidateRowIds: ['row-compound', 'row-ambiguous', 'row-unreconciled'],
+    ambiguousRowIds: ['row-ambiguous'], unreconciledRowIds: ['row-unreconciled'], unreconciled: true,
+  })
+})
+
 test('durable review failure prevents immediate automatic retry but permits retry after backoff', async () => {
   let current = new Date('2026-07-20T12:00:00.000Z')
   const fixture = harness(() => current)

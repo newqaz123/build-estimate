@@ -129,26 +129,47 @@ export function filterReviewProposals(
 type ReviewWithRunState = ExtractionReviewResponse & {
   reviewRun?: {
     status: string
-    reviewTargeting: { candidateRowIds: string[]; unreconciled: boolean }
+    reviewTargeting: {
+      candidateRowIds: string[]
+      ambiguousRowIds?: string[]
+      unreconciledRowIds?: string[]
+      unreconciled: boolean
+    }
   }
 }
 
 export function filterReviewSourceRows(review: ReviewWithRunState, filter: ExtractionReviewSourceFilter) {
-  const candidateIds = new Set(review.reviewRun?.reviewTargeting.candidateRowIds ?? review.sourceRows
+  const targeting = review.reviewRun?.reviewTargeting
+  const candidateIds = new Set(targeting?.candidateRowIds ?? review.sourceRows
     .filter((row) => row.confidence < 0.9 || row.warnings.length > 0 || ["continuation", "option", "unknown"].includes(row.classification))
     .map((row) => row.sourceRowId))
-  if (filter === "ambiguous") return review.sourceRows.filter((row) => candidateIds.has(row.sourceRowId))
-  if (filter === "unreconciled") return review.reviewRun?.reviewTargeting.unreconciled ? [...review.sourceRows] : []
+  const ambiguousIds = new Set(targeting?.ambiguousRowIds ?? review.sourceRows
+    .filter((row) => row.confidence < 0.9 || row.classification === "unknown"
+      || row.warnings.some((warning) => /ambiguous|unsupported|incomplete|invalid_numeric|numeric_overflow/.test(warning.code)))
+    .map((row) => row.sourceRowId))
+  const unreconciledIds = new Set(targeting?.unreconciledRowIds ?? [])
+  if (filter === "ambiguous") return review.sourceRows.filter((row) => ambiguousIds.has(row.sourceRowId))
+  if (filter === "unreconciled") return review.sourceRows.filter((row) => unreconciledIds.has(row.sourceRowId))
   const pendingIds = new Set(review.remainingCandidateRowIds)
   if (["queued", "running"].includes(review.reviewRun?.status ?? "")) candidateIds.forEach((id) => pendingIds.add(id))
   return review.sourceRows.filter((row) => pendingIds.has(row.sourceRowId))
 }
 
-export function shouldDispatchAutomaticReview(review: ExtractionReviewResponse, readOnly: boolean): boolean {
-  if (readOnly) return false
+export type ExtractionReviewRefreshAction = "dispatch" | "poll" | "idle"
+
+export function extractionReviewRefreshAction(
+  review: ExtractionReviewResponse,
+  readOnly: boolean,
+  now = Date.now(),
+): ExtractionReviewRefreshAction {
   const status = (review as ReviewWithRunState).reviewRun?.status
-  if (status) return status === "queued"
-  return review.proposals.length === 0
+  if (!status) return !readOnly && review.proposals.length === 0 ? "dispatch" : "idle"
+  if (status === "queued") return readOnly ? "idle" : "dispatch"
+  if (status !== "running") return "idle"
+  const leaseExpiresAt = review.reviewRun?.leaseExpiresAt
+  const expiry = typeof leaseExpiresAt === "string" ? Date.parse(leaseExpiresAt) : Number.NaN
+  if (Number.isFinite(expiry) && expiry > now) return "poll"
+  return readOnly ? "idle" : "dispatch"
 }
 
 type BulkProposal = {
@@ -197,6 +218,8 @@ function validReviewRun(value: unknown): boolean {
   if (value === undefined) return true
   if (!isRecord(value) || !["queued", "running", "completed", "partial", "failed"].includes(String(value.status))) return false
   if (!isRecord(value.reviewTargeting) || !isStringArray(value.reviewTargeting.candidateRowIds)
+    || (value.reviewTargeting.ambiguousRowIds !== undefined && !isStringArray(value.reviewTargeting.ambiguousRowIds))
+    || (value.reviewTargeting.unreconciledRowIds !== undefined && !isStringArray(value.reviewTargeting.unreconciledRowIds))
     || typeof value.reviewTargeting.unreconciled !== "boolean") return false
   return ["requestKey", "leaseId", "leaseExpiresAt", "failureCode", "retryAfter", "updatedAt"]
     .every((key) => value[key] === undefined || typeof value[key] === "string")

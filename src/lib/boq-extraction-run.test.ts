@@ -62,6 +62,37 @@ test('clean reconciled extraction without ambiguous evidence needs no AI review'
   assert.equal(run.aiReviewStatus, 'not_required')
 })
 
+test('review targeting preserves distinct compound, ambiguous, and row reconciliation reasons', () => {
+  const payload = v3Fixture()
+  const sourceRows = payload.sourceRows as Array<Record<string, unknown>>
+  Object.assign(sourceRows[0]!, { classification: 'continuation', confidence: 0.98, warnings: [] })
+  Object.assign(sourceRows[1]!, { classification: 'item', confidence: 0.72, warnings: [] })
+  Object.assign(sourceRows[2]!, { classification: 'item', confidence: 0.98, warnings: [] })
+  Object.assign(sourceRows[3]!, {
+    classification: 'item', confidence: 0.98,
+    warnings: [{ code: 'section_total_mismatch', message: 'Section total does not reconcile.' }],
+  })
+  payload.warnings = [
+    { code: 'section_total_mismatch', message: 'Section total does not reconcile.', sourceRef: { page: 1, table: 1, row: 4 } },
+    { code: 'document_total_mismatch', message: 'Document total does not reconcile.' },
+  ]
+  payload.sourceTotal = 95_301
+  payload.reconciliation = { itemTotal: 95_300, sourceTotal: 95_301, reconciled: false, difference: -1 }
+
+  const parsed = parseDoclingResult(payload)
+  assert.equal(parsed.contractVersion, 3)
+  const draft = buildDraftImport('boq-1', 'source.pdf', parsed, 'run-1')
+  const run = buildExtractionRun({
+    seed: draft.run!, sourceDigest: 'digest', parserConfigFingerprint: 'config',
+    now: new Date('2026-07-19T00:00:00Z'),
+  })
+
+  assert.deepEqual(run.reviewTargeting.candidateRowIds, ['row-1', 'row-2', 'row-4'])
+  assert.deepEqual(run.reviewTargeting.ambiguousRowIds, ['row-2'])
+  assert.deepEqual(run.reviewTargeting.unreconciledRowIds, ['row-4'])
+  assert.equal(run.reviewTargeting.unreconciled, true)
+})
+
 test('extraction identity changes when immutable source or parser metadata changes', () => {
   const parsed = parseDoclingResult(v3Fixture())
   const draft = buildDraftImport('boq-1', 'source.pdf', parsed, 'run-1')

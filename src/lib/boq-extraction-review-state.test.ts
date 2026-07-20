@@ -8,7 +8,7 @@ import {
   filterReviewSourceRows,
   initialExtractionReviewState,
   normalizeExtractionReviewResponse,
-  shouldDispatchAutomaticReview,
+  extractionReviewRefreshAction,
 } from "./boq-extraction-review-state"
 import type { ExtractionReviewResponse } from "./boq-extraction-ai-review"
 import type { ProposalOperation, ValidatedProposal } from "./boq-extraction-proposals"
@@ -47,6 +47,7 @@ test("normalizes AI, fallback, and not-required review responses without trustin
   assert.equal(normalizeExtractionReviewResponse({ ...base, mode: "ai", proposalStatuses: { p1: { status: "accepted", canUndo: "yes" } } }), null)
   assert.equal(normalizeExtractionReviewResponse({ ...base, mode: "ai", snapshotMode: "merge" }), null)
   assert.equal(normalizeExtractionReviewResponse({ ...base, mode: "ai", reviewRun: { status: "running", reviewTargeting: { candidateRowIds: "row-1", unreconciled: false } } }), null)
+  assert.equal(normalizeExtractionReviewResponse({ ...base, mode: "ai", reviewRun: { status: "running", reviewTargeting: { candidateRowIds: ["row-1"], ambiguousRowIds: "row-1", unreconciledRowIds: [], unreconciled: false } } }), null)
   assert.equal(normalizeExtractionReviewResponse({ ...base, mode: "ai", proposalStatuses: { p1: { status: "pending", canUndo: false, stale: "no", eligible: true } } }), null)
 })
 
@@ -69,7 +70,7 @@ function proposal(id: string, sourceRowId: string, operation: ProposalOperation 
   }
 }
 
-function response(proposals: ValidatedProposal[], sourceRows = [sourceRow]): ExtractionReviewResponse {
+function response(proposals: ValidatedProposal[], sourceRows: ExtractionReviewResponse["sourceRows"] = [sourceRow]): ExtractionReviewResponse {
   return {
     mode: "ai" as const, aiStatus: "completed" as const, message: "Ready",
     sourceRowIds: sourceRows.map((row) => row.sourceRowId), remainingCandidateRowIds: [],
@@ -120,24 +121,36 @@ test("review filters expose pending, accepted, rejected, and needs-attention pro
   assert.deepEqual(filterReviewProposals(proposals, statuses, "needs-attention").map((entry) => entry.id), ["human"])
 })
 
-test("source-row filters expose ambiguous, unreconciled, and durable AI-pending rows even without proposals", () => {
+test("source-row filters keep compound candidates, ambiguous evidence, reconciliation failures, and AI pending distinct", () => {
+  const compound = { ...sourceRow, sourceRowId: "row-compound", classification: "continuation" as const, confidence: 0.98, warnings: [] }
+  const ambiguous = { ...sourceRow, sourceRowId: "row-ambiguous", confidence: 0.72, warnings: [] }
+  const unreconciled = { ...sourceRow, sourceRowId: "row-unreconciled", confidence: 0.98, warnings: [{ code: "section_total_mismatch", message: "Section total mismatch" }] }
+  const unrelated = { ...sourceRow, sourceRowId: "row-unrelated", confidence: 0.98, warnings: [] }
   const review = {
-    ...response([proposal("p1", "row-1")], [sourceRow, { ...sourceRow, sourceRowId: "row-2", confidence: 0.96, warnings: [] }]),
-    remainingCandidateRowIds: ["row-2"],
-    reviewRun: { status: "partial" as const, reviewTargeting: { candidateRowIds: ["row-1", "row-2"], unreconciled: true } },
+    ...response([proposal("p1", "row-ambiguous")], [compound, ambiguous, unreconciled, unrelated]),
+    remainingCandidateRowIds: ["row-compound", "row-unreconciled"],
+    reviewRun: { status: "partial" as const, reviewTargeting: {
+      candidateRowIds: ["row-compound", "row-ambiguous", "row-unreconciled"],
+      ambiguousRowIds: ["row-ambiguous"], unreconciledRowIds: ["row-unreconciled"], unreconciled: true,
+    } },
   }
-  assert.deepEqual(filterReviewSourceRows(review, "ambiguous").map((row) => row.sourceRowId), ["row-1", "row-2"])
-  assert.deepEqual(filterReviewSourceRows(review, "unreconciled").map((row) => row.sourceRowId), ["row-1", "row-2"])
-  assert.deepEqual(filterReviewSourceRows(review, "ai-pending").map((row) => row.sourceRowId), ["row-2"])
+  assert.deepEqual(filterReviewSourceRows(review, "ambiguous").map((row) => row.sourceRowId), ["row-ambiguous"])
+  assert.deepEqual(filterReviewSourceRows(review, "unreconciled").map((row) => row.sourceRowId), ["row-unreconciled"])
+  assert.deepEqual(filterReviewSourceRows(review, "ai-pending").map((row) => row.sourceRowId), ["row-compound", "row-unreconciled"])
 })
 
-test("automatic dispatch runs only for queued drafts and never loops on durable running or failed states", () => {
-  const base = response([]) as ExtractionReviewResponse & { reviewRun: { status: "queued" | "running" | "failed"; reviewTargeting: { candidateRowIds: string[]; unreconciled: boolean } } }
+test("review refresh selector dispatches queued and expired leases but only polls a live running lease", () => {
+  const base = response([]) as ExtractionReviewResponse & { reviewRun: NonNullable<ExtractionReviewResponse["reviewRun"]> }
   base.reviewRun = { status: "queued", reviewTargeting: { candidateRowIds: ["row-1"], unreconciled: false } }
-  assert.equal(shouldDispatchAutomaticReview(base, false), true)
-  assert.equal(shouldDispatchAutomaticReview({ ...base, reviewRun: { ...base.reviewRun, status: "running" } }, false), false)
-  assert.equal(shouldDispatchAutomaticReview({ ...base, reviewRun: { ...base.reviewRun, status: "failed" } }, false), false)
-  assert.equal(shouldDispatchAutomaticReview(base, true), false)
+  const now = Date.parse("2026-07-20T12:00:00.000Z")
+  assert.equal(extractionReviewRefreshAction(base, false, now), "dispatch")
+  assert.equal(extractionReviewRefreshAction({ ...base, reviewRun: { ...base.reviewRun, status: "running", leaseExpiresAt: "2026-07-20T12:00:01.000Z" } }, false, now), "poll")
+  assert.equal(extractionReviewRefreshAction({ ...base, reviewRun: { ...base.reviewRun, status: "running", leaseExpiresAt: "2026-07-20T12:00:01.000Z" } }, true, now), "poll")
+  assert.equal(extractionReviewRefreshAction({ ...base, reviewRun: { ...base.reviewRun, status: "running", leaseExpiresAt: "2026-07-20T12:00:00.000Z" } }, false, now), "dispatch")
+  assert.equal(extractionReviewRefreshAction({ ...base, reviewRun: { ...base.reviewRun, status: "running", leaseExpiresAt: "invalid" } }, false, now), "dispatch")
+  assert.equal(extractionReviewRefreshAction({ ...base, reviewRun: { ...base.reviewRun, status: "running" } }, false, now), "dispatch")
+  assert.equal(extractionReviewRefreshAction({ ...base, reviewRun: { ...base.reviewRun, status: "failed" } }, false, now), "idle")
+  assert.equal(extractionReviewRefreshAction(base, true, now), "idle")
 })
 
 test("request and proposal mutation state preserve loaded review evidence", () => {

@@ -165,7 +165,34 @@ test('durable GET/POST snapshots replace client state and include every candidat
   })
   assert.equal(response.snapshotMode, 'replace')
   assert.deepEqual(response.sourceRowIds, ['row-1', 'row-2'])
-  assert.deepEqual(response.reviewRun.reviewTargeting, { candidateRowIds: ['row-1', 'row-2'], unreconciled: true })
+  assert.deepEqual(response.reviewRun.reviewTargeting, {
+    candidateRowIds: ['row-1', 'row-2'], ambiguousRowIds: [], unreconciledRowIds: [], unreconciled: true,
+  })
+})
+
+test('durable snapshot preserves reason-specific source-row targeting', () => {
+  const compound = { ...rows[0]!, id: 'row-compound', rawText: 'Aligned compound row' }
+  const ambiguous = { ...rows[0]!, id: 'row-ambiguous', row: 4, confidence: 0.7, rawText: 'Ambiguous row' }
+  const reconciled = { ...rows[0]!, id: 'row-unreconciled', row: 5, rawText: 'Section mismatch' }
+  const unrelated = { ...rows[0]!, id: 'row-unrelated', row: 6, rawText: 'Reliable item' }
+  const selectedRun = {
+    ...run,
+    reviewTargeting: {
+      candidateRowIds: ['row-compound', 'row-ambiguous', 'row-unreconciled'], candidateCount: 3,
+      ambiguousRowIds: ['row-ambiguous'], unreconciledRowIds: ['row-unreconciled'], unreconciled: true,
+    },
+    reconciliation: { itemTotal: 9, sourceTotal: 10, reconciled: false, difference: -1 }, sections: [],
+  }
+  const response = buildDurableExtractionReviewResponse({
+    imported: { boq, run: selectedRun }, sourceRows: [compound, ambiguous, reconciled, unrelated],
+    stored: { proposals: [], proposalStatuses: {}, auditEvents: [], reviewRun: { status: 'queued' } },
+  })
+
+  assert.deepEqual(response.reviewRun.reviewTargeting, {
+    candidateRowIds: ['row-ambiguous', 'row-compound', 'row-unreconciled'],
+    ambiguousRowIds: ['row-ambiguous'], unreconciledRowIds: ['row-unreconciled'], unreconciled: true,
+  })
+  assert.deepEqual(response.sourceRowIds, ['row-compound', 'row-ambiguous', 'row-unreconciled'])
 })
 
 test('a completed review refreshes every reviewed source row even when no proposal is returned', async () => {

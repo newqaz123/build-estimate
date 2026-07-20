@@ -102,7 +102,12 @@ export interface ExtractionReviewResponse {
     failureCode?: string
     retryAfter?: string
     updatedAt?: string
-    reviewTargeting: { candidateRowIds: string[]; unreconciled: boolean }
+    reviewTargeting: {
+      candidateRowIds: string[]
+      ambiguousRowIds?: string[]
+      unreconciledRowIds?: string[]
+      unreconciled: boolean
+    }
   }
   provider?: string
   model?: string

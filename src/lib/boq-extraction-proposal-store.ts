@@ -34,7 +34,12 @@ export interface ExtractionReviewRunSummary {
   failureCode?: string
   retryAfter?: string
   updatedAt?: string
-  reviewTargeting?: { candidateRowIds: string[]; unreconciled: boolean }
+  reviewTargeting?: {
+    candidateRowIds: string[]
+    ambiguousRowIds?: string[]
+    unreconciledRowIds?: string[]
+    unreconciled: boolean
+  }
 }
 export interface ExtractionProposalReviewState {
   proposals: ValidatedProposal[]
@@ -271,6 +276,8 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
           ...reviewRunSummary(runData.reviewRun, runData.aiReviewStatus),
           reviewTargeting: {
             candidateRowIds: [...runData.reviewTargeting.candidateRowIds],
+            ambiguousRowIds: [...(runData.reviewTargeting.ambiguousRowIds ?? [])],
+            unreconciledRowIds: [...(runData.reviewTargeting.unreconciledRowIds ?? [])],
             unreconciled: runData.reviewTargeting.unreconciled,
           },
         },
@@ -309,7 +316,12 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
           status: 'running', requestKey, leaseId,
           leaseExpiresAt: new Date(time.getTime() + leaseTtlMs).toISOString(),
           updatedAt: time.toISOString(),
-          ...(targeting ? { reviewTargeting: { candidateRowIds: [...targeting.candidateRowIds], unreconciled: targeting.unreconciled } } : {}),
+          ...(targeting ? { reviewTargeting: {
+            candidateRowIds: [...targeting.candidateRowIds],
+            ambiguousRowIds: [...(targeting.ambiguousRowIds ?? [])],
+            unreconciledRowIds: [...(targeting.unreconciledRowIds ?? [])],
+            unreconciled: targeting.unreconciled,
+          } } : {}),
         }
         transaction.update(runRef, { reviewRun, aiReviewStatus: 'running', updatedAt: time.toISOString() })
         return { kind: 'acquired', reviewRun }

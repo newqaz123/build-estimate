@@ -34,6 +34,10 @@ export interface BoqExtractionRun {
   reviewTargeting: {
     candidateRowIds: string[]
     candidateCount: number
+    /** Explicit row-level ambiguity evidence; absent only on pre-reason-model persisted runs. */
+    ambiguousRowIds?: string[]
+    /** Explicit row-level arithmetic/section reconciliation evidence. */
+    unreconciledRowIds?: string[]
     unreconciled: boolean
   }
 }
@@ -125,14 +129,36 @@ function deepFreeze<T>(value: T): T {
 }
 
 function reviewTargeting(seed: BoqExtractionRunSeed): BoqExtractionRun['reviewTargeting'] {
+  const reconciliationWarningCodes = new Set([
+    'item_arithmetic_mismatch',
+    'component_arithmetic_mismatch',
+    'component_total_mismatch',
+    'section_total_mismatch',
+  ])
+  const warningsByRowId = new Map(seed.sourceRows.map((row) => [row.id, [...row.warnings]]))
+  for (const warning of seed.warnings) {
+    if (!warning.sourceRef) continue
+    const row = seed.sourceRows.find((candidate) => candidate.page === warning.sourceRef?.page
+      && candidate.table === warning.sourceRef?.table && candidate.row === warning.sourceRef?.row)
+    if (row) warningsByRowId.get(row.id)?.push(warning)
+  }
+  const rowWarnings = (row: BoqSourceRowV3) => warningsByRowId.get(row.id) ?? []
   const candidates = seed.sourceRows.filter((row) =>
     row.confidence < 0.9
-      || row.warnings.length > 0
+      || rowWarnings(row).length > 0
       || ['continuation', 'option', 'unknown'].includes(row.classification),
+  )
+  const ambiguous = candidates.filter((row) => row.confidence < 0.9
+    || row.classification === 'unknown'
+    || rowWarnings(row).some((warning) => /ambiguous|unsupported|incomplete|invalid_numeric|numeric_overflow/.test(warning.code)))
+  const unreconciledRows = candidates.filter((row) =>
+    rowWarnings(row).some((warning) => reconciliationWarningCodes.has(warning.code)),
   )
   return {
     candidateRowIds: candidates.map((row) => row.id),
     candidateCount: candidates.length,
+    ambiguousRowIds: ambiguous.map((row) => row.id),
+    unreconciledRowIds: unreconciledRows.map((row) => row.id),
     unreconciled: !seed.reconciliation.reconciled,
   }
 }
