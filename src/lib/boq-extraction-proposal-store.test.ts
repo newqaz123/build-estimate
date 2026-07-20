@@ -79,7 +79,7 @@ class MemoryDb {
 
 function proposal(): ExtractionProposal {
   return {
-    id: 'proposal-1', extractionRunId: 'run-1', operation: 'split', sourceRowIds: ['row-4'], targetItemIds: ['combined'],
+    id: 'proposal-1', extractionRunId: 'run-1', operation: 'separate_components', sourceRowIds: ['row-4'], targetItemIds: ['combined'],
     affectedItemFingerprints: {}, confidence: 0.95, explanation: 'Separate quoted components.',
     proposedItems: [
       { id: 'material', desc: 'Combined material', pricingRole: 'standard', sourceRowIds: ['row-4'], entryOrigin: 'ai_accepted', unit: 'set', qty: 1, rate: 40, total: 40, costComponent: 'material' },

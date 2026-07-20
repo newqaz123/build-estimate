@@ -257,8 +257,11 @@ function validateOperation(proposal: ExtractionProposal, context: ProposalValida
 
   if (proposal.operation === 'split') {
     if (proposal.targetItemIds.length !== 1 || proposed.length < 2 || !everyPriced(proposed)
-      || proposed.some((item) => item.pricingRole !== 'standard')
-      || !approximatelyEqual(totals(proposed), expectedTotal)) return fail('reconciliation_mismatch')
+      || proposed.some((item) => item.pricingRole !== 'standard')) return fail('reconciliation_mismatch')
+    if (proposed.some((item) => item.costComponent === 'material' || item.costComponent === 'labour')) {
+      return fail('invented_component_price')
+    }
+    if (!approximatelyEqual(totals(proposed), expectedTotal)) return fail('reconciliation_mismatch')
     return validProposal(proposal)
   }
 

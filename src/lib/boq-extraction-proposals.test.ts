@@ -81,7 +81,7 @@ test('accept then undo round-trips canonical sections', () => {
   assert.deepEqual(undoAcceptedProposal(accepted.sections, accepted.audit), sections)
 })
 
-test('does not persist component allocation for a generic split without component evidence', () => {
+test('rejects material and labour labels on a generic split without component evidence', () => {
   const aggregateOnlyContext = context({
     sourceEvidence: { 'row-combined': { quotedTotal: 100 }, 'row-extra': { quotedTotal: 20 } },
   })
@@ -94,12 +94,7 @@ test('does not persist component allocation for a generic split without componen
       { id: 'split-labour', desc: 'Labelled labour', pricingRole: 'standard', sourceRowIds: ['row-combined'], entryOrigin: 'ai_accepted', unit: 'set', qty: 1, rate: 60, total: 60, costComponent: 'labour' },
     ],
   }, aggregateOnlyContext)
-  assert.equal(split.valid, true)
-  if (!split.valid) return
-
-  const accepted = applyValidatedProposal(sections, split.proposal)
-  assert.equal('costAllocation' in accepted.sections[0].items[0], false)
-  assert.equal('costAllocation' in accepted.sections[0].items[1], false)
+  assert.deepEqual(split, { valid: false, code: 'invented_component_price' })
 })
 
 test('rejects aggregate-price allocation without source component prices', () => {
@@ -144,7 +139,7 @@ test('validates split, merge, and bundle totals against source evidence', () => 
     confidence: 0.91, explanation: 'Two priced source lines.',
     proposedItems: [
       { id: 'split-a', desc: 'Pump A', pricingRole: 'standard', sourceRowIds: ['row-combined'], entryOrigin: 'ai_accepted', unit: 'set', qty: 1, rate: 40, total: 40, costComponent: 'combined' },
-      { id: 'split-b', desc: 'Pump B', pricingRole: 'standard', sourceRowIds: ['row-combined'], entryOrigin: 'ai_accepted', unit: 'set', qty: 1, rate: 60, total: 60, costComponent: 'combined' },
+      { id: 'split-b', desc: 'Pump B allowance', pricingRole: 'standard', sourceRowIds: ['row-combined'], entryOrigin: 'ai_accepted', unit: 'L/S', qty: 1, rate: 60, total: 60, costComponent: 'lump_sum' },
     ],
   }, context())
   assert.equal(split.valid, true)
