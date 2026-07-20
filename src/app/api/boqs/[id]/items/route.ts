@@ -5,6 +5,7 @@ import type { Boq } from '@/lib/boq-schema'
 import type { StandardEntry } from '@/lib/standard-schema'
 import { normalizeStandardEntry } from '../../../standards/route'
 import { deleteBoqItemAndPruneStandards } from '@/lib/boq-deletion'
+import { addMissingBoqItem, MissingBoqItemError, parseMissingBoqItemRequest } from '@/lib/boq-user-entry'
 import {
   applyBoqItemUpdates,
   BoqItemsValidationError,
@@ -41,6 +42,58 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: error.status })
     }
     console.error('Error counting BOQ standard links:', error)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
+}
+
+export async function POST(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const session = await auth()
+  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let body: unknown
+  try {
+    body = await request.json()
+  } catch {
+    return NextResponse.json({ error: 'Request body must be valid JSON.' }, { status: 400 })
+  }
+  try {
+    const { id } = await params
+    const input = parseMissingBoqItemRequest(body)
+    const itemId = `user-${crypto.randomUUID()}`
+    const now = new Date().toISOString()
+    const result = await runTransaction(async (transaction, db) => {
+      const boqRef = db.collection('boqs').doc(id)
+      const snapshot = await transaction.get(boqRef)
+      if (!snapshot.exists) throw new MissingBoqItemError('BOQ not found.')
+      const current = { id: snapshot.id, ...snapshot.data() } as Boq
+      const updated = { ...addMissingBoqItem(current, input, itemId), updatedAt: now }
+      const added = updated.sections[input.sectionIndex]!.items.at(-1)!
+      transaction.update(boqRef, {
+        sections: updated.sections,
+        totalItems: updated.totalItems,
+        grandTotal: updated.grandTotal,
+        stdStatus: updated.stdStatus,
+        updatedAt: now,
+      })
+      transaction.create(boqRef.collection('manual-entry-audit').doc(itemId), {
+        action: 'add_missing_item',
+        itemId,
+        actorId: session.user?.id ?? 'authenticated-user',
+        createdAt: now,
+        entryOrigin: added.entryOrigin,
+        sourceRowIds: added.sourceRowIds ?? [],
+        item: added,
+      })
+      return updated
+    })
+    return NextResponse.json(result, { status: 201 })
+  } catch (error) {
+    if (error instanceof MissingBoqItemError) {
+      return NextResponse.json({ error: error.message }, { status: /not found/i.test(error.message) ? 404 : 400 })
+    }
+    console.error('Error adding missing BOQ item:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

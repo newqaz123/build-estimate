@@ -84,6 +84,16 @@ function componentProposal(overrides: Record<string, unknown> = {}) {
   }
 }
 
+test('approved BOQs cannot start a new provider review', async () => {
+  let called = false
+  const result = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+    getContext: async () => ({ boq: { ...boq, status: 'approved' }, run, sourceRows: rows }),
+    callProvider: async () => { called = true; throw new Error('must not run') },
+  }))
+  assert.equal(result.status, 400)
+  assert.equal(called, false)
+})
+
 test('automatic review sends only compound candidates and fences untrusted source text', async () => {
   let prompt = ''
   const result = await executeExtractionReview({}, 'boq-1', 'run-1', deps({

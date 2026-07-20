@@ -4,8 +4,8 @@ import { buildExtractionRun, digestBytes, fingerprintParserConfig, type BoqExtra
 import type { BoqSourceRowV3 } from './boq-extraction-schema'
 
 export class ReextractError extends Error {
-  constructor(public readonly code: 'boq_not_found' | 'source_unavailable' | 'v3_required' | 'run_persistence_failed') {
-    super(code === 'source_unavailable' ? 'The original BOQ source PDF is unavailable' : code === 'v3_required' ? 'Re-extraction requires Docling contract v3' : 'BOQ re-extraction failed')
+  constructor(public readonly code: 'boq_not_found' | 'source_unavailable' | 'v3_required' | 'run_persistence_failed' | 'read_only') {
+    super(code === 'source_unavailable' ? 'The original BOQ source PDF is unavailable' : code === 'v3_required' ? 'Re-extraction requires Docling contract v3' : code === 'read_only' ? 'Approved BOQs are read-only' : 'BOQ re-extraction failed')
     this.name = 'ReextractError'
   }
 }
@@ -27,6 +27,7 @@ export async function reextractBoqSource(boqId: string, dependencies: ReextractD
 }> {
   const canonicalBoq = await dependencies.getBoq(boqId)
   if (!canonicalBoq) throw new ReextractError('boq_not_found')
+  if (canonicalBoq.status === 'approved') throw new ReextractError('read_only')
   if (!canonicalBoq.sourceStoragePath) throw new ReextractError('source_unavailable')
   let bytes: Uint8Array
   try {
@@ -54,7 +55,7 @@ export async function reextractBoqSource(boqId: string, dependencies: ReextractD
   } catch {
     throw new ReextractError('run_persistence_failed')
   }
-  // Return the original snapshot deliberately: re-extraction produces evidence
-  // and later proposals, never an implicit canonical overwrite.
-  return { canonicalBoq, run: persisted }
+  // Only the active evidence pointer changes. Saved sections, metadata, catalog
+  // links, and user edits remain byte-for-byte copies of the canonical snapshot.
+  return { canonicalBoq: { ...canonicalBoq, activeExtractionRunId: persisted.id }, run: persisted }
 }

@@ -2,6 +2,8 @@ import type { Boq } from '@/lib/boq-schema'
 import type { BoqExtractionRun } from '@/lib/boq-extraction-run'
 import type { BoqSourceRowV3 } from '@/lib/boq-extraction-schema'
 import { executeExtractionReview, type ExtractionReviewDependencies } from '@/lib/boq-extraction-ai-review'
+import type { ExtractionProposalReviewState } from '@/lib/boq-extraction-proposal-store'
+import type { ValidatedProposal } from '@/lib/boq-extraction-proposals'
 
 export type ExtractionReviewRouteContext = { params: Promise<{ id: string; runId: string }> }
 
@@ -9,6 +11,8 @@ export interface ExtractionReviewHandlerDependencies extends Omit<ExtractionRevi
   authenticate(): Promise<{ user?: unknown } | null>
   getReadyImport(boqId: string, runId: string): Promise<{ boq: Boq; run: BoqExtractionRun } | null>
   getSourceRows(boqId: string, runId: string): Promise<BoqSourceRowV3[]>
+  saveValidatedProposals(boqId: string, runId: string, proposals: readonly ValidatedProposal[]): Promise<void>
+  getReviewState(boqId: string, runId: string): Promise<ExtractionProposalReviewState | null>
 }
 
 export function createExtractionReviewHandler(dependencies: ExtractionReviewHandlerDependencies) {
@@ -35,6 +39,14 @@ export function createExtractionReviewHandler(dependencies: ExtractionReviewHand
       timeoutMs: dependencies.timeoutMs,
       logCategory: dependencies.logCategory,
     })
-    return Response.json(result.body, { status: result.status })
+    if (result.status !== 200) return Response.json(result.body, { status: result.status })
+    try {
+      if (result.body.mode === 'ai') await dependencies.saveValidatedProposals(id, runId, result.body.proposals)
+      const stored = await dependencies.getReviewState(id, runId)
+      if (!stored) return Response.json({ error: 'Extraction run not found' }, { status: 404 })
+      return Response.json({ ...result.body, ...stored }, { status: 200 })
+    } catch {
+      return Response.json({ error: 'Extraction review could not be saved' }, { status: 500 })
+    }
   }
 }

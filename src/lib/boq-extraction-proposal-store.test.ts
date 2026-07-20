@@ -10,7 +10,7 @@ import {
 import { createFirestoreExtractionProposalStore } from './boq-extraction-proposal-store'
 import { v3Fixture } from './boq-extraction-test-fixtures'
 import type { Boq } from './boq-schema'
-import { fingerprintCanonicalItem, type ExtractionProposal } from './boq-extraction-proposals'
+import { fingerprintCanonicalItem, type ExtractionProposal, type ValidatedProposal } from './boq-extraction-proposals'
 
 type RecordData = Record<string, unknown>
 
@@ -54,9 +54,11 @@ class MemoryCollection {
 
 class MemoryDb {
   readonly docs = new Map<string, RecordData>()
+  transactionCount = 0
   collection(name: string): MemoryCollection { return new MemoryCollection(this, name) }
   doc(path: string): MemoryDoc { return new MemoryDoc(this, path) }
   async runTransaction<T>(callback: (transaction: MemoryTransaction) => Promise<T>): Promise<T> {
+    this.transactionCount += 1
     const writes: Array<{ kind: 'create' | 'update'; ref: MemoryDoc; data: RecordData }> = []
     const transaction = {
       get: async (ref: MemoryDoc) => ref.get(),
@@ -74,6 +76,14 @@ class MemoryDb {
       }
     }
     return result
+  }
+}
+
+function keepProposal(id: string, sourceRowId: string, targetId: string, target: Boq['sections'][number]['items'][number]): ExtractionProposal {
+  return {
+    id, extractionRunId: 'run-1', operation: 'keep', sourceRowIds: [sourceRowId], targetItemIds: [targetId],
+    affectedItemFingerprints: { [targetId]: fingerprintCanonicalItem(target) }, confidence: 0.95,
+    explanation: 'Keep the validated deterministic row.', proposedItems: [],
   }
 }
 
@@ -114,13 +124,17 @@ function harness() {
     store: createFirestoreExtractionProposalStore(db as never, () => new Date('2026-07-20T12:00:00.000Z')),
     boq: db.docs.get('boqs/boq-1') as unknown as Boq,
     runPath,
-    proposal: { ...proposal(), affectedItemFingerprints: { combined: fingerprintCanonicalItem(target) } },
+    proposal: {
+      ...proposal(), affectedItemFingerprints: { combined: fingerprintCanonicalItem(target) },
+      evidenceValid: true, reconciled: true, stale: false,
+    } as ValidatedProposal,
   }
 }
 
 test('store undo fences immutable evidence and replays exact accepted/undo BOQ snapshots', async () => {
   const fixture = harness()
-  const firstAccept = await fixture.store.accept('boq-1', 'run-1', 'proposal-1', fixture.proposal, 'user-1')
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  const firstAccept = await fixture.store.accept('boq-1', 'run-1', 'proposal-1', 'user-1')
   assert.equal(firstAccept.status, 200)
   if (firstAccept.status !== 200) return
   const firstAcceptedBoq = firstAccept.body.boq
@@ -128,7 +142,7 @@ test('store undo fences immutable evidence and replays exact accepted/undo BOQ s
   const edited = fixture.db.docs.get('boqs/boq-1')!
   edited.project = 'User-edited project'
   edited.updatedAt = '2026-07-20T12:01:00.000Z'
-  const acceptRetry = await fixture.store.accept('boq-1', 'run-1', 'proposal-1', fixture.proposal, 'user-1')
+  const acceptRetry = await fixture.store.accept('boq-1', 'run-1', 'proposal-1', 'user-1')
   assert.equal(acceptRetry.status, 200)
   if (acceptRetry.status !== 200) return
   assert.deepEqual(acceptRetry.body.boq, firstAcceptedBoq)
@@ -162,11 +176,77 @@ test('store undo fences immutable evidence and replays exact accepted/undo BOQ s
 
 test('store refuses malformed existing audit records before canonical mutation', async () => {
   const fixture = harness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
   fixture.db.docs.set('boqs/boq-1/extractionRuns/run-1/proposalAudits/proposal-1', {
     proposalId: 'proposal-1', status: 'accepted', targetItemIds: ['combined'],
   })
   const before = structuredClone(fixture.db.docs.get('boqs/boq-1'))
-  const result = await fixture.store.accept('boq-1', 'run-1', 'proposal-1', fixture.proposal, 'user-1')
+  const result = await fixture.store.accept('boq-1', 'run-1', 'proposal-1', 'user-1')
   assert.equal(result.status, 409)
   assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+})
+
+test('validated proposals persist durably and action status is reconstructed from audits', async () => {
+  const fixture = harness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  let state = await fixture.store.getReviewState('boq-1', 'run-1')
+  assert.deepEqual(state?.proposals.map((entry) => entry.id), ['proposal-1'])
+  assert.deepEqual(state?.proposalStatuses, { 'proposal-1': { status: 'pending', canUndo: false } })
+
+  const accepted = await fixture.store.accept('boq-1', 'run-1', 'proposal-1', 'user-1')
+  assert.equal(accepted.status, 200)
+  state = await fixture.store.getReviewState('boq-1', 'run-1')
+  assert.equal(state?.proposalStatuses['proposal-1']?.status, 'accepted')
+  assert.equal(state?.proposalStatuses['proposal-1']?.canUndo, true)
+  assert.equal(state?.auditEvents.length, 1)
+})
+
+test('single actions reload the stored proposal and reject approved BOQ mutation', async () => {
+  const fixture = harness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  fixture.db.docs.get('boqs/boq-1')!.status = 'approved'
+  const before = structuredClone(fixture.db.docs.get('boqs/boq-1'))
+  const result = await fixture.store.accept('boq-1', 'run-1', 'proposal-1', 'user-1')
+  assert.equal(result.status, 409)
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+  assert.equal(fixture.db.docs.has(`${fixture.runPath}/proposalAudits/proposal-1`), false)
+})
+
+test('approved BOQs also reject undo without changing the accepted audit', async () => {
+  const fixture = harness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  assert.equal((await fixture.store.accept('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+  fixture.db.docs.get('boqs/boq-1')!.status = 'approved'
+  const before = structuredClone(fixture.db.docs.get('boqs/boq-1'))
+  const result = await fixture.store.undo('boq-1', 'run-1', 'proposal-1', 'user-1')
+  assert.equal(result.status, 409)
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+  assert.equal(fixture.db.docs.has(`${fixture.runPath}/proposalAudits/proposal-1/events/undo`), false)
+})
+
+test('batch acceptance is one transaction and leaves BOQ and audits unchanged on any failure', async () => {
+  const fixture = harness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  const before = structuredClone(fixture.db.docs.get('boqs/boq-1'))
+  const result = await fixture.store.acceptBatch('boq-1', 'run-1', ['proposal-1', 'missing'], 'user-1')
+  assert.equal(result.status, 404)
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+  assert.equal(fixture.db.docs.has(`${fixture.runPath}/proposalAudits/proposal-1`), false)
+})
+
+test('batch acceptance applies every stored proposal in one transaction', async () => {
+  const fixture = harness()
+  const bundle = fixture.boq.sections.flatMap((section) => section.items).find((item) => item.id === 'bundle')!
+  const option = fixture.boq.sections.flatMap((section) => section.items).find((item) => item.id === 'option')!
+  const proposals = [
+    keepProposal('keep-bundle', 'row-1', 'bundle', bundle),
+    keepProposal('keep-option', 'row-3', 'option', option),
+  ]
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', proposals as never)
+  const beforeTransactions = fixture.db.transactionCount
+  const result = await fixture.store.acceptBatch('boq-1', 'run-1', proposals.map((proposal) => proposal.id), 'user-1')
+  assert.equal(result.status, 200)
+  assert.equal(fixture.db.transactionCount - beforeTransactions, 1)
+  assert.equal(fixture.db.docs.has(`${fixture.runPath}/proposalAudits/keep-bundle`), true)
+  assert.equal(fixture.db.docs.has(`${fixture.runPath}/proposalAudits/keep-option`), true)
 })

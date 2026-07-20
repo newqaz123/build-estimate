@@ -36,11 +36,14 @@ function dependencies(overrides: Partial<ReextractDependencies> = {}): Reextract
   }
 }
 
-test('re-extraction persists a new immutable run without changing saved BOQ edits', async () => {
+test('re-extraction persists a new immutable run and discovers it without changing saved BOQ edits', async () => {
   let persisted: BoqExtractionRun | null = null
   const before = structuredClone(boq)
   const result = await reextractBoqSource('boq-1', dependencies({ persistRun: async ({ run }) => { persisted = run; return { ...run, status: 'ready' } } }))
-  assert.deepEqual(result.canonicalBoq, before)
+  assert.deepEqual(result.canonicalBoq.sections, before.sections)
+  assert.equal(result.canonicalBoq.project, before.project)
+  assert.equal(result.canonicalBoq.vendor, before.vendor)
+  assert.equal(result.canonicalBoq.activeExtractionRunId, 'run-reextracted')
   assert.equal(result.run.id, 'run-reextracted')
   assert.notEqual(result.run.id, before.activeExtractionRunId)
   assert.ok(persisted)
@@ -61,6 +64,7 @@ test('re-extraction resolves the current workspace Docling endpoint before parsi
 })
 
 test('re-extraction requires a retained source and a v3 parse without mutating canonical data', async () => {
+  await assert.rejects(() => reextractBoqSource('boq-1', dependencies({ getBoq: async () => ({ ...boq, status: 'approved' }) })), (error: unknown) => error instanceof ReextractError && error.code === 'read_only')
   await assert.rejects(() => reextractBoqSource('boq-1', dependencies({ getBoq: async () => ({ ...boq, sourceStoragePath: undefined }) })), ReextractError)
   await assert.rejects(() => reextractBoqSource('boq-1', dependencies({ loadSource: async () => { throw new Error('storage unavailable') } })), (error: unknown) => error instanceof ReextractError && error.code === 'source_unavailable')
   await assert.rejects(() => reextractBoqSource('boq-1', dependencies({ parsePdfWithDocling: async () => ({ contractVersion: 2 } as DoclingResult) })), /v3/)

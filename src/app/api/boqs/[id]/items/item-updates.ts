@@ -20,6 +20,7 @@ export interface BoqItemUpdate {
   stdStatus?: BoqItem['stdStatus'] | 'fuzzy' | 'llm'
   stdMatch?: string
   stdExclusionReason?: string
+  excludedFromTotal?: boolean
 }
 
 export interface BoqItemUpdateGroup {
@@ -124,6 +125,7 @@ function validateUpdate(value: unknown): BoqItemRequestIdentity {
   }
   if ('stdMatch' in value && typeof value.stdMatch !== 'string') throw new BoqItemsValidationError('stdMatch must be a string.')
   if ('stdExclusionReason' in value && typeof value.stdExclusionReason !== 'string') throw new BoqItemsValidationError('stdExclusionReason must be a string.')
+  if ('excludedFromTotal' in value && typeof value.excludedFromTotal !== 'boolean') throw new BoqItemsValidationError('excludedFromTotal must be a boolean.')
   if (update.stdStatus === 'excluded' && !update.stdExclusionReason?.trim()) {
     throw new BoqItemsValidationError('An exclusion reason is required.')
   }
@@ -191,9 +193,13 @@ function updateOneItem(item: BoqItem, update: BoqItemUpdate): BoqItem {
     ...(update.qty !== undefined ? { qty: update.qty } : {}),
     ...(update.rate !== undefined ? { rate: update.rate } : {}),
     ...(update.type !== undefined ? { type: update.type } : {}),
+    ...(update.excludedFromTotal !== undefined ? { excludedFromTotal: update.excludedFromTotal } : {}),
     ...(update.stdStatus !== undefined ? { stdStatus: update.stdStatus === 'fuzzy' || update.stdStatus === 'llm' ? 'pending' as const : update.stdStatus } : {}),
     ...(update.stdMatch !== undefined ? { stdMatch: update.stdMatch.trim() } : {}),
     ...(update.stdExclusionReason !== undefined ? { stdExclusionReason: update.stdExclusionReason.trim() } : {}),
+  }
+  if (update.excludedFromTotal !== undefined && item.optional !== true) {
+    throw new BoqItemsValidationError('Only optional items can change excludedFromTotal.')
   }
   if (update.materialCost !== undefined || update.labourCost !== undefined) {
     next = applyManualCostAllocation(

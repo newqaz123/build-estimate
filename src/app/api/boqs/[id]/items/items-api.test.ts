@@ -68,6 +68,14 @@ test('production item route delegates parsing and updates to the tested pure mod
   assert.doesNotMatch(source, /function (?:parseUpdateGroups|applyBoqItemUpdates|cloneItemWithUpdate)\b/)
 })
 
+test('production item route persists user-entered missing rows with an audit record', () => {
+  const source = readFileSync(new URL('./route.ts', import.meta.url), 'utf8')
+  assert.match(source, /export async function POST/)
+  assert.match(source, /addMissingBoqItem/)
+  assert.match(source, /manual-entry-audit/)
+  assert.match(source, /entryOrigin/)
+})
+
 test('linked canonical edits update the standard and every linked BOQ item atomically', () => {
   const result = applyBoqItemUpdates(
     [
@@ -182,6 +190,22 @@ test('excluding an item requires a reason and clears its catalog link', () => {
   assert.equal(updated?.stdMatch, undefined)
   assert.equal(updated?.stdConfidence, undefined)
   assert.equal(result.boqs[0]?.stdStatus, 'complete')
+})
+
+test('an excluded optional item can be explicitly included in totals', () => {
+  const result = applyBoqItemUpdates(
+    [boq('boq-1', [item({ optional: true, excludedFromTotal: true, stdStatus: 'unmatched' })])],
+    [],
+    'boq-1',
+    [{ sectionIndex: 0, items: [{ itemCode: 'A-1', excludedFromTotal: false }] }],
+  )
+  const updated = priced(result.boqs[0]?.sections[0]?.items[0])
+  assert.equal(updated.excludedFromTotal, false)
+  assert.equal(result.boqs[0]?.grandTotal, 200)
+  assert.throws(
+    () => applyBoqItemUpdates([boq('boq-1', [item({ optional: false })])], [], 'boq-1', [{ sectionIndex: 0, items: [{ itemCode: 'A-1', excludedFromTotal: true }] }]),
+    /optional/i,
+  )
 })
 
 test('same-standard partial edits compose canonical fields across one batch', () => {

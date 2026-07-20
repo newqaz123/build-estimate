@@ -11,6 +11,7 @@ function handlers(overrides: Partial<ExtractionProposalActionDependencies> = {})
   return createExtractionProposalActionHandlers({
     authenticate: async () => ({ user: { id: 'user-1' } }),
     accept: async () => ({ status: 200, body: { status: 'accepted' } }),
+    acceptBatch: async () => ({ status: 200, body: { status: 'accepted', acceptedProposalIds: [] } }),
     reject: async () => ({ status: 200, body: { status: 'rejected' } }),
     undo: async () => ({ status: 200, body: { status: 'undone' } }),
     ...overrides,
@@ -24,12 +25,12 @@ test('proposal actions authenticate before any transaction work', async () => {
   assert.equal(calls, 0)
 })
 
-test('accept rejects malformed and mismatched proposal bodies before mutation', async () => {
+test('accept uses only the opaque proposal path id and tolerates the legacy echoed body', async () => {
   let calls = 0
   const action = handlers({ accept: async () => { calls += 1; return { status: 200, body: {} } } })
-  assert.equal((await action.accept(request({}), context)).status, 400)
-  assert.equal((await action.accept(request({ proposal: { id: 'other' } }), context)).status, 400)
-  assert.equal(calls, 0)
+  assert.equal((await action.accept(request({}), context)).status, 200)
+  assert.equal((await action.accept(request({ proposal: { id: 'other', total: 999_999 } }), context)).status, 200)
+  assert.equal(calls, 2)
 })
 
 test('accept, reject, and undo dispatch only opaque path identifiers to server actions', async () => {
@@ -43,4 +44,23 @@ test('accept, reject, and undo dispatch only opaque path identifiers to server a
   await action.reject(request(), context)
   await action.undo(new Request('https://example.test', { method: 'POST' }), context)
   assert.deepEqual(calls, ['accept:boq-1:run-1:proposal-1', 'reject:boq-1:run-1:proposal-1', 'undo:boq-1:run-1:proposal-1'])
+})
+
+test('batch acceptance authenticates and forwards only unique bounded opaque ids', async () => {
+  const calls: unknown[] = []
+  const action = handlers({
+    acceptBatch: async (boqId, runId, proposalIds, actorId) => {
+      calls.push({ boqId, runId, proposalIds, actorId })
+      return { status: 200, body: { acceptedProposalIds: proposalIds } }
+    },
+  })
+  const batchContext = { params: Promise.resolve({ id: 'boq-1', runId: 'run-1' }) }
+  const response = await action.acceptBatch(new Request('https://example.test', {
+    method: 'POST', body: JSON.stringify({ proposalIds: ['proposal-1', 'proposal-2'] }),
+  }), batchContext)
+  assert.equal(response.status, 200)
+  assert.deepEqual(calls, [{ boqId: 'boq-1', runId: 'run-1', proposalIds: ['proposal-1', 'proposal-2'], actorId: 'user-1' }])
+  assert.equal((await action.acceptBatch(new Request('https://example.test', {
+    method: 'POST', body: JSON.stringify({ proposalIds: ['proposal-1', 'proposal-1'] }),
+  }), batchContext)).status, 400)
 })

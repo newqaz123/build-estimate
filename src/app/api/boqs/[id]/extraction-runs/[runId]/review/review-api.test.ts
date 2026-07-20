@@ -18,6 +18,8 @@ function handler(overrides: Partial<ExtractionReviewHandlerDependencies> = {}) {
     authenticate: async () => ({ user: { id: 'user-1' } }),
     getReadyImport: async () => ({ boq, run }),
     getSourceRows: async () => rows,
+    saveValidatedProposals: async () => undefined,
+    getReviewState: async () => ({ proposals: [], proposalStatuses: {}, auditEvents: [] }),
     getSettings: async () => null,
     callProvider: async () => ({ content: '{"proposals":[]}', provider: 'openai', model: 'gpt-4o' }),
     env: {}, timeoutMs: 10,
@@ -67,4 +69,28 @@ test('review endpoint returns selected immutable source-row display evidence', a
   assert.deepEqual(body.sourceRows.map(({ sourceRowId, rawText, page }) => ({ sourceRowId, rawText, page })), [
     { sourceRowId: 'row-1', rawText: 'Gutter', page: 2 },
   ])
+})
+
+test('review reload returns durable proposals and reconstructed action statuses', async () => {
+  const selectedRun = {
+    ...run,
+    reviewTargeting: { candidateRowIds: ['row-1'], candidateCount: 1, unreconciled: false },
+    reconciliation: { itemTotal: 0, sourceTotal: 0, reconciled: true, difference: 0 },
+    sections: [],
+  }
+  const stored = { id: 'stored-1', evidenceValid: true, reconciled: true, stale: false }
+  const response = await handler({
+    getReadyImport: async () => ({ boq, run: selectedRun }),
+    getReviewState: async () => ({
+      proposals: [stored as never],
+      proposalStatuses: { 'stored-1': { status: 'accepted', canUndo: true } },
+      auditEvents: [{ proposalId: 'stored-1', status: 'accepted' } as never],
+    }),
+  })(new Request('https://example.test', {
+    method: 'POST', body: JSON.stringify({ manual: false }), headers: { 'Content-Type': 'application/json' },
+  }), { params: Promise.resolve({ id: 'boq-1', runId: 'run-1' }) })
+  const body = await response.json() as { proposals: Array<{ id: string }>; proposalStatuses: Record<string, { status: string }>; auditEvents: unknown[] }
+  assert.deepEqual(body.proposals.map((proposal) => proposal.id), ['stored-1'])
+  assert.equal(body.proposalStatuses['stored-1'].status, 'accepted')
+  assert.equal(body.auditEvents.length, 1)
 })

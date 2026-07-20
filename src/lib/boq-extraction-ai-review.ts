@@ -14,6 +14,7 @@ import {
   resolveVerificationConfig,
 } from './boq-verification'
 import type { callLLM } from './llm'
+import type { ExtractionProposalAudit, ExtractionProposalUndoEvent } from './boq-extraction-acceptance'
 
 const MAX_SOURCE_ROWS = 100
 const MAX_PROMPT_CHARS = 100_000
@@ -89,6 +90,9 @@ export interface ExtractionReviewResponse {
   sourceRows: ExtractionReviewSourceRow[]
   proposals: ValidatedProposal[]
   rejectedProposals: ExtractionReviewRejectedProposal[]
+  /** Durable server-owned action state reconstructed from proposal audit records. */
+  proposalStatuses?: Record<string, { status: 'pending' | 'accepted' | 'rejected' | 'undone'; canUndo: boolean }>
+  auditEvents?: Array<ExtractionProposalAudit | ExtractionProposalUndoEvent>
   provider?: string
   model?: string
 }
@@ -185,11 +189,11 @@ function sourceEvidence(run: BoqExtractionRun): Record<string, ProposalSourceEvi
   return evidence
 }
 
-function sourceRefs(rows: readonly BoqSourceRowV3[]) {
+export function extractionReviewSourceRefs(rows: readonly BoqSourceRowV3[]) {
   return rows.map((row) => ({ sourceRowId: row.id, page: row.page, table: row.table, row: row.row }))
 }
 
-function sourceRowDisplays(rows: readonly BoqSourceRowV3[]): ExtractionReviewSourceRow[] {
+export function extractionReviewSourceRowDisplays(rows: readonly BoqSourceRowV3[]): ExtractionReviewSourceRow[] {
   return rows.map((row) => ({
     sourceRowId: row.id,
     page: row.page,
@@ -213,7 +217,7 @@ function fallback(
   return {
     mode: 'fallback', aiStatus: status,
     message: 'AI review is unavailable. The deterministic extraction remains unchanged; review this row manually.',
-    sourceRowIds: rows.map((row) => row.id), remainingCandidateRowIds: [...remainingCandidateRowIds], sourceRefs: sourceRefs(rows), sourceRows: sourceRowDisplays(rows), proposals: [], rejectedProposals: [],
+    sourceRowIds: rows.map((row) => row.id), remainingCandidateRowIds: [...remainingCandidateRowIds], sourceRefs: extractionReviewSourceRefs(rows), sourceRows: extractionReviewSourceRowDisplays(rows), proposals: [], rejectedProposals: [],
   }
 }
 
@@ -221,7 +225,7 @@ function noReview(rows: readonly BoqSourceRowV3[], remainingCandidateRowIds: rea
   return {
     mode: 'not_required', aiStatus: 'not_required',
     message: 'No ambiguous, unreconciled, or compound source rows need automatic AI review.',
-    sourceRowIds: rows.map((row) => row.id), remainingCandidateRowIds: [...remainingCandidateRowIds], sourceRefs: sourceRefs(rows), sourceRows: sourceRowDisplays(rows), proposals: [], rejectedProposals: [],
+    sourceRowIds: rows.map((row) => row.id), remainingCandidateRowIds: [...remainingCandidateRowIds], sourceRefs: extractionReviewSourceRefs(rows), sourceRows: extractionReviewSourceRowDisplays(rows), proposals: [], rejectedProposals: [],
   }
 }
 
@@ -357,6 +361,7 @@ export async function executeExtractionReview(
   if (!context || context.boq.id !== boqId || context.run.id !== extractionRunId || context.run.boqId !== boqId || context.run.status !== 'ready') {
     return { status: 404, body: { error: 'Extraction run not found' } }
   }
+  if (context.boq.status === 'approved') return { status: 400, body: { error: 'Approved BOQs are read-only' } }
   const selection = selectedRows(request, context)
   if (selection.error) return { status: 400, body: { error: selection.error } }
   if (selection.rows.length === 0) return { status: 200, body: noReview([], selection.remainingCandidateRowIds) }
@@ -405,7 +410,7 @@ export async function executeExtractionReview(
       status: 200,
       body: {
         mode: 'ai', aiStatus: 'completed', message: 'AI suggestions are ready for explicit review and acceptance.',
-        sourceRowIds: selection.rows.map((row) => row.id), remainingCandidateRowIds: selection.remainingCandidateRowIds, sourceRefs: sourceRefs(selection.rows), sourceRows: sourceRowDisplays(selection.rows),
+        sourceRowIds: selection.rows.map((row) => row.id), remainingCandidateRowIds: selection.remainingCandidateRowIds, sourceRefs: extractionReviewSourceRefs(selection.rows), sourceRows: extractionReviewSourceRowDisplays(selection.rows),
         proposals: accepted, rejectedProposals: rejected, provider: result.provider, model: result.model,
       },
     }

@@ -17,7 +17,7 @@ export function createReextractHandler(dependencies: ReextractHandlerDependencie
       return Response.json({ boq: result.canonicalBoq as Boq, extractionRun: result.run }, { status: 201 })
     } catch (error) {
       if (error instanceof ReextractError) {
-        const status = error.code === 'boq_not_found' ? 404 : error.code === 'source_unavailable' || error.code === 'v3_required' ? 400 : 500
+        const status = error.code === 'boq_not_found' ? 404 : error.code === 'read_only' ? 409 : error.code === 'source_unavailable' || error.code === 'v3_required' ? 400 : 500
         return Response.json({ error: error.message }, { status })
       }
       console.error('BOQ re-extraction failed')
