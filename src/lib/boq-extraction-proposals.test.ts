@@ -250,3 +250,31 @@ test('returns dedicated operation and confidence failures for malformed model ou
   assert.deepEqual(validateProposal({ ...valid, confidence: 2 }, context()), { valid: false, code: 'invalid_confidence' })
   assert.deepEqual(validateProposal({ ...valid, confidence: Number.NaN }, context()), { valid: false, code: 'invalid_confidence' })
 })
+
+test('requires proposed provenance to cover every declared source row', () => {
+  const provenanceDrop = separateComponentsProposal({ sourceRowIds: ['row-combined', 'row-extra'] })
+  assert.deepEqual(validateProposal(provenanceDrop, context()), {
+    valid: false, code: 'source_provenance_mismatch',
+  })
+})
+
+test('rejects exclusion state on informational bundle children', () => {
+  const bundle = {
+    id: 'bundle-exclusion', extractionRunId: 'run-1', operation: 'create_bundle', sourceRowIds: ['row-combined'],
+    targetItemIds: ['combined-work'],
+    affectedItemFingerprints: { 'combined-work': fingerprintCanonicalItem(sections[0].items[0]) },
+    confidence: 0.95, explanation: 'Bundle child cannot be excluded.',
+    proposedItems: [
+      { id: 'bundle-parent', desc: 'Pump package', pricingRole: 'bundle_parent', sourceRowIds: ['row-combined'], entryOrigin: 'ai_accepted', unit: 'set', qty: 1, rate: 100, total: 100, costComponent: 'combined' },
+      { id: 'bundle-child', desc: 'Pump body', pricingRole: 'bundle_child', parentBundleId: 'bundle-parent', sourceRowIds: ['row-combined'], entryOrigin: 'ai_accepted', optional: true },
+    ],
+  }
+  assert.deepEqual(validateProposal(bundle, context()), { valid: false, code: 'invalid_shape' })
+})
+
+test('separate_components only accepts standard priced children', () => {
+  const components = separateComponentsProposal()
+  const component = components.proposedItems[0] as unknown as Record<string, unknown>
+  component.pricingRole = 'bundle_parent'
+  assert.deepEqual(validateProposal(components, context()), { valid: false, code: 'invalid_operation_shape' })
+})

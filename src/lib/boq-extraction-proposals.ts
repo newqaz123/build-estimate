@@ -22,6 +22,7 @@ export type ProposalValidationFailureCode =
   | 'unknown_target_item'
   | 'duplicate_item_id'
   | 'duplicate_source_row'
+  | 'source_provenance_mismatch'
   | 'arithmetic_mismatch'
   | 'reconciliation_mismatch'
   | 'invented_component_price'
@@ -218,6 +219,7 @@ function validProposedItem(
   ) return false
 
   if (item.pricingRole === 'bundle_child') {
+    if (item.optional === true || item.excludedFromTotal === true || item.exclusionReason !== undefined && item.exclusionReason !== null) return false
     return nonBlankString(item.parentBundleId)
       && !('unit' in item) && !('qty' in item) && !('rate' in item) && !('total' in item) && !('costComponent' in item)
   }
@@ -276,7 +278,8 @@ function validateOperation(proposal: ExtractionProposal, context: ProposalValida
     if (!evidence?.components) return fail('invented_component_price')
     const material = proposed.find((item) => item.costComponent === 'material')
     const labour = proposed.find((item) => item.costComponent === 'labour')
-    if (!material || !labour || proposed.some((item) => item.costComponent !== 'material' && item.costComponent !== 'labour')) {
+    if (!material || !labour || proposed.some((item) => item.pricingRole !== 'standard')
+      || proposed.some((item) => item.costComponent !== 'material' && item.costComponent !== 'labour')) {
       return fail('invalid_operation_shape')
     }
     if (!hasValidComponent(evidence.components.material) || !hasValidComponent(evidence.components.labour)) return fail('missing_source_evidence')
@@ -356,6 +359,13 @@ export function validateProposal(value: unknown, context: ProposalValidationCont
       && finiteNonNegative(item.qty) && finiteNonNegative(item.rate) && finiteNonNegative(item.total)
       && !approximatelyEqual(item.qty * item.rate, item.total))
     return fail(arithmetic ? 'arithmetic_mismatch' : 'invalid_shape')
+  }
+  if (proposal.proposedItems.length > 0) {
+    const proposedSourceRows = new Set(proposal.proposedItems.flatMap((item) => item.sourceRowIds))
+    if (proposedSourceRows.size !== proposal.sourceRowIds.length
+      || proposal.sourceRowIds.some((sourceRowId) => !proposedSourceRows.has(sourceRowId))) {
+      return fail('source_provenance_mismatch')
+    }
   }
   const proposedIds = proposal.proposedItems.map((item) => item.id)
   if (new Set(proposedIds).size !== proposedIds.length) return fail('duplicate_item_id')
