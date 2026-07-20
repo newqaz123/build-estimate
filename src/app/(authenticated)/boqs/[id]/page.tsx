@@ -47,7 +47,6 @@ import { buildReviewVerification } from "@/lib/boq-review-state"
 import type { Boq, BoqItem, BoqPricedItem, WorkType } from "@/lib/boq-schema"
 import {
   buildUnifiedBoqSections,
-  componentCostView,
   type UnifiedBoqPricedRow,
 } from "@/lib/boq-unified-rows"
 
@@ -312,20 +311,6 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
     }
     handleEdit(row, field, value)
   }, [handleEdit])
-
-  const handleComponentChange = useCallback((row: UnifiedBoqPricedRow, component: "material" | "labour", value: number) => {
-    if (componentCostView(row.item).allocationRequired) return
-    const parsed = parseNonNegativeBoqEditValue(String(value))
-    if (parsed === undefined) return
-    handleEdit(row, component === "material" ? "materialCost" : "labourCost", parsed)
-  }, [handleEdit])
-
-  const handleAllocate = useCallback((row: UnifiedBoqPricedRow, material: number, labour: number) => {
-    if (isReadOnly || mutationBusy) return
-    const key = rowEditKey(row)
-    const current = editsRef.current
-    replaceEdits({ ...current, [key]: { ...current[key], materialCost: material, labourCost: labour } })
-  }, [isReadOnly, mutationBusy, replaceEdits])
 
   const handleMetadataChange = useCallback((field: MetadataField, value: string) => {
     if (isReadOnly || mutationBusy) return
@@ -595,8 +580,6 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
               disabled={isReadOnly || mutationBusy}
               catalogState={catalogMatching.rowState}
               onFieldChange={handleFieldChange}
-              onComponentChange={handleComponentChange}
-              onAllocate={handleAllocate}
               onAcceptSuggestion={(row) => { void handleAcceptCatalogSuggestion(row) }}
               onAiSuggest={(row) => { void catalogMatching.suggestWithAi(row) }}
               onDismissSuggestion={catalogMatching.dismissSuggestion}

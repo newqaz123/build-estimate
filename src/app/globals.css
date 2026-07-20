@@ -1116,32 +1116,26 @@
 .unified-boq-items-table td { padding: var(--space-1); border-bottom: 1px solid var(--border); vertical-align: top; }
 .unified-boq-items-table tbody tr:last-child td { border-bottom: 0; }
 .unified-boq-items-table th.num-col, .unified-boq-items-table td.num-col { text-align: right; }
-.unified-boq-items-table th:first-child { width: 25%; }
-.unified-boq-items-table th:nth-child(2) { width: 8%; }
-.unified-boq-items-table th:nth-child(3) { width: 7%; }
-.unified-boq-items-table th:nth-child(4),
-.unified-boq-items-table th:nth-child(5) { width: 9%; }
-.unified-boq-items-table th:nth-child(6) { width: 10%; }
-.unified-boq-items-table th:last-child { width: 32%; }
+.unified-boq-items-table th:first-child { width: 24%; }
+.unified-boq-items-table th:nth-child(2) { width: 7%; }
+.unified-boq-items-table th:nth-child(3) { width: 6%; }
+.unified-boq-items-table th:nth-child(4) { width: 8%; }
+.unified-boq-items-table th:nth-child(5),
+.unified-boq-items-table th:nth-child(6) { width: 8%; }
+.unified-boq-items-table th:nth-child(7) { width: 9%; }
+.unified-boq-items-table th:last-child { width: 30%; }
 .unified-boq-items-table input { height: 28px; min-width: 0; padding-inline: 7px; font-size: 12px; }
 .unified-boq-items-table input[type="number"] { text-align: right; font-variant-numeric: tabular-nums; }
-.unified-boq-row-details { margin-top: 4px; }
-.unified-boq-row-details summary { width: fit-content; color: var(--accent); font-size: 10px; font-weight: 600; cursor: pointer; list-style-position: inside; }
-.unified-boq-row-details summary:focus-visible { border-radius: var(--radius-xs); outline: none; box-shadow: var(--focus-ring); }
-.unified-boq-row-details-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: var(--space-1); margin-top: var(--space-1); padding: var(--space-2); border: 1px solid var(--border-soft); border-radius: var(--radius-xs); background: color-mix(in oklab, var(--accent) 3%, var(--surface)); }
-.unified-boq-row-details-grid label { display: grid; min-width: 0; gap: 2px; color: var(--muted-text); font-size: 9px; font-weight: 600; }
-.unified-boq-row-details-grid select { width: 100%; height: 28px; min-width: 0; padding: 0 7px; border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--surface); color: var(--fg-2); font: inherit; font-size: 12px; }
-.unified-boq-row-details-grid select:focus-visible { border-color: var(--accent); outline: none; box-shadow: var(--focus-ring); }
 .unified-boq-section-row td { padding: 7px var(--space-2); background: color-mix(in oklab, var(--sidebar) 5%, var(--surface)); color: var(--fg-2); font-size: 11px; font-weight: 700; letter-spacing: 0.015em; }
 .unified-boq-informational-row td { background: color-mix(in oklab, var(--accent) 3%, var(--surface)); color: var(--muted-text); }
 .unified-boq-informational-row .unified-boq-description-cell { padding-left: var(--space-4); }
 .boq-informational-description { padding: 7px 8px 0; color: var(--fg-2); font-size: 12px; }
 .unified-boq-informational-placeholder { padding-top: 10px !important; text-align: center; }
 .unified-boq-component-cell { color: var(--muted-text); }
+.unified-boq-source-cost { display: inline-flex; min-height: 28px; align-items: center; justify-content: flex-end; color: var(--fg-2); font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.unified-boq-source-cost strong { font-weight: 500; }
+.unified-boq-source-cost-missing { display: inline-flex; min-height: 28px; align-items: center; color: var(--muted-text); }
 .unified-boq-total { padding-top: 10px !important; font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.unified-boq-not-split { display: inline-flex; padding: 6px 8px; color: var(--muted-text); font-size: 11px; }
-.unified-boq-allocation-editor { display: grid; grid-template-columns: repeat(2, minmax(64px, 1fr)) auto auto; align-items: end; gap: var(--space-1); }
-.unified-boq-allocation-editor label { display: grid; gap: 2px; color: var(--muted-text); font-size: 9px; font-weight: 600; }
 .unified-boq-catalog-cell { padding: 6px 8px !important; }
 .inline-catalog-cell { display: grid; min-width: 0; gap: 3px; }
 .inline-catalog-status { color: var(--muted-text); font-size: 10px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; }

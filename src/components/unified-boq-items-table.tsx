@@ -1,19 +1,15 @@
 "use client"
 
-import { useState } from "react"
-import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { InlineCatalogCell } from "@/components/inline-catalog-cell"
 import {
-  componentCostView,
   isPricedUnifiedBoqRow,
   type UnifiedBoqPricedRow,
   type UnifiedBoqSection,
 } from "@/lib/boq-unified-rows"
 import type { InlineCatalogRowState } from "@/components/use-inline-catalog-matching"
-import type { BoqPricedItem } from "@/lib/boq-schema"
 
-type EditableBoqField = "code" | "desc" | "unit" | "qty" | "rate" | "type"
+type EditableBoqField = "desc" | "unit" | "qty" | "rate"
 
 export interface UnifiedBoqItemsTableProps {
   sections: UnifiedBoqSection[]
@@ -21,8 +17,6 @@ export interface UnifiedBoqItemsTableProps {
   disabled: boolean
   catalogState: (row: UnifiedBoqPricedRow) => InlineCatalogRowState
   onFieldChange: (row: UnifiedBoqPricedRow, field: EditableBoqField, value: string | number | undefined) => void
-  onComponentChange: (row: UnifiedBoqPricedRow, component: "material" | "labour", value: number) => void
-  onAllocate: (row: UnifiedBoqPricedRow, material: number, labour: number) => void
   onAcceptSuggestion: (row: UnifiedBoqPricedRow) => void
   onAiSuggest: (row: UnifiedBoqPricedRow) => void
   onDismissSuggestion: (row: UnifiedBoqPricedRow) => void
@@ -35,14 +29,35 @@ function currency(value: number): string {
   return `฿${value.toLocaleString()}`
 }
 
+function SourceCostEvidence({
+  label,
+  present,
+  value,
+  basis,
+}: {
+  label: "Material" | "Labour"
+  present: boolean
+  value: number
+  basis: "rate" | "total"
+}) {
+  if (!present) {
+    return <span className="unified-boq-source-cost-missing" aria-label={`${label} not provided`}>—</span>
+  }
+
+  return (
+    <span className="unified-boq-source-cost" aria-label={`${label} source ${basis}`}>
+      <span className="sr-only">{label} source {basis}</span>
+      <strong>{currency(value)}</strong>
+    </span>
+  )
+}
+
 export function UnifiedBoqItemsTable({
   sections,
   readOnly,
   disabled,
   catalogState,
   onFieldChange,
-  onComponentChange,
-  onAllocate,
   onAcceptSuggestion,
   onAiSuggest,
   onDismissSuggestion,
@@ -50,28 +65,11 @@ export function UnifiedBoqItemsTable({
   onExclude,
   onClearCatalogError = () => undefined,
 }: UnifiedBoqItemsTableProps) {
-  const [allocationKey, setAllocationKey] = useState<string | null>(null)
-  const [materialAllocation, setMaterialAllocation] = useState("0")
-  const [labourAllocation, setLabourAllocation] = useState("0")
   const rowStarts: number[] = []
   sections.reduce((rowStart, section) => {
     rowStarts.push(rowStart)
     return rowStart + section.rows.length
   }, 0)
-
-  const beginAllocation = (row: UnifiedBoqPricedRow) => {
-    setAllocationKey(row.key)
-    setMaterialAllocation("0")
-    setLabourAllocation("0")
-  }
-
-  const applyAllocation = (row: UnifiedBoqPricedRow) => {
-    const material = Number(materialAllocation)
-    const labour = Number(labourAllocation)
-    if (!Number.isFinite(material) || !Number.isFinite(labour) || material < 0 || labour < 0) return
-    onAllocate(row, material, labour)
-    setAllocationKey(null)
-  }
 
   return (
     <div className="unified-boq-table-scroll">
@@ -81,6 +79,7 @@ export function UnifiedBoqItemsTable({
             <th>Description</th>
             <th>Unit</th>
             <th className="num-col">Qty</th>
+            <th className="num-col">Rate</th>
             <th className="num-col">Material</th>
             <th className="num-col">Labour</th>
             <th className="num-col">Total</th>
@@ -95,17 +94,8 @@ export function UnifiedBoqItemsTable({
               rowStart={rowStarts[sectionIndex] ?? 0}
               readOnly={readOnly}
               disabled={disabled}
-              allocationKey={allocationKey}
-              materialAllocation={materialAllocation}
-              labourAllocation={labourAllocation}
               catalogState={catalogState}
               onFieldChange={onFieldChange}
-              onComponentChange={onComponentChange}
-              onBeginAllocation={beginAllocation}
-              onMaterialAllocationChange={setMaterialAllocation}
-              onLabourAllocationChange={setLabourAllocation}
-              onApplyAllocation={applyAllocation}
-              onCancelAllocation={() => setAllocationKey(null)}
               onAcceptSuggestion={onAcceptSuggestion}
               onAiSuggest={onAiSuggest}
               onDismissSuggestion={onDismissSuggestion}
@@ -120,17 +110,9 @@ export function UnifiedBoqItemsTable({
   )
 }
 
-interface FragmentSectionProps extends Omit<UnifiedBoqItemsTableProps, "sections" | "onAllocate"> {
+interface FragmentSectionProps extends Omit<UnifiedBoqItemsTableProps, "sections"> {
   section: UnifiedBoqSection
   rowStart: number
-  allocationKey: string | null
-  materialAllocation: string
-  labourAllocation: string
-  onBeginAllocation: (row: UnifiedBoqPricedRow) => void
-  onMaterialAllocationChange: (value: string) => void
-  onLabourAllocationChange: (value: string) => void
-  onApplyAllocation: (row: UnifiedBoqPricedRow) => void
-  onCancelAllocation: () => void
 }
 
 function FragmentSection({
@@ -138,17 +120,8 @@ function FragmentSection({
   rowStart,
   readOnly,
   disabled,
-  allocationKey,
-  materialAllocation,
-  labourAllocation,
   catalogState,
   onFieldChange,
-  onComponentChange,
-  onBeginAllocation,
-  onMaterialAllocationChange,
-  onLabourAllocationChange,
-  onApplyAllocation,
-  onCancelAllocation,
   onAcceptSuggestion,
   onAiSuggest,
   onDismissSuggestion,
@@ -159,7 +132,7 @@ function FragmentSection({
   return (
     <>
       <tr className="unified-boq-section-row">
-        <td colSpan={7}>{section.header || "Parsed Items"}</td>
+        <td colSpan={8}>{section.header || "Parsed Items"}</td>
       </tr>
       {section.rows.map((row, index) => {
         const rowNumber = rowStart + index + 1
@@ -173,20 +146,17 @@ function FragmentSection({
                   <span className="review-item-warning" key={`${warning.code}-${warningIndex}`}>{warning.message}</span>
                 ))}
               </td>
-              <td colSpan={4} className="unified-boq-informational-placeholder">—</td>
+              <td colSpan={5} className="unified-boq-informational-placeholder">—</td>
               <td className="num-col unified-boq-total">Included</td>
               <td className="unified-boq-catalog-cell"><span className="inline-catalog-status">Informational</span></td>
             </tr>
           )
         }
-        const cost = componentCostView(row.item)
         const rowCatalogState = catalogState(row)
-        const allocationOpen = allocationKey === row.key
         const locked = readOnly || disabled || rowCatalogState.busy !== null
-        const basisLabel = cost.basis === "total" ? "total" : "rate"
-        const component = row.item.costComponent
-        const showMaterial = component !== "labour"
-        const showLabour = component !== "material"
+        const evidenceBasis = row.item.type === "lump_sum" ? "total" : "rate"
+        const materialEvidence = row.item.sourceCosts?.material
+        const labourEvidence = row.item.sourceCosts?.labour
 
         return (
           <tr key={row.key} data-row-key={row.key}>
@@ -197,48 +167,6 @@ function FragmentSection({
                 disabled={locked}
                 onChange={(event) => onFieldChange(row, "desc", event.target.value)}
               />
-              <details className="unified-boq-row-details">
-                <summary>Row details</summary>
-                <div className="unified-boq-row-details-grid">
-                  {row.item.code !== undefined ? (
-                    <label>
-                      <span>Code</span>
-                      <Input
-                        aria-label={`Code for ${row.item.desc}, row ${rowNumber}`}
-                        value={row.item.code}
-                        disabled={locked}
-                        onChange={(event) => onFieldChange(row, "code", event.target.value || undefined)}
-                      />
-                    </label>
-                  ) : null}
-                  <label>
-                    <span>Type</span>
-                    <select
-                      aria-label={`Type for ${row.item.desc}, row ${rowNumber}`}
-                      value={row.item.type}
-                      disabled={locked}
-                      onChange={(event) => onFieldChange(row, "type", event.target.value as BoqPricedItem["type"])}
-                    >
-                      <option value="unit">Unit</option>
-                      <option value="lump_sum">Lump Sum</option>
-                      <option value="job">Job</option>
-                    </select>
-                  </label>
-                  {cost.allocationRequired ? (
-                    <label>
-                      <span>Aggregate rate</span>
-                      <Input
-                        aria-label={`Aggregate rate for ${row.item.desc}, row ${rowNumber}`}
-                        type="number"
-                        min="0"
-                        value={row.item.rate}
-                        disabled={locked}
-                        onChange={(event) => onFieldChange(row, "rate", Number(event.target.value))}
-                      />
-                    </label>
-                  ) : null}
-                </div>
-              </details>
               {row.item.extractionWarnings?.map((warning, warningIndex) => (
                 <span className="review-item-warning" key={`${warning.code}-${warningIndex}`}>{warning.message}</span>
               ))}
@@ -261,41 +189,32 @@ function FragmentSection({
                 onChange={(event) => onFieldChange(row, "qty", Number(event.target.value))}
               />
             </td>
-            {cost.allocationRequired ? (
-              <td colSpan={2} className="unified-boq-allocation-cell">
-                {allocationOpen && !locked ? (
-                  <div className="unified-boq-allocation-editor">
-                    <label>
-                      <span>Material</span>
-                      <Input aria-label={`Material allocation for ${row.item.desc}`} type="number" min="0" value={materialAllocation} disabled={locked} onChange={(event) => onMaterialAllocationChange(event.target.value)} />
-                    </label>
-                    <label>
-                      <span>Labour</span>
-                      <Input aria-label={`Labour allocation for ${row.item.desc}`} type="number" min="0" value={labourAllocation} disabled={locked} onChange={(event) => onLabourAllocationChange(event.target.value)} />
-                    </label>
-                    <Button type="button" size="sm" disabled={locked} onClick={() => onApplyAllocation(row)}>Apply</Button>
-                    <Button type="button" size="sm" variant="ghost" disabled={locked} onClick={onCancelAllocation}>Cancel</Button>
-                  </div>
-                ) : readOnly ? (
-                  <span className="unified-boq-not-split">Not split</span>
-                ) : (
-                  <Button type="button" size="sm" variant="outline" disabled={locked} onClick={() => onBeginAllocation(row)}>Allocate</Button>
-                )}
-              </td>
-            ) : (
-              <>
-                <td className="num-col unified-boq-component-cell" data-component="material">
-                  {showMaterial ? (
-                    <Input aria-label={`Material ${basisLabel} for ${row.item.desc}`} type="number" min="0" value={cost.material ?? 0} disabled={locked} onChange={(event) => onComponentChange(row, "material", Number(event.target.value))} />
-                  ) : "—"}
-                </td>
-                <td className="num-col unified-boq-component-cell" data-component="labour">
-                  {showLabour ? (
-                    <Input aria-label={`Labour ${basisLabel} for ${row.item.desc}`} type="number" min="0" value={cost.labour ?? 0} disabled={locked} onChange={(event) => onComponentChange(row, "labour", Number(event.target.value))} />
-                  ) : "—"}
-                </td>
-              </>
-            )}
+            <td className="num-col">
+              <Input
+                aria-label={`Rate for ${row.item.desc}, row ${rowNumber}`}
+                type="number"
+                min="0"
+                value={row.item.rate}
+                disabled={locked}
+                onChange={(event) => onFieldChange(row, "rate", Number(event.target.value))}
+              />
+            </td>
+            <td className="num-col unified-boq-component-cell" data-component="material">
+              <SourceCostEvidence
+                label="Material"
+                present={materialEvidence?.present === true}
+                value={evidenceBasis === "total" ? materialEvidence?.total ?? 0 : materialEvidence?.rate ?? 0}
+                basis={evidenceBasis}
+              />
+            </td>
+            <td className="num-col unified-boq-component-cell" data-component="labour">
+              <SourceCostEvidence
+                label="Labour"
+                present={labourEvidence?.present === true}
+                value={evidenceBasis === "total" ? labourEvidence?.total ?? 0 : labourEvidence?.rate ?? 0}
+                basis={evidenceBasis}
+              />
+            </td>
             <td className="num-col unified-boq-total">{currency(row.item.total)}</td>
             <td className="unified-boq-catalog-cell">
               <InlineCatalogCell

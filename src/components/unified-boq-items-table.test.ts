@@ -47,8 +47,6 @@ function renderTable(
     disabled: false,
     catalogState,
     onFieldChange: () => undefined,
-    onComponentChange: () => undefined,
-    onAllocate: () => undefined,
     onAcceptSuggestion: noopRow,
     onAiSuggest: noopRow,
     onDismissSuggestion: noopRow,
@@ -57,27 +55,15 @@ function renderTable(
   }))
 }
 
-test('keeps the unified BOQ columns while moving legacy fields into row details', () => {
+test('keeps rate visible in the canonical BOQ columns and removes legacy row details', () => {
   const html = renderTable([{ header: 'Valves', items: [item()] }])
   const headers = [...html.matchAll(/<th[^>]*>(.*?)<\/th>/g)].map((match) => match[1].replace(/<[^>]+>/g, ''))
 
-  assert.deepEqual(headers, ['Description', 'Unit', 'Qty', 'Material', 'Labour', 'Total', 'Catalog'])
-  assert.equal(headers.includes('Rate'), false)
+  assert.deepEqual(headers, ['Description', 'Unit', 'Qty', 'Rate', 'Material', 'Labour', 'Total', 'Catalog'])
   assert.equal(headers.includes('Type'), false)
   assert.equal(headers.includes('Code'), false)
-  assert.doesNotMatch(html, /review-component-badge/)
-})
-
-test('legacy aggregate rows can edit code, type, and rate without inventing a component split', () => {
-  const html = renderTable([{
-    header: 'Legacy',
-    items: [item({ code: 'LEG-01', costComponent: 'combined', sourceCosts: undefined })],
-  }])
-
-  assert.match(html, /Row details/)
-  assert.match(html, /aria-label="Code for Valve installation, row 1"[^>]*value="LEG-01"/)
-  assert.match(html, /aria-label="Type for Valve installation, row 1"/)
-  assert.match(html, /aria-label="Aggregate rate for Valve installation, row 1"[^>]*min="0"[^>]*value="100"/)
+  assert.match(html, /aria-label="Rate for Valve installation, row 1"[^>]*min="0"[^>]*value="100"/)
+  assert.doesNotMatch(html, /Row details|Aggregate rate|aria-label="Code|aria-label="Type/)
 })
 
 test('shows non-priced bundle children without matching or counting them twice', () => {
@@ -115,7 +101,7 @@ test('keeps separate material and labour rows with independent quantity and unit
   assert.match(html, /aria-label="Unit for Stub-end 6B, row 2"[^>]*value="Db"/)
 })
 
-test('renders component rates only in the applicable column for single-component rows', () => {
+test('keeps separate component rows independently priced without duplicating their rate as evidence', () => {
   const html = renderTable([{
     header: 'Valve work',
     items: [
@@ -124,41 +110,44 @@ test('renders component rates only in the applicable column for single-component
     ],
   }])
 
-  assert.match(html, /aria-label="Material rate for Material only"[^>]*value="2808"/)
-  assert.match(html, /data-component="labour"[^>]*>—<\/td>/)
-  assert.match(html, /data-component="material"[^>]*>—<\/td>/)
-  assert.match(html, /aria-label="Labour rate for Labour only"[^>]*value="300"/)
+  assert.match(html, /aria-label="Rate for Material only, row 1"[^>]*value="2808"/)
+  assert.match(html, /aria-label="Rate for Labour only, row 2"[^>]*value="300"/)
+  assert.doesNotMatch(html, /aria-label="Material (?:rate|total)|aria-label="Labour (?:rate|total)/)
 })
 
-test('combined rows render editable material and labour component inputs', () => {
+test('combined rows render shared source-cost evidence as compact read-only values', () => {
   const html = renderTable([{
     header: 'Combined work',
     items: [item({
       desc: 'Combined valve',
+      rate: 3108,
+      total: 24864,
       sourceCosts: {
         material: { present: true, qty: 8, unit: 'Pcs', rate: 2808, total: 22464 },
-        labour: { present: true, qty: 48, unit: 'Db', rate: 300, total: 14400 },
+        labour: { present: true, qty: 8, unit: 'Pcs', rate: 300, total: 2400 },
       },
     })],
   }])
 
-  assert.match(html, /aria-label="Material rate for Combined valve"[^>]*value="2808"/)
-  assert.match(html, /aria-label="Labour rate for Combined valve"[^>]*value="300"/)
+  assert.match(html, /aria-label="Rate for Combined valve, row 1"[^>]*value="3108"/)
+  assert.match(html, /Material source rate[^<]*<\/span><strong>฿2,808<\/strong>/)
+  assert.match(html, /Labour source rate[^<]*<\/span><strong>฿300<\/strong>/)
+  assert.doesNotMatch(html, /aria-label="Material (?:rate|total)|aria-label="Labour (?:rate|total)/)
 })
 
-test('unknown component splits require explicit allocation and do not render inferred cost inputs', () => {
+test('missing source component prices remain visibly unprovided and cannot be allocated', () => {
   const html = renderTable([{ header: 'Unknown split', items: [item({ desc: 'Allowance', sourceCosts: undefined })] }])
 
-  assert.match(html, />Allocate</)
-  assert.doesNotMatch(html, /aria-label="Material (?:rate|total) for Allowance"/)
-  assert.doesNotMatch(html, /aria-label="Labour (?:rate|total) for Allowance"/)
-  assert.match(tableSource, /onAllocate\(row, material, labour\)/)
+  assert.match(html, /Material not provided/)
+  assert.match(html, /Labour not provided/)
+  assert.doesNotMatch(html, />Allocate<|allocation editor|onAllocate\(/i)
+  assert.doesNotMatch(tableSource, /onComponentChange|onAllocate|materialAllocation|labourAllocation/)
 })
 
 test('renders each section as one full-width row and catalog controls inline with every item', () => {
   const html = renderTable([{ header: 'ON-OFF VALVE INSTALLATION', items: [item({ desc: 'Loose flange' })] }])
 
-  assert.match(html, /class="unified-boq-section-row"[\s\S]*?<td colSpan="7">ON-OFF VALVE INSTALLATION<\/td>/)
+  assert.match(html, /class="unified-boq-section-row"[\s\S]*?<td colSpan="8">ON-OFF VALVE INSTALLATION<\/td>/)
   assert.match(html, /data-od-id="inline-catalog-section:0:id:item-1"/)
   assert.match(html, />Unmatched</)
 })
@@ -170,10 +159,10 @@ test('disables only an active catalog row while its suggestion request is in fli
     error: null,
   }))
   const busyDescription = html.match(/<input[^>]*aria-label="Description for Busy row, row 1"/)?.[0] ?? ''
-  const busyMaterial = html.match(/<input[^>]*aria-label="Material rate for Busy row"/)?.[0] ?? ''
+  const busyRate = html.match(/<input[^>]*aria-label="Rate for Busy row, row 1"/)?.[0] ?? ''
   const otherDescription = html.match(/<input[^>]*aria-label="Description for Other row, row 2"/)?.[0] ?? ''
 
   assert.match(busyDescription, /\sdisabled=""/)
-  assert.match(busyMaterial, /\sdisabled=""/)
+  assert.match(busyRate, /\sdisabled=""/)
   assert.doesNotMatch(otherDescription, /\sdisabled=""/)
 })
