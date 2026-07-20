@@ -16,6 +16,7 @@ export type ProposalValidationFailureCode =
   | 'invalid_shape'
   | 'unknown_operation'
   | 'invalid_confidence'
+  | 'run_identity_mismatch'
   | 'unknown_source_row'
   | 'missing_source_evidence'
   | 'unknown_target_item'
@@ -79,6 +80,7 @@ export type ProposedExtractionItem = ProposalPricedItem | ProposalBundleChild
 
 export interface ExtractionProposal {
   id: string
+  extractionRunId: string
   operation: ProposalOperation
   sourceRowIds: string[]
   targetItemIds: string[]
@@ -89,6 +91,7 @@ export interface ExtractionProposal {
 }
 
 export interface ProposalValidationContext {
+  extractionRunId: string
   sourceRows: ReadonlyArray<Pick<BoqSourceRowV3, 'id'>>
   sourceEvidence: Readonly<Record<string, ProposalSourceEvidence>>
   sections: readonly BoqSection[]
@@ -144,6 +147,18 @@ function hasUniqueStrings(values: unknown): values is string[] {
   return Array.isArray(values) && values.every(nonBlankString) && new Set(values).size === values.length
 }
 
+function validOptionalState(item: Record<string, unknown>): boolean {
+  if (item.optional !== undefined && typeof item.optional !== 'boolean') return false
+  if (item.excludedFromTotal !== undefined && typeof item.excludedFromTotal !== 'boolean') return false
+  if (item.exclusionReason !== undefined && item.exclusionReason !== null && typeof item.exclusionReason !== 'string') return false
+  const excluded = item.excludedFromTotal === true
+  const optional = item.optional === true
+  const reason = item.exclusionReason
+  if (excluded && (!optional || typeof reason !== 'string' || reason.trim() === '')) return false
+  if (!excluded && reason !== undefined && reason !== null) return false
+  return true
+}
+
 function digest(value: unknown): string {
   return `sha256:${createHash('sha256').update(stableCanonicalJson(value)).digest('hex')}`
 }
@@ -172,7 +187,7 @@ function quotedTotal(sourceRowIds: readonly string[], context: ProposalValidatio
   let sum = 0
   for (const sourceRowId of sourceRowIds) {
     const evidence = context.sourceEvidence[sourceRowId]
-    if (!evidence || !finiteNonNegative(evidence.quotedTotal)) return null
+    if (!evidence || !Object.prototype.hasOwnProperty.call(evidence, 'quotedTotal') || !finiteNonNegative(evidence.quotedTotal)) return null
     sum += evidence.quotedTotal
   }
   return Number.isFinite(sum) ? sum : null
@@ -196,8 +211,10 @@ function validProposedItem(
     || !nonBlankString(item.desc)
     || !PRICING_ROLES.has(item.pricingRole as string)
     || !hasUniqueStrings(item.sourceRowIds)
+    || item.sourceRowIds.length === 0
     || item.sourceRowIds.some((sourceRowId) => !proposalSourceRowIds.includes(sourceRowId))
     || item.entryOrigin !== 'ai_accepted'
+    || !validOptionalState(item)
   ) return false
 
   if (item.pricingRole === 'bundle_child') {
@@ -229,6 +246,8 @@ function validateOperation(proposal: ExtractionProposal, context: ProposalValida
     return fail('invalid_operation_shape')
   }
   if (proposal.operation === 'keep' || proposal.operation === 'needs_human_review') {
+    if (proposal.targetItemIds.length === 0 || proposal.sourceRowIds.length === 0) return fail('invalid_operation_shape')
+    if (expectedTotal === null) return fail('missing_source_evidence')
     return validProposal(proposal)
   }
   if (expectedTotal === null) return fail('missing_source_evidence')
@@ -301,26 +320,30 @@ function validProposal(proposal: ExtractionProposal): ProposalValidationResult {
 export function validateProposal(value: unknown, context: ProposalValidationContext): ProposalValidationResult {
   if (!isRecord(value)
     || !nonBlankString(value.id)
-    || !PROPOSAL_OPERATIONS.includes(value.operation as ProposalOperation)
+    || !nonBlankString(value.operation)
     || !Array.isArray(value.sourceRowIds)
     || !value.sourceRowIds.every(nonBlankString)
     || !Array.isArray(value.targetItemIds)
     || !value.targetItemIds.every(nonBlankString)
     || !isRecord(value.affectedItemFingerprints)
-    || !finiteNonNegative(value.confidence)
-    || value.confidence > 1
     || !nonBlankString(value.explanation)
     || !Array.isArray(value.proposedItems)
   ) return fail('invalid_shape')
 
+  if (!PROPOSAL_OPERATIONS.includes(value.operation as ProposalOperation)) return fail('unknown_operation')
+  if (!finiteNonNegative(value.confidence) || value.confidence > 1) return fail('invalid_confidence')
+  if (!nonBlankString(value.extractionRunId)) return fail('run_identity_mismatch')
+
   const proposal = value as unknown as ExtractionProposal
+  if (proposal.extractionRunId !== context.extractionRunId) return fail('run_identity_mismatch')
+  if (proposal.sourceRowIds.length === 0) return fail('invalid_operation_shape')
   if (new Set(proposal.sourceRowIds).size !== proposal.sourceRowIds.length) return fail('duplicate_source_row')
   if (new Set(proposal.targetItemIds).size !== proposal.targetItemIds.length) return fail('invalid_operation_shape')
   const knownSourceRows = new Set(context.sourceRows.map((row) => row.id))
   if (proposal.sourceRowIds.some((sourceRowId) => !knownSourceRows.has(sourceRowId))) return fail('unknown_source_row')
   const known = knownItems(context.sections)
   if (proposal.targetItemIds.some((itemId) => !known.has(itemId))) return fail('unknown_target_item')
-  if (proposal.operation !== 'needs_human_review' && proposal.targetItemIds.length === 0) return fail('invalid_operation_shape')
+  if (proposal.targetItemIds.length === 0) return fail('invalid_operation_shape')
   if (Object.keys(proposal.affectedItemFingerprints).length !== proposal.targetItemIds.length
     || proposal.targetItemIds.some((itemId) => typeof proposal.affectedItemFingerprints[itemId] !== 'string'
       || proposal.affectedItemFingerprints[itemId] !== fingerprintCanonicalItem(known.get(itemId)!))) {
@@ -389,7 +412,7 @@ function toCanonicalItem(item: ProposedExtractionItem): BoqItem {
     total: item.total,
     type: item.costComponent === 'lump_sum' ? 'lump_sum' : 'unit',
     costComponent: item.costComponent,
-    stdStatus: item.excludedFromTotal ? 'excluded' : 'unmatched',
+    stdStatus: item.excludedFromTotal === true ? 'excluded' : 'unmatched',
   }
   return priced
 }

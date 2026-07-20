@@ -26,6 +26,7 @@ const sections: BoqSection[] = [{
 
 function context(overrides: Partial<ProposalValidationContext> = {}): ProposalValidationContext {
   return {
+    extractionRunId: 'run-1',
     sourceRows: [{ id: 'row-combined' }, { id: 'row-extra' }],
     sourceEvidence: {
       'row-combined': {
@@ -44,18 +45,20 @@ function context(overrides: Partial<ProposalValidationContext> = {}): ProposalVa
 
 function separateComponentsProposal(overrides: Record<string, unknown> = {}) {
   return {
-    id: 'proposal-components', operation: 'separate_components', sourceRowIds: ['row-combined'],
+    id: 'proposal-components', extractionRunId: 'run-1', operation: 'separate_components', sourceRowIds: ['row-combined'],
     targetItemIds: ['combined-work'],
     affectedItemFingerprints: { 'combined-work': fingerprintCanonicalItem(sections[0].items[0]) },
     confidence: 0.96, explanation: 'The quote lists distinct material and labour amounts.',
     proposedItems: [
       {
         id: 'pump-material', desc: 'Pump material', pricingRole: 'standard', sourceRowIds: ['row-combined'],
-        entryOrigin: 'ai_accepted', unit: 'set', qty: 1, rate: 40, total: 40, costComponent: 'material',
+        entryOrigin: 'ai_accepted', optional: false, excludedFromTotal: false, exclusionReason: null,
+        unit: 'set', qty: 1, rate: 40, total: 40, costComponent: 'material',
       },
       {
         id: 'pump-labour', desc: 'Pump labour', pricingRole: 'standard', sourceRowIds: ['row-combined'],
-        entryOrigin: 'ai_accepted', unit: 'set', qty: 1, rate: 60, total: 60, costComponent: 'labour',
+        entryOrigin: 'ai_accepted', optional: false, excludedFromTotal: false, exclusionReason: null,
+        unit: 'set', qty: 1, rate: 60, total: 60, costComponent: 'labour',
       },
     ],
     ...overrides,
@@ -84,6 +87,7 @@ test('rejects aggregate-price allocation without source component prices', () =>
 
 test('validates all operation shapes without silently applying review-only proposals', () => {
   const common = {
+    extractionRunId: 'run-1',
     sourceRowIds: ['row-combined'], targetItemIds: ['combined-work'],
     affectedItemFingerprints: { 'combined-work': fingerprintCanonicalItem(sections[0].items[0]) },
     confidence: 0.91, explanation: 'Evidence checked.',
@@ -97,7 +101,7 @@ test('validates all operation shapes without silently applying review-only propo
 
 test('keep records explicit acceptance without replacing the deterministic structure', () => {
   const proposal = validateProposal({
-    id: 'keep-apply', operation: 'keep', sourceRowIds: ['row-combined'], targetItemIds: ['combined-work'],
+    id: 'keep-apply', extractionRunId: 'run-1', operation: 'keep', sourceRowIds: ['row-combined'], targetItemIds: ['combined-work'],
     affectedItemFingerprints: { 'combined-work': fingerprintCanonicalItem(sections[0].items[0]) },
     confidence: 0.91, explanation: 'The deterministic item already matches the evidence.', proposedItems: [],
   }, context())
@@ -108,7 +112,7 @@ test('keep records explicit acceptance without replacing the deterministic struc
 
 test('validates split, merge, and bundle totals against source evidence', () => {
   const split = validateProposal({
-    id: 'split', operation: 'split', sourceRowIds: ['row-combined'], targetItemIds: ['combined-work'],
+    id: 'split', extractionRunId: 'run-1', operation: 'split', sourceRowIds: ['row-combined'], targetItemIds: ['combined-work'],
     affectedItemFingerprints: { 'combined-work': fingerprintCanonicalItem(sections[0].items[0]) },
     confidence: 0.91, explanation: 'Two priced source lines.',
     proposedItems: [
@@ -119,7 +123,7 @@ test('validates split, merge, and bundle totals against source evidence', () => 
   assert.equal(split.valid, true)
 
   const merge = validateProposal({
-    id: 'merge', operation: 'merge', sourceRowIds: ['row-combined', 'row-extra'], targetItemIds: ['combined-work', 'pump-accessory'],
+    id: 'merge', extractionRunId: 'run-1', operation: 'merge', sourceRowIds: ['row-combined', 'row-extra'], targetItemIds: ['combined-work', 'pump-accessory'],
     affectedItemFingerprints: {
       'combined-work': fingerprintCanonicalItem(sections[0].items[0]),
       'pump-accessory': fingerprintCanonicalItem(sections[0].items[1]),
@@ -132,7 +136,7 @@ test('validates split, merge, and bundle totals against source evidence', () => 
   assert.equal(merge.valid, true)
 
   const bundle = validateProposal({
-    id: 'bundle', operation: 'create_bundle', sourceRowIds: ['row-combined'], targetItemIds: ['combined-work'],
+    id: 'bundle', extractionRunId: 'run-1', operation: 'create_bundle', sourceRowIds: ['row-combined'], targetItemIds: ['combined-work'],
     affectedItemFingerprints: { 'combined-work': fingerprintCanonicalItem(sections[0].items[0]) },
     confidence: 0.91, explanation: 'One aggregate price with information-only children.',
     proposedItems: [
@@ -176,7 +180,7 @@ test('rejects negative values, duplicate source rows, and merge totals that do n
     valid: false, code: 'duplicate_source_row',
   })
   const badMerge = validateProposal({
-    id: 'bad-merge', operation: 'merge', sourceRowIds: ['row-combined', 'row-extra'],
+    id: 'bad-merge', extractionRunId: 'run-1', operation: 'merge', sourceRowIds: ['row-combined', 'row-extra'],
     targetItemIds: ['combined-work', 'pump-accessory'],
     affectedItemFingerprints: {
       'combined-work': fingerprintCanonicalItem(sections[0].items[0]),
@@ -199,4 +203,50 @@ test('a second application or modified accepted structure is refused instead of 
   const modified = structuredClone(accepted.sections)
   modified[0].items[0] = { ...modified[0].items[0], desc: 'Later user edit' }
   assert.throws(() => undoAcceptedProposal(modified, accepted.audit), /changed after acceptance/)
+})
+
+test('requires run-bound, non-empty source evidence for every review operation', () => {
+  assert.deepEqual(validateProposal(separateComponentsProposal({ sourceRowIds: [] }), context()), {
+    valid: false, code: 'invalid_operation_shape',
+  })
+  assert.deepEqual(validateProposal(separateComponentsProposal({ extractionRunId: 'run-other' }), context()), {
+    valid: false, code: 'run_identity_mismatch',
+  })
+  assert.deepEqual(validateProposal({
+    id: 'keep-no-evidence', extractionRunId: 'run-1', operation: 'keep', sourceRowIds: ['row-combined'],
+    targetItemIds: ['combined-work'], affectedItemFingerprints: { 'combined-work': fingerprintCanonicalItem(sections[0].items[0]) },
+    confidence: 0.95, explanation: 'No source payload.', proposedItems: [],
+  }, context({ sourceEvidence: {} })), { valid: false, code: 'missing_source_evidence' })
+  assert.deepEqual(validateProposal({
+    id: 'human-no-target', extractionRunId: 'run-1', operation: 'needs_human_review', sourceRowIds: ['row-combined'],
+    targetItemIds: [], affectedItemFingerprints: {}, confidence: 0.95, explanation: 'Needs a person.', proposedItems: [],
+  }, context()), { valid: false, code: 'invalid_operation_shape' })
+})
+
+test('rejects malformed exclusion flags and relationships, including zero-source replacements', () => {
+  const malformed = separateComponentsProposal()
+  const malformedItem = malformed.proposedItems[0] as unknown as Record<string, unknown>
+  malformedItem.excludedFromTotal = 'yes'
+  assert.deepEqual(validateProposal(malformed, context()), { valid: false, code: 'invalid_shape' })
+  const reasonWithoutExclusion = separateComponentsProposal()
+  const reasonItem = reasonWithoutExclusion.proposedItems[0] as unknown as Record<string, unknown>
+  reasonItem.exclusionReason = 'not excluded'
+  assert.deepEqual(validateProposal(reasonWithoutExclusion, context()), { valid: false, code: 'invalid_shape' })
+  const excludedWithoutOptional = separateComponentsProposal()
+  const excludedItem = excludedWithoutOptional.proposedItems[0] as unknown as Record<string, unknown>
+  excludedItem.excludedFromTotal = true
+  excludedItem.exclusionReason = 'Optional source row'
+  assert.deepEqual(validateProposal(excludedWithoutOptional, context()), { valid: false, code: 'invalid_shape' })
+  const zeroSource = separateComponentsProposal({
+    sourceRowIds: ['row-combined'],
+    proposedItems: [{ ...separateComponentsProposal().proposedItems[0], sourceRowIds: [], total: 0, rate: 0 }],
+  })
+  assert.deepEqual(validateProposal(zeroSource, context()), { valid: false, code: 'invalid_shape' })
+})
+
+test('returns dedicated operation and confidence failures for malformed model output', () => {
+  const valid = separateComponentsProposal()
+  assert.deepEqual(validateProposal({ ...valid, operation: 'invent_price' }, context()), { valid: false, code: 'unknown_operation' })
+  assert.deepEqual(validateProposal({ ...valid, confidence: 2 }, context()), { valid: false, code: 'invalid_confidence' })
+  assert.deepEqual(validateProposal({ ...valid, confidence: Number.NaN }, context()), { valid: false, code: 'invalid_confidence' })
 })
