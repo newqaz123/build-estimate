@@ -169,7 +169,7 @@ export function fingerprintCanonicalItem(item: BoqItem): string {
   return digest(item)
 }
 
-function fingerprintSections(sections: readonly BoqSection[]): string {
+export function fingerprintCanonicalSections(sections: readonly BoqSection[]): string {
   return digest(sections)
 }
 
@@ -504,13 +504,13 @@ export function applyValidatedProposal(
     proposalId: proposal.id,
     operation: proposal.operation,
     beforeSections,
-    beforeSectionsFingerprint: fingerprintSections(beforeSections),
-    afterSectionsFingerprint: fingerprintSections(nextSections),
+    beforeSectionsFingerprint: fingerprintCanonicalSections(beforeSections),
+    afterSectionsFingerprint: fingerprintCanonicalSections(nextSections),
   }
   return { sections: nextSections, audit }
 }
 
 export function undoAcceptedProposal(sections: readonly BoqSection[], audit: ProposalAcceptanceAudit): BoqSection[] {
-  if (fingerprintSections(sections) !== audit.afterSectionsFingerprint) throw new ProposalUndoConflictError()
+  if (fingerprintCanonicalSections(sections) !== audit.afterSectionsFingerprint) throw new ProposalUndoConflictError()
   return structuredClone(audit.beforeSections)
 }
