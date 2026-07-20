@@ -402,6 +402,7 @@ test('v3 staging failure cleans run then source, but uncertain cleanup preserves
   assert.deepEqual(calls, [])
 
   calls.length = 0
+  let sourceDeleted = false
   await assert.rejects(
     () => importPdfAtomically(pdfFile(), 'boq-1', serviceDependencies({
       parsePdfWithDocling: async () => validV3Payload(),
@@ -409,11 +410,11 @@ test('v3 staging failure cleans run then source, but uncertain cleanup preserves
         createRun: async () => 'exists_staging',
         writeSourceRows: async () => { throw new Error('shared run write failed') },
       }),
-      deleteSourcePdf: async () => { calls.push('source:delete') },
+      deleteSourcePdf: async () => { sourceDeleted = true },
     })),
     /cleanup outcome is unknown/i,
   )
-  assert.deepEqual(calls, [])
+  assert.equal(sourceDeleted, false)
 })
 
 test('zero-item v3 import still finalizes a ready reviewable draft', async () => {
