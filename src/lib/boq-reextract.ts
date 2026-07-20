@@ -52,7 +52,8 @@ export async function reextractBoqSource(boqId: string, dependencies: ReextractD
   let persisted: BoqExtractionRun
   try {
     persisted = await dependencies.persistRun({ run, rows: draft.run.sourceRows })
-  } catch {
+  } catch (error) {
+    if (error instanceof ReextractError) throw error
     throw new ReextractError('run_persistence_failed')
   }
   // Only the active evidence pointer changes. Saved sections, metadata, catalog

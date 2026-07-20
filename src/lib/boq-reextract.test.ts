@@ -69,3 +69,12 @@ test('re-extraction requires a retained source and a v3 parse without mutating c
   await assert.rejects(() => reextractBoqSource('boq-1', dependencies({ loadSource: async () => { throw new Error('storage unavailable') } })), (error: unknown) => error instanceof ReextractError && error.code === 'source_unavailable')
   await assert.rejects(() => reextractBoqSource('boq-1', dependencies({ parsePdfWithDocling: async () => ({ contractVersion: 2 } as DoclingResult) })), /v3/)
 })
+
+test('re-extraction preserves a typed read-only conflict raised during final persistence', async () => {
+  await assert.rejects(
+    () => reextractBoqSource('boq-1', dependencies({
+      persistRun: async () => { throw new ReextractError('read_only') },
+    })),
+    (error: unknown) => error instanceof ReextractError && error.code === 'read_only',
+  )
+})

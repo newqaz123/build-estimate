@@ -2,6 +2,7 @@ import type { Firestore } from 'firebase-admin/firestore'
 import type { BoqExtractionRun } from './boq-extraction-run'
 import type { BoqSourceRowV3 } from './boq-extraction-schema'
 import { createFirestoreExtractionStore, extractionRunPath, type ExtractionStore } from './boq-extraction-storage'
+import { ReextractError } from './boq-reextract'
 
 const SOURCE_ROW_BATCH_SIZE = 200
 
@@ -34,6 +35,7 @@ export function createFirestoreReextractionPersistence(db: Firestore, now: () =>
         const [snapshot, boqSnapshot] = await Promise.all([transaction.get(ref), transaction.get(boqRef)])
         const data = snapshot.data()
         if (!snapshot.exists || data?.status !== 'staging' || data.cleanupState || !boqSnapshot.exists) throw new Error('Re-extraction run is not staged')
+        if (boqSnapshot.data()?.status === 'approved') throw new ReextractError('read_only')
         if (data.verifiedSourceRowCount !== run.sourceRowCount || data.verifiedSourceRowChecksum !== run.sourceRowChecksum) {
           throw new Error('Re-extraction run has not passed source-row verification')
         }
