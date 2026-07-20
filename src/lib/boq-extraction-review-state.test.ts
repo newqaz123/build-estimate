@@ -3,12 +3,15 @@ import test from "node:test"
 
 import {
   acceptAllValidatedProposalIds,
+  beginReviewSnapshotRequest,
   extractionReviewReducer,
   filterReviewProposals,
   filterReviewSourceRows,
   initialExtractionReviewState,
   normalizeExtractionReviewResponse,
   extractionReviewRefreshAction,
+  invalidateReviewSnapshotRequests,
+  isLatestReviewSnapshotRequest,
 } from "./boq-extraction-review-state"
 import type { ExtractionReviewResponse } from "./boq-extraction-ai-review"
 import type { ProposalOperation, ValidatedProposal } from "./boq-extraction-proposals"
@@ -167,4 +170,31 @@ test("optimistic accepted state never exposes Undo before durable LIFO eligibili
   const accepted = extractionReviewReducer(loaded, { type: "proposal_status", proposalId: "p1", status: "accepted", canUndo: false })
   assert.equal(accepted.proposalStatuses.p1, "accepted")
   assert.equal(accepted.proposalCanUndo.p1, false)
+})
+
+test("durable review snapshots are latest-request-wins across reverse resolution and invalidation", async () => {
+  const generation = { current: 0 }
+  let visible = "initial"
+  let resolveOlder!: (value: string) => void
+  let resolveNewer!: (value: string) => void
+  const older = new Promise<string>((resolve) => { resolveOlder = resolve })
+  const newer = new Promise<string>((resolve) => { resolveNewer = resolve })
+  const olderRequest = beginReviewSnapshotRequest(generation)
+  const olderCommit = older.then((value) => {
+    if (isLatestReviewSnapshotRequest(generation, olderRequest)) visible = value
+  })
+  const newerRequest = beginReviewSnapshotRequest(generation)
+  const newerCommit = newer.then((value) => {
+    if (isLatestReviewSnapshotRequest(generation, newerRequest)) visible = value
+  })
+
+  resolveNewer("newest stale and undo state")
+  await newerCommit
+  resolveOlder("obsolete state")
+  await olderCommit
+  assert.equal(visible, "newest stale and undo state")
+
+  const invalidatedRequest = beginReviewSnapshotRequest(generation)
+  invalidateReviewSnapshotRequests(generation)
+  assert.equal(isLatestReviewSnapshotRequest(generation, invalidatedRequest), false)
 })

@@ -7,12 +7,15 @@ import { calculateBoqTotals } from '@/lib/boq-pricing'
 import { BoqCanonicalValidationError, parseCanonicalBoqSections } from '@/lib/boq-canonical'
 
 export type BoqDetailRouteContext = { params: Promise<{ id: string }> }
-export type BoqUpdateResult = 'updated' | 'approved' | 'not-found'
+export type BoqUpdateDecision =
+  | { kind: 'update'; updates: Record<string, unknown> }
+  | { kind: 'rejected'; status: 400; body: Record<string, unknown> }
+export type BoqUpdateResult = 'updated' | 'approved' | 'not-found' | Extract<BoqUpdateDecision, { kind: 'rejected' }>
 
 interface BoqDetailDependencies {
   authenticate(): Promise<{ user?: unknown } | null>
   getBoq(id: string): Promise<Boq | null>
-  updateBoq(id: string, updates: Record<string, unknown>): Promise<BoqUpdateResult>
+  updateBoq(id: string, prepareUpdate: (current: Boq) => BoqUpdateDecision): Promise<BoqUpdateResult>
   deleteBoq(id: string): Promise<void>
   loadSource(path: string): Promise<Buffer>
   deleteSource(path: string): Promise<void>
@@ -50,11 +53,11 @@ export function createBoqDetailHandlers(dependencies: BoqDetailDependencies) {
       if (!existing) return Response.json({ error: 'BOQ not found' }, { status: 404 })
 
       const body = await request.json()
-      const updates: Record<string, unknown> = {}
+      const requestedUpdates: Record<string, unknown> = {}
 
-      if (body.project !== undefined) updates.project = body.project
-      if (body.vendor !== undefined) updates.vendor = body.vendor
-      if (body.vendorId !== undefined) updates.vendorId = body.vendorId
+      if (body.project !== undefined) requestedUpdates.project = body.project
+      if (body.vendor !== undefined) requestedUpdates.vendor = body.vendor
+      if (body.vendorId !== undefined) requestedUpdates.vendorId = body.vendorId
       if (body.workType !== undefined) {
         if (!['Structural', 'MEP', 'Finishing', 'Unclassified'].includes(body.workType)) {
           return Response.json(
@@ -62,44 +65,52 @@ export function createBoqDetailHandlers(dependencies: BoqDetailDependencies) {
             { status: 400 },
           )
         }
-        updates.workType = body.workType
+        requestedUpdates.workType = body.workType
       }
-      if (body.date !== undefined) updates.date = body.date
+      if (body.date !== undefined) requestedUpdates.date = body.date
       if (body.status !== undefined) {
         const validStatuses = ['draft', 'parsed', 'active', 'review', 'approved', 'rejected']
         if (!validStatuses.includes(body.status)) {
           return Response.json({ error: 'Invalid status' }, { status: 400 })
         }
-        updates.status = body.status
+        requestedUpdates.status = body.status
       }
       const hasSections = body.sections !== undefined
-      if (hasSections || body.status === 'approved') {
-        const sections = parseCanonicalBoqSections(hasSections ? body.sections : existing.sections)
-        updates.sections = sections
-        const { totalItems, grandTotal } = computeTotals(sections)
-        updates.totalItems = totalItems
-        updates.grandTotal = grandTotal
-      }
-
-      const candidate = { ...existing, ...updates } as Boq
-      const verification = verifyBoqLocally(candidate)
-      if (candidate.status === 'approved' && verification.hasBlockingIssues) {
-        return Response.json(
-          { error: 'Resolve required BOQ fields before approval', verification },
-          { status: 400 },
-        )
-      }
-      if (candidate.status === 'approved') {
-        const catalogReadiness = getBoqCatalogReadiness(candidate)
-        if (catalogReadiness.blocking > 0) {
-          return Response.json(
-            { error: 'Resolve catalog items before approval', catalogReadiness },
-            { status: 400 },
-          )
+      const requestSections = hasSections ? parseCanonicalBoqSections(body.sections) : undefined
+      const updateResult = await dependencies.updateBoq(id, (current) => {
+        const updates = { ...requestedUpdates }
+        if (requestSections || body.status === 'approved') {
+          const sections = requestSections ?? parseCanonicalBoqSections(current.sections)
+          updates.sections = sections
+          const { totalItems, grandTotal } = computeTotals(sections)
+          updates.totalItems = totalItems
+          updates.grandTotal = grandTotal
         }
-      }
 
-      const updateResult = await dependencies.updateBoq(id, updates)
+        const candidate = { ...current, ...updates } as Boq
+        const verification = verifyBoqLocally(candidate)
+        if (candidate.status === 'approved' && verification.hasBlockingIssues) {
+          return {
+            kind: 'rejected',
+            status: 400,
+            body: { error: 'Resolve required BOQ fields before approval', verification },
+          }
+        }
+        if (candidate.status === 'approved') {
+          const catalogReadiness = getBoqCatalogReadiness(candidate)
+          if (catalogReadiness.blocking > 0) {
+            return {
+              kind: 'rejected',
+              status: 400,
+              body: { error: 'Resolve catalog items before approval', catalogReadiness },
+            }
+          }
+        }
+        return { kind: 'update', updates }
+      })
+      if (typeof updateResult === 'object') {
+        return Response.json(updateResult.body, { status: updateResult.status })
+      }
       if (updateResult === 'approved') {
         return Response.json({ error: 'Approved BOQs are read-only' }, { status: 409 })
       }

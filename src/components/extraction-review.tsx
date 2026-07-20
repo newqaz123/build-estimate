@@ -18,11 +18,14 @@ import { Button } from "@/components/ui/button"
 import type { ExtractionReviewResponse, ExtractionReviewSourceRow } from "@/lib/boq-extraction-ai-review"
 import {
   acceptAllValidatedProposalIds,
+  beginReviewSnapshotRequest,
   extractionReviewRefreshAction,
   extractionReviewReducer,
   filterReviewProposals,
   filterReviewSourceRows,
   initialExtractionReviewState,
+  invalidateReviewSnapshotRequests,
+  isLatestReviewSnapshotRequest,
   normalizeExtractionReviewResponse,
   type ExtractionProposalAction,
   type ExtractionReviewFilter,
@@ -137,6 +140,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBack, onBoqChang
   const autoReviewedRunRef = useRef<string | null>(null)
   const recoveryAttemptRef = useRef<string | null>(null)
   const canonicalRevisionRef = useRef(canonicalRevisionKey)
+  const reviewSnapshotGenerationRef = useRef(0)
   const { review, loading, error, proposalActions: actions, proposalStatuses: statuses } = state
 
   const runReview = useCallback(async (sourceRowId?: string) => {
@@ -144,6 +148,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBack, onBoqChang
       dispatch({ type: "review_failed", error: "This BOQ has no immutable extraction evidence. Re-extract the source to create review proposals without overwriting saved edits." })
       return
     }
+    invalidateReviewSnapshotRequests(reviewSnapshotGenerationRef)
     dispatch({ type: "review_started", sourceRowId })
     try {
       const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/extraction-runs/${encodeURIComponent(extractionRunId)}/review`, {
@@ -168,17 +173,19 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBack, onBoqChang
     if (!extractionRunId || autoReviewedRunRef.current === extractionRunId) return
     autoReviewedRunRef.current = extractionRunId
     let active = true
+    const requestGeneration = beginReviewSnapshotRequest(reviewSnapshotGenerationRef)
     void (async () => {
       dispatch({ type: "review_started" })
       try {
         const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/extraction-runs/${encodeURIComponent(extractionRunId)}/review`)
-        if (!active) return
+        if (!active || !isLatestReviewSnapshotRequest(reviewSnapshotGenerationRef, requestGeneration)) return
         if (!response.ok) {
           if (!readOnly) return void runReview()
           throw new Error(await readError(response, "Saved extraction review could not be loaded."))
         }
         const normalized = normalizeExtractionReviewResponse(await response.json())
         if (!normalized) throw new Error("Saved extraction review returned an unsupported response.")
+        if (!active || !isLatestReviewSnapshotRequest(reviewSnapshotGenerationRef, requestGeneration)) return
         const refreshAction = extractionReviewRefreshAction(normalized, readOnly)
         const recoveryKey = `${extractionRunId}:${normalized.reviewRun?.status ?? "legacy"}:${normalized.reviewRun?.requestKey ?? ""}:${normalized.reviewRun?.leaseExpiresAt ?? "missing"}`
         if (refreshAction === "dispatch") recoveryAttemptRef.current = recoveryKey
@@ -186,11 +193,15 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBack, onBoqChang
         if (normalized.proposalStatuses) dispatch({ type: "proposal_statuses", statuses: normalized.proposalStatuses })
         if (refreshAction === "dispatch") void runReview()
       } catch (cause) {
-        if (active) dispatch({ type: "review_failed", error: cause instanceof Error ? cause.message : "Saved extraction review could not be loaded." })
+        if (active && isLatestReviewSnapshotRequest(reviewSnapshotGenerationRef, requestGeneration)) dispatch({ type: "review_failed", error: cause instanceof Error ? cause.message : "Saved extraction review could not be loaded." })
       }
     })()
     return () => { active = false }
   }, [boq.id, extractionRunId, readOnly, runReview])
+
+  useEffect(() => () => {
+    invalidateReviewSnapshotRequests(reviewSnapshotGenerationRef)
+  }, [boq.id, extractionRunId])
 
   useEffect(() => {
     if (!extractionRunId || !review) return
@@ -206,18 +217,19 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBack, onBoqChang
     recoveryAttemptRef.current = null
     let active = true
     const timer = window.setTimeout(() => {
+      const requestGeneration = beginReviewSnapshotRequest(reviewSnapshotGenerationRef)
       void fetch(`/api/boqs/${encodeURIComponent(boq.id)}/extraction-runs/${encodeURIComponent(extractionRunId)}/review`)
         .then(async (response) => {
           if (!response.ok) throw new Error(await readError(response, "Running extraction review could not be refreshed."))
           return normalizeExtractionReviewResponse(await response.json())
         })
         .then((normalized) => {
-          if (!active || !normalized) return
+          if (!active || !normalized || !isLatestReviewSnapshotRequest(reviewSnapshotGenerationRef, requestGeneration)) return
           dispatch({ type: "review_succeeded", response: normalized })
           if (normalized.proposalStatuses) dispatch({ type: "proposal_statuses", statuses: normalized.proposalStatuses })
         })
         .catch((cause) => {
-          if (active) dispatch({ type: "review_failed", error: cause instanceof Error ? cause.message : "Running extraction review could not be refreshed." })
+          if (active && isLatestReviewSnapshotRequest(reviewSnapshotGenerationRef, requestGeneration)) dispatch({ type: "review_failed", error: cause instanceof Error ? cause.message : "Running extraction review could not be refreshed." })
         })
     }, 1_000)
     return () => { active = false; window.clearTimeout(timer) }
@@ -225,15 +237,18 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBack, onBoqChang
 
   const refreshStoredReview = useCallback(async () => {
     if (!extractionRunId) return false
+    const requestGeneration = beginReviewSnapshotRequest(reviewSnapshotGenerationRef)
     try {
       const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/extraction-runs/${encodeURIComponent(extractionRunId)}/review`)
       if (!response.ok) throw new Error(await readError(response, "Extraction review state could not be refreshed."))
       const normalized = normalizeExtractionReviewResponse(await response.json())
       if (!normalized) throw new Error("Saved extraction review returned an unsupported response.")
+      if (!isLatestReviewSnapshotRequest(reviewSnapshotGenerationRef, requestGeneration)) return false
       dispatch({ type: "review_succeeded", response: normalized })
       if (normalized.proposalStatuses) dispatch({ type: "proposal_statuses", statuses: normalized.proposalStatuses })
       return true
     } catch (cause) {
+      if (!isLatestReviewSnapshotRequest(reviewSnapshotGenerationRef, requestGeneration)) return false
       dispatch({ type: "review_failed", error: cause instanceof Error ? cause.message : "Extraction review state could not be refreshed." })
       return false
     }

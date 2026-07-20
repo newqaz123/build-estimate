@@ -150,9 +150,12 @@ function detailHarness(existing: Boq = detailBoq()) {
   const handlers = createBoqDetailHandlers({
     authenticate: async () => ({ user: {} }),
     getBoq: async () => current,
-    updateBoq: async (_id, update) => {
-      updates.push(update)
-      current = current ? { ...current, ...update } as Boq : null
+    updateBoq: async (_id, prepareUpdate) => {
+      if (!current) return 'not-found'
+      const decision = prepareUpdate(current)
+      if (decision.kind === 'rejected') return decision
+      updates.push(decision.updates)
+      current = { ...current, ...decision.updates } as Boq
       return 'updated'
     },
     loadSource: async () => {
@@ -194,6 +197,40 @@ test('approval builds and verifies the candidate while recomputing section total
   const body = await response.json()
   assert.equal('sourceStoragePath' in body, false)
   assert.equal(body.sourceAvailable, true)
+})
+
+test('approval validates the transaction snapshot after a concurrent draft mutation', async () => {
+  const preRead = detailBoq()
+  let stored = detailBoq({ vendor: ' ' })
+  let transactionAttempted = false
+  const handlers = createBoqDetailHandlers({
+    authenticate: async () => ({ user: {} }),
+    getBoq: async () => preRead,
+    updateBoq: async (_id, prepareUpdate) => {
+      transactionAttempted = true
+      assert.equal(typeof prepareUpdate, 'function')
+      const decision = prepareUpdate(stored)
+      if (decision.kind === 'rejected') return decision
+      stored = { ...stored, ...decision.updates } as Boq
+      return 'updated'
+    },
+    deleteBoq: async () => {},
+    loadSource: async () => Buffer.from('%PDF'),
+    deleteSource: async () => {},
+    saveSource: async () => {},
+    logError: () => {},
+  })
+
+  const response = await handlers.PUT(new Request('http://localhost/api/boqs/boq-1', {
+    method: 'PUT',
+    body: JSON.stringify({ status: 'approved' }),
+  }), detailContext)
+
+  assert.equal(transactionAttempted, true)
+  assert.equal(response.status, 400)
+  assert.equal((await response.json()).error, 'Resolve required BOQ fields before approval')
+  assert.equal(stored.status, 'draft')
+  assert.equal(stored.vendor, ' ')
 })
 
 test('approval reparses stored sections when the partial PUT omits sections', async (t) => {
@@ -338,9 +375,11 @@ test('stale PUT after approval returns 409 without overwriting the approved BOQ'
       }
       return stored
     },
-    updateBoq: async (_id, update) => {
+    updateBoq: async (_id, prepareUpdate) => {
       if (stored.status === 'approved') return 'approved'
-      stored = { ...stored, ...update } as Boq
+      const decision = prepareUpdate(stored)
+      if (decision.kind === 'rejected') return decision
+      stored = { ...stored, ...decision.updates } as Boq
       return 'updated'
     },
     deleteBoq: async () => {},

@@ -15,12 +15,15 @@ import { createBoqDetailHandlers, type BoqDetailRouteContext } from './handler'
 const handlers = createBoqDetailHandlers({
   authenticate: auth,
   getBoq: (id) => getDocument<Boq>('boqs', id),
-  updateBoq: (id, updates) => runTransaction(async (transaction, db) => {
+  updateBoq: (id, prepareUpdate) => runTransaction(async (transaction, db) => {
     const ref = db.collection('boqs').doc(id)
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) return 'not-found'
     if (snapshot.data()?.status === 'approved') return 'approved'
-    transaction.update(ref, { ...updates, updatedAt: new Date().toISOString() })
+    const current = { id: snapshot.id, ...snapshot.data() } as Boq
+    const decision = prepareUpdate(current)
+    if (decision.kind === 'rejected') return decision
+    transaction.update(ref, { ...decision.updates, updatedAt: new Date().toISOString() })
     return 'updated'
   }),
   deleteBoq: (id) => runTransaction(async (transaction, db) => {

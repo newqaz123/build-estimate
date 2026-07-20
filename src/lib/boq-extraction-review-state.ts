@@ -7,6 +7,23 @@ export type ExtractionReviewFilter = "all" | "pending" | "accepted" | "rejected"
 export type ExtractionReviewSourceFilter = Extract<ExtractionReviewFilter, "ambiguous" | "unreconciled" | "ai-pending">
 export type ExtractionProposalAction = "accepting" | "rejecting" | "undoing"
 
+export interface ReviewSnapshotGeneration {
+  current: number
+}
+
+export function beginReviewSnapshotRequest(generation: ReviewSnapshotGeneration): number {
+  generation.current += 1
+  return generation.current
+}
+
+export function isLatestReviewSnapshotRequest(generation: ReviewSnapshotGeneration, requestGeneration: number): boolean {
+  return generation.current === requestGeneration
+}
+
+export function invalidateReviewSnapshotRequests(generation: ReviewSnapshotGeneration): void {
+  generation.current += 1
+}
+
 export interface ExtractionReviewState {
   review: ExtractionReviewResponse | null
   proposalStatuses: ExtractionProposalStatusMap
