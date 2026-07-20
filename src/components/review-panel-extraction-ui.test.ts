@@ -9,7 +9,7 @@ test('the review panel keeps compound evidence and accepted suggestions visibly 
   assert.match(source, /data-od-id=\{`extraction-proposal-\$\{proposal\.id\}`\}/)
   assert.match(source, /Informational bundle child/)
   assert.match(source, /Source: \{sourceReferenceLabel\(reference\)\}/)
-  assert.match(source, /item\.optional \? <span[^>]*>Optional · excluded from total/)
+  assert.match(source, /item\.optional \? <span[^>]*>\{item\.excludedFromTotal === true \? "Optional · excluded from total" : "Optional"\}/)
 })
 
 test('the review panel requires deliberate accept/reject actions and supports safe bulk accept and undo', () => {

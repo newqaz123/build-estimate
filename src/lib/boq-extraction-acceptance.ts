@@ -1,6 +1,6 @@
 import type { Boq, BoqSection } from './boq-schema'
 import { calculateBoqTotals } from './boq-pricing'
-import type { BoqExtractionRun } from './boq-extraction-run'
+import { stableCanonicalJson, type BoqExtractionRun } from './boq-extraction-run'
 import type { BoqSourceRowV3, DerivedPricedItemV3 } from './boq-extraction-schema'
 import {
   applyValidatedProposal,
@@ -11,6 +11,7 @@ import {
   type ProposalAcceptanceAudit,
   type ProposalSourceEvidence,
   type ProposalValidationFailureCode,
+  type ProposedExtractionItem,
   type ValidatedProposal,
 } from './boq-extraction-proposals'
 
@@ -31,10 +32,16 @@ export interface ExtractionProposalAudit {
   explanation: string
   sourceRowIds: string[]
   sourceRefs: Array<{ sourceRowId: string; page: number; table: number; row: number }>
+  proposedItems: ProposedExtractionItem[]
+  evidenceValid?: boolean
+  reconciled?: boolean
+  stale?: boolean
   beforeSections: BoqSection[]
   beforeSectionsFingerprint: string
   afterSections: BoqSection[]
   afterSectionsFingerprint: string
+  /** Exact BOQ returned by the initial accepted action; never rebuild retries from current metadata. */
+  resultBoq?: Boq
 }
 
 /** Append-only event written separately from the accepted proposal audit. */
@@ -53,6 +60,8 @@ export interface ExtractionProposalUndoEvent {
   afterSectionsFingerprint: string
   resultTotalItems: number
   resultGrandTotal: number
+  /** Exact BOQ returned by the initial undo action; never rebuild retries from current metadata. */
+  resultBoq?: Boq
 }
 
 export type ProposalAcceptanceResult =
@@ -101,8 +110,10 @@ function toAudit(
   input: { proposal: ExtractionProposal; actorId: string; now: string; sourceRows: readonly BoqSourceRowV3[] },
   status: ExtractionProposalAuditStatus,
   state: ProposalAcceptanceAudit & { sections?: BoqSection[] },
+  resultBoq?: Boq,
 ): ExtractionProposalAudit {
   const afterSections = state.sections ?? state.beforeSections
+  const proposal = input.proposal as ExtractionProposal & Partial<ValidatedProposal>
   return {
     auditId: `${input.proposal.id}:${input.now}`,
     proposalId: input.proposal.id,
@@ -117,10 +128,15 @@ function toAudit(
     explanation: input.proposal.explanation,
     sourceRowIds: [...input.proposal.sourceRowIds],
     sourceRefs: sourceRefs(input.sourceRows, input.proposal.sourceRowIds),
+    proposedItems: structuredClone(input.proposal.proposedItems),
+    ...(proposal.evidenceValid === undefined ? {} : { evidenceValid: proposal.evidenceValid }),
+    ...(proposal.reconciled === undefined ? {} : { reconciled: proposal.reconciled }),
+    ...(proposal.stale === undefined ? {} : { stale: proposal.stale }),
     beforeSections: structuredClone(state.beforeSections),
     beforeSectionsFingerprint: state.beforeSectionsFingerprint,
     afterSections: structuredClone(afterSections),
     afterSectionsFingerprint: state.afterSectionsFingerprint,
+    ...(resultBoq ? { resultBoq: structuredClone(resultBoq) } : {}),
   }
 }
 
@@ -143,14 +159,34 @@ export function validateExtractionProposal(
 }
 
 export function proposalMatchesAudit(proposal: ExtractionProposal, audit: ExtractionProposalAudit): boolean {
-  return proposal.id === audit.proposalId
-    && proposal.extractionRunId === audit.extractionRunId
-    && proposal.operation === audit.operation
-    && proposal.confidence === audit.confidence
-    && proposal.explanation === audit.explanation
-    && JSON.stringify(proposal.sourceRowIds) === JSON.stringify(audit.sourceRowIds)
-    && JSON.stringify(proposal.targetItemIds) === JSON.stringify(audit.targetItemIds)
-    && JSON.stringify(proposal.affectedItemFingerprints) === JSON.stringify(audit.affectedItemFingerprints)
+  const validated = proposal as ExtractionProposal & Partial<ValidatedProposal>
+  return stableCanonicalJson({
+    id: proposal.id,
+    extractionRunId: proposal.extractionRunId,
+    operation: proposal.operation,
+    sourceRowIds: proposal.sourceRowIds,
+    targetItemIds: proposal.targetItemIds,
+    affectedItemFingerprints: proposal.affectedItemFingerprints,
+    confidence: proposal.confidence,
+    explanation: proposal.explanation,
+    proposedItems: proposal.proposedItems,
+    evidenceValid: validated.evidenceValid ?? true,
+    reconciled: validated.reconciled ?? true,
+    stale: validated.stale ?? false,
+  }) === stableCanonicalJson({
+    id: audit.proposalId,
+    extractionRunId: audit.extractionRunId,
+    operation: audit.operation,
+    sourceRowIds: audit.sourceRowIds,
+    targetItemIds: audit.targetItemIds,
+    affectedItemFingerprints: audit.affectedItemFingerprints,
+    confidence: audit.confidence,
+    explanation: audit.explanation,
+    proposedItems: audit.proposedItems,
+    evidenceValid: audit.evidenceValid ?? true,
+    reconciled: audit.reconciled ?? true,
+    stale: audit.stale ?? false,
+  })
 }
 
 export function acceptExtractionProposal(input: {
@@ -164,7 +200,11 @@ export function acceptExtractionProposal(input: {
 }): ProposalAcceptanceResult {
   if (input.existingAudit) {
     if (!proposalMatchesAudit(input.proposal, input.existingAudit)) return { kind: 'invalid', code: 'run_identity_mismatch' }
-    if (input.existingAudit.status === 'accepted') return { kind: 'already_accepted', boq: withTotals(input.boq, input.existingAudit.afterSections), audit: input.existingAudit }
+    if (input.existingAudit.status === 'accepted') {
+      if (!input.existingAudit.resultBoq) return { kind: 'invalid', code: 'run_identity_mismatch' }
+      const replay = structuredClone(input.existingAudit.resultBoq)
+      return { kind: 'already_accepted', boq: replay, audit: input.existingAudit }
+    }
     if (input.existingAudit.status === 'rejected') return { kind: 'rejected', audit: input.existingAudit }
     return { kind: 'invalid', code: 'stale_item' }
   }
@@ -174,10 +214,11 @@ export function acceptExtractionProposal(input: {
   try {
     const accepted = applyValidatedProposal(input.boq.sections, validation.proposal)
     const next = withTotals(input.boq, accepted.sections)
+    const validatedInput = { ...input, proposal: validation.proposal }
     return {
       kind: 'accepted',
       boq: next,
-      audit: toAudit(input, 'accepted', { ...accepted.audit, sections: accepted.sections }),
+      audit: toAudit(validatedInput, 'accepted', { ...accepted.audit, sections: accepted.sections }, next),
     }
   } catch {
     return { kind: 'invalid', code: 'stale_item' }
@@ -191,8 +232,11 @@ export function rejectExtractionProposal(input: {
   now: string
   existingAudit: ExtractionProposalAudit | null
   sourceRows?: readonly BoqSourceRowV3[]
-}): { kind: 'rejected'; audit: ExtractionProposalAudit } | { kind: 'already_recorded'; audit: ExtractionProposalAudit } {
-  if (input.existingAudit) return { kind: 'already_recorded', audit: input.existingAudit }
+}): { kind: 'rejected'; audit: ExtractionProposalAudit } | { kind: 'already_recorded'; audit: ExtractionProposalAudit } | { kind: 'invalid'; code: 'run_identity_mismatch' } {
+  if (input.existingAudit) {
+    if (!proposalMatchesAudit(input.proposal, input.existingAudit)) return { kind: 'invalid', code: 'run_identity_mismatch' }
+    return { kind: 'already_recorded', audit: input.existingAudit }
+  }
   const beforeSections = structuredClone(input.boq?.sections ?? [])
   // A rejection has no BOQ mutation, but records the exact proposal and action.
   const audit: ExtractionProposalAudit = {
@@ -203,6 +247,10 @@ export function rejectExtractionProposal(input: {
     operation: input.proposal.operation, confidence: input.proposal.confidence, explanation: input.proposal.explanation,
     targetItemIds: [...input.proposal.targetItemIds], affectedItemFingerprints: { ...input.proposal.affectedItemFingerprints },
     sourceRowIds: [...input.proposal.sourceRowIds], sourceRefs: sourceRefs(input.sourceRows ?? [], input.proposal.sourceRowIds),
+    proposedItems: structuredClone(input.proposal.proposedItems),
+    ...((input.proposal as Partial<ValidatedProposal>).evidenceValid === undefined ? {} : { evidenceValid: (input.proposal as Partial<ValidatedProposal>).evidenceValid }),
+    ...((input.proposal as Partial<ValidatedProposal>).reconciled === undefined ? {} : { reconciled: (input.proposal as Partial<ValidatedProposal>).reconciled }),
+    ...((input.proposal as Partial<ValidatedProposal>).stale === undefined ? {} : { stale: (input.proposal as Partial<ValidatedProposal>).stale }),
     beforeSections, afterSections: structuredClone(beforeSections),
     beforeSectionsFingerprint: fingerprintCanonicalSections(beforeSections),
     afterSectionsFingerprint: fingerprintCanonicalSections(beforeSections),
@@ -245,6 +293,7 @@ export function undoExtractionProposal(input: {
         afterSectionsFingerprint: fingerprintCanonicalSections(next.sections),
         resultTotalItems: next.totalItems,
         resultGrandTotal: next.grandTotal,
+        resultBoq: structuredClone(next),
       },
     }
   } catch {

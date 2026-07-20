@@ -5,6 +5,7 @@ import type { BoqExtractionRun } from './boq-extraction-run'
 import type { BoqSourceRowV3 } from './boq-extraction-schema'
 import {
   acceptExtractionProposal,
+  proposalMatchesAudit,
   rejectExtractionProposal,
   undoExtractionProposal,
   type ExtractionProposalAudit,
@@ -41,13 +42,47 @@ test('explicit acceptance validates, preserves audit evidence, and excludes bund
   assert.equal(result.audit.afterSections[0].items[0].id, 'material')
 })
 
-test('duplicate acceptance returns the original audit without a second mutation', () => {
+test('duplicate acceptance replays the exact recorded BOQ snapshot after canonical metadata changes', () => {
   const first = acceptExtractionProposal({ boq, run, sourceRows: rows, proposal: proposal(), actorId: 'user-1', now: '2026-07-20T10:00:00.000Z', existingAudit: null })
   assert.equal(first.kind, 'accepted')
   if (first.kind !== 'accepted') return
-  const retry = acceptExtractionProposal({ boq: first.boq, run, sourceRows: rows, proposal: proposal(), actorId: 'user-1', now: '2026-07-20T10:01:00.000Z', existingAudit: first.audit })
+  const retry = acceptExtractionProposal({
+    boq: { ...first.boq, project: 'User-edited project', updatedAt: '2026-07-20T10:01:00.000Z' },
+    run,
+    sourceRows: rows,
+    proposal: proposal(),
+    actorId: 'user-1',
+    now: '2026-07-20T10:01:00.000Z',
+    existingAudit: first.audit,
+  })
   assert.equal(retry.kind, 'already_accepted')
-  if (retry.kind === 'already_accepted') assert.equal(retry.audit.auditId, first.audit.auditId)
+  if (retry.kind === 'already_accepted') {
+    assert.equal(retry.audit.auditId, first.audit.auditId)
+    assert.deepEqual(retry.boq, first.boq)
+  }
+})
+
+test('accepted replay fails closed when its result snapshot is unavailable', () => {
+  const first = acceptExtractionProposal({ boq, run, sourceRows: rows, proposal: proposal(), actorId: 'user-1', now: '2026-07-20T10:00:00.000Z', existingAudit: null })
+  assert.equal(first.kind, 'accepted')
+  if (first.kind !== 'accepted') return
+  const legacyAudit = structuredClone(first.audit)
+  delete legacyAudit.resultBoq
+  const retry = acceptExtractionProposal({ boq: first.boq, run, sourceRows: rows, proposal: proposal(), actorId: 'user-1', now: '2026-07-20T10:01:00.000Z', existingAudit: legacyAudit })
+  assert.equal(retry.kind, 'invalid')
+})
+
+test('proposal replay identity includes proposed items and validation evidence state', () => {
+  const first = acceptExtractionProposal({ boq, run, sourceRows: rows, proposal: proposal(), actorId: 'user-1', now: '2026-07-20T10:00:00.000Z', existingAudit: null })
+  assert.equal(first.kind, 'accepted')
+  if (first.kind !== 'accepted') return
+  const alteredItems = proposal({ proposedItems: proposal().proposedItems.map((item) => ({ ...item, desc: `${item.desc} (altered)` })) })
+  assert.equal(proposalMatchesAudit(alteredItems, first.audit), false)
+  const validated = Object.assign(proposal(), { evidenceValid: true, reconciled: true, stale: false })
+  const acceptedWithValidated = acceptExtractionProposal({ boq, run, sourceRows: rows, proposal: validated, actorId: 'user-1', now: '2026-07-20T10:00:00.000Z', existingAudit: null })
+  assert.equal(acceptedWithValidated.kind, 'accepted')
+  if (acceptedWithValidated.kind !== 'accepted') return
+  assert.equal(proposalMatchesAudit(Object.assign(proposal(), { evidenceValid: true, reconciled: false, stale: false }), acceptedWithValidated.audit), false)
 })
 
 test('stale, unknown, and rejected proposals cannot mutate canonical sections', () => {
@@ -58,6 +93,19 @@ test('stale, unknown, and rejected proposals cannot mutate canonical sections', 
   if (rejected.kind !== 'rejected') return
   const accepted = acceptExtractionProposal({ boq, run, sourceRows: rows, proposal: proposal(), actorId: 'user-1', now: '2026-07-20T10:01:00.000Z', existingAudit: rejected.audit })
   assert.equal(accepted.kind, 'rejected')
+})
+
+test('rejected proposal retries enforce the recorded proposal payload', () => {
+  const rejected = rejectExtractionProposal({ proposal: proposal(), actorId: 'user-1', now: '2026-07-20T10:00:00.000Z', existingAudit: null })
+  assert.equal(rejected.kind, 'rejected')
+  if (rejected.kind !== 'rejected') return
+  const altered = rejectExtractionProposal({
+    proposal: proposal({ proposedItems: proposal().proposedItems.map((item) => ({ ...item, desc: `${item.desc} (altered)` })) }),
+    actorId: 'user-1',
+    now: '2026-07-20T10:01:00.000Z',
+    existingAudit: rejected.audit,
+  })
+  assert.equal(altered.kind, 'invalid')
 })
 
 test('undo restores exactly the recorded before state and refuses later edits', () => {

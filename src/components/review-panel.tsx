@@ -668,7 +668,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
                         <td><Input aria-label={`Rate for item ${idx + 1}`} type="number" value={item.rate} onChange={(event) => handleItemChange(idx, "rate", Number(event.target.value))} /></td>
                         <td className="num-col font-mono" title={allocation ? `${allocation.origin} ${allocation.basis}` : "No reliable split in source"}>{allocation ? `฿${allocation.material.toLocaleString()}` : "Not split"}</td>
                         <td className="num-col font-mono" title={allocation ? `${allocation.origin} ${allocation.basis}` : "No reliable split in source"}>{allocation ? `฿${allocation.labour.toLocaleString()}` : "Not split"}</td>
-                        <td className="num-col font-mono">฿{item.total.toLocaleString()}{item.optional ? <span className="review-optional-state">Optional · excluded from total</span> : null}</td>
+                        <td className="num-col font-mono">฿{item.total.toLocaleString()}{item.optional ? <span className="review-optional-state">{item.excludedFromTotal === true ? "Optional · excluded from total" : "Optional"}</span> : null}</td>
                         <td><span className={`review-std-badge ${item.stdStatus}`}>{item.stdStatus === "matched" ? "Matched" : item.stdStatus === "excluded" ? "Excluded" : item.stdStatus === "pending" ? "Suggested" : "—"}</span></td>
                       </tr>
                     )
