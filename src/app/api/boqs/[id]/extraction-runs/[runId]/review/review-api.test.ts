@@ -3,7 +3,7 @@ import test from 'node:test'
 import type { Boq } from '@/lib/boq-schema'
 import type { BoqExtractionRun } from '@/lib/boq-extraction-run'
 import type { BoqSourceRowV3 } from '@/lib/boq-extraction-schema'
-import { createExtractionReviewHandler, type ExtractionReviewHandlerDependencies } from './review-api'
+import { buildDurableExtractionReviewResponse, createExtractionReviewHandler, type ExtractionReviewHandlerDependencies } from './review-api'
 
 const boq = { id: 'boq-1', sections: [] } as unknown as Boq
 const run = { id: 'run-1', boqId: 'boq-1', status: 'ready' } as BoqExtractionRun
@@ -19,7 +19,11 @@ function handler(overrides: Partial<ExtractionReviewHandlerDependencies> = {}) {
     getReadyImport: async () => ({ boq, run }),
     getSourceRows: async () => rows,
     saveValidatedProposals: async () => undefined,
-    getReviewState: async () => ({ proposals: [], proposalStatuses: {}, auditEvents: [] }),
+    getReviewState: async () => ({ proposals: [], proposalStatuses: {}, auditEvents: [], reviewRun: { status: 'queued' } }),
+    acquireReviewLease: async () => ({ kind: 'acquired', reviewRun: { status: 'running', leaseId: 'lease-1' } }),
+    completeReviewLease: async (_boqId, _runId, _leaseId, status) => ({ status }),
+    failReviewLease: async (_boqId, _runId, _leaseId, failureCode) => ({ status: 'failed', failureCode }),
+    createLeaseId: () => 'lease-1',
     getSettings: async () => null,
     callProvider: async () => ({ content: '{"proposals":[]}', provider: 'openai', model: 'gpt-4o' }),
     env: {}, timeoutMs: 10,
@@ -85,6 +89,7 @@ test('review reload returns durable proposals and reconstructed action statuses'
       proposals: [stored as never],
       proposalStatuses: { 'stored-1': { status: 'accepted', canUndo: true } },
       auditEvents: [{ proposalId: 'stored-1', status: 'accepted' } as never],
+      reviewRun: { status: 'completed' },
     }),
   })(new Request('https://example.test', {
     method: 'POST', body: JSON.stringify({ manual: false }), headers: { 'Content-Type': 'application/json' },
@@ -93,4 +98,91 @@ test('review reload returns durable proposals and reconstructed action statuses'
   assert.deepEqual(body.proposals.map((proposal) => proposal.id), ['stored-1'])
   assert.equal(body.proposalStatuses['stored-1'].status, 'accepted')
   assert.equal(body.auditEvents.length, 1)
+})
+
+test('concurrent automatic dispatch makes one provider call while the second request observes the lease', async () => {
+  const selectedRun = {
+    ...run,
+    reviewTargeting: { candidateRowIds: ['row-1'], candidateCount: 1, unreconciled: false },
+    reconciliation: { itemTotal: 0, sourceTotal: 0, reconciled: true, difference: 0 }, sections: [],
+  }
+  let leased = false
+  let providerCalls = 0
+  const review = handler({
+    getReadyImport: async () => ({ boq, run: selectedRun }),
+    acquireReviewLease: async () => leased
+      ? { kind: 'busy', reviewRun: { status: 'running', leaseId: 'lease-1' } }
+      : (leased = true, { kind: 'acquired', reviewRun: { status: 'running', leaseId: 'lease-1' } }),
+    getSettings: async () => ({ llm: { provider: 'openai', model: 'gpt-4o-mini' } } as never),
+    env: { OPENAI_API_KEY: 'test-key' },
+    callProvider: async () => { providerCalls += 1; await new Promise((resolve) => setTimeout(resolve, 5)); return { content: '{"proposals":[]}', provider: 'openai', model: 'gpt-4o-mini' } },
+  })
+  const makeRequest = () => new Request('https://example.test', { method: 'POST', body: JSON.stringify({ manual: false }) })
+  await Promise.all([
+    review(makeRequest(), { params: Promise.resolve({ id: 'boq-1', runId: 'run-1' }) }),
+    review(makeRequest(), { params: Promise.resolve({ id: 'boq-1', runId: 'run-1' }) }),
+  ])
+  assert.equal(providerCalls, 1)
+})
+
+test('a durable failed lease prevents an immediate automatic provider retry', async () => {
+  const selectedRun = {
+    ...run,
+    reviewTargeting: { candidateRowIds: ['row-1'], candidateCount: 1, unreconciled: false },
+    reconciliation: { itemTotal: 0, sourceTotal: 0, reconciled: true, difference: 0 }, sections: [],
+  }
+  let failed = false
+  let providerCalls = 0
+  const review = handler({
+    getReadyImport: async () => ({ boq, run: selectedRun }),
+    acquireReviewLease: async () => failed
+      ? { kind: 'failed', reviewRun: { status: 'failed', failureCode: 'timeout', retryAfter: '2099-01-01T00:00:00.000Z' } }
+      : { kind: 'acquired', reviewRun: { status: 'running', leaseId: 'lease-1' } },
+    failReviewLease: async () => { failed = true; return { status: 'failed', failureCode: 'timeout' } },
+    getSettings: async () => ({ llm: { provider: 'openai', model: 'gpt-4o-mini' } } as never),
+    env: { OPENAI_API_KEY: 'test-key' },
+    callProvider: async () => { providerCalls += 1; throw new Error('timeout') },
+  })
+  const makeRequest = () => new Request('https://example.test', { method: 'POST', body: JSON.stringify({ manual: false }) })
+  await review(makeRequest(), { params: Promise.resolve({ id: 'boq-1', runId: 'run-1' }) })
+  await review(makeRequest(), { params: Promise.resolve({ id: 'boq-1', runId: 'run-1' }) })
+  assert.equal(providerCalls, 1)
+})
+
+test('durable GET/POST snapshots replace client state and include every candidate row once', () => {
+  const row2 = { ...rows[0]!, id: 'row-2', row: 4, rawText: 'Second candidate' }
+  const selectedRun = {
+    ...run,
+    reviewTargeting: { candidateRowIds: ['row-1', 'row-2'], candidateCount: 2, unreconciled: true },
+    reconciliation: { itemTotal: 0, sourceTotal: 10, reconciled: false, difference: -10 }, sections: [],
+  }
+  const response = buildDurableExtractionReviewResponse({
+    imported: { boq, run: selectedRun }, sourceRows: [...rows, row2],
+    stored: {
+      proposals: [], proposalStatuses: {}, auditEvents: [],
+      reviewRun: { status: 'running', reviewTargeting: { candidateRowIds: ['row-1', 'row-2'], unreconciled: true } },
+    },
+  })
+  assert.equal(response.snapshotMode, 'replace')
+  assert.deepEqual(response.sourceRowIds, ['row-1', 'row-2'])
+  assert.deepEqual(response.reviewRun.reviewTargeting, { candidateRowIds: ['row-1', 'row-2'], unreconciled: true })
+})
+
+test('a completed review refreshes every reviewed source row even when no proposal is returned', async () => {
+  const selectedRun = {
+    ...run,
+    reviewTargeting: { candidateRowIds: ['row-1'], candidateCount: 1, unreconciled: false },
+    reconciliation: { itemTotal: 0, sourceTotal: 0, reconciled: true, difference: 0 }, sections: [],
+  }
+  let refreshedRows: readonly string[] = []
+  const response = await handler({
+    getReadyImport: async () => ({ boq, run: selectedRun }),
+    getSettings: async () => ({ llm: { provider: 'openai', model: 'gpt-4o-mini' } } as never),
+    env: { OPENAI_API_KEY: 'test-key' },
+    saveValidatedProposals: async (_boqId, _runId, _proposals, sourceRowIds) => { refreshedRows = sourceRowIds },
+  })(new Request('https://example.test', { method: 'POST', body: JSON.stringify({ manual: false }) }), {
+    params: Promise.resolve({ id: 'boq-1', runId: 'run-1' }),
+  })
+  assert.equal(response.status, 200)
+  assert.deepEqual(refreshedRows, ['row-1'])
 })

@@ -81,6 +81,7 @@ export interface ExtractionReviewSourceRow {
 }
 
 export interface ExtractionReviewResponse {
+  snapshotMode?: 'replace'
   mode: 'ai' | 'fallback' | 'not_required'
   aiStatus: ExtractionReviewAiStatus
   message: string
@@ -93,6 +94,16 @@ export interface ExtractionReviewResponse {
   /** Durable server-owned action state reconstructed from proposal audit records. */
   proposalStatuses?: Record<string, { status: 'pending' | 'accepted' | 'rejected' | 'undone'; canUndo: boolean }>
   auditEvents?: Array<ExtractionProposalAudit | ExtractionProposalUndoEvent>
+  reviewRun?: {
+    status: 'queued' | 'running' | 'completed' | 'partial' | 'failed'
+    requestKey?: string
+    leaseId?: string
+    leaseExpiresAt?: string
+    failureCode?: string
+    retryAfter?: string
+    updatedAt?: string
+    reviewTargeting: { candidateRowIds: string[]; unreconciled: boolean }
+  }
   provider?: string
   model?: string
 }

@@ -4,8 +4,7 @@ import { getDb, getDocument } from '@/lib/db'
 import { callLLM } from '@/lib/llm'
 import { createFirestoreExtractionProposalStore } from '@/lib/boq-extraction-proposal-store'
 import type { WorkspaceSettings } from '@/lib/settings-schema'
-import { automaticReviewCandidateRowIds, extractionReviewSourceRefs, extractionReviewSourceRowDisplays } from '@/lib/boq-extraction-ai-review'
-import { createExtractionReviewHandler, type ExtractionReviewRouteContext } from './review-api'
+import { buildDurableExtractionReviewResponse, createExtractionReviewHandler, type ExtractionReviewRouteContext } from './review-api'
 
 const REVIEW_TIMEOUT_MS = 20_000
 
@@ -13,8 +12,12 @@ const handler = createExtractionReviewHandler({
   authenticate: auth,
   getReadyImport: (boqId, runId) => createFirestoreExtractionStore(getDb()).getReadyImport(boqId, runId),
   getSourceRows: (boqId, runId) => createFirestoreExtractionStore(getDb()).getSourceRows(boqId, runId),
-  saveValidatedProposals: (boqId, runId, proposals) => createFirestoreExtractionProposalStore(getDb()).saveValidatedProposals(boqId, runId, proposals),
+  saveValidatedProposals: (boqId, runId, proposals, refreshedSourceRowIds) => createFirestoreExtractionProposalStore(getDb()).saveValidatedProposals(boqId, runId, proposals, refreshedSourceRowIds),
   getReviewState: (boqId, runId) => createFirestoreExtractionProposalStore(getDb()).getReviewState(boqId, runId),
+  acquireReviewLease: (boqId, runId, requestKey, leaseId, ttl, force) => createFirestoreExtractionProposalStore(getDb()).acquireReviewLease(boqId, runId, requestKey, leaseId, ttl, force),
+  completeReviewLease: (boqId, runId, leaseId, status, proposals) => createFirestoreExtractionProposalStore(getDb()).completeReviewLease(boqId, runId, leaseId, status, proposals),
+  failReviewLease: (boqId, runId, leaseId, failureCode, retryDelayMs) => createFirestoreExtractionProposalStore(getDb()).failReviewLease(boqId, runId, leaseId, failureCode, retryDelayMs),
+  createLeaseId: () => crypto.randomUUID(),
   getSettings: () => getDocument<WorkspaceSettings>('settings', 'workspace'),
   callProvider: callLLM,
   env: process.env,
@@ -42,21 +45,7 @@ export async function GET(_request: Request, context: ExtractionReviewRouteConte
       proposalStore.getReviewState(id, runId),
     ])
     if (!imported || !stored) return Response.json({ error: 'Extraction run not found' }, { status: 404 })
-    const proposalRowIds = new Set(stored.proposals.flatMap((proposal) => proposal.sourceRowIds))
-    const candidateIds = automaticReviewCandidateRowIds(imported.run)
-    const visibleIds = proposalRowIds.size > 0 ? proposalRowIds : new Set(candidateIds)
-    const visibleRows = sourceRows.filter((row) => visibleIds.has(row.id))
-    return Response.json({
-      mode: stored.proposals.length > 0 ? 'ai' : 'not_required',
-      aiStatus: stored.proposals.length > 0 ? 'completed' : 'not_required',
-      message: stored.proposals.length > 0 ? 'Saved extraction suggestions loaded for review.' : 'No saved extraction suggestions are available.',
-      sourceRowIds: visibleRows.map((row) => row.id),
-      remainingCandidateRowIds: candidateIds.filter((rowId) => !proposalRowIds.has(rowId)),
-      sourceRefs: extractionReviewSourceRefs(visibleRows),
-      sourceRows: extractionReviewSourceRowDisplays(visibleRows),
-      rejectedProposals: [],
-      ...stored,
-    })
+    return Response.json(buildDurableExtractionReviewResponse({ imported, sourceRows, stored }))
   } catch {
     return Response.json({ error: 'Extraction review could not be loaded' }, { status: 500 })
   }

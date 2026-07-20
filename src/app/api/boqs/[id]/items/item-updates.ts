@@ -229,6 +229,7 @@ export function applyBoqItemUpdates(
 ): { boqs: Boq[]; standards: StandardEntry[]; affectedItems: number; affectedBoqs: number; affectedLinkCount: number } {
   const target = boqs.find((boq) => boq.id === boqId)
   if (!target) throw new BoqItemsValidationError('BOQ not found', 404)
+  if (target.status === 'approved') throw new BoqItemsValidationError('Approved BOQs cannot be edited.', 409)
   if (updateGroups.length === 0) throw new BoqItemsValidationError('At least one item update is required.')
 
   const updates = new Map<string, BoqItemUpdate>()
@@ -293,6 +294,15 @@ export function applyBoqItemUpdates(
     for (const key of collectStandardLinks(boqs, changed, standardsById.get(standardId)!).keys()) {
       linkToStandard.set(key, standardId)
     }
+  }
+  for (const candidate of boqs) {
+    if (candidate.status !== 'approved') continue
+    const wouldChange = candidate.sections.some((section, sectionIndex) => section.items.some((item) => {
+      if (item.stdId && changedStandards.has(item.stdId)) return true
+      const identityKey = getBoqItemIdentityKey(item)
+      return identityKey ? linkToStandard.has(makeLinkKey(candidate.id, sectionIndex, identityKey)) : false
+    }))
+    if (wouldChange) throw new BoqItemsValidationError('Approved BOQs cannot be edited.', 409)
   }
   const affectedLinkCount = [...standardChanges.keys()].reduce((sum, id) => {
     const standard = standardsById.get(id)

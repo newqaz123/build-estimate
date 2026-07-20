@@ -157,6 +157,23 @@ test('unlinked BOQ edits remain local and do not mutate the standard catalog', (
   assert.deepEqual(result.boqs[1]?.sections[0]?.items[0], item({ code: 'B-1', stdId: 'std-1', desc: 'Source concrete' }))
 })
 
+test('approved BOQs reject general item PATCH mutations', () => {
+  const approved = { ...boq('boq-approved', [item()]), status: 'approved' as const }
+  assert.throws(
+    () => applyBoqItemUpdates([approved], [], approved.id, [{ sectionIndex: 0, items: [{ itemCode: 'A-1', qty: 3 }] }]),
+    (error: unknown) => error instanceof Error && 'status' in error && error.status === 409,
+  )
+})
+
+test('canonical PATCH cannot propagate a linked standard mutation into an approved BOQ', () => {
+  const source = boq('boq-source', [item({ stdId: 'std-1' })])
+  const approved = { ...boq('boq-approved', [item({ code: 'B-1', stdId: 'std-1' })]), status: 'approved' as const }
+  assert.throws(
+    () => applyBoqItemUpdates([source, approved], [standard()], source.id, [{ sectionIndex: 0, items: [{ itemCode: 'A-1', desc: 'Changed canonical' }] }]),
+    (error: unknown) => error instanceof Error && 'status' in error && error.status === 409,
+  )
+})
+
 test('material and labour edits persist an allocation and reconcile the row rate', () => {
   const result = applyBoqItemUpdates(
     [boq('boq-1', [item({ stdStatus: 'unmatched' })])],
