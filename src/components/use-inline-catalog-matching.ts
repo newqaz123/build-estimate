@@ -84,11 +84,11 @@ export async function loadInlineCatalogSources(
       if (signal?.aborted || isAbortError(error)) throw error
       return null
     })
-  const standardsResponse = await fetchImpl("/api/standards", { signal })
+  const standardsPromise = fetchImpl("/api/standards", { signal })
+  const [settingsResult, standardsResponse] = await Promise.all([settingsPromise, standardsPromise])
   if (!standardsResponse.ok) throw new Error("The standard catalog could not be loaded.")
   const standardsResult: unknown = await standardsResponse.json()
   if (!Array.isArray(standardsResult)) throw new Error("The standard catalog returned an invalid response.")
-  const settingsResult = await settingsPromise
   return {
     standards: standardsResult as StandardEntry[],
     unitMap: safeUnitMap(settingsResult),

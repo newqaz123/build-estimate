@@ -420,6 +420,17 @@ test('settings failure falls back to an empty unit map without discarding loaded
   assert.deepEqual(result, { standards: catalog, unitMap: {} })
 })
 
+test('an early settings abort remains attached while the standards request is pending', async () => {
+  const abortError = new DOMException('Aborted', 'AbortError')
+  const fetchImpl: typeof fetch = async (input) => {
+    if (String(input) === '/api/settings') throw abortError
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    return Response.json([standard()])
+  }
+
+  await assert.rejects(loadInlineCatalogSources(fetchImpl), abortError)
+})
+
 test('the hook loads catalog and fuzzy settings once for each BOQ route', () => {
   const source = readFileSync(new URL('./use-inline-catalog-matching.ts', import.meta.url), 'utf8')
   assert.match(source, /fetchImpl\("\/api\/standards"/)
