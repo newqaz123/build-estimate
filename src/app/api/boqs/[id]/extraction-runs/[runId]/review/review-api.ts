@@ -47,6 +47,7 @@ export function buildDurableExtractionReviewResponse(input: {
     },
   }
   const proposalRowIds = new Set(input.stored.proposals.flatMap((proposal) => proposal.sourceRowIds))
+  const reviewedSourceRowIds = new Set(input.stored.reviewRun.reviewedSourceRowIds ?? proposalRowIds)
   const visibleIds = new Set([...reviewRun.reviewTargeting.candidateRowIds, ...proposalRowIds])
   const visibleRows = input.sourceRows.filter((row) => visibleIds.has(row.id))
   const failure = reviewRun.failureCode
@@ -63,7 +64,7 @@ export function buildDurableExtractionReviewResponse(input: {
         ? 'AI review is temporarily unavailable. The deterministic extraction remains unchanged.'
         : input.stored.proposals.length > 0 ? 'Saved extraction suggestions loaded for review.' : 'No saved extraction suggestions are available.',
     sourceRowIds: visibleRows.map((row) => row.id),
-    remainingCandidateRowIds: reviewRun.reviewTargeting.candidateRowIds.filter((rowId) => !proposalRowIds.has(rowId)),
+    remainingCandidateRowIds: reviewRun.reviewTargeting.candidateRowIds.filter((rowId) => !reviewedSourceRowIds.has(rowId)),
     sourceRefs: extractionReviewSourceRefs(visibleRows),
     sourceRows: extractionReviewSourceRowDisplays(visibleRows),
     rejectedProposals: input.rejectedProposals ?? [],
@@ -93,7 +94,7 @@ export function createExtractionReviewHandler(dependencies: ExtractionReviewHand
     const leaseId = dependencies.createLeaseId()
     let lease
     try {
-      lease = await dependencies.acquireReviewLease(id, runId, requestKey, leaseId, REVIEW_LEASE_MS, parsedRequest.manual)
+      lease = await dependencies.acquireReviewLease(id, runId, requestKey, leaseId, REVIEW_LEASE_MS, parsedRequest.manual || parsedRequest.force === true)
     } catch {
       return Response.json({ error: 'Extraction run not found' }, { status: 404 })
     }

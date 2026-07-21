@@ -172,6 +172,24 @@ export function filterReviewSourceRows(review: ReviewWithRunState, filter: Extra
   return review.sourceRows.filter((row) => pendingIds.has(row.sourceRowId))
 }
 
+export function selectReviewVisibility(
+  review: ExtractionReviewResponse,
+  statuses: ExtractionProposalStatusMap,
+  filter: ExtractionReviewFilter,
+): { proposals: ValidatedProposal[]; sourceRows: ExtractionReviewResponse["sourceRows"] } {
+  if (filter === "all") {
+    return { proposals: [...review.proposals], sourceRows: review.proposals.length === 0 ? [...review.sourceRows] : [] }
+  }
+  if (filter !== "ambiguous" && filter !== "unreconciled" && filter !== "ai-pending") {
+    return { proposals: filterReviewProposals(review.proposals, statuses, filter), sourceRows: [] }
+  }
+  const matchingRows = filterReviewSourceRows(review, filter)
+  const matchingRowIds = new Set(matchingRows.map((row) => row.sourceRowId))
+  const proposals = review.proposals.filter((proposal) => proposal.sourceRowIds.some((rowId) => matchingRowIds.has(rowId)))
+  const proposedRowIds = new Set(proposals.flatMap((proposal) => proposal.sourceRowIds))
+  return { proposals, sourceRows: matchingRows.filter((row) => !proposedRowIds.has(row.sourceRowId)) }
+}
+
 export type ExtractionReviewRefreshAction = "dispatch" | "poll" | "idle"
 
 export function extractionReviewRefreshAction(
@@ -234,6 +252,7 @@ function validProposalStatuses(value: unknown): boolean {
 function validReviewRun(value: unknown): boolean {
   if (value === undefined) return true
   if (!isRecord(value) || !["queued", "running", "completed", "partial", "failed"].includes(String(value.status))) return false
+  if (value.reviewedSourceRowIds !== undefined && !isStringArray(value.reviewedSourceRowIds)) return false
   if (!isRecord(value.reviewTargeting) || !isStringArray(value.reviewTargeting.candidateRowIds)
     || (value.reviewTargeting.ambiguousRowIds !== undefined && !isStringArray(value.reviewTargeting.ambiguousRowIds))
     || (value.reviewTargeting.unreconciledRowIds !== undefined && !isStringArray(value.reviewTargeting.unreconciledRowIds))

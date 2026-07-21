@@ -374,6 +374,16 @@ test('lease completion with zero proposals still atomically supersedes refreshed
   assert.equal((fixture.db.docs.get(fixture.runPath)?.reviewRun as { status?: string }).status, 'completed')
 })
 
+test('review lease completion durably unions rows reviewed without proposals', async () => {
+  const fixture = harness()
+  await fixture.store.acquireReviewLease('boq-1', 'run-1', 'request-1', 'lease-1', 1_000, false)
+  await fixture.store.completeReviewLease('boq-1', 'run-1', 'lease-1', 'completed', [], ['row-4'])
+  await fixture.store.acquireReviewLease('boq-1', 'run-1', 'request-2', 'lease-2', 1_000, true)
+  await fixture.store.completeReviewLease('boq-1', 'run-1', 'lease-2', 'completed', [], ['row-5'])
+
+  assert.deepEqual((await fixture.store.getReviewState('boq-1', 'run-1'))?.reviewRun.reviewedSourceRowIds, ['row-4', 'row-5'])
+})
+
 test('review leases preserve reason-specific targeting through completion and reload', async () => {
   const fixture = harness()
   fixture.db.docs.get(fixture.runPath)!.reviewTargeting = {

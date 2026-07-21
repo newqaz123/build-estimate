@@ -42,6 +42,7 @@ export type ExtractionReviewAiStatus =
 export interface ExtractionReviewRequest {
   sourceRowIds?: string[]
   manual: boolean
+  force?: boolean
   provider?: string
   model?: string
 }
@@ -102,6 +103,7 @@ export interface ExtractionReviewResponse {
     failureCode?: string
     retryAfter?: string
     updatedAt?: string
+    reviewedSourceRowIds?: string[]
     reviewTargeting: {
       candidateRowIds: string[]
       ambiguousRowIds?: string[]
@@ -141,9 +143,10 @@ function optionalString(value: unknown, name: string, max: number): string | und
 
 export function parseExtractionReviewRequest(value: unknown): ExtractionReviewRequest {
   if (!isRecord(value)) throw new ExtractionReviewRequestError('request must be an object')
-  const allowed = new Set(['sourceRowIds', 'manual', 'provider', 'model'])
+  const allowed = new Set(['sourceRowIds', 'manual', 'force', 'provider', 'model'])
   if (Object.keys(value).some((key) => !allowed.has(key))) throw new ExtractionReviewRequestError('request contains unsupported fields')
   if (value.manual !== undefined && typeof value.manual !== 'boolean') throw new ExtractionReviewRequestError('manual must be a boolean')
+  if (value.force !== undefined && typeof value.force !== 'boolean') throw new ExtractionReviewRequestError('force must be a boolean')
   let sourceRowIds: string[] | undefined
   if (value.sourceRowIds !== undefined) {
     const normalized = Array.isArray(value.sourceRowIds) && value.sourceRowIds.every(nonBlankString)
@@ -164,6 +167,7 @@ export function parseExtractionReviewRequest(value: unknown): ExtractionReviewRe
   return {
     ...(sourceRowIds ? { sourceRowIds } : {}),
     manual,
+    ...(value.force === true ? { force: true } : {}),
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),
   }

@@ -189,6 +189,11 @@ test('normalizes source row IDs before checking uniqueness', () => {
   )
 })
 
+test('accepts an explicit forced recheck and rejects malformed force values', () => {
+  assert.deepEqual(parseExtractionReviewRequest({ force: true }), { manual: false, force: true })
+  assert.throws(() => parseExtractionReviewRequest({ force: 'yes' }), /force must be a boolean/i)
+})
+
 test('automatic review caps candidate rows and exposes manual follow-up IDs', async () => {
   const manyRows = Array.from({ length: 105 }, (_, index) => ({ ...rows[0]!, id: `row-${index}` }))
   const manyItems = manyRows.map((row, index) => ({

@@ -53,6 +53,27 @@ test('review endpoint validates JSON before it calls the provider', async () => 
   assert.equal(providerCalls, 0)
 })
 
+test('an explicit forced recheck is forwarded to the completed-request lease guard', async () => {
+  let forced = false
+  const selectedRun = {
+    ...run,
+    reviewTargeting: { candidateRowIds: ['row-1'], candidateCount: 1, unreconciled: false },
+    reconciliation: { itemTotal: 0, sourceTotal: 0, reconciled: true, difference: 0 }, sections: [],
+  }
+  const response = await handler({
+    getReadyImport: async () => ({ boq, run: selectedRun }),
+    acquireReviewLease: async (_boqId, _runId, _requestKey, _leaseId, _ttl, force) => {
+      forced = force
+      return { kind: 'acquired', reviewRun: { status: 'running', leaseId: 'lease-1' } }
+    },
+  })(new Request('https://example.test', {
+    method: 'POST', body: JSON.stringify({ manual: false, force: true }), headers: { 'Content-Type': 'application/json' },
+  }), { params: Promise.resolve({ id: 'boq-1', runId: 'run-1' }) })
+
+  assert.equal(response.status, 200)
+  assert.equal(forced, true)
+})
+
 test('review endpoint returns selected immutable source-row display evidence', async () => {
   const selectedRun = {
     ...run,
@@ -167,6 +188,23 @@ test('durable GET/POST snapshots replace client state and include every candidat
   assert.deepEqual(response.reviewRun.reviewTargeting, {
     candidateRowIds: ['row-1', 'row-2'], ambiguousRowIds: [], unreconciledRowIds: [], unreconciled: true,
   })
+})
+
+test('durable snapshots remove successfully reviewed no-proposal rows from follow-up', () => {
+  const selectedRun = {
+    ...run,
+    reviewTargeting: { candidateRowIds: ['row-1'], candidateCount: 1, unreconciled: false },
+    reconciliation: { itemTotal: 0, sourceTotal: 0, reconciled: true, difference: 0 }, sections: [],
+  }
+  const response = buildDurableExtractionReviewResponse({
+    imported: { boq, run: selectedRun }, sourceRows: rows,
+    stored: {
+      proposals: [], proposalStatuses: {}, auditEvents: [],
+      reviewRun: { status: 'completed', reviewedSourceRowIds: ['row-1'] },
+    },
+  })
+
+  assert.deepEqual(response.remainingCandidateRowIds, [])
 })
 
 test('durable snapshot preserves reason-specific source-row targeting', () => {

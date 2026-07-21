@@ -12,6 +12,7 @@ import {
   extractionReviewRefreshAction,
   invalidateReviewSnapshotRequests,
   isLatestReviewSnapshotRequest,
+  selectReviewVisibility,
 } from "./boq-extraction-review-state"
 import type { ExtractionReviewResponse } from "./boq-extraction-ai-review"
 import type { ProposalOperation, ValidatedProposal } from "./boq-extraction-proposals"
@@ -140,6 +141,27 @@ test("source-row filters keep compound candidates, ambiguous evidence, reconcili
   assert.deepEqual(filterReviewSourceRows(review, "ambiguous").map((row) => row.sourceRowId), ["row-ambiguous"])
   assert.deepEqual(filterReviewSourceRows(review, "unreconciled").map((row) => row.sourceRowId), ["row-unreconciled"])
   assert.deepEqual(filterReviewSourceRows(review, "ai-pending").map((row) => row.sourceRowId), ["row-compound", "row-unreconciled"])
+})
+
+test("review visibility applies status and source filters without leaking the unfiltered source list", () => {
+  const ambiguous = { ...sourceRow, sourceRowId: "row-ambiguous", confidence: 0.72, warnings: [] }
+  const pending = { ...sourceRow, sourceRowId: "row-pending", confidence: 0.98, warnings: [] }
+  const acceptedProposal = proposal("accepted", "row-ambiguous")
+  const review = {
+    ...response([acceptedProposal], [ambiguous, pending]),
+    remainingCandidateRowIds: ["row-pending"],
+    reviewRun: { status: "partial" as const, reviewTargeting: {
+      candidateRowIds: ["row-ambiguous", "row-pending"], ambiguousRowIds: ["row-ambiguous"], unreconciledRowIds: [], unreconciled: false,
+    } },
+  }
+
+  const accepted = selectReviewVisibility(review, { accepted: "accepted" }, "accepted")
+  assert.deepEqual(accepted.proposals.map((entry) => entry.id), ["accepted"])
+  assert.deepEqual(accepted.sourceRows, [])
+
+  const aiPending = selectReviewVisibility(review, { accepted: "accepted" }, "ai-pending")
+  assert.deepEqual(aiPending.proposals, [])
+  assert.deepEqual(aiPending.sourceRows.map((row) => row.sourceRowId), ["row-pending"])
 })
 
 test("review refresh selector dispatches queued and expired leases but only polls a live running lease", () => {

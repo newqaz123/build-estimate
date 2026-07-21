@@ -34,6 +34,7 @@ export interface ExtractionReviewRunSummary {
   failureCode?: string
   retryAfter?: string
   updatedAt?: string
+  reviewedSourceRowIds?: string[]
   reviewTargeting?: {
     candidateRowIds: string[]
     ambiguousRowIds?: string[]
@@ -347,6 +348,7 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
           status: 'running', requestKey, leaseId,
           leaseExpiresAt: new Date(time.getTime() + leaseTtlMs).toISOString(),
           updatedAt: time.toISOString(),
+          ...(current.reviewedSourceRowIds?.length ? { reviewedSourceRowIds: [...current.reviewedSourceRowIds] } : {}),
           ...(targeting ? { reviewTargeting: {
             candidateRowIds: [...targeting.candidateRowIds],
             ambiguousRowIds: [...(targeting.ambiguousRowIds ?? [])],
@@ -388,8 +390,10 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
           )
         }
         const timestamp = now().toISOString()
+        const reviewedSourceRowIds = [...new Set([...(current.reviewedSourceRowIds ?? []), ...refreshedSourceRowIds])]
         const reviewRun: ExtractionReviewRunSummary = {
           status, requestKey: current.requestKey, updatedAt: timestamp, reviewTargeting: current.reviewTargeting,
+          ...(reviewedSourceRowIds.length ? { reviewedSourceRowIds } : {}),
         }
         transaction.update(runRef, { reviewRun, aiReviewStatus: status, updatedAt: timestamp })
         return reviewRun
@@ -414,6 +418,7 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
         const reviewRun: ExtractionReviewRunSummary = {
           status: 'failed', requestKey: current.requestKey, failureCode,
           retryAfter: new Date(time.getTime() + retryDelayMs).toISOString(), updatedAt: time.toISOString(), reviewTargeting: current.reviewTargeting,
+          ...(current.reviewedSourceRowIds?.length ? { reviewedSourceRowIds: [...current.reviewedSourceRowIds] } : {}),
         }
         transaction.update(runRef, { reviewRun, aiReviewStatus: 'failed', updatedAt: time.toISOString() })
         return reviewRun

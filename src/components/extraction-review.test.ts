@@ -27,7 +27,8 @@ test("canonical detail switches only the right pane and no longer mounts the leg
   const source = readFileSync(detailUrl, "utf8")
   assert.match(source, /type RightPaneMode = "items" \| "extraction"/)
   assert.match(source, /<ExtractionReview/)
-  assert.match(readFileSync(componentUrl, "utf8"), /Back to BOQ items/)
+  assert.doesNotMatch(readFileSync(componentUrl, "utf8"), /Back to BOQ items/)
+  assert.doesNotMatch(source, /onBack=\{/)
   assert.match(source, /requestedPage=/)
   assert.match(source, /onNavigateToPage=/)
   assert.match(source, /aria-controls="boq-extraction-panel"/)
@@ -37,6 +38,13 @@ test("canonical detail switches only the right pane and no longer mounts the leg
   assert.doesNotMatch(source, /import \{ ReviewPanel \}/)
   assert.doesNotMatch(source, /<ReviewPanel/)
   assert.equal((source.match(/<PdfReviewViewer/g) ?? []).length, 1)
+})
+
+test("explicit AI rechecks are forced and follow-up rows expose in-flight feedback", () => {
+  const source = readFileSync(componentUrl, "utf8")
+  assert.match(source, /force:\s*true/)
+  assert.match(source, /requestedSourceRowId/)
+  assert.match(source, /Checking…/)
 })
 
 test("compare review reuses the standalone extraction review instead of a duplicate controller", () => {

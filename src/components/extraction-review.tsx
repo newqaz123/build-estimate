@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react"
 import {
-  ArrowLeft,
   Check,
   FileSearch,
   Loader2,
@@ -21,12 +20,11 @@ import {
   beginReviewSnapshotRequest,
   extractionReviewRefreshAction,
   extractionReviewReducer,
-  filterReviewProposals,
-  filterReviewSourceRows,
   initialExtractionReviewState,
   invalidateReviewSnapshotRequests,
   isLatestReviewSnapshotRequest,
   normalizeExtractionReviewResponse,
+  selectReviewVisibility,
   type ExtractionProposalAction,
   type ExtractionReviewFilter,
 } from "@/lib/boq-extraction-review-state"
@@ -37,7 +35,6 @@ import type { Boq } from "@/lib/boq-schema"
 interface ExtractionReviewProps {
   boq: Boq
   canonicalRevisionKey: string
-  onBack?: () => void
   onBoqChange: (boq: Boq) => void
   onNavigateToPage: (page: number) => void
   sourceAvailable: boolean
@@ -60,11 +57,12 @@ function reviewTitle(review: ExtractionReviewResponse): string {
   return review.proposals.length > 0 ? "AI suggestions ready" : "No proposals returned"
 }
 
-function SourceEvidence({ source, onNavigateToPage, onRecheck, disabled }: {
+function SourceEvidence({ source, onNavigateToPage, onRecheck, disabled, checking }: {
   source: ExtractionReviewSourceRow
   onNavigateToPage: (page: number) => void
   onRecheck: (sourceRowId: string) => void
   disabled: boolean
+  checking: boolean
 }) {
   return (
     <section className="extraction-structure extraction-original" aria-label={`Original source row ${source.sourceRowId}`}>
@@ -88,7 +86,7 @@ function SourceEvidence({ source, onNavigateToPage, onRecheck, disabled }: {
         <button type="button" onClick={() => onNavigateToPage(source.page)} aria-label={`Show source row on PDF page ${source.page}`}>
           <FileSearch aria-hidden="true" />{sourceReferenceLabel(source)}
         </button>
-        <button type="button" onClick={() => onRecheck(source.sourceRowId)} disabled={disabled}>Recheck with AI</button>
+        <button type="button" onClick={() => onRecheck(source.sourceRowId)} disabled={disabled}>{checking ? "Checking…" : "Recheck with AI"}</button>
       </div>
     </section>
   )
@@ -133,7 +131,7 @@ const REVIEW_FILTERS: Array<{ value: ExtractionReviewFilter; label: string }> = 
   { value: "ai-pending", label: "AI pending" },
 ]
 
-export function ExtractionReview({ boq, canonicalRevisionKey, onBack, onBoqChange, onNavigateToPage, sourceAvailable, readOnly = false, mutationBlockedReason }: ExtractionReviewProps) {
+export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNavigateToPage, sourceAvailable, readOnly = false, mutationBlockedReason }: ExtractionReviewProps) {
   const [extractionRunId, setExtractionRunId] = useState(boq.activeExtractionRunId)
   const [state, dispatch] = useReducer(extractionReviewReducer, undefined, initialExtractionReviewState)
   const [reextracting, setReextracting] = useState(false)
@@ -141,9 +139,9 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBack, onBoqChang
   const recoveryAttemptRef = useRef<string | null>(null)
   const canonicalRevisionRef = useRef(canonicalRevisionKey)
   const reviewSnapshotGenerationRef = useRef(0)
-  const { review, loading, error, proposalActions: actions, proposalStatuses: statuses } = state
+  const { review, loading, requestedSourceRowId, error, proposalActions: actions, proposalStatuses: statuses } = state
 
-  const runReview = useCallback(async (sourceRowId?: string) => {
+  const runReview = useCallback(async ({ sourceRowId, force = false, notify = false }: { sourceRowId?: string; force?: boolean; notify?: boolean } = {}) => {
     if (!extractionRunId) {
       dispatch({ type: "review_failed", error: "This BOQ has no immutable extraction evidence. Re-extract the source to create review proposals without overwriting saved edits." })
       return
@@ -154,7 +152,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBack, onBoqChang
       const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/extraction-runs/${encodeURIComponent(extractionRunId)}/review`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(sourceRowId ? { manual: true, sourceRowIds: [sourceRowId] } : { manual: false }),
+        body: JSON.stringify(sourceRowId ? { manual: true, force, sourceRowIds: [sourceRowId] } : { manual: false, force }),
       })
       if (!response.ok) throw new Error(await readError(response, "AI extraction review could not be completed."))
       const normalized = normalizeExtractionReviewResponse(await response.json())
@@ -162,6 +160,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBack, onBoqChang
       dispatch({ type: "review_succeeded", response: normalized, sourceRowId })
       if (normalized.proposalStatuses) dispatch({ type: "proposal_statuses", statuses: normalized.proposalStatuses })
       if (normalized.mode === "fallback") toast.warning(normalized.message)
+      else if (notify) toast.success(sourceRowId ? "Source row reviewed" : "AI review refreshed")
       return normalized
     } catch (cause) {
       dispatch({ type: "review_failed", error: cause instanceof Error ? cause.message : "AI extraction review could not be completed. The imported BOQ remains unchanged." })
@@ -329,31 +328,21 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBack, onBoqChang
 
   const reviewRunStatus = review?.reviewRun?.status
   const busy = loading || reextracting || reviewRunStatus === "running" || Object.values(actions).some(Boolean)
-  const filteredSourceRows = useMemo(() => review && ["ambiguous", "unreconciled", "ai-pending"].includes(state.filter)
-    ? filterReviewSourceRows(review, state.filter as "ambiguous" | "unreconciled" | "ai-pending") : [], [review, state.filter])
-  const visibleProposals = useMemo(() => {
-    const proposals = filterReviewProposals(review?.proposals ?? [], statuses, state.filter)
-    if (!review || filteredSourceRows.length === 0 || !["ambiguous", "unreconciled", "ai-pending"].includes(state.filter)) return proposals
-    const rowIds = new Set(filteredSourceRows.map((row) => row.sourceRowId))
-    return proposals.filter((proposal) => proposal.sourceRowIds.some((rowId) => rowIds.has(rowId)))
-  }, [filteredSourceRows, review, state.filter, statuses])
-  const filteredRowsWithoutProposal = useMemo(() => {
-    const proposedRowIds = new Set(visibleProposals.flatMap((proposal) => proposal.sourceRowIds))
-    return filteredSourceRows.filter((row) => !proposedRowIds.has(row.sourceRowId))
-  }, [filteredSourceRows, visibleProposals])
+  const visibility = useMemo(() => review ? selectReviewVisibility(review, statuses, state.filter) : { proposals: [], sourceRows: [] }, [review, state.filter, statuses])
+  const visibleProposals = visibility.proposals
+  const visibleSourceRows = visibility.sourceRows
 
   return (
     <section className="focused-extraction-review" data-od-id="focused-extraction-review" aria-labelledby="focused-extraction-title">
       <header className="focused-extraction-header">
         <div>
-          {onBack ? <Button type="button" variant="ghost" size="sm" onClick={onBack}><ArrowLeft aria-hidden="true" />Back to BOQ items</Button> : null}
           <span className="review-eyebrow">Evidence review</span>
           <h2 id="focused-extraction-title">Compound-cell extraction</h2>
           <p>Nothing changes until you accept a validated correction.</p>
         </div>
         <div className="extraction-review-heading-actions">
           {bulkProposalIds.length > 0 && !readOnly ? <Button type="button" size="sm" onClick={() => void acceptAll()} disabled={busy || Boolean(mutationBlockedReason)}><Check aria-hidden="true" />Accept all validated high-confidence</Button> : null}
-          <Button type="button" variant="outline" size="sm" onClick={() => void runReview()} disabled={readOnly || !extractionRunId || busy}>{loading || reviewRunStatus === "running" ? <Loader2 className="animate-spin" /> : <Sparkles aria-hidden="true" />}{reviewRunStatus === "running" ? "AI review running" : "Recheck with AI"}</Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => void runReview({ force: true, notify: true })} disabled={readOnly || !extractionRunId || busy}>{loading || reviewRunStatus === "running" ? <Loader2 className="animate-spin" /> : <Sparkles aria-hidden="true" />}{reviewRunStatus === "running" ? "AI review running" : "Recheck with AI"}</Button>
         </div>
       </header>
 
@@ -375,7 +364,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBack, onBoqChang
         </div>
       ) : null}
 
-      {review?.remainingCandidateRowIds.length ? <div className="extraction-remaining-rows" aria-label="Additional candidate source rows"><span>Follow-up rows:</span>{review.remainingCandidateRowIds.map((sourceRowId) => <button type="button" key={sourceRowId} onClick={() => void runReview(sourceRowId)} disabled={readOnly || busy}>{sourceRowId}</button>)}</div> : null}
+      {review?.remainingCandidateRowIds.length ? <div className="extraction-remaining-rows" aria-label="Additional candidate source rows"><span>Follow-up rows:</span>{review.remainingCandidateRowIds.map((sourceRowId) => <button type="button" key={sourceRowId} onClick={() => void runReview({ sourceRowId, force: true, notify: true })} disabled={readOnly || busy}>{requestedSourceRowId === sourceRowId ? "Checking…" : sourceRowId}</button>)}</div> : null}
 
       {error ? <div className="review-save-error" role="alert">{error}</div> : null}
 
@@ -410,7 +399,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBack, onBoqChang
                 <p>{proposal.explanation}</p>
                 <button type="button" className="extraction-proposal-expand" aria-expanded={expanded} onClick={() => dispatch({ type: "toggle_expanded", proposalId: proposal.id })}>{expanded ? "Hide evidence" : "Compare source and proposal"}</button>
                 {expanded ? <div className="extraction-structure-grid">
-                  <div className="extraction-original-list">{sourceRows.map((source) => <SourceEvidence key={source.sourceRowId} source={source} onNavigateToPage={onNavigateToPage} onRecheck={(sourceRowId) => void runReview(sourceRowId)} disabled={readOnly || busy} />)}<CurrentStructure boq={boq} proposal={proposal} /></div>
+                  <div className="extraction-original-list">{sourceRows.map((source) => <SourceEvidence key={source.sourceRowId} source={source} onNavigateToPage={onNavigateToPage} onRecheck={(sourceRowId) => void runReview({ sourceRowId, force: true, notify: true })} disabled={readOnly || busy} checking={requestedSourceRowId === source.sourceRowId} />)}<CurrentStructure boq={boq} proposal={proposal} /></div>
                   <ProposedStructure proposal={proposal} />
                 </div> : null}
                 <div className="extraction-validation-summary"><strong>Validation & reconciliation</strong><span><Check aria-hidden="true" />Source evidence valid</span><span><Check aria-hidden="true" />Arithmetic reconciled</span>{proposal.stale ? <span><X aria-hidden="true" />Proposal is stale</span> : null}</div>
@@ -430,13 +419,9 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBack, onBoqChang
         </div>
       ) : null}
 
-      {filteredRowsWithoutProposal.length ? <div className="extraction-reviewed-source-list" aria-label="Filtered source rows without proposals"><strong>Source rows awaiting review</strong>{filteredRowsWithoutProposal.map((source) => <SourceEvidence key={source.sourceRowId} source={source} onNavigateToPage={onNavigateToPage} onRecheck={(sourceRowId) => void runReview(sourceRowId)} disabled={readOnly || busy} />)}</div> : null}
+      {visibleSourceRows.length ? <div className="extraction-reviewed-source-list" aria-label="Visible source rows without proposals"><strong>{state.filter === "all" ? "Reviewed source rows" : "Source rows matching this filter"}</strong>{visibleSourceRows.map((source) => <SourceEvidence key={source.sourceRowId} source={source} onNavigateToPage={onNavigateToPage} onRecheck={(sourceRowId) => void runReview({ sourceRowId, force: true, notify: true })} disabled={readOnly || busy} checking={requestedSourceRowId === source.sourceRowId} />)}</div> : null}
 
-      {review?.sourceRows.length && review.proposals.length === 0 ? (
-        <div className="extraction-reviewed-source-list" aria-label="Reviewed source rows">
-          {review.sourceRows.map((source) => <SourceEvidence key={source.sourceRowId} source={source} onNavigateToPage={onNavigateToPage} onRecheck={(sourceRowId) => void runReview(sourceRowId)} disabled={readOnly || busy} />)}
-        </div>
-      ) : null}
+      {review && state.filter !== "all" && visibleProposals.length === 0 && visibleSourceRows.length === 0 ? <div className="extraction-review-empty"><FileSearch aria-hidden="true" /><strong>No matching review results</strong><span>Choose another filter to continue reviewing extraction evidence.</span></div> : null}
     </section>
   )
 }
