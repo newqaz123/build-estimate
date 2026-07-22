@@ -14,6 +14,12 @@
 /coverage
 /.worktrees/
 
+# local agent scratch
+/.zcode/
+/.od/
+/.superpowers/
+/.playwright-mcp/
+
 # next.js
 /.next/
 /out/
