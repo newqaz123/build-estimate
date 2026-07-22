@@ -8,6 +8,7 @@ import {
   Check,
   ChevronLeft,
   FileDown,
+  FileSearch,
   Loader2,
   Lock,
   MoreHorizontal,
@@ -537,13 +538,13 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
             {isReadOnly ? <span className="boq-readonly-note"><Lock aria-hidden="true" />Approved · read only</span> : null}
           </div>
           <div className="review-header-actions boq-unified-actions">
+            {hasSource || boq.activeExtractionRunId ? (
+              <Button type="button" variant="outline" size="sm" onClick={() => setRightPaneMode(rightPaneMode === "items" ? "extraction" : "items")} disabled={mutationBusy} aria-controls={rightPaneMode === "items" ? "boq-extraction-panel" : "boq-items-panel"}>
+                {rightPaneMode === "items" ? <><Sparkles aria-hidden="true" />Extraction review</> : <><FileSearch aria-hidden="true" />BOQ items</>}
+              </Button>
+            ) : null}
             {!isReadOnly ? (
               <>
-                {hasSource || boq.activeExtractionRunId ? (
-                  <Button type="button" variant="outline" size="sm" onClick={() => setRightPaneMode("extraction")} disabled={mutationBusy} aria-pressed={rightPaneMode === "extraction"}>
-                    <Sparkles aria-hidden="true" />Extraction review
-                  </Button>
-                ) : null}
                 <Button type="button" variant="outline" size="sm" onClick={() => void handleSaveAll()} disabled={mutationBusy}>
                   {saving ? <Loader2 className="animate-spin" /> : <Save aria-hidden="true" />}Save draft
                 </Button>
@@ -576,11 +577,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
             />
           ) : null}
         >
-          <div className="boq-right-pane-mode" role="tablist" aria-label="BOQ review mode">
-            <button type="button" id="boq-items-tab" role="tab" aria-controls="boq-items-panel" aria-selected={rightPaneMode === "items"} tabIndex={rightPaneMode === "items" ? 0 : -1} onClick={() => setRightPaneMode("items")}>BOQ items</button>
-            <button type="button" id="boq-extraction-tab" role="tab" aria-controls="boq-extraction-panel" aria-selected={rightPaneMode === "extraction"} tabIndex={rightPaneMode === "extraction" ? 0 : -1} onClick={() => setRightPaneMode("extraction")}>Extraction review</button>
-          </div>
-          <div className="boq-items-mode" role="tabpanel" id="boq-items-panel" aria-labelledby="boq-items-tab" hidden={rightPaneMode !== "items"}>
+          <div className="boq-items-mode" id="boq-items-panel" hidden={rightPaneMode !== "items"}>
           <div className="review-metadata">
             <h2 className="text-sm font-medium mb-3">BOQ Details</h2>
             <div className="grid grid-cols-2 gap-3">
@@ -651,7 +648,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
             <div className="review-blockers mt-3" role="alert"><strong>Resolve before approval</strong><ul>{blockingIssues.map((issue, index) => <li key={`${issue.code}-${index}`}>{issue.message}</li>)}</ul></div>
           ) : null}
           </div>
-          <div className="boq-extraction-mode" role="tabpanel" id="boq-extraction-panel" aria-labelledby="boq-extraction-tab" hidden={rightPaneMode !== "extraction"}>
+          <div className="boq-extraction-mode" id="boq-extraction-panel" hidden={rightPaneMode !== "extraction"}>
             <ExtractionReview
               boq={boq}
               canonicalRevisionKey={canonicalRevisionKey}

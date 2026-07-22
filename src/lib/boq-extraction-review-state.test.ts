@@ -164,6 +164,32 @@ test("review visibility applies status and source filters without leaking the un
   assert.deepEqual(aiPending.sourceRows.map((row) => row.sourceRowId), ["row-pending"])
 })
 
+test("selectReviewVisibility displayed-result totals back the per-filter chip counts", () => {
+  const ambiguous = { ...sourceRow, sourceRowId: "row-ambiguous", confidence: 0.72, warnings: [] }
+  const pending = { ...sourceRow, sourceRowId: "row-pending", confidence: 0.98, warnings: [] }
+  const acceptedProposal = proposal("accepted", "row-ambiguous")
+  const review = {
+    ...response([acceptedProposal], [ambiguous, pending]),
+    remainingCandidateRowIds: ["row-pending"],
+    reviewRun: { status: "partial" as const, reviewTargeting: {
+      candidateRowIds: ["row-ambiguous", "row-pending"], ambiguousRowIds: ["row-ambiguous"], unreconciledRowIds: [], unreconciled: false,
+    } },
+  }
+  const statuses = { accepted: "accepted" } as const
+  const count = (filter: "all" | "accepted" | "pending" | "rejected" | "needs-attention" | "ambiguous" | "unreconciled" | "ai-pending") => {
+    const result = selectReviewVisibility(review, statuses, filter)
+    return result.proposals.length + result.sourceRows.length
+  }
+  assert.equal(count("all"), 1)
+  assert.equal(count("accepted"), 1)
+  assert.equal(count("pending"), 0)
+  assert.equal(count("rejected"), 0)
+  assert.equal(count("needs-attention"), 0)
+  assert.equal(count("ambiguous"), 1)
+  assert.equal(count("unreconciled"), 0)
+  assert.equal(count("ai-pending"), 1)
+})
+
 test("review refresh selector dispatches queued and expired leases but only polls a live running lease", () => {
   const base = response([]) as ExtractionReviewResponse & { reviewRun: NonNullable<ExtractionReviewResponse["reviewRun"]> }
   base.reviewRun = { status: "queued", reviewTargeting: { candidateRowIds: ["row-1"], unreconciled: false } }

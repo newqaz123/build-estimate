@@ -19,6 +19,11 @@
 /.od/
 /.superpowers/
 /.playwright-mcp/
+/.pi-subagents/
+
+# Python cache
+__pycache__/
+*.py[cod]
 
 # next.js
 /.next/

@@ -31,8 +31,15 @@ test("canonical detail switches only the right pane and no longer mounts the leg
   assert.doesNotMatch(source, /onBack=\{/)
   assert.match(source, /requestedPage=/)
   assert.match(source, /onNavigateToPage=/)
-  assert.match(source, /aria-controls="boq-extraction-panel"/)
-  assert.match(source, /role="tabpanel" id="boq-extraction-panel"/)
+  assert.doesNotMatch(source, /role="tablist"/)
+  assert.doesNotMatch(source, /boq-right-pane-mode/)
+  assert.doesNotMatch(source, /id="boq-items-tab"/)
+  assert.doesNotMatch(source, /id="boq-extraction-tab"/)
+  assert.equal((source.match(/setRightPaneMode\(/g) ?? []).length, 1)
+  assert.match(source, /rightPaneMode === "items" \? "extraction" : "items"/)
+  assert.match(source, /aria-controls=\{rightPaneMode === "items" \? "boq-extraction-panel" : "boq-items-panel"\}/)
+  assert.match(source, /id="boq-items-panel" hidden=\{rightPaneMode !== "items"\}/)
+  assert.match(source, /id="boq-extraction-panel" hidden=\{rightPaneMode !== "extraction"\}/)
   assert.match(source, /Add missing item/)
   assert.match(source, /\/items`,\s*\{[\s\S]{0,120}?method: "POST"/)
   assert.doesNotMatch(source, /import \{ ReviewPanel \}/)
@@ -40,11 +47,25 @@ test("canonical detail switches only the right pane and no longer mounts the leg
   assert.equal((source.match(/<PdfReviewViewer/g) ?? []).length, 1)
 })
 
-test("explicit AI rechecks are forced and follow-up rows expose in-flight feedback", () => {
+test("explicit AI rechecks are forced and follow-up rows expose readable labels and in-flight feedback", () => {
   const source = readFileSync(componentUrl, "utf8")
   assert.match(source, /force:\s*true/)
   assert.match(source, /requestedSourceRowId/)
   assert.match(source, /Checking…/)
+  assert.match(source, /const sourceRowLabels = useMemo/)
+  assert.match(source, /sourceReferenceLabel\(reference\)/)
+  assert.match(source, /Row \$\{index \+ 1\}/)
+  assert.match(source, /Recheck \$\{label\} with AI/)
+})
+
+test("extraction review filters derive per-chip counts from displayed results and disable empty categories", () => {
+  const source = readFileSync(componentUrl, "utf8")
+  assert.match(source, /const filterCounts = useMemo/)
+  assert.match(source, /selectReviewVisibility\(review, statuses, filter\.value\)/)
+  assert.match(source, /filter-chip-count/)
+  assert.match(source, /disabled=\{disabled\}/)
+  assert.match(source, /aria-disabled=\{disabled \|\| undefined\}/)
+  assert.match(source, /set_filter", filter: "all"/)
 })
 
 test("compare review reuses the standalone extraction review instead of a duplicate controller", () => {

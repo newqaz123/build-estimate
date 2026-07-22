@@ -1077,6 +1077,11 @@
 .extraction-proposal-list { display: grid; gap: var(--space-2); margin-top: var(--space-3); }
 .extraction-review-filters { display: flex; gap: var(--space-1); margin-top: var(--space-3); overflow-x: auto; padding-bottom: 2px; }
 .extraction-review-filters .filter-chip { flex: 0 0 auto; background: var(--surface); }
+.extraction-review-filters .filter-chip.active { background: var(--accent); color: var(--accent-on); border-color: var(--accent); }
+.extraction-review-filters .filter-chip-count { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 4px; margin-left: 2px; border-radius: var(--radius-pill); background: color-mix(in oklab, var(--fg) 14%, transparent); font-size: 10px; font-weight: 600; }
+.extraction-review-filters .filter-chip.active .filter-chip-count { background: color-mix(in oklab, var(--accent-on) 32%, transparent); }
+.extraction-review-filters .filter-chip:disabled { opacity: .5; cursor: not-allowed; }
+.extraction-review-filters .filter-chip:disabled:hover { border-color: var(--border); }
 .extraction-remaining-rows { display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; margin-top: var(--space-2); color: var(--muted-text); font-size: 10px; }
 .extraction-remaining-rows button, .extraction-proposal-expand { padding: 2px 6px; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface); color: var(--accent); font-size: 10px; cursor: pointer; }
 .extraction-remaining-rows button:disabled { opacity: .5; cursor: not-allowed; }
@@ -1100,10 +1105,6 @@
 .extraction-proposed-structure small { color: var(--muted-text); font-family: var(--font-mono); font-size: 10px; text-align: right; }
 .extraction-proposal-actions { display: flex; align-items: flex-start; gap: var(--space-1); white-space: nowrap; }
 .extraction-action-status { padding-top: 6px; color: var(--muted-text); font-size: 11px; font-weight: 600; }
-.boq-right-pane-mode { display: inline-flex; gap: 2px; margin: 0 0 var(--space-3); padding: 3px; border: 1px solid var(--border); border-radius: var(--radius-pill); background: color-mix(in oklab, var(--muted) 58%, var(--surface)); }
-.boq-right-pane-mode button { min-height: 28px; padding: 4px 11px; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--muted-text); font-size: 11px; font-weight: 600; cursor: pointer; }
-.boq-right-pane-mode button[aria-selected="true"] { background: var(--surface); color: var(--accent); box-shadow: 0 1px 3px color-mix(in oklab, var(--fg) 12%, transparent); }
-.boq-right-pane-mode button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .focused-extraction-review { min-height: 100%; padding-bottom: var(--space-6); }
 .focused-extraction-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); padding-bottom: var(--space-3); border-bottom: 1px solid var(--border); }
 .focused-extraction-header > div:first-child { display: grid; gap: 2px; }
@@ -1326,7 +1327,7 @@
   .boq-unified-header { align-items: flex-start; flex-direction: column; }
   .boq-unified-header .review-header-title,
   .boq-unified-actions { width: 100%; }
-  .boq-unified-actions { justify-content: flex-end; }
+  .boq-unified-actions { justify-content: flex-end; flex-wrap: wrap; }
   .boq-unified-title span,
   .boq-readonly-note { display: none; }
 }

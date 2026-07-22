@@ -32,6 +32,10 @@ import { proposalCanBeAccepted, proposalIsHighConfidence, sourceReferenceLabel }
 import type { ValidatedProposal } from "@/lib/boq-extraction-proposals"
 import type { Boq } from "@/lib/boq-schema"
 
+/** Client guard so a hung review POST can never strand the loading spinner.
+ *  Sits above the 20s server provider timeout, so the server responds first in normal cases. */
+const REVIEW_FETCH_TIMEOUT_MS = 30_000
+
 interface ExtractionReviewProps {
   boq: Boq
   canonicalRevisionKey: string
@@ -148,11 +152,14 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
     }
     invalidateReviewSnapshotRequests(reviewSnapshotGenerationRef)
     dispatch({ type: "review_started", sourceRowId })
+    const timeoutController = new AbortController()
+    const timeout = setTimeout(() => timeoutController.abort(), REVIEW_FETCH_TIMEOUT_MS)
     try {
       const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/extraction-runs/${encodeURIComponent(extractionRunId)}/review`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(sourceRowId ? { manual: true, force, sourceRowIds: [sourceRowId] } : { manual: false, force }),
+        signal: timeoutController.signal,
       })
       if (!response.ok) throw new Error(await readError(response, "AI extraction review could not be completed."))
       const normalized = normalizeExtractionReviewResponse(await response.json())
@@ -163,14 +170,16 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
       else if (notify) toast.success(sourceRowId ? "Source row reviewed" : "AI review refreshed")
       return normalized
     } catch (cause) {
-      dispatch({ type: "review_failed", error: cause instanceof Error ? cause.message : "AI extraction review could not be completed. The imported BOQ remains unchanged." })
+      const aborted = cause instanceof DOMException && cause.name === "AbortError"
+      dispatch({ type: "review_failed", error: aborted ? "AI extraction review timed out. Try rechecking with AI again." : cause instanceof Error ? cause.message : "AI extraction review could not be completed. The imported BOQ remains unchanged." })
       return null
+    } finally {
+      clearTimeout(timeout)
     }
   }, [boq.id, extractionRunId])
 
   useEffect(() => {
-    if (!extractionRunId || autoReviewedRunRef.current === extractionRunId) return
-    autoReviewedRunRef.current = extractionRunId
+    if (!extractionRunId) return
     let active = true
     const requestGeneration = beginReviewSnapshotRequest(reviewSnapshotGenerationRef)
     void (async () => {
@@ -179,8 +188,14 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
         const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/extraction-runs/${encodeURIComponent(extractionRunId)}/review`)
         if (!active || !isLatestReviewSnapshotRequest(reviewSnapshotGenerationRef, requestGeneration)) return
         if (!response.ok) {
-          if (!readOnly) return void runReview()
-          throw new Error(await readError(response, "Saved extraction review could not be loaded."))
+          if (readOnly) throw new Error(await readError(response, "Saved extraction review could not be loaded."))
+          // Only the auto-trigger POST needs to run once per run; the GET above is idempotent
+          // and must be allowed to re-run on StrictMode remount so loading always resolves.
+          if (autoReviewedRunRef.current !== extractionRunId) {
+            autoReviewedRunRef.current = extractionRunId
+            void runReview()
+          }
+          return
         }
         const normalized = normalizeExtractionReviewResponse(await response.json())
         if (!normalized) throw new Error("Saved extraction review returned an unsupported response.")
@@ -331,6 +346,26 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
   const visibility = useMemo(() => review ? selectReviewVisibility(review, statuses, state.filter) : { proposals: [], sourceRows: [] }, [review, state.filter, statuses])
   const visibleProposals = visibility.proposals
   const visibleSourceRows = visibility.sourceRows
+  const filterCounts = useMemo(() => {
+    const counts: Partial<Record<ExtractionReviewFilter, number>> = {}
+    if (review) for (const filter of REVIEW_FILTERS) {
+      const result = selectReviewVisibility(review, statuses, filter.value)
+      counts[filter.value] = result.proposals.length + result.sourceRows.length
+    }
+    return counts
+  }, [review, statuses])
+  const sourceRowLabels = useMemo(() => {
+    const labels = new Map<string, string>()
+    if (review) {
+      for (const reference of review.sourceRefs) labels.set(reference.sourceRowId, sourceReferenceLabel(reference))
+      for (const sourceRow of review.sourceRows) if (!labels.has(sourceRow.sourceRowId)) labels.set(sourceRow.sourceRowId, sourceReferenceLabel(sourceRow))
+    }
+    return labels
+  }, [review])
+  useEffect(() => {
+    if (!review || state.filter === "all") return
+    if ((filterCounts[state.filter] ?? 0) === 0) dispatch({ type: "set_filter", filter: "all" })
+  }, [review, state.filter, filterCounts])
 
   return (
     <section className="focused-extraction-review" data-od-id="focused-extraction-review" aria-labelledby="focused-extraction-title">
@@ -364,7 +399,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
         </div>
       ) : null}
 
-      {review?.remainingCandidateRowIds.length ? <div className="extraction-remaining-rows" aria-label="Additional candidate source rows"><span>Follow-up rows:</span>{review.remainingCandidateRowIds.map((sourceRowId) => <button type="button" key={sourceRowId} onClick={() => void runReview({ sourceRowId, force: true, notify: true })} disabled={readOnly || busy}>{requestedSourceRowId === sourceRowId ? "Checking…" : sourceRowId}</button>)}</div> : null}
+      {review?.remainingCandidateRowIds.length ? <div className="extraction-remaining-rows" aria-label="Additional candidate source rows"><span>Follow-up rows:</span>{review.remainingCandidateRowIds.map((sourceRowId, index) => { const label = sourceRowLabels.get(sourceRowId) ?? `Row ${index + 1}`; const checking = requestedSourceRowId === sourceRowId; return <button type="button" key={sourceRowId} onClick={() => void runReview({ sourceRowId, force: true, notify: true })} disabled={readOnly || busy} aria-label={checking ? `Checking ${label}` : `Recheck ${label} with AI`}>{checking ? "Checking…" : label}</button> })}</div> : null}
 
       {error ? <div className="review-save-error" role="alert">{error}</div> : null}
 
@@ -376,7 +411,14 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
 
       {review && (review.proposals.length > 0 || review.sourceRows.length > 0) ? (
         <div className="extraction-review-filters" role="group" aria-label="Filter extraction proposals">
-          {REVIEW_FILTERS.map((filter) => <button type="button" className={state.filter === filter.value ? "filter-chip active" : "filter-chip"} aria-pressed={state.filter === filter.value} key={filter.value} onClick={() => dispatch({ type: "set_filter", filter: filter.value })}>{filter.label}</button>)}
+          {REVIEW_FILTERS.map((filter) => {
+            const count = filterCounts[filter.value] ?? 0
+            const selected = state.filter === filter.value
+            const disabled = count === 0
+            return (
+              <button type="button" className={selected ? "filter-chip active" : "filter-chip"} aria-pressed={selected} aria-disabled={disabled || undefined} aria-label={`${filter.label} · ${count} ${count === 1 ? "result" : "results"}`} key={filter.value} disabled={disabled} onClick={() => dispatch({ type: "set_filter", filter: filter.value })}>{filter.label}<span className="filter-chip-count" aria-hidden="true">{count}</span></button>
+            )
+          })}
         </div>
       ) : null}
 
