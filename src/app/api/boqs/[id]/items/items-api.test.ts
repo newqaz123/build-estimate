@@ -157,10 +157,10 @@ test('unlinked BOQ edits remain local and do not mutate the standard catalog', (
   assert.deepEqual(result.boqs[1]?.sections[0]?.items[0], item({ code: 'B-1', stdId: 'std-1', desc: 'Source concrete' }))
 })
 
-test('approved BOQs reject general item PATCH mutations', () => {
+test('approved BOQs reject component PATCH mutations', () => {
   const approved = { ...boq('boq-approved', [item()]), status: 'approved' as const }
   assert.throws(
-    () => applyBoqItemUpdates([approved], [], approved.id, [{ sectionIndex: 0, items: [{ itemCode: 'A-1', qty: 3 }] }]),
+    () => applyBoqItemUpdates([approved], [], approved.id, [{ sectionIndex: 0, items: [{ itemCode: 'A-1', materialCost: 70, labourCost: 50 }] }]),
     (error: unknown) => error instanceof Error && 'status' in error && error.status === 409,
   )
 })
@@ -174,7 +174,7 @@ test('canonical PATCH cannot propagate a linked standard mutation into an approv
   )
 })
 
-test('material and labour edits persist an allocation and reconcile the row rate', () => {
+test('full material and labour edits persist a manual allocation and reconcile the row rate', () => {
   const result = applyBoqItemUpdates(
     [boq('boq-1', [item({ stdStatus: 'unmatched' })])],
     [],
@@ -185,6 +185,60 @@ test('material and labour edits persist an allocation and reconcile the row rate
   assert.deepEqual(updated?.costAllocation, { basis: 'rate', material: 70, labour: 50, origin: 'manual' })
   assert.equal(updated?.rate, 120)
   assert.equal(updated?.total, 240)
+})
+
+test('partial material PATCH preserves source-derived labour and marks origin manual', () => {
+  const result = applyBoqItemUpdates(
+    [boq('boq-1', [item({
+      stdStatus: 'unmatched',
+      sourceCosts: {
+        material: { present: true, qty: 2, unit: 'm3', rate: 60, total: 120 },
+        labour: { present: true, qty: 2, unit: 'm3', rate: 40, total: 80 },
+      },
+    })])],
+    [],
+    'boq-1',
+    [{ sectionIndex: 0, items: [{ itemCode: 'A-1', materialCost: 80 }] }],
+  )
+  const updated = priced(result.boqs[0]?.sections[0]?.items[0])
+  assert.deepEqual(updated?.costAllocation, { basis: 'rate', material: 80, labour: 40, origin: 'manual' })
+  assert.equal(updated?.rate, 120)
+  assert.equal(updated?.total, 240)
+})
+
+test('partial labour PATCH against an existing manual allocation preserves material', () => {
+  const result = applyBoqItemUpdates(
+    [boq('boq-1', [item({
+      stdStatus: 'unmatched',
+      costAllocation: { basis: 'rate', material: 70, labour: 50, origin: 'manual' },
+    })])],
+    [],
+    'boq-1',
+    [{ sectionIndex: 0, items: [{ itemCode: 'A-1', labourCost: 60 }] }],
+  )
+  const updated = priced(result.boqs[0]?.sections[0]?.items[0])
+  assert.deepEqual(updated?.costAllocation, { basis: 'rate', material: 70, labour: 60, origin: 'manual' })
+  assert.equal(updated?.rate, 130)
+  assert.equal(updated?.total, 260)
+})
+
+test('lump-sum component allocation uses totals and derives rate from quantity', () => {
+  const result = applyBoqItemUpdates(
+    [boq('boq-1', [item({
+      stdStatus: 'unmatched',
+      type: 'lump_sum',
+      qty: 1,
+      rate: 5000,
+      total: 5000,
+    })])],
+    [],
+    'boq-1',
+    [{ sectionIndex: 0, items: [{ itemCode: 'A-1', materialCost: 3000, labourCost: 2000 }] }],
+  )
+  const updated = priced(result.boqs[0]?.sections[0]?.items[0])
+  assert.deepEqual(updated?.costAllocation, { basis: 'total', material: 3000, labour: 2000, origin: 'manual' })
+  assert.equal(updated?.rate, 5000)
+  assert.equal(updated?.total, 5000)
 })
 
 test('excluding an item requires a reason and clears its catalog link', () => {
@@ -271,6 +325,42 @@ test('malformed PATCH payload values are rejected with 400 validation errors', (
       (error: unknown) => error instanceof Error && 'status' in error && error.status === 400,
     )
   }
+})
+
+test('component monetary values reject negatives, NaN, Infinity and sub-cent precision', () => {
+  const invalidValues: unknown[] = [
+    { sectionIndex: 0, items: [{ itemCode: 'A-1', materialCost: -1 }] },
+    { sectionIndex: 0, items: [{ itemCode: 'A-1', labourCost: Number.NaN }] },
+    { sectionIndex: 0, items: [{ itemCode: 'A-1', materialCost: Number.POSITIVE_INFINITY }] },
+    { sectionIndex: 0, items: [{ itemCode: 'A-1', labourCost: 12.345 }] },
+  ]
+
+  for (const payload of invalidValues) {
+    assert.throws(
+      () => parseUpdateGroups(payload),
+      (error: unknown) => error instanceof Error && 'status' in error && error.status === 400,
+    )
+  }
+})
+
+test('informational bundle children reject component mutations', () => {
+  const bundle = {
+    id: 'bundle-child-1',
+    code: undefined,
+    desc: 'Bundle child',
+    pricingRole: 'bundle_child' as const,
+    parentBundleId: 'bundle-parent-1',
+    stdStatus: 'excluded' as const,
+  }
+  assert.throws(
+    () => applyBoqItemUpdates(
+      [boq('boq-1', [bundle])],
+      [],
+      'boq-1',
+      [{ sectionIndex: 0, items: [{ itemId: 'bundle-child-1', materialCost: 50 }] }],
+    ),
+    /informational|read-only numeric/i,
+  )
 })
 
 test('standard link impact counts scanned direct links and legacy provenance rows', () => {

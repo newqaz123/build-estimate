@@ -1,7 +1,7 @@
 import type { Boq, BoqItem, BoqPricedItem } from '@/lib/boq-schema'
 import { getBoqItemIdentityKey, resolveBoqItemIdentity, type BoqItemRequestIdentity } from '@/lib/boq-item-identity'
 import type { StandardEntry } from '@/lib/standard-schema'
-import { applyManualCostAllocation } from '@/lib/boq-cost-allocation'
+import { applyManualCostAllocation, costAllocationReconciles, deriveSourceCostAllocation } from '@/lib/boq-cost-allocation'
 import { calculateBoqTotals, isPricedBoqItem } from '@/lib/boq-pricing'
 import { applyStandardToBoqItem } from '../../../standards/route'
 
@@ -144,6 +144,12 @@ function validateUpdate(value: unknown): BoqItemRequestIdentity {
     if (fieldValue !== undefined && (typeof fieldValue !== 'number' || !Number.isFinite(fieldValue) || fieldValue < 0)) {
       throw new BoqItemsValidationError(`${field} must be a finite non-negative number.`)
     }
+    if ((field === 'materialCost' || field === 'labourCost') && fieldValue !== undefined) {
+      const scaled = Math.round(fieldValue * 100)
+      if (Math.abs(scaled / 100 - fieldValue) > 1e-9) {
+        throw new BoqItemsValidationError(`${field} must have at most 2 decimal places.`)
+      }
+    }
   }
   if (update.type !== undefined && !['unit', 'lump_sum', 'job'].includes(update.type)) {
     throw new BoqItemsValidationError('type is invalid.')
@@ -201,12 +207,15 @@ function updateOneItem(item: BoqItem, update: BoqItemUpdate): BoqItem {
   if (update.excludedFromTotal !== undefined && item.optional !== true) {
     throw new BoqItemsValidationError('Only optional items can change excludedFromTotal.')
   }
-  if (update.materialCost !== undefined || update.labourCost !== undefined) {
-    next = applyManualCostAllocation(
-      next,
-      update.materialCost ?? item.costAllocation?.material ?? 0,
-      update.labourCost ?? item.costAllocation?.labour ?? 0,
-    )
+  const hasComponentEdit = update.materialCost !== undefined || update.labourCost !== undefined
+  if (hasComponentEdit) {
+    const baseline = deriveSourceCostAllocation(next)
+    const material = update.materialCost ?? baseline?.material ?? 0
+    const labour = update.labourCost ?? baseline?.labour ?? 0
+    next = applyManualCostAllocation(next, material, labour)
+    if (!costAllocationReconciles(next)) {
+      throw new BoqItemsValidationError('Material and Labour components do not reconcile with the row rate and total.')
+    }
   }
   if (update.stdMatch === undefined && 'stdMatch' in update) delete next.stdMatch
   if (update.stdStatus === 'excluded') {
@@ -216,8 +225,10 @@ function updateOneItem(item: BoqItem, update: BoqItemUpdate): BoqItem {
   } else if (update.stdStatus !== undefined) {
     delete next.stdExclusionReason
   }
-  if (update.qty !== undefined || update.rate !== undefined) next.total = next.qty * next.rate
-  else if (update.total !== undefined) next.total = update.total
+  if (!hasComponentEdit) {
+    if (update.qty !== undefined || update.rate !== undefined) next.total = next.qty * next.rate
+    else if (update.total !== undefined) next.total = update.total
+  }
   return next
 }
 

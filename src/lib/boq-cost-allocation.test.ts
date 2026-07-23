@@ -38,6 +38,26 @@ test('derives a source rate allocation when material and labour share quantity a
   })
 })
 
+test('derives a source total allocation for lump-sum component evidence', () => {
+  const allocation = deriveSourceCostAllocation(item({
+    type: 'lump_sum',
+    qty: 1,
+    rate: 350,
+    total: 350,
+    sourceCosts: {
+      material: { present: true, qty: 1, unit: 'L/S', rate: 200, total: 200 },
+      labour: { present: true, qty: 1, unit: 'L/S', rate: 150, total: 150 },
+    },
+  }))
+
+  assert.deepEqual(allocation, {
+    basis: 'total',
+    material: 200,
+    labour: 150,
+    origin: 'source',
+  })
+})
+
 test('derives explicit one-component source rows without inventing a combined split', () => {
   assert.deepEqual(deriveSourceCostAllocation(item({ costComponent: 'material' })), {
     basis: 'rate', material: 100, labour: 0, origin: 'source',

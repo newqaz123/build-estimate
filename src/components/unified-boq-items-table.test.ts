@@ -39,14 +39,25 @@ function bundleChild(overrides: Partial<BoqInformationalItem> = {}): BoqInformat
 
 function renderTable(
   sections: BoqSection[],
-  catalogState: (row: { item: BoqPricedItem }) => InlineCatalogRowState = () => ({ suggestion: null, busy: null, error: null }),
-  onIncludeOptional: (row: unknown) => void = () => undefined,
+  {
+    catalogState = () => ({ suggestion: null, busy: null, error: null }),
+    onIncludeOptional = () => undefined,
+    readOnly = false,
+    disabled = false,
+    onComponentDraftValidityChange = () => undefined,
+  }: {
+    catalogState?: (row: { item: BoqPricedItem }) => InlineCatalogRowState
+    onIncludeOptional?: (row: unknown) => void
+    readOnly?: boolean
+    disabled?: boolean
+    onComponentDraftValidityChange?: (key: string, isInvalid: boolean) => void
+  } = {},
 ): string {
   const noopRow = () => undefined
   return renderToStaticMarkup(createElement(UnifiedBoqItemsTable, {
     sections: buildUnifiedBoqSections(sections),
-    readOnly: false,
-    disabled: false,
+    readOnly,
+    disabled,
     catalogState,
     onFieldChange: () => undefined,
     onAcceptSuggestion: noopRow,
@@ -55,6 +66,7 @@ function renderTable(
     onFindMatch: noopRow,
     onExclude: noopRow,
     onIncludeOptional,
+    onComponentDraftValidityChange,
   }))
 }
 
@@ -83,9 +95,11 @@ test('shows non-priced bundle children without matching or counting them twice',
       item({ id: 'bundle-parent-1', pricingRole: 'bundle_parent', desc: 'Priced bundle', total: 800 }),
       bundleChild(),
     ],
-  }], () => {
-    catalogLookups += 1
-    return { suggestion: null, busy: null, error: null }
+  }], {
+    catalogState: () => {
+      catalogLookups += 1
+      return { suggestion: null, busy: null, error: null }
+    },
   })
 
   assert.match(html, /Informational bundle component/)
@@ -110,7 +124,7 @@ test('keeps separate material and labour rows with independent quantity and unit
   assert.match(html, /aria-label="Unit for Stub-end 6B, row 2"[^>]*value="Db"/)
 })
 
-test('keeps separate component rows independently priced with explicit identity and read-only rate evidence', () => {
+test('separate component rows render only the applicable component input and lock the rate', () => {
   const html = renderTable([{
     header: 'Valve work',
     items: [
@@ -119,15 +133,24 @@ test('keeps separate component rows independently priced with explicit identity 
     ],
   }])
 
-  assert.match(html, /aria-label="Rate for Valve component, row 1"[^>]*value="999"/)
-  assert.match(html, /aria-label="Rate for Valve component, row 2"[^>]*value="777"/)
-  assert.match(html, /Material component/)
-  assert.match(html, /Labour component/)
-  assert.match(html, /Material source rate[^<]*<\/span><strong>฿2,808<\/strong>/)
-  assert.match(html, /Labour source rate[^<]*<\/span><strong>฿300<\/strong>/)
-  assert.match(html, /data-component="material"[\s\S]*?Material source rate[\s\S]*?data-component="labour"[^>]*>[\s\S]*?Labour not provided/)
-  assert.match(html, /data-component="material"[^>]*>[\s\S]*?Material not provided[\s\S]*?data-component="labour"[\s\S]*?Labour source rate/)
-  assert.doesNotMatch(html, /aria-label="Material (?:rate|total)|aria-label="Labour (?:rate|total)/)
+  assert.match(html, /aria-label="Material for Valve component, row 1"[^>]*value="2808.00"/)
+  assert.match(html, /aria-label="Labour for Valve component, row 2"[^>]*value="300.00"/)
+  const materialRow = html.match(/<tr[^>]*data-row-key="[^"]*id:material"[\s\S]*?<\/tr>/)?.[0] ?? ''
+  const labourRow = html.match(/<tr[^>]*data-row-key="[^"]*id:labour"[\s\S]*?<\/tr>/)?.[0] ?? ''
+  const materialRate = materialRow.match(/<input[^>]*aria-label="Rate for Valve component, row 1"[^>]*>/)?.[0] ?? ''
+  const labourRate = labourRow.match(/<input[^>]*aria-label="Rate for Valve component, row 2"[^>]*>/)?.[0] ?? ''
+  assert.match(materialRate, /\sdisabled=""/)
+  assert.match(materialRate, /value="999"/)
+  assert.match(labourRate, /\sdisabled=""/)
+  assert.match(labourRate, /value="777"/)
+  assert.match(materialRow, /Material component/)
+  assert.match(labourRow, /Labour component/)
+  assert.match(materialRow, /Labour not applicable/)
+  assert.doesNotMatch(materialRow, /aria-label="Labour for/)
+  assert.match(labourRow, /Material not applicable/)
+  assert.doesNotMatch(labourRow, /aria-label="Material for/)
+  assert.match(materialRow, /class="unified-boq-component-origin source"[^>]*>Source</)
+  assert.match(labourRow, /class="unified-boq-component-origin source"[^>]*>Source</)
 })
 
 test('does not relabel an editable separate-component rate as source evidence', () => {
@@ -136,14 +159,16 @@ test('does not relabel an editable separate-component rate as source evidence', 
     items: [item({ desc: 'Editable material row', rate: 999, total: 7992, costComponent: 'material', costAllocation: undefined })],
   }])
 
-  assert.match(html, /aria-label="Rate for Editable material row, row 1"[^>]*value="999"/)
+  const editableRate = html.match(/<input[^>]*aria-label="Rate for Editable material row, row 1"[^>]*>/)?.[0] ?? ''
+  assert.match(editableRate, /\sdisabled=""/)
+  assert.match(editableRate, /value="999"/)
   assert.match(html, /Material component/)
-  assert.match(html, /Material not provided/)
-  assert.match(html, /Labour not provided/)
-  assert.doesNotMatch(html, /Material (?:source|row) rate/)
+  assert.match(html, /aria-label="Material for Editable material row, row 1"[^>]*value="999.00"/)
+  assert.match(html, /Labour not applicable/)
+  assert.doesNotMatch(html, /Material source/)
 })
 
-test('combined rows render shared source-cost evidence as compact read-only values', () => {
+test('combined source-derived rows expose editable material and labour inputs with rate-basis values', () => {
   const html = renderTable([{
     header: 'Combined work',
     items: [item({
@@ -157,19 +182,71 @@ test('combined rows render shared source-cost evidence as compact read-only valu
     })],
   }])
 
-  assert.match(html, /aria-label="Rate for Combined valve, row 1"[^>]*value="3108"/)
-  assert.match(html, /Material source rate[^<]*<\/span><strong>฿2,808<\/strong>/)
-  assert.match(html, /Labour source rate[^<]*<\/span><strong>฿300<\/strong>/)
-  assert.doesNotMatch(html, /aria-label="Material (?:rate|total)|aria-label="Labour (?:rate|total)/)
+  assert.match(html, /aria-label="Material for Combined valve, row 1"[^>]*value="2808.00"/)
+  assert.match(html, /aria-label="Labour for Combined valve, row 1"[^>]*value="300.00"/)
+  assert.match(html, /Material source rate:[^<]*2,808\.00/)
+  assert.match(html, /Labour source rate:[^<]*300\.00/)
+  assert.match(html, /class="unified-boq-component-origin source"[^>]*>Source</)
+  const combinedRate = html.match(/<input[^>]*aria-label="Rate for Combined valve, row 1"[^>]*>/)?.[0] ?? ''
+  assert.match(combinedRate, /\sdisabled=""/)
+  assert.match(combinedRate, /value="3108"/)
 })
 
-test('missing source component prices remain visibly unprovided and cannot be allocated', () => {
+test('lump-sum rows expose editable total-basis material and labour inputs', () => {
+  const html = renderTable([{
+    header: 'Lump sum',
+    items: [item({
+      desc: 'Provisional sum',
+      type: 'lump_sum',
+      qty: 1,
+      rate: 5000,
+      total: 5000,
+      sourceCosts: {
+        material: { present: true, qty: 1, unit: 'Ls', rate: 3000, total: 3000 },
+        labour: { present: true, qty: 1, unit: 'Ls', rate: 2000, total: 2000 },
+      },
+    })],
+  }])
+
+  assert.match(html, /aria-label="Material for Provisional sum, row 1"[^>]*value="3000.00"/)
+  assert.match(html, /aria-label="Labour for Provisional sum, row 1"[^>]*value="2000.00"/)
+  assert.match(html, /Material source total:[^<]*3,000\.00/)
+  assert.match(html, /Labour source total:[^<]*2,000\.00/)
+  assert.match(html, /class="unified-boq-component-origin source"[^>]*>Source</)
+})
+
+test('an unsplit combined row renders editable zeroed component controls until the first edit', () => {
   const html = renderTable([{ header: 'Unknown split', items: [item({ desc: 'Allowance', sourceCosts: undefined })] }])
 
-  assert.match(html, /Material not provided/)
-  assert.match(html, /Labour not provided/)
+  assert.match(html, /aria-label="Material for Allowance, row 1"[^>]*value="0.00"/)
+  assert.match(html, /aria-label="Labour for Allowance, row 1"[^>]*value="0.00"/)
+  assert.match(html, /aria-label="Rate for Allowance, row 1"[^>]*value="100"/)
+  assert.doesNotMatch(html, /aria-label="Rate for Allowance, row 1"[^>]*disabled=""/)
   assert.doesNotMatch(html, />Allocate<|allocation editor|onAllocate\(/i)
   assert.doesNotMatch(tableSource, /onComponentChange|onAllocate|materialAllocation|labourAllocation/)
+})
+
+test('manual allocations show the manual indicator while preserving immutable source evidence', () => {
+  const html = renderTable([{
+    header: 'Manual split',
+    items: [item({
+      desc: 'Manual valve',
+      rate: 3200,
+      total: 25600,
+      costAllocation: { basis: 'rate', material: 2900, labour: 300, origin: 'manual' },
+      sourceCosts: {
+        material: { present: true, qty: 8, unit: 'Pcs', rate: 2808, total: 22464 },
+        labour: { present: true, qty: 8, unit: 'Pcs', rate: 300, total: 2400 },
+      },
+    })],
+  }])
+
+  assert.match(html, /aria-label="Material for Manual valve, row 1"[^>]*value="2900.00"/)
+  assert.match(html, /aria-label="Labour for Manual valve, row 1"[^>]*value="300.00"/)
+  assert.match(html, /Manual/)
+  assert.match(html, /Material source rate:[^<]*2,808\.00/)
+  assert.match(html, /Labour source rate:[^<]*300\.00/)
+  assert.match(html, /class="unified-boq-component-origin manual"[^>]*>Manual</)
 })
 
 test('renders each section as one full-width row and catalog controls inline with every item', () => {
@@ -199,16 +276,55 @@ test('converts BOQ rows to labelled two-column cards at 920px and one-column car
 })
 
 test('disables only an active catalog row while its suggestion request is in flight', () => {
-  const html = renderTable([{ header: 'Valves', items: [item({ desc: 'Busy row', costComponent: 'material' }), item({ id: 'other', desc: 'Other row', costComponent: 'material' })] }], (row) => ({
-    suggestion: null,
-    busy: row.item.desc === 'Busy row' ? 'ai' : null,
-    error: null,
-  }))
+  const html = renderTable([{ header: 'Valves', items: [item({ desc: 'Busy row', costComponent: 'material' }), item({ id: 'other', desc: 'Other row', costComponent: 'material' })] }], {
+    catalogState: (row) => ({
+      suggestion: null,
+      busy: row.item.desc === 'Busy row' ? 'ai' : null,
+      error: null,
+    }),
+  })
   const busyDescription = html.match(/<input[^>]*aria-label="Description for Busy row, row 1"/)?.[0] ?? ''
-  const busyRate = html.match(/<input[^>]*aria-label="Rate for Busy row, row 1"/)?.[0] ?? ''
+  const busyMaterial = html.match(/<input[^>]*aria-label="Material for Busy row, row 1"/)?.[0] ?? ''
   const otherDescription = html.match(/<input[^>]*aria-label="Description for Other row, row 2"/)?.[0] ?? ''
 
   assert.match(busyDescription, /\sdisabled=""/)
-  assert.match(busyRate, /\sdisabled=""/)
+  assert.match(busyMaterial, /\sdisabled=""/)
   assert.doesNotMatch(otherDescription, /\sdisabled=""/)
+})
+
+test('approved rows render component evidence as read-only values without inputs', () => {
+  const sections = [{
+    header: 'Approved',
+    items: [item({
+      desc: 'Approved valve',
+      rate: 3108,
+      total: 24864,
+      costAllocation: { basis: 'rate', material: 2808, labour: 300, origin: 'manual' },
+      sourceCosts: {
+        material: { present: true, qty: 8, unit: 'Pcs', rate: 2808, total: 22464 },
+        labour: { present: true, qty: 8, unit: 'Pcs', rate: 300, total: 2400 },
+      },
+    })],
+  }]
+  const html = renderTable(sections, { readOnly: true })
+
+  assert.equal(html.includes('aria-label="Material for Approved valve, row 1"'), false)
+  assert.equal(html.includes('aria-label="Labour for Approved valve, row 1"'), false)
+  assert.equal(html.includes('2,808.00'), true)
+  assert.equal(html.includes('300.00'), true)
+  assert.equal(html.includes('>Manual<'), true)
+})
+
+test('informational bundle children remain on the non-editable placeholder path', () => {
+  const html = renderTable([{
+    header: 'Bundle',
+    items: [
+      item({ id: 'bundle-parent-1', pricingRole: 'bundle_parent', desc: 'Priced bundle', total: 800 }),
+      bundleChild(),
+    ],
+  }])
+
+  assert.doesNotMatch(html, /aria-label="Material for Informational bundle component, row 2"/)
+  assert.doesNotMatch(html, /aria-label="Labour for Informational bundle component, row 2"/)
+  assert.match(html, />Included</)
 })

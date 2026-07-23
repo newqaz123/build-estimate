@@ -207,6 +207,8 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   const [addingItem, setAddingItem] = useState(false)
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("items")
   const [pdfPageRequest, setPdfPageRequest] = useState({ page: 1, key: 0 })
+  const [invalidDraftKeys, setInvalidDraftKeys] = useState<Set<string>>(new Set())
+  const invalidDraftRef = useRef<Set<string>>(new Set())
   const isReadOnly = boq.status === "approved"
   const mutationBusy = saving || approving || matching || deleting || addingItem
   const canonicalRevisionKey = useMemo(() => buildCanonicalRevisionKey(boq), [boq])
@@ -299,8 +301,8 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
     replaceEdits({ ...current, [key]: { ...current[key], [field]: value } })
   }, [isReadOnly, mutationBusy, replaceEdits])
 
-  const handleFieldChange = useCallback((row: UnifiedBoqPricedRow, field: "code" | "desc" | "unit" | "qty" | "rate" | "type", value: string | number | undefined) => {
-    if (field === "qty" || field === "rate") {
+  const handleFieldChange = useCallback((row: UnifiedBoqPricedRow, field: "code" | "desc" | "unit" | "qty" | "rate" | "type" | "materialCost" | "labourCost", value: string | number | undefined) => {
+    if (field === "qty" || field === "rate" || field === "materialCost" || field === "labourCost") {
       const parsed = parseNonNegativeBoqEditValue(String(value))
       if (parsed === undefined) return
       handleEdit(row, field, parsed)
@@ -362,8 +364,23 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
     })
   }, [boq, isReadOnly, mutationBusy, replaceMetadataEdits])
 
+  const handleComponentDraftValidityChange = useCallback((key: string, isInvalid: boolean) => {
+    const next = new Set(invalidDraftRef.current)
+    if (isInvalid) {
+      next.add(key)
+    } else {
+      next.delete(key)
+    }
+    invalidDraftRef.current = next
+    setInvalidDraftKeys(next)
+  }, [])
+
   const handleSaveAll = async () => {
     if (isReadOnly || mutationBusy) return
+    if (invalidDraftRef.current.size > 0) {
+      toast.error("Component costs contain invalid drafts. Fix them before saving.")
+      return
+    }
     const editSnapshot = editsRef.current
     const metadataSnapshot = metadataEditsRef.current
     const keys = Object.keys(editSnapshot)
@@ -431,6 +448,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
 
   const handleApprove = async () => {
     if (isReadOnly || mutationBusy) return
+    if (invalidDraftRef.current.size > 0) return void toast.error("Component costs contain invalid drafts. Fix them before approving.")
     if (pendingChanges > 0) return void toast.error("Save pending changes before approving")
     if (verification.hasBlockingIssues) return void toast.error("Resolve the review blockers before approving")
     if (requireCatalogReadiness && catalogReadiness.blocking > 0) return void toast.error("Resolve catalog matching before approving")
@@ -545,10 +563,10 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
             ) : null}
             {!isReadOnly ? (
               <>
-                <Button type="button" variant="outline" size="sm" onClick={() => void handleSaveAll()} disabled={mutationBusy}>
+                <Button type="button" variant="outline" size="sm" onClick={() => void handleSaveAll()} disabled={mutationBusy || invalidDraftKeys.size > 0}>
                   {saving ? <Loader2 className="animate-spin" /> : <Save aria-hidden="true" />}Save draft
                 </Button>
-                <Button type="button" size="sm" onClick={() => void handleApprove()} disabled={mutationBusy || pendingChanges > 0 || verification.hasBlockingIssues || (requireCatalogReadiness && catalogReadiness.blocking > 0)}>
+                <Button type="button" size="sm" onClick={() => void handleApprove()} disabled={mutationBusy || invalidDraftKeys.size > 0 || pendingChanges > 0 || verification.hasBlockingIssues || (requireCatalogReadiness && catalogReadiness.blocking > 0)}>
                   {approving ? <Loader2 className="animate-spin" /> : <Check aria-hidden="true" />}Approve BOQ
                 </Button>
               </>
@@ -628,6 +646,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
               onExclude={(row) => { setExcludeTarget(row); setExcludeReason("") }}
               onIncludeOptional={(row) => { void handleIncludeOptional(row) }}
               onClearCatalogError={catalogMatching.clearRowError}
+              onComponentDraftValidityChange={handleComponentDraftValidityChange}
             />
           ) : (
             <div className="proto-empty-state boq-filter-empty"><p>No items match your filter</p></div>
@@ -653,7 +672,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
               boq={boq}
               canonicalRevisionKey={canonicalRevisionKey}
               readOnly={isReadOnly}
-              mutationBlockedReason={pendingChanges > 0 ? "You have unsaved BOQ item or detail edits. Use Save draft before applying extraction corrections." : undefined}
+              mutationBlockedReason={invalidDraftKeys.size > 0 ? "Component costs contain invalid drafts. Fix them before applying extraction corrections." : pendingChanges > 0 ? "You have unsaved BOQ item or detail edits. Use Save draft before applying extraction corrections." : undefined}
               sourceAvailable={hasSource}
               onBoqChange={applyMutationBoq}
               onNavigateToPage={(page) => setPdfPageRequest((current) => ({ page, key: current.key + 1 }))}

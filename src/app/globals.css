@@ -1206,7 +1206,15 @@
 .unified-boq-component-badge.labour { background: color-mix(in oklab, var(--fg-2) 7%, transparent); color: var(--fg-2); }
 .unified-boq-source-cost { display: inline-flex; min-height: 28px; align-items: center; justify-content: flex-end; color: var(--fg-2); font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .unified-boq-source-cost strong { font-weight: 500; }
-.unified-boq-source-cost-missing { display: inline-flex; min-height: 28px; align-items: center; color: var(--muted-text); }
+.unified-boq-source-cost-missing,
+.unified-boq-component-missing { display: inline-flex; min-height: 28px; align-items: center; color: var(--muted-text); }
+.unified-boq-component-input-wrap { display: grid; gap: 2px; min-width: 0; }
+.unified-boq-component-input-wrap input { width: 100%; min-width: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.unified-boq-component-origin { display: inline-flex; justify-self: end; padding: 1px 5px; border-radius: var(--radius-pill); font-size: 9px; font-weight: 700; line-height: 1.35; text-transform: uppercase; letter-spacing: 0.03em; }
+.unified-boq-component-origin.source { background: color-mix(in oklab, #006400 10%, transparent); color: #006400; }
+.unified-boq-component-origin.manual { background: color-mix(in oklab, var(--accent) 10%, transparent); color: var(--accent); }
+.unified-boq-component-evidence { display: block; justify-self: end; max-width: 100%; overflow: hidden; color: var(--muted-text); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.unified-boq-component-error { justify-self: end; color: var(--danger); font-size: 9px; }
 .unified-boq-total { padding-top: 10px !important; font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .unified-boq-catalog-cell { padding: 6px 8px !important; }
 .inline-catalog-cell { display: grid; min-width: 0; gap: 3px; }

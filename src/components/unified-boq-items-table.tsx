@@ -1,7 +1,10 @@
 "use client"
 
+import { useCallback, useEffect, useRef, useState } from "react"
 import { Input } from "@/components/ui/input"
 import { InlineCatalogCell } from "@/components/inline-catalog-cell"
+import { deriveSourceCostAllocation } from "@/lib/boq-cost-allocation"
+import type { BoqSourceCost } from "@/lib/boq-schema"
 import {
   isPricedUnifiedBoqRow,
   type UnifiedBoqPricedRow,
@@ -9,7 +12,7 @@ import {
 } from "@/lib/boq-unified-rows"
 import type { InlineCatalogRowState } from "@/components/use-inline-catalog-matching"
 
-type EditableBoqField = "desc" | "unit" | "qty" | "rate"
+type EditableBoqField = "desc" | "unit" | "qty" | "rate" | "materialCost" | "labourCost"
 
 export interface UnifiedBoqItemsTableProps {
   sections: UnifiedBoqSection[]
@@ -24,33 +27,170 @@ export interface UnifiedBoqItemsTableProps {
   onExclude: (row: UnifiedBoqPricedRow) => void
   onIncludeOptional?: (row: UnifiedBoqPricedRow) => void
   onClearCatalogError?: (key: string) => void
+  onComponentDraftValidityChange?: (key: string, isInvalid: boolean) => void
 }
 
 function currency(value: number): string {
-  return `฿${value.toLocaleString()}`
+  return `฿${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
-function SourceCostEvidence({
+function formatNumber2(value: number): string {
+  return value.toFixed(2)
+}
+
+function parseCentDraft(raw: string): { valid: true; value: number } | { valid: false; error: string } {
+  const trimmed = raw.trim()
+  if (trimmed === "") return { valid: false, error: "Required" }
+  const parsed = Number(trimmed)
+  if (!Number.isFinite(parsed)) return { valid: false, error: "Must be a number" }
+  if (parsed < 0) return { valid: false, error: "Must be non-negative" }
+  const scaled = Math.round(parsed * 100)
+  if (Math.abs(scaled / 100 - parsed) > 1e-9) return { valid: false, error: "Maximum 2 decimal places" }
+  return { valid: true, value: scaled / 100 }
+}
+
+function sourceEvidenceText(
+  label: "Material" | "Labour",
+  basis: "rate" | "total" | null,
+  evidence?: BoqSourceCost,
+): string | undefined {
+  if (!evidence?.present) return undefined
+  return `${label} source ${basis ?? "rate"}: ${currency(basis === "total" ? evidence.total : evidence.rate)}`
+}
+
+function ComponentCostCell({
   label,
-  present,
   value,
   basis,
+  evidence,
+  origin,
 }: {
   label: "Material" | "Labour"
-  present: boolean
   value: number
-  basis: "rate" | "total"
+  basis: "rate" | "total" | null
+  evidence?: BoqSourceCost
+  origin?: "source" | "manual"
 }) {
-  if (!present) {
-    return <span className="unified-boq-source-cost-missing" aria-label={`${label} not provided`}>—</span>
+  const evidenceText = sourceEvidenceText(label, basis, evidence)
+  return (
+    <span className="unified-boq-source-cost">
+      <span className="sr-only">{evidenceText ?? `${label} ${basis ?? "rate"}`}</span>
+      <strong>{currency(value)}</strong>
+      {origin ? <span className={`unified-boq-component-origin ${origin}`}>{origin === "source" ? "Source" : "Manual"}</span> : null}
+      {evidenceText ? <span className="unified-boq-component-evidence" title={evidenceText}>{evidenceText}</span> : null}
+    </span>
+  )
+}
+
+function ComponentCostInput({
+  row,
+  rowNumber,
+  component,
+  label,
+  value,
+  basis,
+  evidence,
+  origin,
+  disabled,
+  onFieldChange,
+  onValidityChange,
+}: {
+  row: UnifiedBoqPricedRow
+  rowNumber: number
+  component: "material" | "labour"
+  label: "Material" | "Labour"
+  value: number
+  basis: "rate" | "total" | null
+  evidence?: BoqSourceCost
+  origin?: "source" | "manual"
+  disabled: boolean
+  onFieldChange: (row: UnifiedBoqPricedRow, field: EditableBoqField, value: number | undefined) => void
+  onValidityChange?: (key: string, isInvalid: boolean) => void
+}) {
+  const key = `${row.key}:${component}`
+  const [draft, setDraft] = useState<string>(formatNumber2(value))
+  const [focused, setFocused] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const previousValueRef = useRef(value)
+  const fieldName = component === "material" ? "materialCost" : "labourCost"
+
+  const reportValidity = useCallback((isInvalid: boolean) => {
+    onValidityChange?.(key, isInvalid)
+  }, [key, onValidityChange])
+
+  useEffect(() => {
+    reportValidity(false)
+    return () => {
+      reportValidity(false)
+    }
+  }, [reportValidity])
+
+  useEffect(() => {
+    if (focused) return
+    if (previousValueRef.current !== value) {
+      setDraft(formatNumber2(value))
+      setError(null)
+      reportValidity(false)
+      previousValueRef.current = value
+    }
+  }, [value, focused, reportValidity])
+
+  const evidenceText = sourceEvidenceText(label, basis, evidence)
+
+  const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = event.target.value
+    setDraft(raw)
+    const result = parseCentDraft(raw)
+    if (result.valid) {
+      setError(null)
+      reportValidity(false)
+      onFieldChange(row, fieldName, result.value)
+    }
   }
-  const evidenceLabel = `${label} source ${basis}`
+
+  const handleBlur = () => {
+    setFocused(false)
+    const result = parseCentDraft(draft)
+    if (!result.valid) {
+      setError(result.error)
+      reportValidity(true)
+      return
+    }
+    setError(null)
+    reportValidity(false)
+    setDraft(formatNumber2(result.value))
+    onFieldChange(row, fieldName, result.value)
+  }
+
+  const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => {
+    setFocused(true)
+    event.currentTarget.select()
+  }
 
   return (
-    <span className="unified-boq-source-cost" aria-label={evidenceLabel}>
-      <span className="sr-only">{evidenceLabel}</span>
-      <strong>{currency(value)}</strong>
-    </span>
+    <div className="unified-boq-component-input-wrap">
+      <Input
+        className="unified-boq-component-input"
+        aria-label={`${label} for ${row.item.desc}, row ${rowNumber}`}
+        aria-describedby={evidenceText ? `${key}-evidence` : undefined}
+        type="number"
+        min="0"
+        step="0.01"
+        value={draft}
+        disabled={disabled}
+        aria-invalid={error ? "true" : undefined}
+        onChange={handleChange}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+      />
+      {error ? <span className="unified-boq-component-error">{error}</span> : null}
+      {origin ? <span className={`unified-boq-component-origin ${origin}`}>{origin === "source" ? "Source" : "Manual"}</span> : null}
+      {evidenceText ? (
+        <span id={`${key}-evidence`} className="unified-boq-component-evidence" title={evidenceText}>
+          {evidenceText}
+        </span>
+      ) : null}
+    </div>
   )
 }
 
@@ -67,6 +207,7 @@ export function UnifiedBoqItemsTable({
   onExclude,
   onIncludeOptional = () => undefined,
   onClearCatalogError = () => undefined,
+  onComponentDraftValidityChange,
 }: UnifiedBoqItemsTableProps) {
   const rowStarts: number[] = []
   sections.reduce((rowStart, section) => {
@@ -106,6 +247,7 @@ export function UnifiedBoqItemsTable({
               onExclude={onExclude}
               onIncludeOptional={onIncludeOptional}
               onClearCatalogError={onClearCatalogError}
+              onComponentDraftValidityChange={onComponentDraftValidityChange}
             />
           ))}
         </tbody>
@@ -133,6 +275,7 @@ function FragmentSection({
   onExclude,
   onIncludeOptional = () => undefined,
   onClearCatalogError = () => undefined,
+  onComponentDraftValidityChange,
 }: FragmentSectionProps) {
   return (
     <>
@@ -159,15 +302,22 @@ function FragmentSection({
         }
         const rowCatalogState = catalogState(row)
         const locked = readOnly || disabled || rowCatalogState.busy !== null
-        const evidenceBasis = row.item.type === "lump_sum" ? "total" : "rate"
-        const materialEvidence = row.item.sourceCosts?.material
-        const labourEvidence = row.item.sourceCosts?.labour
         const isMaterialRow = row.item.costComponent === "material"
         const isLabourRow = row.item.costComponent === "labour"
+        const isLumpSumRow = row.item.costComponent === "lump_sum" || row.item.type === "lump_sum"
         const isSeparateComponentRow = isMaterialRow || isLabourRow
-        const sourceAllocation = row.item.costAllocation?.origin === "source" ? row.item.costAllocation : undefined
-        const materialPresent = isMaterialRow ? sourceAllocation !== undefined : !isSeparateComponentRow && materialEvidence?.present === true
-        const labourPresent = isLabourRow ? sourceAllocation !== undefined : !isSeparateComponentRow && labourEvidence?.present === true
+        const evidenceBasis = isLumpSumRow ? "total" : "rate"
+        const allocation = deriveSourceCostAllocation(row.item)
+        const materialValue = isLabourRow ? 0 : (allocation?.material ?? 0)
+        const labourValue = isMaterialRow ? 0 : (allocation?.labour ?? 0)
+        const origin = allocation?.origin
+        const materialEvidence = row.item.sourceCosts?.material
+        const labourEvidence = row.item.sourceCosts?.labour
+        const rateLocked = locked || isSeparateComponentRow || allocation !== undefined
+
+        const handleComponentChange = (targetRow: UnifiedBoqPricedRow, field: EditableBoqField, value: number | undefined) => {
+          onFieldChange(targetRow, field, value)
+        }
 
         return (
           <tr key={row.key} data-row-key={row.key}>
@@ -213,25 +363,63 @@ function FragmentSection({
                 type="number"
                 min="0"
                 value={row.item.rate}
-                disabled={locked}
+                disabled={rateLocked}
                 onChange={(event) => onFieldChange(row, "rate", Number(event.target.value))}
               />
             </td>
             <td className="num-col unified-boq-component-cell" data-component="material" data-label="Material">
-              <SourceCostEvidence
-                label="Material"
-                present={materialPresent}
-                value={isMaterialRow ? sourceAllocation?.material ?? 0 : evidenceBasis === "total" ? materialEvidence?.total ?? 0 : materialEvidence?.rate ?? 0}
-                basis={isMaterialRow && sourceAllocation ? sourceAllocation.basis : evidenceBasis}
-              />
+              {isLabourRow ? (
+                <span className="unified-boq-component-missing" aria-label="Material not applicable">—</span>
+              ) : readOnly ? (
+                <ComponentCostCell
+                  label="Material"
+                  value={materialValue}
+                  basis={evidenceBasis}
+                  evidence={materialEvidence}
+                  origin={origin}
+                />
+              ) : (
+                <ComponentCostInput
+                  row={row}
+                  rowNumber={rowNumber}
+                  component="material"
+                  label="Material"
+                  value={materialValue}
+                  basis={evidenceBasis}
+                  evidence={materialEvidence}
+                  origin={origin}
+                  disabled={locked}
+                  onFieldChange={handleComponentChange}
+                  onValidityChange={onComponentDraftValidityChange}
+                />
+              )}
             </td>
             <td className="num-col unified-boq-component-cell" data-component="labour" data-label="Labour">
-              <SourceCostEvidence
-                label="Labour"
-                present={labourPresent}
-                value={isLabourRow ? sourceAllocation?.labour ?? 0 : evidenceBasis === "total" ? labourEvidence?.total ?? 0 : labourEvidence?.rate ?? 0}
-                basis={isLabourRow && sourceAllocation ? sourceAllocation.basis : evidenceBasis}
-              />
+              {isMaterialRow ? (
+                <span className="unified-boq-component-missing" aria-label="Labour not applicable">—</span>
+              ) : readOnly ? (
+                <ComponentCostCell
+                  label="Labour"
+                  value={labourValue}
+                  basis={evidenceBasis}
+                  evidence={labourEvidence}
+                  origin={origin}
+                />
+              ) : (
+                <ComponentCostInput
+                  row={row}
+                  rowNumber={rowNumber}
+                  component="labour"
+                  label="Labour"
+                  value={labourValue}
+                  basis={evidenceBasis}
+                  evidence={labourEvidence}
+                  origin={origin}
+                  disabled={locked}
+                  onFieldChange={handleComponentChange}
+                  onValidityChange={onComponentDraftValidityChange}
+                />
+              )}
             </td>
             <td className="num-col unified-boq-total" data-label="Total">{currency(row.item.total)}</td>
             <td className="unified-boq-catalog-cell" data-label="Catalog">

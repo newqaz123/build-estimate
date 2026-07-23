@@ -13,6 +13,15 @@ export function deriveSourceCostAllocation(item: BoqItem): BoqCostAllocation | u
   if (!isPricedBoqItem(item)) return undefined
   if (item.costAllocation) return item.costAllocation
 
+  if (item.type === 'lump_sum' && item.sourceCosts?.material.present && item.sourceCosts.labour.present) {
+    return {
+      basis: 'total',
+      material: item.sourceCosts.material.total,
+      labour: item.sourceCosts.labour.total,
+      origin: 'source',
+    }
+  }
+
   if (item.type !== 'lump_sum' && item.sourceCosts?.material.present && item.sourceCosts.labour.present) {
     return {
       basis: 'rate',
