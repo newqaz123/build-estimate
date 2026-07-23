@@ -1343,6 +1343,8 @@
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 .app-shell {
+  position: fixed;
+  inset: 0;
   display: flex;
   height: 100vh;
   height: 100dvh;
@@ -1393,6 +1395,8 @@
   gap: var(--space-3);
 }
 .sidebar-brand svg { width: 28px; height: 28px; flex-shrink: 0; color: var(--accent); }
+.sidebar.collapsed .sidebar-brand { justify-content: center; gap: 0; }
+.sidebar.collapsed .sidebar-brand > svg { display: none; }
 .sidebar-brand span {
   font-family: var(--font-display);
   font-size: 18px;
@@ -1463,8 +1467,8 @@
   margin-left: auto;
 }
 .sidebar-toggle:hover { color: rgba(255,255,255,0.8); }
-.sidebar-toggle svg { width: 14px; height: 14px; display: block; }
-.sidebar.collapsed .sidebar-toggle { transform: rotate(180deg); }
+.sidebar-toggle svg { width: 14px; height: 14px; display: block; pointer-events: none; }
+.sidebar.collapsed .sidebar-toggle { margin-left: 0; transform: rotate(180deg); }
 
 /* Topbar */
 .topbar {
@@ -1503,6 +1507,7 @@
 @media (max-width: 768px) {
   .sidebar { width: var(--sidebar-collapsed-w); min-width: var(--sidebar-collapsed-w); }
   .sidebar-brand { justify-content: center; padding-inline: var(--space-4); }
+  .sidebar.collapsed .sidebar-brand > svg { display: block; }
   .sidebar-brand span, .sidebar-nav a span, .sidebar-signout span { display: none; }
   .sidebar-toggle { display: none; }
   .sidebar-nav a, .sidebar-signout { justify-content: center; padding: var(--space-2); gap: 0; }
