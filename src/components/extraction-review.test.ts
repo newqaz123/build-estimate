@@ -66,6 +66,24 @@ test("extraction review filters derive per-chip counts from displayed results an
   assert.match(source, /disabled=\{disabled\}/)
   assert.match(source, /aria-disabled=\{disabled \|\| undefined\}/)
   assert.match(source, /set_filter", filter: "all"/)
+  assert.match(source, /selectEffectiveFilter/)
+  assert.match(source, /effectiveFilter === filter\.value/)
+  assert.match(source, /effectiveFilter !== "all"/)
+  assert.match(source, /Candidate source rows without proposals/)
+  assert.match(source, /selectExtractionReviewOutcome/)
+  assert.match(source, /extractionReviewOutcomeTitle/)
+  assert.match(source, /extractionReviewOutcomeMessage/)
+  assert.match(source, /rejectionLabelGroups/)
+  assert.match(source, /reviewProgress\.progressText/)
+  assert.doesNotMatch(source, /reviewTitle/)
+})
+
+test("active extraction review chip uses pale accent with dark text instead of white accent-on", () => {
+  const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8")
+  assert.match(css, /\.extraction-review-filters \.filter-chip\.active[\s\S]*?color:\s*var\(--fg\)/)
+  assert.match(css, /\.extraction-review-filters \.filter-chip\.active[\s\S]*?color-mix\(in oklab, var\(--accent\) 12%[^)]+\)/)
+  const section = css.slice(css.indexOf(".extraction-review-filters"), css.indexOf(".extraction-review-filters") + 500)
+  assert.doesNotMatch(section, /--accent-on/)
 })
 
 test("compare review reuses the standalone extraction review instead of a duplicate controller", () => {

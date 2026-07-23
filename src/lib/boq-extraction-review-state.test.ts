@@ -12,6 +12,7 @@ import {
   extractionReviewRefreshAction,
   invalidateReviewSnapshotRequests,
   isLatestReviewSnapshotRequest,
+  selectEffectiveFilter,
   selectReviewVisibility,
 } from "./boq-extraction-review-state"
 import type { ExtractionReviewResponse } from "./boq-extraction-ai-review"
@@ -180,7 +181,7 @@ test("selectReviewVisibility displayed-result totals back the per-filter chip co
     const result = selectReviewVisibility(review, statuses, filter)
     return result.proposals.length + result.sourceRows.length
   }
-  assert.equal(count("all"), 1)
+  assert.equal(count("all"), 2)
   assert.equal(count("accepted"), 1)
   assert.equal(count("pending"), 0)
   assert.equal(count("rejected"), 0)
@@ -245,4 +246,79 @@ test("durable review snapshots are latest-request-wins across reverse resolution
   const invalidatedRequest = beginReviewSnapshotRequest(generation)
   invalidateReviewSnapshotRequests(generation)
   assert.equal(isLatestReviewSnapshotRequest(generation, invalidatedRequest), false)
+})
+
+test("normalizeExtractionReviewResponse rejects malformed validation summaries", () => {
+  const base = {
+    mode: "ai" as const,
+    aiStatus: "completed" as const,
+    message: "Ready",
+    sourceRowIds: ["row-1"],
+    remainingCandidateRowIds: [],
+    sourceRefs: [{ sourceRowId: "row-1", page: 2, table: 1, row: 4 }],
+    sourceRows: [sourceRow],
+    proposals: [],
+    rejectedProposals: [],
+    reviewRun: { status: "partial" as const, reviewTargeting: { candidateRowIds: ["row-1"], unreconciled: false } },
+  }
+  assert.notEqual(normalizeExtractionReviewResponse({ ...base, reviewRun: { ...base.reviewRun, validationSummary: { validatedProposalCount: 0, rejectedProposalCount: 1, rejectionCounts: { arithmetic_mismatch: 1 } } } }), null)
+  assert.equal(normalizeExtractionReviewResponse({ ...base, reviewRun: { ...base.reviewRun, validationSummary: { validatedProposalCount: -1, rejectedProposalCount: 0 } } }), null)
+  assert.equal(normalizeExtractionReviewResponse({ ...base, reviewRun: { ...base.reviewRun, validationSummary: { validatedProposalCount: 0, rejectedProposalCount: 0, rejectionCounts: { bogus_code: 1 } } } }), null)
+  assert.equal(normalizeExtractionReviewResponse({ ...base, reviewRun: { ...base.reviewRun, validationSummary: { validatedProposalCount: 0, rejectedProposalCount: 1, rejectionCounts: { arithmetic_mismatch: 5 } } } }), null)
+})
+
+test("selectEffectiveFilter falls back to all when the selected filter has zero results", () => {
+  const acceptedProposal = proposal("p1", "row-1")
+  const review = {
+    ...response([acceptedProposal]),
+    reviewRun: { status: "completed" as const, reviewTargeting: { candidateRowIds: ["row-1"], ambiguousRowIds: ["row-1"], unreconciledRowIds: [], unreconciled: false } },
+  }
+  const acceptedStatuses = { p1: "accepted" as const }
+  assert.equal(selectEffectiveFilter(review, acceptedStatuses, "all"), "all")
+  assert.equal(selectEffectiveFilter(review, acceptedStatuses, "pending"), "all")
+  assert.equal(selectEffectiveFilter(review, acceptedStatuses, "accepted"), "accepted")
+  assert.equal(selectEffectiveFilter(review, acceptedStatuses, "rejected"), "all")
+  assert.equal(selectEffectiveFilter(review, acceptedStatuses, "ambiguous"), "ambiguous")
+})
+
+test("All filter includes proposal cards and unrepresented source rows exactly once", () => {
+  const row1 = { ...sourceRow, sourceRowId: "row-1", confidence: 0.72 }
+  const row2 = { ...sourceRow, sourceRowId: "row-2", row: 5 }
+  const p1 = proposal("p1", "row-1")
+  const review = {
+    ...response([p1], [row1, row2]),
+    reviewRun: { status: "completed" as const, reviewTargeting: { candidateRowIds: ["row-1", "row-2"], ambiguousRowIds: ["row-1", "row-2"], unreconciledRowIds: [], unreconciled: false } },
+  }
+  const visibility = selectReviewVisibility(review, {}, "all")
+  assert.equal(visibility.proposals.length, 1)
+  assert.equal(visibility.sourceRows.length, 1)
+  assert.equal(visibility.sourceRows[0].sourceRowId, "row-2")
+})
+
+test("real-shape filter counts: 22 ambiguous, 2 reviewed, 20 remaining, 0 unreconciled", () => {
+  const candidateIds = Array.from({ length: 22 }, (_, i) => `sr-${i}`)
+  const rows = candidateIds.map((id, i) => ({ ...sourceRow, sourceRowId: id, row: i + 1, confidence: 1, warnings: [{ code: "unsupported_row", message: "Ambiguous" }] }))
+  const review: ExtractionReviewResponse = {
+    mode: "ai", aiStatus: "completed", message: "Ready",
+    sourceRowIds: candidateIds,
+    remainingCandidateRowIds: candidateIds.slice(2),
+    sourceRefs: rows.map((row) => ({ sourceRowId: row.sourceRowId, page: row.page, table: row.table, row: row.row })),
+    sourceRows: rows,
+    proposals: [],
+    rejectedProposals: [],
+    reviewRun: {
+      status: "partial",
+      reviewedSourceRowIds: candidateIds.slice(0, 2),
+      reviewTargeting: { candidateRowIds: candidateIds, ambiguousRowIds: candidateIds, unreconciledRowIds: [], unreconciled: true },
+    },
+  }
+  const statuses = {}
+  const all = selectReviewVisibility(review, statuses, "all")
+  assert.equal(all.proposals.length + all.sourceRows.length, 22)
+  const ambiguous = selectReviewVisibility(review, statuses, "ambiguous")
+  assert.equal(ambiguous.proposals.length + ambiguous.sourceRows.length, 22)
+  const aiPending = selectReviewVisibility(review, statuses, "ai-pending")
+  assert.equal(aiPending.proposals.length + aiPending.sourceRows.length, 20)
+  const unreconciled = selectReviewVisibility(review, statuses, "unreconciled")
+  assert.equal(unreconciled.proposals.length + unreconciled.sourceRows.length, 0)
 })

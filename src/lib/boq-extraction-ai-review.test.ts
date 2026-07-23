@@ -3,7 +3,6 @@ import test from 'node:test'
 import type { Boq, BoqSection } from './boq-schema'
 import type { BoqExtractionRun } from './boq-extraction-run'
 import type { BoqSourceRowV3 } from './boq-extraction-schema'
-import { fingerprintCanonicalItem } from './boq-extraction-proposals'
 import {
   executeExtractionReview,
   parseExtractionReviewRequest,
@@ -74,11 +73,11 @@ function deps(overrides: Partial<ExtractionReviewDependencies> = {}): Extraction
 
 function componentProposal(overrides: Record<string, unknown> = {}) {
   return {
-    id: 'proposal-components', extractionRunId: 'run-1', operation: 'separate_components', sourceRowIds: ['row-compound'], targetItemIds: ['combined'],
-    affectedItemFingerprints: { combined: fingerprintCanonicalItem(sections[0].items[0]) }, confidence: 0.96, explanation: 'The source has component prices.',
+    id: 'proposal-components', operation: 'separate_components', sourceRowIds: ['row-compound'], targetItemIds: ['combined'],
+    confidence: 0.96, explanation: 'The source has component prices.',
     proposedItems: [
-      { id: 'material', desc: 'Pump material', pricingRole: 'standard', sourceRowIds: ['row-compound'], entryOrigin: 'ai_accepted', unit: 'set', qty: 1, rate: 40, total: 40, costComponent: 'material' },
-      { id: 'labour', desc: 'Pump labour', pricingRole: 'standard', sourceRowIds: ['row-compound'], entryOrigin: 'ai_accepted', unit: 'set', qty: 1, rate: 60, total: 60, costComponent: 'labour' },
+      { id: 'material', desc: 'Pump material', pricingRole: 'standard', parentBundleId: null, sourceRowIds: ['row-compound'], optional: false, excludedFromTotal: false, exclusionReason: null, unit: 'set', qty: 1, rate: 40, total: 40, costComponent: 'material' },
+      { id: 'labour', desc: 'Pump labour', pricingRole: 'standard', parentBundleId: null, sourceRowIds: ['row-compound'], optional: false, excludedFromTotal: false, exclusionReason: null, unit: 'set', qty: 1, rate: 60, total: 60, costComponent: 'labour' },
     ],
     ...overrides,
   }
@@ -171,8 +170,8 @@ test('malformed, unknown-source, and duplicate AI proposals are discarded server
 test('automatic review cannot escape its selected compound source row', async () => {
   const result = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
     callProvider: async (_messages, provider, model) => ({ content: JSON.stringify({ proposals: [{
-      id: 'cross-row', extractionRunId: 'run-1', operation: 'keep', sourceRowIds: ['row-clear'], targetItemIds: ['clear'],
-      affectedItemFingerprints: { clear: fingerprintCanonicalItem(sections[0].items[1]) }, confidence: 0.95,
+      id: 'cross-row', operation: 'keep', sourceRowIds: ['row-clear'], targetItemIds: ['clear'],
+      confidence: 0.95,
       explanation: 'Review a different clear row.', proposedItems: [],
     }] }), provider, model }),
   }))
@@ -225,7 +224,7 @@ test('AI proposals cannot drop target optional/excluded state', async () => {
   target.exclusionReason = 'Source option'
   const dropped = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
     getContext: async () => ({ boq: optionalBoq, run, sourceRows: rows }),
-    callProvider: async (_messages, provider, model) => ({ content: JSON.stringify({ proposals: [componentProposal({ affectedItemFingerprints: { combined: fingerprintCanonicalItem(target) } })] }), provider, model }),
+    callProvider: async (_messages, provider, model) => ({ content: JSON.stringify({ proposals: [componentProposal()] }), provider, model }),
   }))
   assert.equal(dropped.status, 200)
   if (dropped.status === 200) assert.deepEqual(dropped.body.rejectedProposals, [{ index: 0, code: 'target_state_mismatch' }])
@@ -234,9 +233,101 @@ test('AI proposals cannot drop target optional/excluded state', async () => {
     getContext: async () => ({ boq: optionalBoq, run, sourceRows: rows }),
     callProvider: async (_messages, provider, model) => ({ content: JSON.stringify({ proposals: [componentProposal({
       proposedItems: componentProposal().proposedItems.map((item) => ({ ...item, optional: true, excludedFromTotal: true, exclusionReason: 'Source option' })),
-      affectedItemFingerprints: { combined: fingerprintCanonicalItem(target) },
     })] }), provider, model }),
   }))
   assert.equal(carried.status, 200)
   if (carried.status === 200) assert.equal(carried.body.proposals.length, 1)
+})
+
+test('prompt includes the explicit provider contract and forbids server-owned fields', async () => {
+  let systemPrompt = ''
+  await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+    callProvider: async (messages, provider, model) => {
+      systemPrompt = messages[0]!.content
+      return { content: '{"proposals":[]}', provider, model }
+    },
+  }))
+  assert.match(systemPrompt, /RESPONSE CONTRACT/)
+  assert.match(systemPrompt, /FORBIDDEN[\s\S]*extractionRunId/)
+  assert.match(systemPrompt, /affectedItemFingerprints/)
+  assert.match(systemPrompt, /entryOrigin/)
+  for (const op of ['keep', 'split', 'merge', 'separate_components', 'create_bundle', 'needs_human_review']) {
+    assert.match(systemPrompt, new RegExp(`"${op}"`))
+  }
+  assert.match(systemPrompt, /parentBundleId/)
+  assert.match(systemPrompt, /costComponent/)
+  assert.match(systemPrompt, /\{"proposals":\[\]\}/)
+  assert.doesNotMatch(systemPrompt, /\[ExtractionProposal\]/)
+})
+
+test('provider DTO without server-owned fields produces valid proposals', async () => {
+  const result = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+    callProvider: async (_messages, provider, model) => ({ content: JSON.stringify({ proposals: [componentProposal()] }), provider, model }),
+  }))
+  assert.equal(result.status, 200)
+  if (result.status === 200) {
+    assert.equal(result.body.mode, 'ai')
+    assert.equal(result.body.proposals.length, 1)
+    assert.equal(result.body.rejectedProposals.length, 0)
+  }
+})
+
+test('provider proposals including server-owned fields are rejected as invalid_shape', async () => {
+  const withServerFields = {
+    ...componentProposal(),
+    extractionRunId: 'run-1',
+    affectedItemFingerprints: {},
+    proposedItems: componentProposal().proposedItems.map((item) => ({ ...item, entryOrigin: 'ai_accepted' })),
+  }
+  const result = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+    callProvider: async (_messages, provider, model) => ({ content: JSON.stringify({ proposals: [withServerFields] }), provider, model }),
+  }))
+  assert.equal(result.status, 200)
+  if (result.status === 200) {
+    assert.equal(result.body.proposals.length, 0)
+    assert.deepEqual(result.body.rejectedProposals, [{ index: 0, code: 'invalid_shape' }])
+  }
+})
+
+test('cross-mapped source evidence to unrelated target is rejected as target_source_mismatch', async () => {
+  const crossRun = structuredClone(run)
+  crossRun.reviewTargeting = { candidateRowIds: ['row-compound', 'row-clear'], candidateCount: 2, unreconciled: false }
+  const result = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+    getContext: async () => ({ boq, run: crossRun, sourceRows: rows }),
+    callProvider: async (_messages, provider, model) => ({ content: JSON.stringify({ proposals: [{
+      id: 'cross-map', operation: 'separate_components', sourceRowIds: ['row-compound'], targetItemIds: ['clear'],
+      confidence: 0.95, explanation: 'Use compound evidence to fix the clear row.',
+      proposedItems: [
+        { id: 'mat', desc: 'Material', pricingRole: 'standard', parentBundleId: null, sourceRowIds: ['row-compound'], optional: false, excludedFromTotal: false, exclusionReason: null, unit: 'set', qty: 1, rate: 40, total: 40, costComponent: 'material' },
+        { id: 'lab', desc: 'Labour', pricingRole: 'standard', parentBundleId: null, sourceRowIds: ['row-compound'], optional: false, excludedFromTotal: false, exclusionReason: null, unit: 'set', qty: 1, rate: 60, total: 60, costComponent: 'labour' },
+      ],
+    }] }), provider, model }),
+  }))
+  assert.equal(result.status, 200)
+  if (result.status === 200) {
+    assert.deepEqual(result.body.proposals, [])
+    assert.deepEqual(result.body.rejectedProposals, [{ index: 0, code: 'target_source_mismatch' }])
+  }
+})
+
+test('mixed provider batch preserves original rejection indices after preparation filtering', async () => {
+  const valid = componentProposal()
+  const invalidShape = { id: '', operation: 'separate_components', sourceRowIds: ['row-compound'], targetItemIds: ['combined'], confidence: 0.9, explanation: 'x', proposedItems: [] }
+  const semanticBad = {
+    ...componentProposal(),
+    id: 'proposal-semantic',
+    proposedItems: componentProposal().proposedItems.map((item, i) => i === 0 ? { ...item, total: 999 } : item),
+  }
+  const result = await executeExtractionReview({ sourceRowIds: ['row-compound'], manual: true }, 'boq-1', 'run-1', deps({
+    callProvider: async (_messages, provider, model) => ({ content: JSON.stringify({ proposals: [valid, invalidShape, semanticBad] }), provider, model }),
+  }))
+  assert.equal(result.status, 200)
+  if (result.status === 200) {
+    assert.equal(result.body.proposals.length, 1)
+    assert.equal(result.body.proposals[0].id, 'proposal-components')
+    assert.deepEqual(result.body.rejectedProposals, [
+      { index: 1, code: 'invalid_shape' },
+      { index: 2, code: 'arithmetic_mismatch' },
+    ])
+  }
 })

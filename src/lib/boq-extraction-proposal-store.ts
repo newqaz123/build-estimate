@@ -3,7 +3,7 @@ import type { Boq } from './boq-schema'
 import { extractionRunPath, sourceRowPath, createFirestoreExtractionStore } from './boq-extraction-storage'
 import { checksumSourceRows, extractionRunIdentityFingerprint, fingerprintParserConfig, stableCanonicalJson, type BoqExtractionRun } from './boq-extraction-run'
 import type { BoqSourceRowV3 } from './boq-extraction-schema'
-import { fingerprintCanonicalItem, fingerprintCanonicalSections, isHighConfidenceProposal, type ExtractionProposal, type ValidatedProposal } from './boq-extraction-proposals'
+import { fingerprintCanonicalItem, fingerprintCanonicalSections, isHighConfidenceProposal, normalizeValidationSummary, type ExtractionProposal, type ProposalValidationSummary, type ValidatedProposal } from './boq-extraction-proposals'
 import {
   acceptExtractionProposal,
   proposalMatchesAudit,
@@ -35,6 +35,7 @@ export interface ExtractionReviewRunSummary {
   retryAfter?: string
   updatedAt?: string
   reviewedSourceRowIds?: string[]
+  validationSummary?: ProposalValidationSummary
   reviewTargeting?: {
     candidateRowIds: string[]
     ambiguousRowIds?: string[]
@@ -78,11 +79,45 @@ function canonicalProposalId(proposal: ValidatedProposal): string {
   return `proposal-${fingerprint.slice('sha256:'.length, 'sha256:'.length + 32)}`
 }
 
+function optionalStringField(record: Record<string, unknown>, key: string): string | undefined {
+  return typeof record[key] === 'string' ? record[key] as string : undefined
+}
+
+function optionalStringArrayField(record: Record<string, unknown>, key: string): string[] | undefined {
+  return Array.isArray(record[key]) && (record[key] as unknown[]).every((item) => typeof item === 'string') ? record[key] as string[] : undefined
+}
+
+/** Reconstructs a review-run summary from an explicit field allowlist so that
+ *  unexpected legacy Firestore fields (raw provider payloads, source data, etc.)
+ *  never leak through GET/POST responses. */
 function reviewRunSummary(value: unknown, fallback: unknown): ExtractionReviewRunSummary {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
-    const status = (value as { status?: unknown }).status
+    const record = value as Record<string, unknown>
+    const status = record.status
     if (status === 'queued' || status === 'running' || status === 'completed' || status === 'partial' || status === 'failed') {
-      return structuredClone(value) as ExtractionReviewRunSummary
+      const normalized = normalizeValidationSummary(record.validationSummary)
+      const targeting = record.reviewTargeting
+      const reviewTargeting = targeting && typeof targeting === 'object' && !Array.isArray(targeting)
+        ? {
+            candidateRowIds: optionalStringArrayField(targeting as Record<string, unknown>, 'candidateRowIds') ?? [],
+            ambiguousRowIds: optionalStringArrayField(targeting as Record<string, unknown>, 'ambiguousRowIds'),
+            unreconciledRowIds: optionalStringArrayField(targeting as Record<string, unknown>, 'unreconciledRowIds'),
+            unreconciled: (targeting as Record<string, unknown>).unreconciled === true,
+          }
+        : undefined
+      const result: ExtractionReviewRunSummary = {
+        status,
+        requestKey: optionalStringField(record, 'requestKey'),
+        leaseId: optionalStringField(record, 'leaseId'),
+        leaseExpiresAt: optionalStringField(record, 'leaseExpiresAt'),
+        failureCode: optionalStringField(record, 'failureCode'),
+        retryAfter: optionalStringField(record, 'retryAfter'),
+        updatedAt: optionalStringField(record, 'updatedAt'),
+        reviewedSourceRowIds: optionalStringArrayField(record, 'reviewedSourceRowIds'),
+        reviewTargeting,
+      }
+      if (normalized) result.validationSummary = normalized
+      return result
     }
   }
   return {
@@ -368,6 +403,7 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
       status: 'completed' | 'partial',
       proposals: readonly ValidatedProposal[],
       refreshedSourceRowIds: readonly string[] = proposals.flatMap((proposal) => proposal.sourceRowIds),
+      validationSummary: ProposalValidationSummary | null = null,
     ): Promise<ExtractionReviewRunSummary> {
       const immutable = await loadImmutable(boqId, runId)
       if (!immutable) throw new Error('Extraction run not found')
@@ -394,6 +430,7 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
         const reviewRun: ExtractionReviewRunSummary = {
           status, requestKey: current.requestKey, updatedAt: timestamp, reviewTargeting: current.reviewTargeting,
           ...(reviewedSourceRowIds.length ? { reviewedSourceRowIds } : {}),
+          ...(validationSummary ? { validationSummary } : {}),
         }
         transaction.update(runRef, { reviewRun, aiReviewStatus: status, updatedAt: timestamp })
         return reviewRun

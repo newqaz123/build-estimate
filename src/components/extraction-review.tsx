@@ -14,7 +14,7 @@ import {
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
-import type { ExtractionReviewResponse, ExtractionReviewSourceRow } from "@/lib/boq-extraction-ai-review"
+import type { ExtractionReviewSourceRow } from "@/lib/boq-extraction-ai-review"
 import {
   acceptAllValidatedProposalIds,
   beginReviewSnapshotRequest,
@@ -24,11 +24,12 @@ import {
   invalidateReviewSnapshotRequests,
   isLatestReviewSnapshotRequest,
   normalizeExtractionReviewResponse,
+  selectEffectiveFilter,
   selectReviewVisibility,
   type ExtractionProposalAction,
   type ExtractionReviewFilter,
 } from "@/lib/boq-extraction-review-state"
-import { proposalCanBeAccepted, proposalIsHighConfidence, sourceReferenceLabel } from "@/lib/boq-extraction-review-ui"
+import { extractionReviewOutcomeMessage, extractionReviewOutcomeTitle, proposalCanBeAccepted, proposalIsHighConfidence, rejectionLabelGroups, selectExtractionReviewOutcome, selectExtractionReviewProgress, sourceReferenceLabel } from "@/lib/boq-extraction-review-ui"
 import type { ValidatedProposal } from "@/lib/boq-extraction-proposals"
 import type { Boq } from "@/lib/boq-schema"
 
@@ -53,12 +54,6 @@ async function readError(response: Response, fallback: string): Promise<string> 
   } catch {
     return fallback
   }
-}
-
-function reviewTitle(review: ExtractionReviewResponse): string {
-  if (review.mode === "fallback") return "AI review unavailable"
-  if (review.mode === "not_required") return "No review needed"
-  return review.proposals.length > 0 ? "AI suggestions ready" : "No proposals returned"
 }
 
 function SourceEvidence({ source, onNavigateToPage, onRecheck, disabled, checking }: {
@@ -343,9 +338,13 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
 
   const reviewRunStatus = review?.reviewRun?.status
   const busy = loading || reextracting || reviewRunStatus === "running" || Object.values(actions).some(Boolean)
-  const visibility = useMemo(() => review ? selectReviewVisibility(review, statuses, state.filter) : { proposals: [], sourceRows: [] }, [review, state.filter, statuses])
+  const effectiveFilter = useMemo(() => review ? selectEffectiveFilter(review, statuses, state.filter) : "all", [review, state.filter, statuses])
+  const visibility = useMemo(() => review ? selectReviewVisibility(review, statuses, effectiveFilter) : { proposals: [], sourceRows: [] }, [review, effectiveFilter, statuses])
   const visibleProposals = visibility.proposals
   const visibleSourceRows = visibility.sourceRows
+  const reviewOutcome = useMemo(() => review ? selectExtractionReviewOutcome(review) : null, [review])
+  const reviewProgress = useMemo(() => review ? selectExtractionReviewProgress(review) : null, [review])
+  const blockedGroups = useMemo(() => review ? rejectionLabelGroups(review.reviewRun?.validationSummary ?? null) : [], [review])
   const filterCounts = useMemo(() => {
     const counts: Partial<Record<ExtractionReviewFilter, number>> = {}
     if (review) for (const filter of REVIEW_FILTERS) {
@@ -390,16 +389,17 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
       ) : loading && !review ? (
         <div className="extraction-review-state" role="status"><Loader2 className="animate-spin" aria-hidden="true" />Checking only ambiguous, unreconciled, and compound rows…</div>
       ) : review ? (
-        <div className={`extraction-review-result ${review.mode}`} role="status">
-          <div className="extraction-review-result-copy"><strong>{reviewTitle(review)}</strong><span>{review.message}</span></div>
+        <div className={`extraction-review-result ${review.mode} ${reviewOutcome === "validation-blocked" || reviewOutcome === "proposals-partially-blocked" || reviewOutcome === "legacy-partial" ? "is-blocked" : ""}`} role="status">
+          <div className="extraction-review-result-copy"><strong>{reviewOutcome ? extractionReviewOutcomeTitle(reviewOutcome) : ""}</strong><span>{reviewOutcome ? extractionReviewOutcomeMessage(review, reviewOutcome) : review.message}</span></div>
           <div className="extraction-review-result-counts">
-            {review.rejectedProposals.length > 0 ? <small>{review.rejectedProposals.length} unsafe suggestion{review.rejectedProposals.length === 1 ? "" : "s"} blocked by server validation.</small> : null}
-            {review.remainingCandidateRowIds.length > 0 ? <small>{review.remainingCandidateRowIds.length} additional candidate row{review.remainingCandidateRowIds.length === 1 ? "" : "s"} remain for follow-up.</small> : null}
+            {reviewProgress && reviewProgress.candidateCount > 0 ? <small>{reviewProgress.progressText}</small> : null}
+            {blockedGroups.length > 0 ? <><small>{review.reviewRun?.validationSummary?.rejectedProposalCount ?? 0} unsafe suggestion{(review.reviewRun?.validationSummary?.rejectedProposalCount ?? 0) === 1 ? "" : "s"} blocked by server validation.</small>{blockedGroups.map((group) => <small key={group.label}>{group.count} {group.label.toLowerCase()}{group.count === 1 ? "" : "s"}.</small>)}</> : null}
+
           </div>
         </div>
       ) : null}
 
-      {review?.remainingCandidateRowIds.length ? <div className="extraction-remaining-rows" aria-label="Additional candidate source rows"><span>Follow-up rows:</span>{review.remainingCandidateRowIds.map((sourceRowId, index) => { const label = sourceRowLabels.get(sourceRowId) ?? `Row ${index + 1}`; const checking = requestedSourceRowId === sourceRowId; return <button type="button" key={sourceRowId} onClick={() => void runReview({ sourceRowId, force: true, notify: true })} disabled={readOnly || busy} aria-label={checking ? `Checking ${label}` : `Recheck ${label} with AI`}>{checking ? "Checking…" : label}</button> })}</div> : null}
+      {review?.remainingCandidateRowIds.length ? <div className="extraction-remaining-rows" role="group" aria-label="Additional candidate source rows"><span>Follow-up rows:</span>{review.remainingCandidateRowIds.map((sourceRowId, index) => { const label = sourceRowLabels.get(sourceRowId) ?? `Row ${index + 1}`; const checking = requestedSourceRowId === sourceRowId; return <button type="button" key={sourceRowId} onClick={() => void runReview({ sourceRowId, force: true, notify: true })} disabled={readOnly || busy} aria-label={checking ? `Checking ${label}` : `Recheck ${label} with AI`}>{checking ? "Checking…" : label}</button> })}</div> : null}
 
       {error ? <div className="review-save-error" role="alert">{error}</div> : null}
 
@@ -407,13 +407,13 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
 
       {hasStaleProposals ? <div className="review-save-error" role="status"><strong>Canonical BOQ changed. Recheck with AI</strong><span>Saved item or detail changes made these suggestions stale. Recheck before accepting them.</span></div> : null}
 
-      {review?.mode === "ai" && review.proposals.length === 0 ? <div className="extraction-review-empty"><Check aria-hidden="true" /><strong>No correction proposals</strong><span>The deterministic BOQ remains unchanged. You can recheck an individual source row below.</span></div> : null}
+      {review?.mode === "ai" && review.proposals.length === 0 && (reviewOutcome === "no-correction" || reviewOutcome === "pending-follow-up") ? <div className="extraction-review-empty"><Check aria-hidden="true" /><strong>{reviewOutcome === "pending-follow-up" ? "No correction for reviewed rows" : "No correction proposals"}</strong><span>The deterministic BOQ remains unchanged. You can recheck an individual source row below.</span></div> : null}
 
       {review && (review.proposals.length > 0 || review.sourceRows.length > 0) ? (
         <div className="extraction-review-filters" role="group" aria-label="Filter extraction proposals">
           {REVIEW_FILTERS.map((filter) => {
             const count = filterCounts[filter.value] ?? 0
-            const selected = state.filter === filter.value
+            const selected = effectiveFilter === filter.value
             const disabled = count === 0
             return (
               <button type="button" className={selected ? "filter-chip active" : "filter-chip"} aria-pressed={selected} aria-disabled={disabled || undefined} aria-label={`${filter.label} · ${count} ${count === 1 ? "result" : "results"}`} key={filter.value} disabled={disabled} onClick={() => dispatch({ type: "set_filter", filter: filter.value })}>{filter.label}<span className="filter-chip-count" aria-hidden="true">{count}</span></button>
@@ -461,9 +461,9 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
         </div>
       ) : null}
 
-      {visibleSourceRows.length ? <div className="extraction-reviewed-source-list" aria-label="Visible source rows without proposals"><strong>{state.filter === "all" ? "Reviewed source rows" : "Source rows matching this filter"}</strong>{visibleSourceRows.map((source) => <SourceEvidence key={source.sourceRowId} source={source} onNavigateToPage={onNavigateToPage} onRecheck={(sourceRowId) => void runReview({ sourceRowId, force: true, notify: true })} disabled={readOnly || busy} checking={requestedSourceRowId === source.sourceRowId} />)}</div> : null}
+      {visibleSourceRows.length ? <div className="extraction-reviewed-source-list" aria-label="Visible source rows without proposals"><strong>{effectiveFilter === "all" ? "Candidate source rows without proposals" : "Source rows matching this filter"}</strong>{visibleSourceRows.map((source) => <SourceEvidence key={source.sourceRowId} source={source} onNavigateToPage={onNavigateToPage} onRecheck={(sourceRowId) => void runReview({ sourceRowId, force: true, notify: true })} disabled={readOnly || busy} checking={requestedSourceRowId === source.sourceRowId} />)}</div> : null}
 
-      {review && state.filter !== "all" && visibleProposals.length === 0 && visibleSourceRows.length === 0 ? <div className="extraction-review-empty"><FileSearch aria-hidden="true" /><strong>No matching review results</strong><span>Choose another filter to continue reviewing extraction evidence.</span></div> : null}
+      {review && effectiveFilter !== "all" && visibleProposals.length === 0 && visibleSourceRows.length === 0 ? <div className="extraction-review-empty"><FileSearch aria-hidden="true" /><strong>No matching review results</strong><span>Choose another filter to continue reviewing extraction evidence.</span></div> : null}
     </section>
   )
 }

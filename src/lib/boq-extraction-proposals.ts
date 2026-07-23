@@ -12,27 +12,71 @@ const COST_COMPONENTS = new Set(['material', 'labour', 'combined', 'lump_sum'])
 
 export type ProposalOperation = typeof PROPOSAL_OPERATIONS[number]
 export type ProposalCostComponent = 'material' | 'labour' | 'combined' | 'lump_sum'
-export type ProposalValidationFailureCode =
-  | 'invalid_shape'
-  | 'unknown_operation'
-  | 'invalid_confidence'
-  | 'run_identity_mismatch'
-  | 'unknown_source_row'
-  | 'missing_source_evidence'
-  | 'unknown_target_item'
-  | 'duplicate_item_id'
-  | 'duplicate_source_row'
-  | 'source_provenance_mismatch'
-  | 'arithmetic_mismatch'
-  | 'reconciliation_mismatch'
-  | 'invented_component_price'
-  | 'invalid_bundle'
-  | 'invalid_operation_shape'
-  | 'stale_item'
-  | 'target_state_mismatch'
-  | 'overlapping_target'
-  | 'overlapping_source_row'
-  | 'duplicate_proposal'
+export const PROPOSAL_VALIDATION_FAILURE_CODES = [
+  'invalid_shape',
+  'unknown_operation',
+  'invalid_confidence',
+  'run_identity_mismatch',
+  'unknown_source_row',
+  'missing_source_evidence',
+  'unknown_target_item',
+  'duplicate_item_id',
+  'duplicate_source_row',
+  'source_provenance_mismatch',
+  'target_source_mismatch',
+  'arithmetic_mismatch',
+  'reconciliation_mismatch',
+  'invented_component_price',
+  'invalid_bundle',
+  'invalid_operation_shape',
+  'stale_item',
+  'target_state_mismatch',
+  'overlapping_target',
+  'overlapping_source_row',
+  'duplicate_proposal',
+] as const
+
+export type ProposalValidationFailureCode = (typeof PROPOSAL_VALIDATION_FAILURE_CODES)[number]
+
+const FAILURE_CODE_SET = new Set<string>(PROPOSAL_VALIDATION_FAILURE_CODES)
+
+export function isProposalValidationFailureCode(value: unknown): value is ProposalValidationFailureCode {
+  return typeof value === 'string' && FAILURE_CODE_SET.has(value)
+}
+
+/** Safe, server-owned summary of proposal validation results. Contains only
+ *  nonnegative integer counts and allowlisted failure-code counts — never
+ *  raw provider output, source text, indices, or explanations. */
+export interface ProposalValidationSummary {
+  validatedProposalCount: number
+  rejectedProposalCount: number
+  rejectionCounts?: Partial<Record<ProposalValidationFailureCode, number>>
+}
+
+/** Sanitizes untrusted stored/API summary data. Returns null when the field is
+ *  absent or malformed so otherwise valid proposals remain readable. */
+export function normalizeValidationSummary(value: unknown): ProposalValidationSummary | null {
+  if (value === undefined || value === null) return null
+  if (!isRecord(value)) return null
+  const validated = value.validatedProposalCount
+  const rejected = value.rejectedProposalCount
+  if (typeof validated !== 'number' || !Number.isInteger(validated) || validated < 0) return null
+  if (typeof rejected !== 'number' || !Number.isInteger(rejected) || rejected < 0) return null
+  const rawCounts = value.rejectionCounts
+  const rejectionCounts: Partial<Record<ProposalValidationFailureCode, number>> = {}
+  let codeSum = 0
+  if (rawCounts !== undefined && rawCounts !== null) {
+    if (!isRecord(rawCounts)) return null
+    for (const [code, count] of Object.entries(rawCounts)) {
+      if (!isProposalValidationFailureCode(code)) return null
+      if (typeof count !== 'number' || !Number.isInteger(count) || count < 1) return null
+      rejectionCounts[code] = count
+      codeSum += count
+    }
+  }
+  if (codeSum > rejected) return null
+  return { validatedProposalCount: validated, rejectedProposalCount: rejected, ...(codeSum > 0 ? { rejectionCounts } : {}) }
+}
 
 export interface ProposalSourceComponentEvidence {
   qty: number
@@ -183,6 +227,17 @@ function knownItems(sections: readonly BoqSection[]): Map<string, BoqItem> {
     for (const item of section.items) if (nonBlankString(item.id)) items.set(item.id, item)
   }
   return items
+}
+
+/** Returns the canonical source-row IDs a target item was derived from.
+ *  Prefers the explicit `sourceRowIds` array; falls back to legacy `sourceRowId`. */
+function canonicalTargetSourceRows(item: BoqItem): string[] {
+  if (Array.isArray(item.sourceRowIds) && item.sourceRowIds.length > 0) {
+    const filtered = item.sourceRowIds.filter(nonBlankString)
+    if (filtered.length > 0) return filtered
+  }
+  if (nonBlankString(item.sourceRowId)) return [item.sourceRowId]
+  return []
 }
 
 function quotedTotal(sourceRowIds: readonly string[], context: ProposalValidationContext): number | null {
@@ -397,6 +452,23 @@ export function validateProposal(value: unknown, context: ProposalValidationCont
       || proposal.affectedItemFingerprints[itemId] !== fingerprintCanonicalItem(known.get(itemId)!))) {
     return fail('stale_item')
   }
+
+  // Canonical provenance: every proposal source row must be a canonical source
+  // of at least one target, and every target must share at least one canonical
+  // source row with the proposal. Prevents using source row A evidence to
+  // mutate unrelated target B.
+  const canonicalSourceByTarget = new Map<string, Set<string>>()
+  const allTargetSources = new Set<string>()
+  for (const targetId of proposal.targetItemIds) {
+    const sources = new Set(canonicalTargetSourceRows(known.get(targetId)!))
+    canonicalSourceByTarget.set(targetId, sources)
+    sources.forEach((sourceRowId) => allTargetSources.add(sourceRowId))
+  }
+  if (proposal.sourceRowIds.some((sourceRowId) => !allTargetSources.has(sourceRowId))) return fail('target_source_mismatch')
+  if (proposal.targetItemIds.some((targetId) => {
+    const sources = canonicalSourceByTarget.get(targetId)!
+    return !proposal.sourceRowIds.some((sourceRowId) => sources.has(sourceRowId))
+  })) return fail('target_source_mismatch')
 
   if (!proposal.proposedItems.every((item) => validProposedItem(item, proposal.sourceRowIds))) {
     const arithmetic = proposal.proposedItems.some((item) => isRecord(item)

@@ -9,7 +9,7 @@ import type {
 } from './boq-extraction-schema'
 
 export type ExtractionRunStatus = 'staging' | 'ready'
-export type ExtractionAiReviewStatus = 'not_required' | 'queued' | 'running' | 'complete' | 'failed'
+export type ExtractionAiReviewStatus = 'not_required' | 'queued' | 'running' | 'completed' | 'partial' | 'complete' | 'failed'
 
 export interface BoqExtractionRun {
   id: string

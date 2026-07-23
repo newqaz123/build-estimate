@@ -1071,15 +1071,16 @@
 .extraction-review-state > svg { width: 15px; height: 15px; flex: 0 0 auto; color: var(--accent); }
 .extraction-review-result { justify-content: space-between; border: 1px solid color-mix(in oklab, var(--accent) 16%, transparent); }
 .extraction-review-result.fallback { border-color: color-mix(in oklab, #b88a00 35%, var(--border)); background: color-mix(in oklab, #eab308 8%, var(--surface)); }
+.extraction-review-result.is-blocked { border-color: color-mix(in oklab, #b88a00 35%, var(--border)); background: color-mix(in oklab, #eab308 6%, var(--surface)); }
 .extraction-review-result-copy { display: grid; gap: 2px; }
 .extraction-review-result strong { color: var(--fg-2); font-size: 11px; }
 .extraction-review-result small { color: #9a6b00; font-size: 10px; text-align: right; }
 .extraction-proposal-list { display: grid; gap: var(--space-2); margin-top: var(--space-3); }
 .extraction-review-filters { display: flex; gap: var(--space-1); margin-top: var(--space-3); overflow-x: auto; padding-bottom: 2px; }
 .extraction-review-filters .filter-chip { flex: 0 0 auto; background: var(--surface); }
-.extraction-review-filters .filter-chip.active { background: var(--accent); color: var(--accent-on); border-color: var(--accent); }
+.extraction-review-filters .filter-chip.active { background: color-mix(in oklab, var(--accent) 12%, var(--surface)); color: var(--fg); border-color: var(--accent); }
 .extraction-review-filters .filter-chip-count { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 4px; margin-left: 2px; border-radius: var(--radius-pill); background: color-mix(in oklab, var(--fg) 14%, transparent); font-size: 10px; font-weight: 600; }
-.extraction-review-filters .filter-chip.active .filter-chip-count { background: color-mix(in oklab, var(--accent-on) 32%, transparent); }
+.extraction-review-filters .filter-chip.active .filter-chip-count { background: color-mix(in oklab, var(--accent) 24%, transparent); color: var(--fg); }
 .extraction-review-filters .filter-chip:disabled { opacity: .5; cursor: not-allowed; }
 .extraction-review-filters .filter-chip:disabled:hover { border-color: var(--border); }
 .extraction-remaining-rows { display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; margin-top: var(--space-2); color: var(--muted-text); font-size: 10px; }
@@ -1116,6 +1117,11 @@
 .focused-extraction-review .extraction-review-state strong { color: var(--fg-2); }
 .focused-extraction-review .extraction-review-state p { margin: 0; }
 .extraction-review-result-counts { display: grid; gap: 2px; justify-items: end; }
+@media (max-width: 520px) {
+  .extraction-review-result { flex-direction: column; align-items: stretch; gap: var(--space-1); }
+  .extraction-review-result-counts { justify-items: start; }
+  .extraction-review-result small { text-align: left; }
+}
 .extraction-review-empty { display: grid; justify-items: center; gap: var(--space-1); margin-top: var(--space-4); padding: var(--space-6); border: 1px dashed var(--border); border-radius: var(--radius-brand-sm); color: var(--muted-text); font-size: 11px; text-align: center; }
 .extraction-review-empty > svg { width: 20px; color: #006400; }
 .extraction-review-empty strong { color: var(--fg-2); font-size: 12px; }

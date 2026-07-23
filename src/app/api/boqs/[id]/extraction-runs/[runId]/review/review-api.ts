@@ -11,7 +11,7 @@ import {
   type ExtractionReviewRejectedProposal,
 } from '@/lib/boq-extraction-ai-review'
 import type { ExtractionProposalReviewState, ExtractionReviewRunSummary } from '@/lib/boq-extraction-proposal-store'
-import type { ValidatedProposal } from '@/lib/boq-extraction-proposals'
+import type { ProposalValidationFailureCode, ProposalValidationSummary, ValidatedProposal } from '@/lib/boq-extraction-proposals'
 import { stableCanonicalJson } from '@/lib/boq-extraction-run'
 
 export type ExtractionReviewRouteContext = { params: Promise<{ id: string; runId: string }> }
@@ -22,13 +22,26 @@ export interface ExtractionReviewHandlerDependencies extends Omit<ExtractionRevi
   getSourceRows(boqId: string, runId: string): Promise<BoqSourceRowV3[]>
   getReviewState(boqId: string, runId: string): Promise<ExtractionProposalReviewState | null>
   acquireReviewLease(boqId: string, runId: string, requestKey: string, leaseId: string, leaseTtlMs: number, force: boolean): Promise<{ kind: 'acquired' | 'busy' | 'complete' | 'failed'; reviewRun: ExtractionReviewRunSummary }>
-  completeReviewLease(boqId: string, runId: string, leaseId: string, status: 'completed' | 'partial', proposals: readonly ValidatedProposal[], refreshedSourceRowIds: readonly string[]): Promise<ExtractionReviewRunSummary>
+  completeReviewLease(boqId: string, runId: string, leaseId: string, status: 'completed' | 'partial', proposals: readonly ValidatedProposal[], refreshedSourceRowIds: readonly string[], validationSummary: ProposalValidationSummary | null): Promise<ExtractionReviewRunSummary>
   failReviewLease(boqId: string, runId: string, leaseId: string, failureCode: string, retryDelayMs: number): Promise<ExtractionReviewRunSummary>
   createLeaseId(): string
 }
 
 const REVIEW_LEASE_MS = 30_000
 const REVIEW_FAILURE_BACKOFF_MS = 30_000
+
+function buildValidationSummary(validatedCount: number, rejected: readonly ExtractionReviewRejectedProposal[]): ProposalValidationSummary {
+  const rejectionCounts: Partial<Record<ProposalValidationFailureCode, number>> = {}
+  for (const entry of rejected) {
+    if (!entry.code) continue
+    rejectionCounts[entry.code] = (rejectionCounts[entry.code] ?? 0) + 1
+  }
+  return {
+    validatedProposalCount: validatedCount,
+    rejectedProposalCount: rejected.length,
+    ...(Object.keys(rejectionCounts).length > 0 ? { rejectionCounts } : {}),
+  }
+}
 
 export function buildDurableExtractionReviewResponse(input: {
   imported: { boq: Boq; run: BoqExtractionRun }
@@ -50,26 +63,60 @@ export function buildDurableExtractionReviewResponse(input: {
   const reviewedSourceRowIds = new Set(input.stored.reviewRun.reviewedSourceRowIds ?? proposalRowIds)
   const visibleIds = new Set([...reviewRun.reviewTargeting.candidateRowIds, ...proposalRowIds])
   const visibleRows = input.sourceRows.filter((row) => visibleIds.has(row.id))
+  const candidateCount = reviewRun.reviewTargeting.candidateRowIds.length
+  const reviewedCount = reviewRun.reviewTargeting.candidateRowIds.filter((rowId) => reviewedSourceRowIds.has(rowId)).length
+  const remainingCount = reviewRun.reviewTargeting.candidateRowIds.filter((rowId) => !reviewedSourceRowIds.has(rowId)).length
+  const proposalCount = input.stored.proposals.length
+  const validationSummary = reviewRun.validationSummary ?? null
   const failure = reviewRun.failureCode
   const knownFailure = ['provider_not_configured', 'unsupported_provider', 'unauthorized', 'rate_limited', 'timeout', 'malformed_response', 'provider_failure'].includes(failure ?? '')
     ? failure
     : 'provider_failure'
-  return {
-    snapshotMode: 'replace' as const,
-    mode: input.stored.proposals.length > 0 ? 'ai' as const : reviewRun.status === 'failed' ? 'fallback' as const : 'not_required' as const,
-    aiStatus: reviewRun.status === 'failed' ? knownFailure : reviewRun.status === 'completed' || reviewRun.status === 'partial' ? 'completed' : 'not_required',
-    message: reviewRun.status === 'running'
-      ? 'Extraction review is running.'
+  const hasCandidates = candidateCount > 0
+  const mode: 'ai' | 'fallback' | 'not_required' = reviewRun.status === 'failed'
+    ? 'fallback'
+    : !hasCandidates
+      ? 'not_required'
+      : 'ai'
+  const aiStatus = reviewRun.status === 'failed'
+    ? knownFailure
+    : reviewRun.status === 'completed' || reviewRun.status === 'partial'
+      ? 'completed'
+      : hasCandidates
+        ? 'not_required'
+        : 'not_required'
+  const progress = candidateCount > 0
+    ? `${reviewedCount} of ${candidateCount} candidate row${candidateCount === 1 ? '' : 's'} reviewed · ${remainingCount} pending.`
+    : ''
+  const message = reviewRun.status === 'running'
+    ? 'Extraction review is running.'
+    : reviewRun.status === 'queued'
+      ? 'Extraction review is queued.'
       : reviewRun.status === 'failed'
         ? 'AI review is temporarily unavailable. The deterministic extraction remains unchanged.'
-        : input.stored.proposals.length > 0 ? 'Saved extraction suggestions loaded for review.' : 'No saved extraction suggestions are available.',
+        : !hasCandidates
+          ? 'No ambiguous, unreconciled, or compound rows require review.'
+          : proposalCount > 0 && validationSummary && validationSummary.rejectedProposalCount > 0
+            ? `${proposalCount} suggestion${proposalCount === 1 ? '' : 's'} ready; ${validationSummary.rejectedProposalCount} blocked by validation. ${progress}`
+            : proposalCount > 0
+              ? `Saved extraction suggestions loaded for review. ${progress}`
+              : validationSummary && validationSummary.rejectedProposalCount > 0
+                ? `AI returned ${validationSummary.rejectedProposalCount} suggestion${validationSummary.rejectedProposalCount === 1 ? '' : 's'}, but none passed evidence and reconciliation checks. The BOQ remains unchanged. ${progress}`
+                : reviewRun.status === 'partial'
+                  ? `Review partially completed. Recheck with AI to restore validation details. ${progress}`
+                  : `No correction recommended for the reviewed rows. ${progress}`
+  return {
+    snapshotMode: 'replace' as const,
+    mode,
+    aiStatus,
+    message,
     sourceRowIds: visibleRows.map((row) => row.id),
     remainingCandidateRowIds: reviewRun.reviewTargeting.candidateRowIds.filter((rowId) => !reviewedSourceRowIds.has(rowId)),
     sourceRefs: extractionReviewSourceRefs(visibleRows),
     sourceRows: extractionReviewSourceRowDisplays(visibleRows),
     rejectedProposals: input.rejectedProposals ?? [],
     ...input.stored,
-    reviewRun,
+    reviewRun: { ...reviewRun, ...(validationSummary ? { validationSummary } : {}) },
   }
 }
 
@@ -137,7 +184,8 @@ export function createExtractionReviewHandler(dependencies: ExtractionReviewHand
         finalRun = await dependencies.failReviewLease(id, runId, leaseId, result.body.aiStatus, REVIEW_FAILURE_BACKOFF_MS)
       } else {
         const status = result.body.rejectedProposals.length > 0 ? 'partial' : 'completed'
-        finalRun = await dependencies.completeReviewLease(id, runId, leaseId, status, result.body.proposals, result.body.sourceRowIds)
+        const summary = buildValidationSummary(result.body.proposals.length, result.body.rejectedProposals)
+        finalRun = await dependencies.completeReviewLease(id, runId, leaseId, status, result.body.proposals, result.body.sourceRowIds, summary)
       }
       const snapshot = await loadSnapshot(finalRun, result.body.rejectedProposals)
       if (!snapshot) return Response.json({ error: 'Extraction run not found' }, { status: 404 })

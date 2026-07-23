@@ -412,3 +412,25 @@ test('durable review failure prevents immediate automatic retry but permits retr
   current = new Date('2026-07-20T12:00:31.000Z')
   assert.equal((await fixture.store.acquireReviewLease('boq-1', 'run-1', 'request-1', 'lease-3', 1_000, false)).kind, 'acquired')
 })
+
+test('reviewRun summary omits unexpected stored fields that could leak provider payloads or source data', async () => {
+  const fixture = harness()
+  const runRecord = fixture.db.docs.get(fixture.runPath) as RecordData
+  runRecord.reviewRun = {
+    status: 'completed',
+    updatedAt: '2026-07-20T12:00:00.000Z',
+    reviewedSourceRowIds: ['row-1'],
+    rawProviderResponse: { choices: [{ message: { content: 'LEAK' } }] },
+    sourceDataBlob: 'private-source',
+    internalDebugTrace: ['sensitive-trace'],
+  }
+  runRecord.aiReviewStatus = 'completed'
+
+  const state = await fixture.store.getReviewState('boq-1', 'run-1')
+  const summary = state?.reviewRun as unknown as Record<string, unknown>
+  assert.equal(summary?.status, 'completed')
+  assert.deepEqual(summary?.reviewedSourceRowIds, ['row-1'])
+  assert.equal(summary?.rawProviderResponse, undefined)
+  assert.equal(summary?.sourceDataBlob, undefined)
+  assert.equal(summary?.internalDebugTrace, undefined)
+})

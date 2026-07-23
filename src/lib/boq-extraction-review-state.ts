@@ -1,5 +1,5 @@
 import type { ExtractionReviewResponse } from "./boq-extraction-ai-review"
-import type { ProposalOperation, ValidatedProposal } from "./boq-extraction-proposals"
+import { normalizeValidationSummary, type ProposalOperation, type ValidatedProposal } from "./boq-extraction-proposals"
 
 export type ExtractionProposalStatus = "accepted" | "rejected" | "undone"
 export type ExtractionProposalStatusMap = Record<string, ExtractionProposalStatus | undefined>
@@ -178,7 +178,11 @@ export function selectReviewVisibility(
   filter: ExtractionReviewFilter,
 ): { proposals: ValidatedProposal[]; sourceRows: ExtractionReviewResponse["sourceRows"] } {
   if (filter === "all") {
-    return { proposals: [...review.proposals], sourceRows: review.proposals.length === 0 ? [...review.sourceRows] : [] }
+    const proposedRowIds = new Set(review.proposals.flatMap((proposal) => proposal.sourceRowIds))
+    return {
+      proposals: [...review.proposals],
+      sourceRows: review.sourceRows.filter((row) => !proposedRowIds.has(row.sourceRowId)),
+    }
   }
   if (filter !== "ambiguous" && filter !== "unreconciled" && filter !== "ai-pending") {
     return { proposals: filterReviewProposals(review.proposals, statuses, filter), sourceRows: [] }
@@ -188,6 +192,19 @@ export function selectReviewVisibility(
   const proposals = review.proposals.filter((proposal) => proposal.sourceRowIds.some((rowId) => matchingRowIds.has(rowId)))
   const proposedRowIds = new Set(proposals.flatMap((proposal) => proposal.sourceRowIds))
   return { proposals, sourceRows: matchingRows.filter((row) => !proposedRowIds.has(row.sourceRowId)) }
+}
+
+/** Returns the filter that should actually be rendered/pressed. When the selected
+ *  filter has zero results it falls back to "all" so a disabled chip is never
+ *  shown as selected, even before the reducer dispatch resets it. */
+export function selectEffectiveFilter(
+  review: ExtractionReviewResponse,
+  statuses: ExtractionProposalStatusMap,
+  selectedFilter: ExtractionReviewFilter,
+): ExtractionReviewFilter {
+  if (selectedFilter === "all") return "all"
+  const visibility = selectReviewVisibility(review, statuses, selectedFilter)
+  return visibility.proposals.length === 0 && visibility.sourceRows.length === 0 ? "all" : selectedFilter
 }
 
 export type ExtractionReviewRefreshAction = "dispatch" | "poll" | "idle"
@@ -253,6 +270,7 @@ function validReviewRun(value: unknown): boolean {
   if (value === undefined) return true
   if (!isRecord(value) || !["queued", "running", "completed", "partial", "failed"].includes(String(value.status))) return false
   if (value.reviewedSourceRowIds !== undefined && !isStringArray(value.reviewedSourceRowIds)) return false
+  if (value.validationSummary !== undefined && normalizeValidationSummary(value.validationSummary) === null) return false
   if (!isRecord(value.reviewTargeting) || !isStringArray(value.reviewTargeting.candidateRowIds)
     || (value.reviewTargeting.ambiguousRowIds !== undefined && !isStringArray(value.reviewTargeting.ambiguousRowIds))
     || (value.reviewTargeting.unreconciledRowIds !== undefined && !isStringArray(value.reviewTargeting.unreconciledRowIds))
