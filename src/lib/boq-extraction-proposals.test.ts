@@ -185,11 +185,11 @@ test('rejects unknown evidence, bad arithmetic, stale edits, and duplicate batch
   assert.equal(batch.results[1].code, 'overlapping_target')
 })
 
-test('high confidence requires valid evidence, reconciliation, a non-review operation, and fresh state', () => {
+test('legacy component restructuring remains valid for stored compatibility but is not high-confidence actionable', () => {
   const result = validateProposal(separateComponentsProposal(), context())
   assert.equal(result.valid, true)
   if (!result.valid) return
-  assert.equal(isHighConfidenceProposal(result.proposal), true)
+  assert.equal(isHighConfidenceProposal(result.proposal), false)
   assert.equal(isHighConfidenceProposal({ ...result.proposal, confidence: 0.89 }), false)
   assert.equal(isHighConfidenceProposal({ ...result.proposal, operation: 'needs_human_review' }), false)
 })
@@ -239,10 +239,11 @@ test('requires run-bound, non-empty source evidence for every review operation',
     targetItemIds: ['combined-work'], affectedItemFingerprints: { 'combined-work': fingerprintCanonicalItem(sections[0].items[0]) },
     confidence: 0.95, explanation: 'No source payload.', proposedItems: [],
   }, context({ sourceEvidence: {} })), { valid: false, code: 'missing_source_evidence' })
-  assert.deepEqual(validateProposal({
+  const humanWithoutTarget = validateProposal({
     id: 'human-no-target', extractionRunId: 'run-1', operation: 'needs_human_review', sourceRowIds: ['row-combined'],
     targetItemIds: [], affectedItemFingerprints: {}, confidence: 0.95, explanation: 'Needs a person.', proposedItems: [],
-  }, context()), { valid: false, code: 'invalid_operation_shape' })
+  }, context())
+  assert.equal(humanWithoutTarget.valid, true)
 })
 
 test('rejects malformed exclusion flags and relationships, including zero-source replacements', () => {

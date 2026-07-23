@@ -226,7 +226,7 @@ test('durable snapshot preserves reason-specific source-row targeting', () => {
   })
 
   assert.deepEqual(response.reviewRun.reviewTargeting, {
-    candidateRowIds: ['row-ambiguous', 'row-compound', 'row-unreconciled'],
+    candidateRowIds: ['row-compound', 'row-ambiguous', 'row-unreconciled'],
     ambiguousRowIds: ['row-ambiguous'], unreconciledRowIds: ['row-unreconciled'], unreconciled: true,
   })
   assert.deepEqual(response.sourceRowIds, ['row-compound', 'row-ambiguous', 'row-unreconciled'])

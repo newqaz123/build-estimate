@@ -1,11 +1,28 @@
 import { createHash } from 'node:crypto'
 import { BOQ_RECONCILIATION_TOLERANCE, type BoqSourceRowV3 } from './boq-extraction-schema'
 import { stableCanonicalJson } from './boq-extraction-run'
-import type { BoqItem, BoqPricedItem, BoqSection } from './boq-schema'
+import type { BoqItem, BoqPricedItem, BoqSection, BoqSourceRef } from './boq-schema'
 
 export const PROPOSAL_OPERATIONS = [
   'keep', 'split', 'merge', 'separate_components', 'create_bundle', 'needs_human_review',
+  'insert_missing_item', 'replace_item', 'remove_spurious_item',
 ] as const
+
+/** New reviews may only create these mutating decisions. Legacy operations
+ * remain readable for stored audit compatibility. */
+export const REVIEW_ACTIONABLE_OPERATIONS = new Set<ProposalOperation>([
+  'insert_missing_item', 'replace_item', 'remove_spurious_item',
+])
+
+export function isReviewActionableOperation(operation: unknown): operation is ProposalOperation {
+  return typeof operation === 'string' && REVIEW_ACTIONABLE_OPERATIONS.has(operation as ProposalOperation)
+}
+
+/** Operations that require at least one existing target item. */
+const OPERATIONS_REQUIRING_TARGETS = new Set<ProposalOperation>([
+  'keep', 'split', 'merge', 'separate_components', 'create_bundle',
+  'replace_item', 'remove_spurious_item',
+])
 
 const PRICING_ROLES = new Set(['standard', 'bundle_parent', 'bundle_child'])
 const COST_COMPONENTS = new Set(['material', 'labour', 'combined', 'lump_sum'])
@@ -34,6 +51,9 @@ export const PROPOSAL_VALIDATION_FAILURE_CODES = [
   'overlapping_target',
   'overlapping_source_row',
   'duplicate_proposal',
+  'unknown_candidate_item',
+  'duplicate_canonical_source',
+  'spurious_removal_blocked',
 ] as const
 
 export type ProposalValidationFailureCode = (typeof PROPOSAL_VALIDATION_FAILURE_CODES)[number]
@@ -99,6 +119,7 @@ export interface ProposalPricedItem {
   pricingRole: 'standard' | 'bundle_parent'
   parentBundleId?: null
   sourceRowIds: string[]
+  sourceRef?: BoqSourceRef
   entryOrigin: 'ai_accepted'
   optional?: boolean
   excludedFromTotal?: boolean
@@ -108,6 +129,7 @@ export interface ProposalPricedItem {
   rate: number
   total: number
   costComponent: ProposalCostComponent
+  sourceCosts?: { material: ProposalSourceComponentEvidence; labour: ProposalSourceComponentEvidence } | null
 }
 
 export interface ProposalBundleChild {
@@ -116,6 +138,7 @@ export interface ProposalBundleChild {
   pricingRole: 'bundle_child'
   parentBundleId: string
   sourceRowIds: string[]
+  sourceRef?: BoqSourceRef
   entryOrigin: 'ai_accepted'
   optional?: boolean
   excludedFromTotal?: boolean
@@ -128,6 +151,13 @@ export interface ExtractionProposal {
   id: string
   extractionRunId: string
   operation: ProposalOperation
+  /** Present on v2 decisions. Candidate IDs are selected by the provider;
+   * all other fields below are injected and verified by the server. */
+  candidateItemIds?: string[]
+  baseSectionsFingerprint?: string
+  destinationSectionIndex?: number
+  destinationItemIndex?: number
+  candidateSourceOrder?: number
   sourceRowIds: string[]
   targetItemIds: string[]
   affectedItemFingerprints: Record<string, string>
@@ -136,11 +166,38 @@ export interface ExtractionProposal {
   proposedItems: ProposedExtractionItem[]
 }
 
+/** Server-owned immutable candidate used to validate expanded v2 decisions. */
+export interface ProposalCandidateRef {
+  id: string
+  sectionIndex: number
+  sectionHeader: string
+  sourceOrder: number
+  sourceRowIds: string[]
+  sourceRefs?: BoqSourceRef[]
+  desc: string
+  pricingRole: 'standard' | 'bundle_parent'
+  parentBundleId: null
+  unit: string
+  qty: number
+  rate: number
+  total: number
+  costComponent: ProposalCostComponent | string
+  sourceCosts?: { material: ProposalSourceComponentEvidence; labour: ProposalSourceComponentEvidence } | null
+  optional: boolean
+  excludedFromTotal: boolean
+  exclusionReason: string | null
+}
+
+export type ProposalValidationSourceRow = Pick<BoqSourceRowV3, 'id'> & Partial<Omit<BoqSourceRowV3, 'id'>>
+
 export interface ProposalValidationContext {
   extractionRunId: string
-  sourceRows: ReadonlyArray<Pick<BoqSourceRowV3, 'id'>>
+  sourceRows: ReadonlyArray<ProposalValidationSourceRow>
   sourceEvidence: Readonly<Record<string, ProposalSourceEvidence>>
   sections: readonly BoqSection[]
+  /** Server-owned candidate items from the immutable extraction run.
+   *  Required for every v2 mutating decision. */
+  candidateItems?: ReadonlyMap<string, ProposalCandidateRef>
 }
 
 export interface ValidatedProposal extends ExtractionProposal {
@@ -259,6 +316,12 @@ function hasValidComponent(component: unknown): component is ProposalSourceCompo
     && approximatelyEqual(component.qty * component.rate, component.total)
 }
 
+function validSourceCosts(value: unknown, expectedTotal: number): boolean {
+  if (value === undefined || value === null) return value === null || value === undefined
+  if (!isRecord(value) || !hasValidComponent(value.material) || !hasValidComponent(value.labour)) return false
+  return approximatelyEqual(value.material.total + value.labour.total, expectedTotal)
+}
+
 function validProposedItem(
   item: unknown,
   proposalSourceRowIds: readonly string[],
@@ -287,6 +350,7 @@ function validProposedItem(
     && finiteNonNegative(item.total)
     && COST_COMPONENTS.has(item.costComponent as string)
     && approximatelyEqual(item.qty * item.rate, item.total)
+    && validSourceCosts(item.sourceCosts, item.total)
 }
 
 function everyPriced(items: readonly ProposedExtractionItem[]): items is ProposalPricedItem[] {
@@ -297,17 +361,154 @@ function totals(items: readonly ProposalPricedItem[]): number {
   return items.reduce((sum, item) => sum + item.total, 0)
 }
 
+function normalizedCandidateItem(candidate: ProposalCandidateRef): ProposalPricedItem {
+  return {
+    id: candidate.id,
+    desc: candidate.desc,
+    pricingRole: candidate.pricingRole,
+    parentBundleId: null,
+    sourceRowIds: [...candidate.sourceRowIds],
+    ...(candidate.sourceRefs?.[0] ? { sourceRef: { ...candidate.sourceRefs[0] } } : {}),
+    entryOrigin: 'ai_accepted',
+    optional: candidate.optional,
+    excludedFromTotal: candidate.excludedFromTotal,
+    exclusionReason: candidate.exclusionReason,
+    unit: candidate.unit,
+    qty: candidate.qty,
+    rate: candidate.rate,
+    total: candidate.total,
+    costComponent: candidate.costComponent as ProposalCostComponent,
+    ...(candidate.sourceCosts ? { sourceCosts: structuredClone(candidate.sourceCosts) } : {}),
+  }
+}
+
+function resolveCandidateSectionIndex(candidates: readonly ProposalCandidateRef[], sections: readonly BoqSection[]): number | null {
+  const runIndexes = new Set(candidates.map((candidate) => candidate.sectionIndex))
+  const headers = new Set(candidates.map((candidate) => candidate.sectionHeader))
+  if (runIndexes.size !== 1 || headers.size !== 1) return null
+  const runIndex = candidates[0].sectionIndex
+  const header = candidates[0].sectionHeader
+  if (sections[runIndex]?.header === header) return runIndex
+  const matches = sections.flatMap((section, index) => section.header === header ? [index] : [])
+  return matches.length === 1 ? matches[0] : null
+}
+
+function canonicalItemSourceOrder(item: BoqItem, candidates: ReadonlyMap<string, ProposalCandidateRef>): number {
+  const sources = new Set(canonicalTargetSourceRows(item))
+  let order = Number.MAX_SAFE_INTEGER
+  for (const candidate of candidates.values()) {
+    if (candidate.sourceRowIds.some((id) => sources.has(id))) order = Math.min(order, candidate.sourceOrder)
+  }
+  return order
+}
+
+function expectedDestinationItemIndex(
+  proposal: ExtractionProposal,
+  candidates: readonly ProposalCandidateRef[],
+  context: ProposalValidationContext,
+  sectionIndex: number,
+): number | null {
+  if (proposal.operation === 'replace_item') {
+    const targetIds = new Set(proposal.targetItemIds)
+    const indexes = context.sections[sectionIndex].items.flatMap((item, index) => targetIds.has(item.id ?? '') ? [index] : [])
+    return indexes.length === proposal.targetItemIds.length ? Math.min(...indexes) : null
+  }
+  const firstOrder = Math.min(...candidates.map((candidate) => candidate.sourceOrder))
+  const index = context.sections[sectionIndex].items.findIndex((item) =>
+    canonicalItemSourceOrder(item, context.candidateItems!) > firstOrder)
+  return index === -1 ? context.sections[sectionIndex].items.length : index
+}
+
+function validateCandidateExpansion(
+  proposal: ExtractionProposal,
+  context: ProposalValidationContext,
+): ProposalValidationResult | null {
+  if (!['insert_missing_item', 'replace_item'].includes(proposal.operation)) return null
+  if (!context.candidateItems || !hasUniqueStrings(proposal.candidateItemIds) || proposal.candidateItemIds.length === 0) {
+    return fail('unknown_candidate_item')
+  }
+  const candidates = proposal.candidateItemIds.map((id) => context.candidateItems!.get(id))
+  if (candidates.some((candidate) => !candidate)) return fail('unknown_candidate_item')
+  const knownCandidates = candidates as ProposalCandidateRef[]
+  const canonicalItems = knownItems(context.sections)
+  if (knownCandidates.some((candidate) => canonicalItems.has(candidate.id) && !proposal.targetItemIds.includes(candidate.id))) {
+    return fail('duplicate_item_id')
+  }
+  const candidateSources = new Set(knownCandidates.flatMap((candidate) => candidate.sourceRowIds))
+  if (candidateSources.size !== proposal.sourceRowIds.length
+    || proposal.sourceRowIds.some((id) => !candidateSources.has(id))) return fail('source_provenance_mismatch')
+  const expectedItems = knownCandidates
+    .sort((left, right) => left.sourceOrder - right.sourceOrder || left.id.localeCompare(right.id))
+    .map(normalizedCandidateItem)
+  if (stableCanonicalJson(expectedItems) !== stableCanonicalJson(proposal.proposedItems)) {
+    return fail('unknown_candidate_item')
+  }
+  const destinationSectionIndex = resolveCandidateSectionIndex(knownCandidates, context.sections)
+  if (destinationSectionIndex === null || proposal.destinationSectionIndex !== destinationSectionIndex
+    || proposal.candidateSourceOrder !== Math.min(...knownCandidates.map((candidate) => candidate.sourceOrder))) {
+    return fail('source_provenance_mismatch')
+  }
+  const destinationItemIndex = expectedDestinationItemIndex(proposal, knownCandidates, context, destinationSectionIndex)
+  if (destinationItemIndex === null || proposal.destinationItemIndex !== destinationItemIndex) return fail('source_provenance_mismatch')
+  return null
+}
+
+function candidateQuotedTotal(proposal: ExtractionProposal, context: ProposalValidationContext): number | null {
+  if (!context.candidateItems || !proposal.candidateItemIds) return null
+  let sum = 0
+  for (const id of proposal.candidateItemIds) {
+    const candidate = context.candidateItems.get(id)
+    if (!candidate || !finiteNonNegative(candidate.total)) return null
+    sum += candidate.total
+  }
+  return Number.isFinite(sum) ? sum : null
+}
+
+function isNumericOnlyEvidence(row: ProposalValidationSourceRow): boolean {
+  if (!Array.isArray(row.rawCells)) return false
+  const texts = row.rawCells
+    .filter((cell) => !cell.carried && cell.rawText.trim() !== '')
+    .map((cell) => cell.rawText.trim())
+  return texts.length > 0 && texts.every((text) => /^(?:(?:THB|USD|SGD|฿|\$)\s*)?\d[\d,]*(?:\.\d+)?(?:\s*(?:THB|USD|SGD|฿|\$))?$/i.test(text))
+}
+
+function safeSpuriousSource(row: ProposalValidationSourceRow): boolean {
+  return (typeof row.classification === 'string' && ['header', 'section', 'total', 'note'].includes(row.classification))
+    || (Array.isArray(row.warnings) && row.warnings.some((warning) => warning.code === 'unsupported_row') && isNumericOnlyEvidence(row))
+}
+
 function validateOperation(proposal: ExtractionProposal, context: ProposalValidationContext): ProposalValidationResult {
-  const expectedTotal = quotedTotal(proposal.sourceRowIds, context)
   const proposed = proposal.proposedItems
   if ((proposal.operation === 'keep' || proposal.operation === 'needs_human_review') && proposed.length !== 0) {
     return fail('invalid_operation_shape')
   }
-  if (proposal.operation === 'keep' || proposal.operation === 'needs_human_review') {
+  if (proposal.operation === 'needs_human_review') return validProposal(proposal)
+  if (proposal.operation === 'keep') {
     if (proposal.targetItemIds.length === 0 || proposal.sourceRowIds.length === 0) return fail('invalid_operation_shape')
+    const expectedTotal = quotedTotal(proposal.sourceRowIds, context)
     if (expectedTotal === null) return fail('missing_source_evidence')
     return validProposal(proposal)
   }
+
+  // Spurious removal does not require priced source evidence, but every source
+  // row must be deterministically structural or numeric-only summary evidence.
+  if (proposal.operation === 'remove_spurious_item') {
+    if (proposed.length !== 0) return fail('invalid_operation_shape')
+    const sourceById = new Map(context.sourceRows.map((row) => [row.id, row]))
+    if (proposal.sourceRowIds.some((id) => !sourceById.has(id) || !safeSpuriousSource(sourceById.get(id)!))) {
+      return fail('spurious_removal_blocked')
+    }
+    if (context.candidateItems) {
+      const candidateSourceRows = new Set<string>()
+      for (const candidate of context.candidateItems.values()) candidate.sourceRowIds.forEach((id) => candidateSourceRows.add(id))
+      if (proposal.sourceRowIds.some((id) => candidateSourceRows.has(id))) return fail('spurious_removal_blocked')
+    }
+    return validProposal(proposal)
+  }
+
+  const expectedTotal = ['insert_missing_item', 'replace_item'].includes(proposal.operation)
+    ? candidateQuotedTotal(proposal, context)
+    : quotedTotal(proposal.sourceRowIds, context)
   if (expectedTotal === null) return fail('missing_source_evidence')
 
   if (proposal.operation === 'split') {
@@ -358,6 +559,20 @@ function validateOperation(proposal: ExtractionProposal, context: ProposalValida
     return validProposal(proposal)
   }
 
+  if (proposal.operation === 'insert_missing_item') {
+    if (proposal.targetItemIds.length !== 0 || proposed.length === 0) return fail('invalid_operation_shape')
+    if (!everyPriced(proposed) || proposed.some((item) => item.pricingRole !== 'standard')) return fail('invalid_operation_shape')
+    if (!approximatelyEqual(totals(proposed), expectedTotal)) return fail('reconciliation_mismatch')
+    return validProposal(proposal)
+  }
+
+  if (proposal.operation === 'replace_item') {
+    if (proposal.targetItemIds.length === 0 || proposed.length === 0) return fail('invalid_operation_shape')
+    if (!everyPriced(proposed) || proposed.some((item) => item.pricingRole !== 'standard')) return fail('invalid_operation_shape')
+    if (!approximatelyEqual(totals(proposed), expectedTotal)) return fail('reconciliation_mismatch')
+    return validProposal(proposal)
+  }
+
   return fail('unknown_operation')
 }
 
@@ -391,6 +606,7 @@ function validateTargetOptionalState(
   context: ProposalValidationContext,
 ): ProposalValidationResult | null {
   if (proposal.proposedItems.length === 0) return null
+  if (proposal.targetItemIds.length === 0) return null // targetless insert
   const known = knownItems(context.sections)
   const targets = proposal.targetItemIds.map((id) => known.get(id)).filter((item): item is BoqItem => item !== undefined)
   if (targets.length !== proposal.targetItemIds.length) return fail('unknown_target_item')
@@ -445,30 +661,53 @@ export function validateProposal(value: unknown, context: ProposalValidationCont
   const knownSourceRows = new Set(context.sourceRows.map((row) => row.id))
   if (proposal.sourceRowIds.some((sourceRowId) => !knownSourceRows.has(sourceRowId))) return fail('unknown_source_row')
   const known = knownItems(context.sections)
-  if (proposal.targetItemIds.some((itemId) => !known.has(itemId))) return fail('unknown_target_item')
-  if (proposal.targetItemIds.length === 0) return fail('invalid_operation_shape')
-  if (Object.keys(proposal.affectedItemFingerprints).length !== proposal.targetItemIds.length
-    || proposal.targetItemIds.some((itemId) => typeof proposal.affectedItemFingerprints[itemId] !== 'string'
-      || proposal.affectedItemFingerprints[itemId] !== fingerprintCanonicalItem(known.get(itemId)!))) {
+  const requiresTargets = OPERATIONS_REQUIRING_TARGETS.has(proposal.operation)
+  const hasTargets = proposal.targetItemIds.length > 0
+  if (requiresTargets && !hasTargets) return fail('invalid_operation_shape')
+  if (proposal.operation === 'insert_missing_item' && hasTargets) return fail('invalid_operation_shape')
+  if (!requiresTargets && proposal.operation !== 'needs_human_review' && proposal.operation !== 'insert_missing_item' && !hasTargets) {
+    return fail('invalid_operation_shape')
+  }
+
+  if (hasTargets) {
+    if (proposal.targetItemIds.some((itemId) => !known.has(itemId))) return fail('unknown_target_item')
+    if (Object.keys(proposal.affectedItemFingerprints).length !== proposal.targetItemIds.length
+      || proposal.targetItemIds.some((itemId) => typeof proposal.affectedItemFingerprints[itemId] !== 'string'
+        || proposal.affectedItemFingerprints[itemId] !== fingerprintCanonicalItem(known.get(itemId)!))) {
+      return fail('stale_item')
+    }
+    const canonicalSourceByTarget = new Map<string, Set<string>>()
+    const allTargetSources = new Set<string>()
+    for (const targetId of proposal.targetItemIds) {
+      const sources = new Set(canonicalTargetSourceRows(known.get(targetId)!))
+      canonicalSourceByTarget.set(targetId, sources)
+      sources.forEach((sourceRowId) => allTargetSources.add(sourceRowId))
+    }
+    if (proposal.sourceRowIds.some((sourceRowId) => !allTargetSources.has(sourceRowId))) return fail('target_source_mismatch')
+    if (proposal.targetItemIds.some((targetId) => {
+      const sources = canonicalSourceByTarget.get(targetId)!
+      return !proposal.sourceRowIds.some((sourceRowId) => sources.has(sourceRowId))
+    })) return fail('target_source_mismatch')
+  } else if (proposal.operation === 'insert_missing_item') {
+    const canonicalBySource = new Set<string>()
+    for (const section of context.sections) {
+      for (const item of section.items) canonicalTargetSourceRows(item).forEach((id) => canonicalBySource.add(id))
+    }
+    if (proposal.sourceRowIds.some((id) => canonicalBySource.has(id))) return fail('duplicate_canonical_source')
+  } else if (Object.keys(proposal.affectedItemFingerprints).length !== 0) {
     return fail('stale_item')
   }
 
-  // Canonical provenance: every proposal source row must be a canonical source
-  // of at least one target, and every target must share at least one canonical
-  // source row with the proposal. Prevents using source row A evidence to
-  // mutate unrelated target B.
-  const canonicalSourceByTarget = new Map<string, Set<string>>()
-  const allTargetSources = new Set<string>()
-  for (const targetId of proposal.targetItemIds) {
-    const sources = new Set(canonicalTargetSourceRows(known.get(targetId)!))
-    canonicalSourceByTarget.set(targetId, sources)
-    sources.forEach((sourceRowId) => allTargetSources.add(sourceRowId))
+  if (REVIEW_ACTIONABLE_OPERATIONS.has(proposal.operation)) {
+    if (!nonBlankString(proposal.baseSectionsFingerprint)
+      || proposal.baseSectionsFingerprint !== fingerprintCanonicalSections(context.sections)) return fail('stale_item')
+    if (proposal.operation === 'remove_spurious_item') {
+      if (!Array.isArray(proposal.candidateItemIds) || proposal.candidateItemIds.length !== 0) return fail('invalid_operation_shape')
+    } else {
+      const candidateFailure = validateCandidateExpansion(proposal, context)
+      if (candidateFailure) return candidateFailure
+    }
   }
-  if (proposal.sourceRowIds.some((sourceRowId) => !allTargetSources.has(sourceRowId))) return fail('target_source_mismatch')
-  if (proposal.targetItemIds.some((targetId) => {
-    const sources = canonicalSourceByTarget.get(targetId)!
-    return !proposal.sourceRowIds.some((sourceRowId) => sources.has(sourceRowId))
-  })) return fail('target_source_mismatch')
 
   if (!proposal.proposedItems.every((item) => validProposedItem(item, proposal.sourceRowIds))) {
     const arithmetic = proposal.proposedItems.some((item) => isRecord(item)
@@ -514,7 +753,7 @@ export function isHighConfidenceProposal(proposal: ValidatedProposal): boolean {
   return proposal.confidence >= 0.90
     && proposal.evidenceValid
     && proposal.reconciled
-    && proposal.operation !== 'needs_human_review'
+    && isReviewActionableOperation(proposal.operation)
     && proposal.stale !== true
 }
 
@@ -524,6 +763,7 @@ function toCanonicalItem(item: ProposedExtractionItem, operation: ProposalOperat
     desc: item.desc,
     sourceRowId: item.sourceRowIds[0],
     sourceRowIds: [...item.sourceRowIds],
+    ...(item.sourceRef ? { sourceRef: { ...item.sourceRef } } : {}),
     entryOrigin: 'ai_accepted' as const,
     ...(item.optional === true ? { optional: true } : {}),
     ...(item.excludedFromTotal === true ? { excludedFromTotal: true } : {}),
@@ -547,6 +787,18 @@ function toCanonicalItem(item: ProposedExtractionItem, operation: ProposalOperat
     ...(operation === 'separate_components' && item.costComponent === 'labour' ? {
       costAllocation: { basis: 'rate' as const, material: 0, labour: item.rate, origin: 'source' as const },
     } : {}),
+    ...((operation === 'insert_missing_item' || operation === 'replace_item') && item.sourceCosts ? {
+      sourceCosts: {
+        material: { ...item.sourceCosts.material, present: true },
+        labour: { ...item.sourceCosts.labour, present: true },
+      },
+      costAllocation: {
+        basis: 'rate' as const,
+        material: item.sourceCosts.material.rate,
+        labour: item.sourceCosts.labour.rate,
+        origin: 'source' as const,
+      },
+    } : {}),
     stdStatus: item.excludedFromTotal === true ? 'excluded' : 'unmatched',
   }
   return priced
@@ -556,10 +808,36 @@ function toCanonicalItem(item: ProposedExtractionItem, operation: ProposalOperat
 export function applyValidatedProposal(
   sections: readonly BoqSection[],
   proposal: ValidatedProposal,
+  options: { skipBaseRevisionCheck?: boolean } = {},
 ): { sections: BoqSection[]; audit: ProposalAcceptanceAudit } {
   if (proposal.operation === 'needs_human_review') throw new TypeError('A human review proposal cannot be applied')
   const beforeSections = structuredClone(sections) as BoqSection[]
+  if (!options.skipBaseRevisionCheck && proposal.baseSectionsFingerprint
+    && fingerprintCanonicalSections(beforeSections) !== proposal.baseSectionsFingerprint) throw new ProposalUndoConflictError()
   const current = knownItems(beforeSections)
+
+  if (proposal.operation === 'insert_missing_item') {
+    const destSectionIndex = proposal.destinationSectionIndex
+    const destinationItemIndex = proposal.destinationItemIndex
+    if (!Number.isInteger(destSectionIndex) || destSectionIndex! < 0 || destSectionIndex! >= beforeSections.length
+      || !Number.isInteger(destinationItemIndex) || destinationItemIndex! < 0
+      || destinationItemIndex! > beforeSections[destSectionIndex!].items.length) {
+      throw new TypeError('Insert proposal has no valid server-owned destination')
+    }
+    const nextItems = [...beforeSections[destSectionIndex!].items]
+    nextItems.splice(destinationItemIndex!, 0, ...proposal.proposedItems.map((item) => toCanonicalItem(item, proposal.operation)))
+    const nextSections = beforeSections.map((section, index) =>
+      index === destSectionIndex ? { ...section, items: nextItems } : section)
+    const audit: ProposalAcceptanceAudit = {
+      proposalId: proposal.id,
+      operation: proposal.operation,
+      beforeSections,
+      beforeSectionsFingerprint: fingerprintCanonicalSections(beforeSections),
+      afterSectionsFingerprint: fingerprintCanonicalSections(nextSections),
+    }
+    return { sections: nextSections, audit }
+  }
+
   if (proposal.targetItemIds.some((id) => {
     const currentItem = current.get(id)
     return !currentItem || fingerprintCanonicalItem(currentItem) !== proposal.affectedItemFingerprints[id]
@@ -579,7 +857,7 @@ export function applyValidatedProposal(
   const nextItems = proposal.operation === 'keep'
     ? [...beforeSections[sectionIndex].items]
     : beforeSections[sectionIndex].items.filter((item) => !targetIds.has(item.id ?? ''))
-  if (proposal.operation !== 'keep') {
+  if (proposal.operation !== 'keep' && proposal.operation !== 'remove_spurious_item') {
     nextItems.splice(insertAt, 0, ...proposal.proposedItems.map((item) => toCanonicalItem(item, proposal.operation)))
   }
   const nextSections = beforeSections.map((section, index) => index === sectionIndex ? { ...section, items: nextItems } : section)

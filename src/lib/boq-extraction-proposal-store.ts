@@ -324,10 +324,12 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
         }
         const audit = auditByProposal.get(proposal!.id)
         if (!audit) {
-          const stale = proposal!.targetItemIds.some((itemId) => {
-            const item = immutable.boq.sections.flatMap((section) => section.items).find((candidate) => candidate.id === itemId)
-            return !item || proposal!.affectedItemFingerprints[itemId] !== fingerprintCanonicalItem(item)
-          })
+          const stale = (proposal!.baseSectionsFingerprint !== undefined
+            && proposal!.baseSectionsFingerprint !== currentSectionsFingerprint)
+            || proposal!.targetItemIds.some((itemId) => {
+              const item = immutable.boq.sections.flatMap((section) => section.items).find((candidate) => candidate.id === itemId)
+              return !item || proposal!.affectedItemFingerprints[itemId] !== fingerprintCanonicalItem(item)
+            })
           proposal!.stale = stale
           proposalStatuses[proposal!.id] = { status: 'pending', canUndo: false, stale, eligible: !stale && isHighConfidenceProposal(proposal!) }
           return
@@ -582,6 +584,9 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
             }
           }
           const acceptedAudit = auditSnap.data() as ExtractionProposalAudit
+          if ((acceptedAudit.batchProposalIds?.length ?? 0) > 1) {
+            return { status: 409, body: { error: 'Atomic proposal batches cannot be partially undone' } }
+          }
           const actionTimestamp = now().toISOString()
           const result = undoExtractionProposal({
             boq,
@@ -651,35 +656,54 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
           }
           const seenTargets = new Set<string>()
           const seenRows = new Set<string>()
+          const validated: ValidatedProposal[] = []
           for (const proposal of proposals as ValidatedProposal[]) {
             if (proposal.targetItemIds.some((id) => seenTargets.has(id)) || proposal.sourceRowIds.some((id) => seenRows.has(id))) {
               return { status: 409, body: { error: 'Proposal batch contains overlapping changes' } }
             }
             proposal.targetItemIds.forEach((id) => seenTargets.add(id))
             proposal.sourceRowIds.forEach((id) => seenRows.add(id))
+            const validation = validateExtractionProposal(boq, immutable.run, immutable.sourceRows, proposal)
+            if (!validation.valid) return invalidResponse(validation.code)
+            if (!isHighConfidenceProposal(validation.proposal)) return { status: 400, body: { error: 'Proposal is not eligible for batch acceptance' } }
+            validated.push(validation.proposal)
           }
+          // Insertions use indexes derived from the shared pre-batch revision.
+          // Apply them first, from the end of each section backwards, so index
+          // shifts cannot reverse or misplace source-ordered candidates.
+          const mutationOrder = [...validated].sort((left, right) => {
+            const leftInsert = left.operation === 'insert_missing_item' ? 0 : 1
+            const rightInsert = right.operation === 'insert_missing_item' ? 0 : 1
+            return leftInsert - rightInsert
+              || (right.destinationSectionIndex ?? -1) - (left.destinationSectionIndex ?? -1)
+              || (right.destinationItemIndex ?? -1) - (left.destinationItemIndex ?? -1)
+              || (right.candidateSourceOrder ?? -1) - (left.candidateSourceOrder ?? -1)
+          })
           const actionTimestamp = now().toISOString()
           let currentBoq = boq
-          const audits: ExtractionProposalAudit[] = []
-          for (const proposal of proposals as ValidatedProposal[]) {
+          const auditsById = new Map<string, ExtractionProposalAudit>()
+          for (const proposal of mutationOrder) {
             const result = acceptExtractionProposal({
               boq: currentBoq, run: immutable.run, sourceRows: immutable.sourceRows,
-              proposal, actorId, now: actionTimestamp, existingAudit: null,
+              proposal, prevalidatedProposal: proposal, skipBaseRevisionCheck: true,
+              actorId, now: actionTimestamp, existingAudit: null,
             })
             if (result.kind !== 'accepted') {
               const error = result.kind === 'invalid' ? result.code : 'Proposal batch is no longer pending'
               return result.kind === 'invalid' ? invalidResponse(error) : { status: 409, body: { error } }
             }
             currentBoq = result.boq
-            audits.push(result.audit)
+            auditsById.set(proposal.id, result.audit)
           }
+          const audits = proposalIds.map((id) => auditsById.get(id)!)
           const acceptedBoq = { ...currentBoq, updatedAt: actionTimestamp }
           transaction.update(boqRef, {
             sections: acceptedBoq.sections, totalItems: acceptedBoq.totalItems,
             grandTotal: acceptedBoq.grandTotal, updatedAt: actionTimestamp,
           })
+          const mutationProposalIds = mutationOrder.map((proposal) => proposal.id)
           audits.forEach((audit, index) => transaction.create(auditRefs[index], {
-            ...audit, resultBoq: structuredClone(acceptedBoq), batchProposalIds: [...proposalIds],
+            ...audit, resultBoq: structuredClone(acceptedBoq), batchProposalIds: mutationProposalIds,
           }))
           proposalRefs.forEach((proposalRef) => transaction.update(proposalRef, { lifecycleStatus: 'accepted', updatedAt: actionTimestamp }))
           return { status: 200, body: { status: 'accepted', acceptedProposalIds: [...proposalIds], boq: acceptedBoq, audits } }

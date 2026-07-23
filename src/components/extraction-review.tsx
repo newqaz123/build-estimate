@@ -30,7 +30,7 @@ import {
   type ExtractionReviewFilter,
 } from "@/lib/boq-extraction-review-state"
 import { extractionReviewOutcomeMessage, extractionReviewOutcomeTitle, proposalCanBeAccepted, proposalIsHighConfidence, rejectionLabelGroups, selectExtractionReviewOutcome, selectExtractionReviewProgress, sourceReferenceLabel } from "@/lib/boq-extraction-review-ui"
-import type { ValidatedProposal } from "@/lib/boq-extraction-proposals"
+import { isReviewActionableOperation, type ValidatedProposal } from "@/lib/boq-extraction-proposals"
 import type { Boq } from "@/lib/boq-schema"
 
 /** Client guard so a hung review POST can never strand the loading spinner.
@@ -92,6 +92,11 @@ function SourceEvidence({ source, onNavigateToPage, onRecheck, disabled, checkin
 }
 
 function ProposedStructure({ proposal }: { proposal: ValidatedProposal }) {
+  const emptyMessage = proposal.operation === "remove_spurious_item"
+    ? "Remove the current non-item row without adding a replacement."
+    : proposal.operation === "needs_human_review"
+      ? "No safe automatic correction is available."
+      : "No BOQ change is proposed."
   return (
     <section className="extraction-structure extraction-proposed" aria-label="Proposed structure">
       <div className="extraction-structure-heading"><span>Proposed structure</span><span>{proposal.proposedItems.length} item{proposal.proposedItems.length === 1 ? "" : "s"}</span></div>
@@ -100,11 +105,16 @@ function ProposedStructure({ proposal }: { proposal: ValidatedProposal }) {
           {proposal.proposedItems.map((item) => (
             <li key={item.id} className={item.pricingRole === "bundle_child" ? "bundle-child" : undefined}>
               <strong>{item.desc}</strong>
-              {item.pricingRole === "bundle_child" ? <small>Informational child · no second total</small> : <small>{item.qty} {item.unit} × ฿{item.rate.toLocaleString()} = ฿{item.total.toLocaleString()}</small>}
+              {item.pricingRole === "bundle_child" ? <small>Informational child · no second total</small> : (
+                <>
+                  <small>{item.qty} {item.unit} × ฿{item.rate.toLocaleString()} = ฿{item.total.toLocaleString()}</small>
+                  {item.sourceCosts ? <small>Material ฿{item.sourceCosts.material.total.toLocaleString()} + Labour ฿{item.sourceCosts.labour.total.toLocaleString()} · one combined BOQ row</small> : null}
+                </>
+              )}
             </li>
           ))}
         </ul>
-      ) : <p>The reviewer recommends keeping the current BOQ structure.</p>}
+      ) : <p>{emptyMessage}</p>}
     </section>
   )
 }
@@ -117,6 +127,18 @@ function CurrentStructure({ boq, proposal }: { boq: Boq; proposal: ValidatedProp
       {items.length ? <ul>{items.map((item) => <li key={item.id}><strong>{item.desc}</strong>{"qty" in item ? <small>{item.qty} {item.unit} × ฿{item.rate.toLocaleString()} = ฿{item.total.toLocaleString()}</small> : <small>Informational bundle child</small>}</li>)}</ul> : <p>No current target item. The proposal refers only to retained source evidence.</p>}
     </section>
   )
+}
+
+const OPERATION_LABELS: Record<string, string> = {
+  insert_missing_item: "Add missing item",
+  replace_item: "Replace item",
+  remove_spurious_item: "Remove non-item row",
+  needs_human_review: "Needs human review",
+  keep: "Keep",
+  split: "Split",
+  merge: "Merge",
+  separate_components: "Separate components",
+  create_bundle: "Create bundle",
 }
 
 const REVIEW_FILTERS: Array<{ value: ExtractionReviewFilter; label: string }> = [
@@ -430,11 +452,12 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
             const sourceRows = review.sourceRows.filter((row) => proposal.sourceRowIds.includes(row.sourceRowId))
             const canAccept = proposalCanBeAccepted(proposal) && !status
             const humanReview = proposal.operation === "needs_human_review"
+            const nonActionable = !isReviewActionableOperation(proposal.operation)
             const expanded = state.expandedProposalIds[proposal.id] !== false
             return (
               <article className={`extraction-proposal focused ${status ? `is-${status}` : ""}`} key={proposal.id}>
                 <div className="extraction-proposal-labels">
-                  <span className={`extraction-operation ${proposal.operation}`}>{proposal.operation.replaceAll("_", " ")}</span>
+                  <span className={`extraction-operation ${proposal.operation}`}>{OPERATION_LABELS[proposal.operation] ?? proposal.operation.replaceAll("_", " ")}</span>
                   <span className={proposalIsHighConfidence(proposal) ? "extraction-confidence high" : "extraction-confidence"}>{Math.round(proposal.confidence * 100)}% confidence</span>
                   <span className="extraction-validated">Validated evidence</span>
                 </div>
@@ -444,13 +467,13 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
                   <div className="extraction-original-list">{sourceRows.map((source) => <SourceEvidence key={source.sourceRowId} source={source} onNavigateToPage={onNavigateToPage} onRecheck={(sourceRowId) => void runReview({ sourceRowId, force: true, notify: true })} disabled={readOnly || busy} checking={requestedSourceRowId === source.sourceRowId} />)}<CurrentStructure boq={boq} proposal={proposal} /></div>
                   <ProposedStructure proposal={proposal} />
                 </div> : null}
-                <div className="extraction-validation-summary"><strong>Validation & reconciliation</strong><span><Check aria-hidden="true" />Source evidence valid</span><span><Check aria-hidden="true" />Arithmetic reconciled</span>{proposal.stale ? <span><X aria-hidden="true" />Proposal is stale</span> : null}</div>
+                <div className="extraction-validation-summary"><strong>Validation & reconciliation</strong>{humanReview ? <span><TriangleAlert aria-hidden="true" />No safe automatic correction; manual review required</span> : <><span><Check aria-hidden="true" />Source evidence valid</span><span><Check aria-hidden="true" />Arithmetic reconciled</span></>}{proposal.stale ? <span><X aria-hidden="true" />Proposal is stale</span> : null}</div>
                 <div className="extraction-proposal-footer">
-                  {humanReview ? <span className="extraction-human-review"><TriangleAlert aria-hidden="true" />Needs human review · acceptance disabled</span> : <span />}
+                  {nonActionable ? <span className="extraction-human-review"><TriangleAlert aria-hidden="true" />{humanReview ? "Needs human review · acceptance disabled" : "Legacy suggestion · acceptance disabled"}</span> : <span />}
                   <div className="extraction-proposal-actions">
                     {status === "accepted" && state.proposalCanUndo[proposal.id] && !readOnly ? <Button type="button" variant="outline" size="sm" onClick={() => void executeAction(proposal, "undo")} disabled={Boolean(action) || Boolean(mutationBlockedReason)}>Undo{action === "undoing" ? <Loader2 className="animate-spin" /> : <Undo2 aria-hidden="true" />}</Button> : null}
                     {!status ? <>
-                      <Button type="button" size="sm" onClick={() => void executeAction(proposal, "accept")} disabled={readOnly || Boolean(mutationBlockedReason) || !canAccept || Boolean(action)}>Accept{action === "accepting" ? <Loader2 className="animate-spin" /> : <Check aria-hidden="true" />}</Button>
+                      {canAccept ? <Button type="button" size="sm" onClick={() => void executeAction(proposal, "accept")} disabled={readOnly || Boolean(mutationBlockedReason) || Boolean(action)}>Accept{action === "accepting" ? <Loader2 className="animate-spin" /> : <Check aria-hidden="true" />}</Button> : null}
                       <Button type="button" variant="ghost" size="sm" onClick={() => void executeAction(proposal, "reject")} disabled={readOnly || Boolean(action)}>Reject{action === "rejecting" ? <Loader2 className="animate-spin" /> : <X aria-hidden="true" />}</Button>
                     </> : status !== "accepted" ? <span className="extraction-action-status">{status === "rejected" ? "Rejected" : "Undone"}</span> : null}
                   </div>

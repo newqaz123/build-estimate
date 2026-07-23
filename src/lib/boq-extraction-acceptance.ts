@@ -2,6 +2,7 @@ import type { Boq, BoqSection } from './boq-schema'
 import { calculateBoqTotals } from './boq-pricing'
 import { stableCanonicalJson, type BoqExtractionRun } from './boq-extraction-run'
 import type { BoqSourceRowV3, DerivedPricedItemV3 } from './boq-extraction-schema'
+import { buildExtractionCandidates } from './boq-extraction-evidence'
 import {
   applyValidatedProposal,
   fingerprintCanonicalSections,
@@ -26,6 +27,14 @@ export interface ExtractionProposalAudit {
   actorId: string
   timestamp: string
   operation: ExtractionProposal['operation']
+  candidateItemIds?: string[]
+  baseSectionsFingerprint?: string
+  destinationSectionIndex?: number
+  destinationItemIndex?: number
+  candidateSourceOrder?: number
+  /** Present when several proposals were accepted atomically. Individual undo
+   * is intentionally blocked because it would partially unwind the batch. */
+  batchProposalIds?: string[]
   targetItemIds: string[]
   affectedItemFingerprints: Record<string, string>
   confidence: number
@@ -122,6 +131,11 @@ function toAudit(
     actorId: input.actorId,
     timestamp: input.now,
     operation: input.proposal.operation,
+    ...(input.proposal.candidateItemIds ? { candidateItemIds: [...input.proposal.candidateItemIds] } : {}),
+    ...(input.proposal.baseSectionsFingerprint ? { baseSectionsFingerprint: input.proposal.baseSectionsFingerprint } : {}),
+    ...(input.proposal.destinationSectionIndex === undefined ? {} : { destinationSectionIndex: input.proposal.destinationSectionIndex }),
+    ...(input.proposal.destinationItemIndex === undefined ? {} : { destinationItemIndex: input.proposal.destinationItemIndex }),
+    ...(input.proposal.candidateSourceOrder === undefined ? {} : { candidateSourceOrder: input.proposal.candidateSourceOrder }),
     targetItemIds: [...input.proposal.targetItemIds],
     affectedItemFingerprints: { ...input.proposal.affectedItemFingerprints },
     confidence: input.proposal.confidence,
@@ -150,11 +164,13 @@ export function validateExtractionProposal(
   if (run.boqId !== boq.id || run.status !== 'ready' || proposal.extractionRunId !== run.id) {
     return { valid: false, code: 'run_identity_mismatch' }
   }
+  const candidates = buildExtractionCandidates(run, sourceRows)
   return validateProposal(proposal, {
     extractionRunId: run.id,
     sourceRows,
     sourceEvidence: sourceEvidence(run),
     sections: boq.sections,
+    candidateItems: candidates,
   })
 }
 
@@ -164,6 +180,11 @@ export function proposalMatchesAudit(proposal: ExtractionProposal, audit: Extrac
     id: proposal.id,
     extractionRunId: proposal.extractionRunId,
     operation: proposal.operation,
+    candidateItemIds: proposal.candidateItemIds,
+    baseSectionsFingerprint: proposal.baseSectionsFingerprint,
+    destinationSectionIndex: proposal.destinationSectionIndex,
+    destinationItemIndex: proposal.destinationItemIndex,
+    candidateSourceOrder: proposal.candidateSourceOrder,
     sourceRowIds: proposal.sourceRowIds,
     targetItemIds: proposal.targetItemIds,
     affectedItemFingerprints: proposal.affectedItemFingerprints,
@@ -177,6 +198,11 @@ export function proposalMatchesAudit(proposal: ExtractionProposal, audit: Extrac
     id: audit.proposalId,
     extractionRunId: audit.extractionRunId,
     operation: audit.operation,
+    candidateItemIds: audit.candidateItemIds,
+    baseSectionsFingerprint: audit.baseSectionsFingerprint,
+    destinationSectionIndex: audit.destinationSectionIndex,
+    destinationItemIndex: audit.destinationItemIndex,
+    candidateSourceOrder: audit.candidateSourceOrder,
     sourceRowIds: audit.sourceRowIds,
     targetItemIds: audit.targetItemIds,
     affectedItemFingerprints: audit.affectedItemFingerprints,
@@ -197,6 +223,9 @@ export function acceptExtractionProposal(input: {
   actorId: string
   now: string
   existingAudit: ExtractionProposalAudit | null
+  /** Batch acceptance may prevalidate all proposals against one canonical revision. */
+  prevalidatedProposal?: ValidatedProposal
+  skipBaseRevisionCheck?: boolean
 }): ProposalAcceptanceResult {
   if (input.existingAudit) {
     if (!proposalMatchesAudit(input.proposal, input.existingAudit)) return { kind: 'invalid', code: 'run_identity_mismatch' }
@@ -208,11 +237,15 @@ export function acceptExtractionProposal(input: {
     if (input.existingAudit.status === 'rejected') return { kind: 'rejected', audit: input.existingAudit }
     return { kind: 'invalid', code: 'stale_item' }
   }
-  const validation = validateExtractionProposal(input.boq, input.run, input.sourceRows, input.proposal)
+  const validation = input.prevalidatedProposal
+    ? { valid: true as const, proposal: input.prevalidatedProposal }
+    : validateExtractionProposal(input.boq, input.run, input.sourceRows, input.proposal)
   if (!validation.valid) return { kind: 'invalid', code: validation.code }
   if (validation.proposal.operation === 'needs_human_review') return { kind: 'invalid', code: 'needs_human_review' }
   try {
-    const accepted = applyValidatedProposal(input.boq.sections, validation.proposal)
+    const accepted = applyValidatedProposal(input.boq.sections, validation.proposal, {
+      skipBaseRevisionCheck: input.skipBaseRevisionCheck,
+    })
     const next = withTotals(input.boq, accepted.sections)
     const validatedInput = { ...input, proposal: validation.proposal }
     return {
@@ -245,6 +278,11 @@ export function rejectExtractionProposal(input: {
     extractionRunId: input.proposal.extractionRunId,
     status: 'rejected', actorId: input.actorId, timestamp: input.now,
     operation: input.proposal.operation, confidence: input.proposal.confidence, explanation: input.proposal.explanation,
+    ...(input.proposal.candidateItemIds ? { candidateItemIds: [...input.proposal.candidateItemIds] } : {}),
+    ...(input.proposal.baseSectionsFingerprint ? { baseSectionsFingerprint: input.proposal.baseSectionsFingerprint } : {}),
+    ...(input.proposal.destinationSectionIndex === undefined ? {} : { destinationSectionIndex: input.proposal.destinationSectionIndex }),
+    ...(input.proposal.destinationItemIndex === undefined ? {} : { destinationItemIndex: input.proposal.destinationItemIndex }),
+    ...(input.proposal.candidateSourceOrder === undefined ? {} : { candidateSourceOrder: input.proposal.candidateSourceOrder }),
     targetItemIds: [...input.proposal.targetItemIds], affectedItemFingerprints: { ...input.proposal.affectedItemFingerprints },
     sourceRowIds: [...input.proposal.sourceRowIds], sourceRefs: sourceRefs(input.sourceRows ?? [], input.proposal.sourceRowIds),
     proposedItems: structuredClone(input.proposal.proposedItems),

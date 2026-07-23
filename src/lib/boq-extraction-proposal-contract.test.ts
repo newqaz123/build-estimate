@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { prepareProviderProposal, providerContractInstructions } from './boq-extraction-proposal-contract'
+import {
+  prepareProviderProposal,
+  prepareProviderProposalV2,
+  providerContractInstructions,
+  providerContractInstructionsV2,
+  type ProviderCandidateRef,
+} from './boq-extraction-proposal-contract'
 import { fingerprintCanonicalItem, validateProposal, type ProposalValidationContext } from './boq-extraction-proposals'
 import type { BoqItem, BoqSection } from './boq-schema'
 import type { BoqSourceRowV3 } from './boq-extraction-schema'
@@ -378,4 +384,67 @@ test('rejects priced item missing exclusionReason', () => {
   const item = { ...base.proposedItems[0]! }
   delete item.exclusionReason
   assert.equal(prepareProviderProposal({ ...base, proposedItems: [item, base.proposedItems[1]!] }, { extractionRunId: 'run-1', targetItems }).ok, false)
+})
+
+const v2Candidate: ProviderCandidateRef = {
+  id: 'candidate-2', sectionIndex: 0, sectionHeader: 'Works', sourceOrder: 1,
+  sourceRowIds: ['sr-2'], desc: 'Immutable valve', pricingRole: 'standard', parentBundleId: null,
+  unit: 'pcs', qty: 2, rate: 50, total: 100, costComponent: 'material', sourceCosts: null,
+  optional: false, excludedFromTotal: false, exclusionReason: null,
+}
+const v2ExistingCandidate: ProviderCandidateRef = {
+  ...v2Candidate, id: 'candidate-1', sourceOrder: 0, sourceRowIds: ['sr-1'],
+  desc: target.desc, unit: 'set', qty: 1, rate: 100, total: 100, costComponent: 'combined',
+}
+const v2Context = {
+  extractionRunId: 'run-1', sections, targetItems,
+  candidateItems: new Map<string, ProviderCandidateRef>([
+    ['candidate-1', v2ExistingCandidate], ['candidate-2', v2Candidate],
+  ]),
+}
+
+test('v2 decision expands immutable candidates and injects revision and destination metadata', () => {
+  const prepared = prepareProviderProposalV2({
+    id: 'insert-2', operation: 'insert_missing_item', sourceRowIds: ['sr-2'], targetItemIds: [],
+    candidateItemIds: ['candidate-2'], confidence: 0.96, explanation: 'Missing source-backed item.',
+  }, v2Context)
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) return
+  assert.equal(prepared.proposal.proposedItems[0].desc, 'Immutable valve')
+  assert.equal((prepared.proposal.proposedItems[0] as { total: number }).total, 100)
+  assert.equal(prepared.proposal.destinationSectionIndex, 0)
+  assert.equal(prepared.proposal.destinationItemIndex, 1)
+  assert.match(prepared.proposal.baseSectionsFingerprint ?? '', /^sha256:/)
+})
+
+test('v2 decision DTO cannot author values or use invalid operation shapes', () => {
+  const valid = {
+    id: 'insert-2', operation: 'insert_missing_item', sourceRowIds: ['sr-2'], targetItemIds: [],
+    candidateItemIds: ['candidate-2'], confidence: 0.96, explanation: 'Missing item.',
+  }
+  assert.equal(prepareProviderProposalV2({ ...valid, proposedItems: [{ total: 999 }] }, v2Context).ok, false)
+  assert.equal(prepareProviderProposalV2({ ...valid, candidateItemIds: ['missing'] }, v2Context).ok, false)
+  assert.equal(prepareProviderProposalV2({ ...valid, operation: 'keep' }, v2Context).ok, false)
+  assert.equal(prepareProviderProposalV2({ ...valid, operation: 'remove_spurious_item' }, v2Context).ok, false)
+})
+
+test('v2 preparation rejects bundle-parent candidates that lack immutable child structure', () => {
+  const bundleCandidate = { ...v2Candidate, id: 'bundle-parent', pricingRole: 'bundle_parent' }
+  const context = {
+    ...v2Context,
+    candidateItems: new Map([['bundle-parent', bundleCandidate]]) as unknown as Map<string, ProviderCandidateRef>,
+  }
+  assert.equal(prepareProviderProposalV2({
+    id: 'insert-bundle', operation: 'insert_missing_item', sourceRowIds: ['sr-2'], targetItemIds: [],
+    candidateItemIds: ['bundle-parent'], confidence: 0.96, explanation: 'Unsafe partial bundle.',
+  }, context).ok, false)
+})
+
+test('v2 contract asks only for source-backed add, replace, remove or human-review decisions', () => {
+  const instructions = providerContractInstructionsV2()
+  assert.match(instructions, /insert_missing_item/)
+  assert.match(instructions, /replace_item/)
+  assert.match(instructions, /remove_spurious_item/)
+  assert.match(instructions, /NEVER invent prices/)
+  assert.match(instructions, /NEVER propose keep or separate_components/)
 })

@@ -1,0 +1,1960 @@
+{
+  "sourceRows": [
+    {
+      "id": "sr-surasak-1",
+      "page": 2,
+      "table": 2,
+      "row": 1,
+      "section": "Modify stage floor",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "No. Description",
+          "lines": [
+            "No. Description"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "No. Description",
+      "classification": "header",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-2",
+      "page": 2,
+      "table": 2,
+      "row": 2,
+      "section": "Modify stage floor",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "Modify stage floor",
+          "lines": [
+            "Modify stage floor"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "Modify stage floor",
+      "classification": "section",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-3",
+      "page": 2,
+      "table": 2,
+      "row": 3,
+      "section": "Modify stage floor",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "L-50x50x5t x6000L",
+          "lines": [
+            "L-50x50x5t x6000L"
+          ],
+          "carried": false
+        },
+        {
+          "column": 1,
+          "rawText": "SS400",
+          "lines": [
+            "SS400"
+          ],
+          "carried": false
+        },
+        {
+          "column": 2,
+          "rawText": "1.0",
+          "lines": [
+            "1.0"
+          ],
+          "carried": false
+        },
+        {
+          "column": 3,
+          "rawText": "pcs.",
+          "lines": [
+            "pcs."
+          ],
+          "carried": false
+        },
+        {
+          "column": 4,
+          "rawText": "730.00",
+          "lines": [
+            "730.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 5,
+          "rawText": "730.00",
+          "lines": [
+            "730.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "730.00",
+          "lines": [
+            "730.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "L-50x50x5t x6000L | SS400 | 1.0 | pcs. | 730.00 | 730.00 | 730.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-4",
+      "page": 2,
+      "table": 2,
+      "row": 4,
+      "section": "Modify stage floor",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "CH.PL4'x8'×3t",
+          "lines": [
+            "CH.PL4'x8'×3t"
+          ],
+          "carried": false
+        },
+        {
+          "column": 2,
+          "rawText": "0.5",
+          "lines": [
+            "0.5"
+          ],
+          "carried": false
+        },
+        {
+          "column": 3,
+          "rawText": "pcs.",
+          "lines": [
+            "pcs."
+          ],
+          "carried": false
+        },
+        {
+          "column": 4,
+          "rawText": "3,600.00",
+          "lines": [
+            "3,600.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 5,
+          "rawText": "1,800.00",
+          "lines": [
+            "1,800.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "1,800.00",
+          "lines": [
+            "1,800.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "CH.PL4'x8'×3t | 0.5 | pcs. | 3,600.00 | 1,800.00 | 1,800.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-5",
+      "page": 2,
+      "table": 2,
+      "row": 5,
+      "section": "Modify stage floor",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "Pipe 1 1/4B x Sch40 x 6000L",
+          "lines": [
+            "Pipe 1 1/4B x Sch40 x 6000L"
+          ],
+          "carried": false
+        },
+        {
+          "column": 1,
+          "rawText": "SS400",
+          "lines": [
+            "SS400"
+          ],
+          "carried": false
+        },
+        {
+          "column": 2,
+          "rawText": "1.0",
+          "lines": [
+            "1.0"
+          ],
+          "carried": false
+        },
+        {
+          "column": 3,
+          "rawText": "m.",
+          "lines": [
+            "m."
+          ],
+          "carried": false
+        },
+        {
+          "column": 4,
+          "rawText": "100.00",
+          "lines": [
+            "100.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 5,
+          "rawText": "100.00",
+          "lines": [
+            "100.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "100.00",
+          "lines": [
+            "100.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "Pipe 1 1/4B x Sch40 x 6000L | SS400 | 1.0 | m. | 100.00 | 100.00 | 100.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-6",
+      "page": 2,
+      "table": 2,
+      "row": 6,
+      "section": "Modify stage floor",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "Pipe 3/4B x Sch40 x6000L",
+          "lines": [
+            "Pipe 3/4B x Sch40 x6000L"
+          ],
+          "carried": false
+        },
+        {
+          "column": 1,
+          "rawText": "SS400",
+          "lines": [
+            "SS400"
+          ],
+          "carried": false
+        },
+        {
+          "column": 2,
+          "rawText": "1.0",
+          "lines": [
+            "1.0"
+          ],
+          "carried": false
+        },
+        {
+          "column": 3,
+          "rawText": "m.",
+          "lines": [
+            "m."
+          ],
+          "carried": false
+        },
+        {
+          "column": 4,
+          "rawText": "60.00",
+          "lines": [
+            "60.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 5,
+          "rawText": "60.00",
+          "lines": [
+            "60.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "60.00",
+          "lines": [
+            "60.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "Pipe 3/4B x Sch40 x6000L | SS400 | 1.0 | m. | 60.00 | 60.00 | 60.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-7",
+      "page": 2,
+      "table": 2,
+      "row": 7,
+      "section": "Modify stage floor",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "Fabrication&Installation",
+          "lines": [
+            "Fabrication&Installation"
+          ],
+          "carried": false
+        },
+        {
+          "column": 1,
+          "rawText": "SS400",
+          "lines": [
+            "SS400"
+          ],
+          "carried": false
+        },
+        {
+          "column": 2,
+          "rawText": "1.0",
+          "lines": [
+            "1.0"
+          ],
+          "carried": false
+        },
+        {
+          "column": 3,
+          "rawText": "lot.",
+          "lines": [
+            "lot."
+          ],
+          "carried": false
+        },
+        {
+          "column": 4,
+          "rawText": "1,500.00",
+          "lines": [
+            "1,500.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 5,
+          "rawText": "1,500.00",
+          "lines": [
+            "1,500.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 6,
+          "rawText": "12,000.00",
+          "lines": [
+            "12,000.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 7,
+          "rawText": "12,000.00",
+          "lines": [
+            "12,000.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "13,500.00",
+          "lines": [
+            "13,500.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "Fabrication&Installation | SS400 | 1.0 | lot. | 1,500.00 | 1,500.00 | 12,000.00 | 12,000.00 | 13,500.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-8",
+      "page": 2,
+      "table": 2,
+      "row": 8,
+      "section": "Modify stage floor",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "Palnting",
+          "lines": [
+            "Palnting"
+          ],
+          "carried": false
+        },
+        {
+          "column": 2,
+          "rawText": "1.0",
+          "lines": [
+            "1.0"
+          ],
+          "carried": false
+        },
+        {
+          "column": 3,
+          "rawText": "lot.",
+          "lines": [
+            "lot."
+          ],
+          "carried": false
+        },
+        {
+          "column": 4,
+          "rawText": "2,000.00",
+          "lines": [
+            "2,000.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 5,
+          "rawText": "2,000.00",
+          "lines": [
+            "2,000.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 6,
+          "rawText": "1,500.00",
+          "lines": [
+            "1,500.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 7,
+          "rawText": "1,500.00",
+          "lines": [
+            "1,500.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "3,500.00",
+          "lines": [
+            "3,500.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "Palnting | 1.0 | lot. | 2,000.00 | 2,000.00 | 1,500.00 | 1,500.00 | 3,500.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-9",
+      "page": 2,
+      "table": 2,
+      "row": 9,
+      "section": "2 Modif pipe 4% NaOH - 2B -BS1",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "Pipe 2B x Sch10 × 6000L",
+          "lines": [
+            "Pipe 2B x Sch10 × 6000L"
+          ],
+          "carried": false
+        },
+        {
+          "column": 1,
+          "rawText": "SUS304",
+          "lines": [
+            "SUS304"
+          ],
+          "carried": false
+        },
+        {
+          "column": 2,
+          "rawText": "1.0",
+          "lines": [
+            "1.0"
+          ],
+          "carried": false
+        },
+        {
+          "column": 3,
+          "rawText": "pcs.",
+          "lines": [
+            "pcs."
+          ],
+          "carried": false
+        },
+        {
+          "column": 4,
+          "rawText": "2,400.00",
+          "lines": [
+            "2,400.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 5,
+          "rawText": "2,400.00",
+          "lines": [
+            "2,400.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "2,400.00",
+          "lines": [
+            "2,400.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "Pipe 2B x Sch10 × 6000L | SUS304 | 1.0 | pcs. | 2,400.00 | 2,400.00 | 2,400.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-10",
+      "page": 2,
+      "table": 2,
+      "row": 10,
+      "section": "2 Modif pipe 4% NaOH - 2B -BS1",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "Elbow90'x2BxSch10",
+          "lines": [
+            "Elbow90'x2BxSch10"
+          ],
+          "carried": false
+        },
+        {
+          "column": 1,
+          "rawText": "SUS304",
+          "lines": [
+            "SUS304"
+          ],
+          "carried": false
+        },
+        {
+          "column": 2,
+          "rawText": "1.0",
+          "lines": [
+            "1.0"
+          ],
+          "carried": false
+        },
+        {
+          "column": 3,
+          "rawText": "pcs.",
+          "lines": [
+            "pcs."
+          ],
+          "carried": false
+        },
+        {
+          "column": 4,
+          "rawText": "110.00",
+          "lines": [
+            "110.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 5,
+          "rawText": "110.00",
+          "lines": [
+            "110.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "110.00",
+          "lines": [
+            "110.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "Elbow90'x2BxSch10 | SUS304 | 1.0 | pcs. | 110.00 | 110.00 | 110.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-11",
+      "page": 2,
+      "table": 2,
+      "row": 11,
+      "section": "2 Modif pipe 4% NaOH - 2B -BS1",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "Tee28x2Bx2BxSch10",
+          "lines": [
+            "Tee28x2Bx2BxSch10"
+          ],
+          "carried": false
+        },
+        {
+          "column": 1,
+          "rawText": "SUS304",
+          "lines": [
+            "SUS304"
+          ],
+          "carried": false
+        },
+        {
+          "column": 2,
+          "rawText": "1.0",
+          "lines": [
+            "1.0"
+          ],
+          "carried": false
+        },
+        {
+          "column": 3,
+          "rawText": "pcs.",
+          "lines": [
+            "pcs."
+          ],
+          "carried": false
+        },
+        {
+          "column": 4,
+          "rawText": "330.00",
+          "lines": [
+            "330.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 5,
+          "rawText": "330.00",
+          "lines": [
+            "330.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "330.00",
+          "lines": [
+            "330.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "Tee28x2Bx2BxSch10 | SUS304 | 1.0 | pcs. | 330.00 | 330.00 | 330.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-12",
+      "page": 2,
+      "table": 2,
+      "row": 12,
+      "section": "2 Modif pipe 4% NaOH - 2B -BS1",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "Reducer Tee3Bx3Bx2BxSch10",
+          "lines": [
+            "Reducer Tee3Bx3Bx2BxSch10"
+          ],
+          "carried": false
+        },
+        {
+          "column": 1,
+          "rawText": "SUS304",
+          "lines": [
+            "SUS304"
+          ],
+          "carried": false
+        },
+        {
+          "column": 2,
+          "rawText": "1.0",
+          "lines": [
+            "1.0"
+          ],
+          "carried": false
+        },
+        {
+          "column": 3,
+          "rawText": "pcs.",
+          "lines": [
+            "pcs."
+          ],
+          "carried": false
+        },
+        {
+          "column": 4,
+          "rawText": "570.00",
+          "lines": [
+            "570.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 5,
+          "rawText": "570.00",
+          "lines": [
+            "570.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "570.00",
+          "lines": [
+            "570.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "Reducer Tee3Bx3Bx2BxSch10 | SUS304 | 1.0 | pcs. | 570.00 | 570.00 | 570.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-13",
+      "page": 2,
+      "table": 2,
+      "row": 13,
+      "section": "2 Modif pipe 4% NaOH - 2B -BS1",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "Stub End 2Bx Sch10",
+          "lines": [
+            "Stub End 2Bx Sch10"
+          ],
+          "carried": false
+        },
+        {
+          "column": 1,
+          "rawText": "SUS304",
+          "lines": [
+            "SUS304"
+          ],
+          "carried": false
+        },
+        {
+          "column": 2,
+          "rawText": "2.0",
+          "lines": [
+            "2.0"
+          ],
+          "carried": false
+        },
+        {
+          "column": 3,
+          "rawText": "pcs.",
+          "lines": [
+            "pcs."
+          ],
+          "carried": false
+        },
+        {
+          "column": 4,
+          "rawText": "210.00",
+          "lines": [
+            "210.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 5,
+          "rawText": "420.00",
+          "lines": [
+            "420.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "420.00",
+          "lines": [
+            "420.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "Stub End 2Bx Sch10 | SUS304 | 2.0 | pcs. | 210.00 | 420.00 | 420.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-14",
+      "page": 2,
+      "table": 2,
+      "row": 14,
+      "section": "2 Modif pipe 4% NaOH - 2B -BS1",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "Loose Flange 2B x 10K",
+          "lines": [
+            "Loose Flange 2B x 10K"
+          ],
+          "carried": false
+        },
+        {
+          "column": 1,
+          "rawText": "Galv.",
+          "lines": [
+            "Galv."
+          ],
+          "carried": false
+        },
+        {
+          "column": 2,
+          "rawText": "2.0",
+          "lines": [
+            "2.0"
+          ],
+          "carried": false
+        },
+        {
+          "column": 3,
+          "rawText": "pcs.",
+          "lines": [
+            "pcs."
+          ],
+          "carried": false
+        },
+        {
+          "column": 4,
+          "rawText": "250.00",
+          "lines": [
+            "250.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 5,
+          "rawText": "500.00",
+          "lines": [
+            "500.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "500.00",
+          "lines": [
+            "500.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "Loose Flange 2B x 10K | Galv. | 2.0 | pcs. | 250.00 | 500.00 | 500.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-15",
+      "page": 2,
+      "table": 2,
+      "row": 15,
+      "section": "2 Modif pipe 4% NaOH - 2B -BS1",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "Gasket 2B x 10Kx 3t RF",
+          "lines": [
+            "Gasket 2B x 10Kx 3t RF"
+          ],
+          "carried": false
+        },
+        {
+          "column": 1,
+          "rawText": "Teflon",
+          "lines": [
+            "Teflon"
+          ],
+          "carried": false
+        },
+        {
+          "column": 2,
+          "rawText": "2.0",
+          "lines": [
+            "2.0"
+          ],
+          "carried": false
+        },
+        {
+          "column": 3,
+          "rawText": "pcs.",
+          "lines": [
+            "pcs."
+          ],
+          "carried": false
+        },
+        {
+          "column": 4,
+          "rawText": "160.00",
+          "lines": [
+            "160.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 5,
+          "rawText": "320.00",
+          "lines": [
+            "320.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "320.00",
+          "lines": [
+            "320.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "Gasket 2B x 10Kx 3t RF | Teflon | 2.0 | pcs. | 160.00 | 320.00 | 320.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-16",
+      "page": 2,
+      "table": 2,
+      "row": 16,
+      "section": "2 Modif pipe 4% NaOH - 2B -BS1",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "Boll & Nut 5/8\"x 2 1/2\"",
+          "lines": [
+            "Boll & Nut 5/8\"x 2 1/2\""
+          ],
+          "carried": false
+        },
+        {
+          "column": 1,
+          "rawText": "Galv.",
+          "lines": [
+            "Galv."
+          ],
+          "carried": false
+        },
+        {
+          "column": 2,
+          "rawText": "8.0",
+          "lines": [
+            "8.0"
+          ],
+          "carried": false
+        },
+        {
+          "column": 3,
+          "rawText": "set.",
+          "lines": [
+            "set."
+          ],
+          "carried": false
+        },
+        {
+          "column": 4,
+          "rawText": "35.00",
+          "lines": [
+            "35.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 5,
+          "rawText": "280.00",
+          "lines": [
+            "280.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "280.00",
+          "lines": [
+            "280.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "Boll & Nut 5/8\"x 2 1/2\" | Galv. | 8.0 | set. | 35.00 | 280.00 | 280.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-17",
+      "page": 2,
+      "table": 2,
+      "row": 17,
+      "section": "2 Modif pipe 4% NaOH - 2B -BS1",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "BallValve 2Bx 10K(Existing)",
+          "lines": [
+            "BallValve 2Bx 10K(Existing)"
+          ],
+          "carried": false
+        },
+        {
+          "column": 2,
+          "rawText": "1.0",
+          "lines": [
+            "1.0"
+          ],
+          "carried": false
+        },
+        {
+          "column": 3,
+          "rawText": "pcs.",
+          "lines": [
+            "pcs."
+          ],
+          "carried": false
+        },
+        {
+          "column": 6,
+          "rawText": "500.00",
+          "lines": [
+            "500.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 7,
+          "rawText": "500.00",
+          "lines": [
+            "500.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "500.00",
+          "lines": [
+            "500.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "BallValve 2Bx 10K(Existing) | 1.0 | pcs. | 500.00 | 500.00 | 500.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-18",
+      "page": 2,
+      "table": 2,
+      "row": 18,
+      "section": "2 Modif pipe 4% NaOH - 2B -BS1",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "PipeFabricaiton",
+          "lines": [
+            "PipeFabricaiton"
+          ],
+          "carried": false
+        },
+        {
+          "column": 1,
+          "rawText": "SUS304",
+          "lines": [
+            "SUS304"
+          ],
+          "carried": false
+        },
+        {
+          "column": 2,
+          "rawText": "30.0",
+          "lines": [
+            "30.0"
+          ],
+          "carried": false
+        },
+        {
+          "column": 3,
+          "rawText": "DB.",
+          "lines": [
+            "DB."
+          ],
+          "carried": false
+        },
+        {
+          "column": 6,
+          "rawText": "250.00",
+          "lines": [
+            "250.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 7,
+          "rawText": "7,500.00",
+          "lines": [
+            "7,500.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "7,500.00",
+          "lines": [
+            "7,500.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "PipeFabricaiton | SUS304 | 30.0 | DB. | 250.00 | 7,500.00 | 7,500.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-19",
+      "page": 2,
+      "table": 2,
+      "row": 19,
+      "section": "2 Modif pipe 4% NaOH - 2B -BS1",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "SafetyControl",
+          "lines": [
+            "SafetyControl"
+          ],
+          "carried": false
+        },
+        {
+          "column": 2,
+          "rawText": "1.0",
+          "lines": [
+            "1.0"
+          ],
+          "carried": false
+        },
+        {
+          "column": 3,
+          "rawText": "lot.",
+          "lines": [
+            "lot."
+          ],
+          "carried": false
+        },
+        {
+          "column": 6,
+          "rawText": "4,000.00",
+          "lines": [
+            "4,000.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 7,
+          "rawText": "4,000.00",
+          "lines": [
+            "4,000.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "4,000.00",
+          "lines": [
+            "4,000.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "SafetyControl | 1.0 | lot. | 4,000.00 | 4,000.00 | 4,000.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-20",
+      "page": 2,
+      "table": 2,
+      "row": 20,
+      "section": "2 Modif pipe 4% NaOH - 2B -BS1",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "4 MaterialPreparation",
+          "lines": [
+            "4 MaterialPreparation"
+          ],
+          "carried": false
+        },
+        {
+          "column": 2,
+          "rawText": "1.0",
+          "lines": [
+            "1.0"
+          ],
+          "carried": false
+        },
+        {
+          "column": 3,
+          "rawText": "lot.",
+          "lines": [
+            "lot."
+          ],
+          "carried": false
+        },
+        {
+          "column": 6,
+          "rawText": "4,000.00",
+          "lines": [
+            "4,000.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 7,
+          "rawText": "4,000.00",
+          "lines": [
+            "4,000.00"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "4,000.00",
+          "lines": [
+            "4,000.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "4 MaterialPreparation | 1.0 | lot. | 4,000.00 | 4,000.00 | 4,000.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-23",
+      "page": 2,
+      "table": 2,
+      "row": 23,
+      "section": "2 Modif pipe 4% NaOH - 2B -BS1",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 8,
+          "rawText": "40,620.00",
+          "lines": [
+            "40,620.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "40,620.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-24",
+      "page": 2,
+      "table": 2,
+      "row": 24,
+      "section": "2 Modif pipe 4% NaOH - 2B -BS1",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "OVERHEAD&EXPENSES",
+          "lines": [
+            "OVERHEAD&EXPENSES"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "6,380.00",
+          "lines": [
+            "6,380.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "OVERHEAD&EXPENSES | 6,380.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-25",
+      "page": 2,
+      "table": 2,
+      "row": 25,
+      "section": "2 Modif pipe 4% NaOH - 2B -BS1",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 8,
+          "rawText": "47,000.00",
+          "lines": [
+            "47,000.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "47,000.00",
+      "classification": "item",
+      "confidence": 1.0,
+      "warnings": []
+    },
+    {
+      "id": "sr-surasak-26",
+      "page": 2,
+      "table": 2,
+      "row": 26,
+      "section": "2 Modif pipe 4% NaOH - 2B -BS1",
+      "headers": [
+        "No. Description",
+        "Jeds.Material",
+        "Q'ty.",
+        "Unit.",
+        "Material cost.Unit/Price",
+        "Material cost.Total/Price",
+        "Labour cost.Unit/Price",
+        "Labour cost.Total/Price",
+        "Total Price."
+      ],
+      "rawCells": [
+        {
+          "column": 0,
+          "rawText": "GRAND TOTAL",
+          "lines": [
+            "GRAND TOTAL"
+          ],
+          "carried": false
+        },
+        {
+          "column": 8,
+          "rawText": "47,000.00",
+          "lines": [
+            "47,000.00"
+          ],
+          "carried": false
+        }
+      ],
+      "rawText": "GRAND TOTAL | 47,000.00",
+      "classification": "total",
+      "confidence": 1.0,
+      "warnings": []
+    }
+  ],
+  "expectedSections": [
+    {
+      "header": "Modify stage floor",
+      "items": [
+        {
+          "id": "di-sr-surasak-3-standard-1",
+          "desc": "L-50x50x5t x6000L",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "sr-surasak-3"
+          ],
+          "entryOrigin": "docling",
+          "costComponent": "material",
+          "unit": "pcs.",
+          "qty": 1.0,
+          "rate": 730.0,
+          "total": 730.0
+        },
+        {
+          "id": "di-sr-surasak-4-standard-1",
+          "desc": "CH.PL4'x8'×3t",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "sr-surasak-4"
+          ],
+          "entryOrigin": "docling",
+          "costComponent": "material",
+          "unit": "pcs.",
+          "qty": 0.5,
+          "rate": 3600.0,
+          "total": 1800.0
+        },
+        {
+          "id": "di-sr-surasak-5-standard-1",
+          "desc": "Pipe 1 1/4B x Sch40 x 6000L",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "sr-surasak-5"
+          ],
+          "entryOrigin": "docling",
+          "costComponent": "material",
+          "unit": "m.",
+          "qty": 1.0,
+          "rate": 100.0,
+          "total": 100.0
+        },
+        {
+          "id": "di-sr-surasak-6-standard-1",
+          "desc": "Pipe 3/4B x Sch40 x6000L",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "sr-surasak-6"
+          ],
+          "entryOrigin": "docling",
+          "costComponent": "material",
+          "unit": "m.",
+          "qty": 1.0,
+          "rate": 60.0,
+          "total": 60.0
+        },
+        {
+          "id": "di-sr-surasak-7-combined-1",
+          "desc": "Fabrication&Installation",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "sr-surasak-7"
+          ],
+          "entryOrigin": "docling",
+          "costComponent": "combined",
+          "sourceCosts": {
+            "material": {
+              "qty": 1.0,
+              "unit": "lot.",
+              "rate": 1500.0,
+              "total": 1500.0
+            },
+            "labour": {
+              "qty": 1.0,
+              "unit": "lot.",
+              "rate": 12000.0,
+              "total": 12000.0
+            }
+          },
+          "unit": "lot.",
+          "qty": 1.0,
+          "rate": 13500.0,
+          "total": 13500.0
+        },
+        {
+          "id": "di-sr-surasak-8-combined-1",
+          "desc": "Palnting",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "sr-surasak-8"
+          ],
+          "entryOrigin": "docling",
+          "costComponent": "combined",
+          "sourceCosts": {
+            "material": {
+              "qty": 1.0,
+              "unit": "lot.",
+              "rate": 2000.0,
+              "total": 2000.0
+            },
+            "labour": {
+              "qty": 1.0,
+              "unit": "lot.",
+              "rate": 1500.0,
+              "total": 1500.0
+            }
+          },
+          "unit": "lot.",
+          "qty": 1.0,
+          "rate": 3500.0,
+          "total": 3500.0
+        }
+      ]
+    },
+    {
+      "header": "2 Modif pipe 4% NaOH - 2B -BS1",
+      "items": [
+        {
+          "id": "di-sr-surasak-9-standard-1",
+          "desc": "Pipe 2B x Sch10 × 6000L",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "sr-surasak-9"
+          ],
+          "entryOrigin": "docling",
+          "costComponent": "material",
+          "unit": "pcs.",
+          "qty": 1.0,
+          "rate": 2400.0,
+          "total": 2400.0
+        },
+        {
+          "id": "di-sr-surasak-10-standard-1",
+          "desc": "Elbow90'x2BxSch10",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "sr-surasak-10"
+          ],
+          "entryOrigin": "docling",
+          "costComponent": "material",
+          "unit": "pcs.",
+          "qty": 1.0,
+          "rate": 110.0,
+          "total": 110.0
+        },
+        {
+          "id": "di-sr-surasak-11-standard-1",
+          "desc": "Tee28x2Bx2BxSch10",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "sr-surasak-11"
+          ],
+          "entryOrigin": "docling",
+          "costComponent": "material",
+          "unit": "pcs.",
+          "qty": 1.0,
+          "rate": 330.0,
+          "total": 330.0
+        },
+        {
+          "id": "di-sr-surasak-12-standard-1",
+          "desc": "Reducer Tee3Bx3Bx2BxSch10",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "sr-surasak-12"
+          ],
+          "entryOrigin": "docling",
+          "costComponent": "material",
+          "unit": "pcs.",
+          "qty": 1.0,
+          "rate": 570.0,
+          "total": 570.0
+        },
+        {
+          "id": "di-sr-surasak-13-standard-1",
+          "desc": "Stub End 2Bx Sch10",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "sr-surasak-13"
+          ],
+          "entryOrigin": "docling",
+          "costComponent": "material",
+          "unit": "pcs.",
+          "qty": 2.0,
+          "rate": 210.0,
+          "total": 420.0
+        },
+        {
+          "id": "di-sr-surasak-14-standard-1",
+          "desc": "Loose Flange 2B x 10K",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "sr-surasak-14"
+          ],
+          "entryOrigin": "docling",
+          "costComponent": "material",
+          "unit": "pcs.",
+          "qty": 2.0,
+          "rate": 250.0,
+          "total": 500.0
+        },
+        {
+          "id": "di-sr-surasak-15-standard-1",
+          "desc": "Gasket 2B x 10Kx 3t RF",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "sr-surasak-15"
+          ],
+          "entryOrigin": "docling",
+          "costComponent": "material",
+          "unit": "pcs.",
+          "qty": 2.0,
+          "rate": 160.0,
+          "total": 320.0
+        },
+        {
+          "id": "di-sr-surasak-16-standard-1",
+          "desc": "Boll & Nut 5/8\"x 2 1/2\"",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "sr-surasak-16"
+          ],
+          "entryOrigin": "docling",
+          "costComponent": "material",
+          "unit": "set.",
+          "qty": 8.0,
+          "rate": 35.0,
+          "total": 280.0
+        },
+        {
+          "id": "di-sr-surasak-17-standard-1",
+          "desc": "BallValve 2Bx 10K(Existing)",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "sr-surasak-17"
+          ],
+          "entryOrigin": "docling",
+          "costComponent": "labour",
+          "unit": "pcs.",
+          "qty": 1.0,
+          "rate": 500.0,
+          "total": 500.0
+        },
+        {
+          "id": "di-sr-surasak-18-standard-1",
+          "desc": "PipeFabricaiton",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "sr-surasak-18"
+          ],
+          "entryOrigin": "docling",
+          "costComponent": "labour",
+          "unit": "DB.",
+          "qty": 30.0,
+          "rate": 250.0,
+          "total": 7500.0
+        },
+        {
+          "id": "di-sr-surasak-19-standard-1",
+          "desc": "SafetyControl",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "sr-surasak-19"
+          ],
+          "entryOrigin": "docling",
+          "costComponent": "labour",
+          "unit": "lot.",
+          "qty": 1.0,
+          "rate": 4000.0,
+          "total": 4000.0
+        },
+        {
+          "id": "di-sr-surasak-20-standard-1",
+          "desc": "4 MaterialPreparation",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "sr-surasak-20"
+          ],
+          "entryOrigin": "docling",
+          "costComponent": "labour",
+          "unit": "lot.",
+          "qty": 1.0,
+          "rate": 4000.0,
+          "total": 4000.0
+        },
+        {
+          "id": "di-sr-surasak-24-standard-1",
+          "desc": "OVERHEAD&EXPENSES",
+          "pricingRole": "standard",
+          "sourceRowIds": [
+            "sr-surasak-24"
+          ],
+          "entryOrigin": "docling",
+          "costComponent": "lump_sum",
+          "unit": "L/S",
+          "qty": 1.0,
+          "rate": 6380.0,
+          "total": 6380.0
+        }
+      ]
+    }
+  ],
+  "expectedWarningCodes": [
+    "unsupported_row",
+    "unsupported_row"
+  ],
+  "expectedReconciliation": {
+    "itemTotal": 47000.0,
+    "sourceTotal": 47000.0,
+    "reconciled": true,
+    "difference": 0.0
+  }
+}

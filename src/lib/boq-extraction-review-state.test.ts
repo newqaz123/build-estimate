@@ -57,18 +57,21 @@ test("normalizes AI, fallback, and not-required review responses without trustin
 })
 
 test("bulk acceptance selects only validated, evidenced, reconciled, high-confidence, non-stale proposals", () => {
-  const safe = { id: "safe", operation: "split", confidence: 0.9, evidenceValid: true, reconciled: true, stale: false }
+  const safe = { id: "safe", operation: "insert_missing_item", confidence: 0.9, evidenceValid: true, reconciled: true, stale: false }
   assert.deepEqual(acceptAllValidatedProposalIds([
     safe,
     { ...safe, id: "low", confidence: 0.89 },
     { ...safe, id: "stale", stale: true },
     { ...safe, id: "human", operation: "needs_human_review" },
+    { ...safe, id: "keep", operation: "keep" },
+    { ...safe, id: "components", operation: "separate_components" },
+    { ...safe, id: "legacy-split", operation: "split" },
     { ...safe, id: "rejected", evidenceValid: false },
-  ], { safe: undefined, low: undefined, stale: undefined, human: undefined, rejected: undefined }), ["safe"])
+  ], { safe: undefined, low: undefined, stale: undefined, human: undefined, keep: undefined, components: undefined, "legacy-split": undefined, rejected: undefined }), ["safe"])
   assert.deepEqual(acceptAllValidatedProposalIds([safe], { safe: "accepted" }), [])
 })
 
-function proposal(id: string, sourceRowId: string, operation: ProposalOperation = "split"): ValidatedProposal {
+function proposal(id: string, sourceRowId: string, operation: ProposalOperation = "insert_missing_item"): ValidatedProposal {
   return {
     id, extractionRunId: "run-1", operation, sourceRowIds: [sourceRowId], targetItemIds: [], affectedItemFingerprints: {},
     confidence: 0.95, explanation: id, proposedItems: [], evidenceValid: true, reconciled: true, stale: false,

@@ -18,9 +18,10 @@ import boq_source_rows
 from boq_source_rows import build_source_rows
 
 try:
-    from boq_compound_parser import derive_document
+    from boq_compound_parser import derive_document, _find_columns
 except ImportError:
     derive_document = None
+    _find_columns = None
 
 
 class BoqParserTest(unittest.TestCase):
@@ -1662,7 +1663,16 @@ class CompoundDerivationTest(unittest.TestCase):
         self.assertIsNotNone(derive_document, "compound derivation API must exist")
         fixture_dir = Path(__file__).resolve().parent / "fixtures" / "compound"
         paths = sorted(fixture_dir.glob("*.json"))
-        self.assertEqual(len(paths), 8)
+        self.assertEqual(len(paths), 9)
+        self.assertEqual(
+            {path.name for path in paths},
+            {
+                "aggregate-bundle.json", "aligned-multiline.json",
+                "continuation-cross-page.json", "merged-and-repeated-headers.json",
+                "options.json", "separate-components.json", "shared-components.json",
+                "unequal-lines.json", "surasak-unit-price.json",
+            },
+        )
         for path in paths:
             with self.subTest(fixture=path.name):
                 fixture = json.loads(path.read_text())
@@ -1672,6 +1682,149 @@ class CompoundDerivationTest(unittest.TestCase):
                 self.assertEqual(result["warningCodes"], fixture["expectedWarningCodes"])
                 self.assertEqual(result["reconciliation"], fixture["expectedReconciliation"])
                 self.assertEqual(fixture["sourceRows"], original_rows)
+
+    def test_surasak_component_header_roles_preserve_shared_quantity_and_unit(self):
+        self.assertIsNotNone(_find_columns)
+        cells = [
+            LosslessContractV3Test._cell("No. Description", 0, 0, column_header=True),
+            LosslessContractV3Test._cell("Jeds.Material", 0, 1, column_header=True),
+            LosslessContractV3Test._cell("Q'ty.", 0, 2, column_header=True),
+            LosslessContractV3Test._cell("Unit.", 0, 3, column_header=True),
+            LosslessContractV3Test._cell(
+                "Material cost", 0, 4, column_header=True,
+                col_span=2, end_col_offset_idx=6,
+            ),
+            LosslessContractV3Test._cell(
+                "Labour cost", 0, 6, column_header=True,
+                col_span=2, end_col_offset_idx=8,
+            ),
+            LosslessContractV3Test._cell("Total Price.", 0, 8, column_header=True),
+            LosslessContractV3Test._cell("Unit/Price", 1, 4, column_header=True),
+            LosslessContractV3Test._cell("Total/Price", 1, 5, column_header=True),
+            LosslessContractV3Test._cell("Unit/Price", 1, 6, column_header=True),
+            LosslessContractV3Test._cell("Total/Price", 1, 7, column_header=True),
+        ]
+        cells.extend(
+            LosslessContractV3Test._cell(value, 2, column)
+            for column, value in enumerate(("Work", "SS400", "1", "lot", "4", "4", "6", "6", "10"))
+        )
+        rows = build_source_rows([LosslessContractV3Test._table(
+            page=1, table=1, cells=cells, num_rows=3, num_cols=9,
+        )])
+        roles = _find_columns(rows[2])
+        self.assertEqual(
+            {key: roles[key] for key in (
+                "material_rate", "material_total", "labour_rate", "labour_total",
+            )},
+            {"material_rate": 4, "material_total": 5, "labour_rate": 6, "labour_total": 7},
+        )
+        self.assertEqual(roles["qty"], 2)
+        self.assertEqual(roles["unit"], 3)
+
+    def test_sparse_material_only_row_derives_item_without_warning(self):
+        """Reproduces the live Docling shape: material-only rows omit labour cells
+        entirely. The parser must discover labour roles from the header vector
+        and derive a valid material-only item without incomplete_component_evidence."""
+        headers = [
+            "No. Description", "Jeds / Material", "Q'ty", "Unit",
+            "Material cost / Unit/Price", "Material cost / Total/Price",
+            "Labour cost / Unit/Price", "Labour cost / Total/Price",
+            "Total Price",
+        ]
+        # Material-only row: cells at 0,1,2,3,4,5,8 — columns 6,7 absent
+        raw_cells = [
+            {"column": c, "rawText": v, "lines": [v], "carried": False}
+            for c, v in [
+                (0, "L-50x50x5t x6000L"), (1, "SS400"), (2, "1.0"),
+                (3, "pcs."), (4, "730.00"), (5, "730.00"), (8, "730.00"),
+            ]
+        ]
+        row = {
+            "id": "sr-sparse-1", "page": 2, "table": 2, "row": 3,
+            "section": None, "headers": headers, "rawCells": raw_cells,
+            "rawText": " | ".join(c["rawText"] for c in raw_cells),
+            "classification": "item", "confidence": 1.0, "warnings": [],
+        }
+        result = derive_document([row])
+        items = result["sections"][0]["items"]
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["desc"], "L-50x50x5t x6000L")
+        self.assertEqual(items[0]["costComponent"], "material")
+        self.assertEqual(items[0]["total"], 730.0)
+        self.assertNotIn("incomplete_component_evidence", result["warningCodes"])
+
+    def test_amount_only_component_total_is_retained_without_fabricated_description(self):
+        cells = [
+            LosslessContractV3Test._cell("Description", 0, 0, column_header=True),
+            LosslessContractV3Test._cell("Total Price", 0, 1, column_header=True),
+            LosslessContractV3Test._cell("47,000.00", 1, 1),
+        ]
+        rows = build_source_rows([LosslessContractV3Test._table(
+            page=1, table=1, cells=cells, num_rows=2, num_cols=2,
+        )])
+        result = derive_document(rows)
+        self.assertEqual(result["sections"][0]["items"], [])
+        self.assertEqual(result["warnings"][0]["code"], "unsupported_row")
+        self.assertNotIn("47,000.00", result["sections"])
+        self.assertEqual(result["reviewCandidateRowIds"], [rows[1]["id"]])
+
+    def test_surasak_unit_price_fixture_reconciles_without_sparse_balance_items(self):
+        fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/surasak-unit-price.json").read_text())
+        original_rows = json.loads(json.dumps(fixture["sourceRows"]))
+        result = derive_document(fixture["sourceRows"])
+        items = [item for section in result["sections"] for item in section["items"]]
+        self.assertEqual(result["totalItems"], 19)
+        self.assertEqual(result["sourceTotal"], 47000.0)
+        self.assertEqual(result["reconciliation"], {
+            "itemTotal": 47000.0, "sourceTotal": 47000.0,
+            "reconciled": True, "difference": 0.0,
+        })
+        self.assertEqual([item["desc"] for item in items], [
+            "L-50x50x5t x6000L", "CH.PL4'x8'×3t", "Pipe 1 1/4B x Sch40 x 6000L",
+            "Pipe 3/4B x Sch40 x6000L", "Fabrication&Installation", "Palnting",
+            "Pipe 2B x Sch10 × 6000L", "Elbow90'x2BxSch10", "Tee28x2Bx2BxSch10",
+            "Reducer Tee3Bx3Bx2BxSch10", "Stub End 2Bx Sch10", "Loose Flange 2B x 10K",
+            "Gasket 2B x 10Kx 3t RF", 'Boll & Nut 5/8"x 2 1/2"',
+            "BallValve 2Bx 10K(Existing)", "PipeFabricaiton", "SafetyControl",
+            "4 MaterialPreparation", "OVERHEAD&EXPENSES",
+        ])
+        overhead = items[-1]
+        self.assertEqual(
+            {key: overhead[key] for key in ("desc", "unit", "qty", "rate", "total", "costComponent")},
+            {"desc": "OVERHEAD&EXPENSES", "unit": "L/S", "qty": 1.0,
+             "rate": 6380.0, "total": 6380.0, "costComponent": "lump_sum"},
+        )
+        combined = next(item for item in items if item["desc"] == "Fabrication&Installation")
+        self.assertEqual(combined["sourceCosts"]["material"]["total"], 1500.0)
+        self.assertEqual(combined["sourceCosts"]["labour"]["total"], 12000.0)
+        self.assertEqual(combined["total"], 13500.0)
+        self.assertNotIn("40,620.00", [item["desc"] for item in items])
+        self.assertNotIn("47,000.00", [item["desc"] for item in items])
+        self.assertNotIn(40620.0, [item["total"] for item in items])
+        self.assertNotIn(47000.0, [item["total"] for item in items])
+        grand = next(row for row in result["sourceRows"] if row["id"] == "sr-surasak-26")
+        self.assertEqual(grand["classification"], "total")
+        self.assertEqual(grand["rawCells"][-1]["rawText"], "47,000.00")
+        # Single-component rows (material-only or labour-only) must NOT emit
+        # incomplete_component_evidence when the other component's columns are
+        # simply absent from the Docling output.
+        incomplete_ids = {
+            warning["sourceRowId"] for warning in result["warnings"]
+            if warning["code"] == "incomplete_component_evidence"
+        }
+        self.assertEqual(incomplete_ids, set())
+        # Amount-only summary rows remain evidence-only review candidates.
+        self.assertIn("sr-surasak-23", result["reviewCandidateRowIds"])
+        self.assertIn("sr-surasak-25", result["reviewCandidateRowIds"])
+        # OVERHEAD&EXPENSES is now a derived lump_sum item, not a review candidate.
+        self.assertNotIn("sr-surasak-24", result["reviewCandidateRowIds"])
+        self.assertEqual(
+            [warning["code"] for warning in result["sourceRows"]
+             if warning["id"] in {"sr-surasak-23", "sr-surasak-25"}
+             for warning in warning["warnings"]],
+            ["unsupported_row", "unsupported_row"],
+        )
+        self.assertEqual(fixture["sourceRows"], original_rows)
 
     def test_ids_are_stable_and_collision_safe_for_shared_evidence(self):
         fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/separate-components.json").read_text())
@@ -1757,8 +1910,12 @@ class CompoundDerivationTest(unittest.TestCase):
             row["rawCells"][column]["lines"] = [""]
         result = derive_document(fixture["sourceRows"])
         items = result["sections"][0]["items"]
+        # When the labour component has no evidence at all (rate and total both
+        # absent/blank), the row is a valid material-only item. The missing
+        # component is not inferred from the aggregate, and no warning is
+        # emitted for a component that simply has no source data.
         self.assertEqual([(item["costComponent"], item["total"]) for item in items], [("material", 600.0)])
-        self.assertIn("incomplete_component_evidence", result["warningCodes"])
+        self.assertNotIn("incomplete_component_evidence", result["warningCodes"])
 
     def test_unrepresentable_numeric_evidence_is_warned_without_overflow(self):
         fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/merged-and-repeated-headers.json").read_text())

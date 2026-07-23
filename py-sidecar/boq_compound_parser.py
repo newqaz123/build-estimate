@@ -95,7 +95,13 @@ def _header_leaf(row: dict[str, Any], column: int) -> str:
 
 def _find_columns(row: dict[str, Any]) -> dict[str, int]:
     roles: dict[str, int] = {}
-    for column in _cells(row):
+    # Iterate over the full retained header vector, not only cells present in
+    # this row. Docling omits empty cells entirely, so a material-only row may
+    # have no anchor cells at the labour columns. Without scanning headers we
+    # would never discover those labour_* roles and _derive_components would
+    # bail before attempting single-component derivation.
+    headers = row.get("headers", [])
+    for column in range(len(headers)):
         header = _header(row, column)
         leaf_header = _header_leaf(row, column)
         component = "material" if "material" in header else "labour" if "labour" in header else ""
@@ -105,12 +111,12 @@ def _find_columns(row: dict[str, Any]) -> dict[str, int]:
             roles.setdefault("desc", column)
         elif component and ("qty" in header or "quantity" in header):
             roles[f"{component}_qty"] = column
-        elif component and ("unit" in header or "uom" in header):
-            roles[f"{component}_unit"] = column
         elif component and ("total" in header or "amount" in header):
             roles[f"{component}_total"] = column
         elif component and ("rate" in header or "price" in header):
             roles[f"{component}_rate"] = column
+        elif component and ("unit" in header or "uom" in header):
+            roles[f"{component}_unit"] = column
         elif leaf_header in {"qty", "q ty", "quantity"}:
             roles["qty"] = column
         elif leaf_header in {"unit", "uom", "unit of measure"}:
@@ -120,7 +126,16 @@ def _find_columns(row: dict[str, Any]) -> dict[str, int]:
         elif "amount" in leaf_header or leaf_header in {"total", "total price", "value"}:
             roles["amount"] = column
     if "desc" not in roles and _cells(row):
-        roles["desc"] = min(_cells(row))
+        assigned_pricing_columns = {
+            column for role, column in roles.items()
+            if role != "desc"
+        }
+        description_columns = [
+            column for column in _cells(row)
+            if column not in assigned_pricing_columns
+        ]
+        if description_columns:
+            roles["desc"] = min(description_columns)
     return roles
 
 
@@ -403,12 +418,17 @@ def _section_instances(
 
 
 def _derive_components(row: dict[str, Any], roles: dict[str, int], desc: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
-    if not any(role.startswith("material_") for role in roles) or not any(role.startswith("labour_") for role in roles):
+    # Proceed when at least one component has declared header roles. A
+    # material-only row has no anchor cells at the labour columns (Docling
+    # omits empty cells), but the header vector still declares them, so
+    # _find_columns discovers labour_* roles even without present cells.
+    if not any(role.startswith("material_") for role in roles) and not any(role.startswith("labour_") for role in roles):
         return None
     shared_qty_decimal = _decimal(_value(row, roles.get("qty")))
     shared_unit = _value(row, roles.get("unit"))
     components: dict[str, dict[str, Any]] = {}
     component_decimals: dict[str, dict[str, Decimal]] = {}
+    component_has_evidence: dict[str, bool] = {}
     arithmetic_mismatch = False
     for component in ("material", "labour"):
         qty_decimal = _decimal(_value(row, roles.get(f"{component}_qty")))
@@ -417,6 +437,7 @@ def _derive_components(row: dict[str, Any], roles: dict[str, int], desc: str) ->
         total_decimal = _decimal(_value(row, roles.get(f"{component}_total")))
         qty_decimal = shared_qty_decimal if qty_decimal is None else qty_decimal
         unit = shared_unit if not unit else unit
+        component_has_evidence[component] = rate_decimal is not None or total_decimal is not None
         if total_decimal is not None and qty_decimal is not None and rate_decimal is not None:
             if abs(
                 qty_decimal * rate_decimal - total_decimal
@@ -430,6 +451,12 @@ def _derive_components(row: dict[str, Any], roles: dict[str, int], desc: str) ->
                 "qty": _finite_float(qty_decimal), "unit": unit,
                 "rate": _finite_float(rate_decimal), "total": _finite_float(total_decimal),
             }
+    # When neither component has any numeric evidence at all, defer to the
+    # non-component derivation path. A row like OVERHEAD&EXPENSES has only a
+    # description and an aggregate amount; it should become a lump_sum item,
+    # not an incomplete_component_evidence dead end.
+    if not any(component_has_evidence.values()):
+        return None
     if arithmetic_mismatch:
         return ([], [_warning(
             row, "component_arithmetic_mismatch",
@@ -439,12 +466,20 @@ def _derive_components(row: dict[str, Any], roles: dict[str, int], desc: str) ->
         return ([], [_warning(row, "incomplete_component_evidence", "Component prices were incomplete and were not inferred from the aggregate.")])
     if len(components) == 1:
         component, values = next(iter(components.items()))
-        return (
-            [_priced_item(row, ordinal=1, desc=desc, component=component, **values)],
-            [_warning(
+        other = "labour" if component == "material" else "material"
+        warnings: list[dict[str, Any]] = []
+        # Only warn when the other component had partial evidence that could
+        # not be completed. When the other component's columns are simply
+        # absent (no rate or total at all), the row is a valid single-
+        # component item, not an incomplete dual-component row.
+        if component_has_evidence.get(other):
+            warnings.append(_warning(
                 row, "incomplete_component_evidence",
                 "Only one component has complete source pricing; the missing component was not inferred from the aggregate.",
-            )],
+            ))
+        return (
+            [_priced_item(row, ordinal=1, desc=desc, component=component, **values)],
+            warnings,
         )
     material, labour = components["material"], components["labour"]
     material_decimals = component_decimals["material"]

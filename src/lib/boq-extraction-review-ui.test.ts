@@ -23,7 +23,7 @@ function proposal(overrides: Partial<ReviewableProposalFixture> = {}): Reviewabl
   return {
     id: 'proposal-1',
     extractionRunId: 'run-1',
-    operation: 'separate_components',
+    operation: 'insert_missing_item',
     sourceRowIds: ['row-1'],
     targetItemIds: ['item-1'],
     affectedItemFingerprints: { 'item-1': 'fingerprint' },
@@ -47,6 +47,8 @@ test('only reconciled evidence-backed suggestions at 90% confidence are high-con
 test('human-review suggestions are surfaced but cannot be accepted as automatic corrections', () => {
   assert.equal(proposalCanBeAccepted(proposal()), true)
   assert.equal(proposalCanBeAccepted(proposal({ operation: 'needs_human_review' })), false)
+  assert.equal(proposalCanBeAccepted(proposal({ operation: 'keep' })), false)
+  assert.equal(proposalCanBeAccepted(proposal({ operation: 'separate_components' })), false)
   assert.equal(proposalCanBeAccepted(proposal({ stale: true })), false)
 })
 

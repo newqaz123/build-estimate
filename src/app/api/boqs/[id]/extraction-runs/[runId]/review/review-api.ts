@@ -53,7 +53,7 @@ export function buildDurableExtractionReviewResponse(input: {
   const reviewRun = {
     ...(input.reviewRun ?? input.stored.reviewRun),
     reviewTargeting: {
-      candidateRowIds: automaticReviewCandidateRowIds(input.imported.run),
+      candidateRowIds: automaticReviewCandidateRowIds(input.imported.run, input.sourceRows, input.imported.boq.sections),
       ambiguousRowIds: [...(input.imported.run.reviewTargeting.ambiguousRowIds ?? [])],
       unreconciledRowIds: [...(input.imported.run.reviewTargeting.unreconciledRowIds ?? [])],
       unreconciled: input.imported.run.reviewTargeting.unreconciled,

@@ -1,5 +1,5 @@
 import type { ExtractionReviewResponse } from "./boq-extraction-ai-review"
-import { normalizeValidationSummary, type ProposalOperation, type ValidatedProposal } from "./boq-extraction-proposals"
+import { isReviewActionableOperation, normalizeValidationSummary, type ProposalOperation, type ValidatedProposal } from "./boq-extraction-proposals"
 
 export type ExtractionProposalStatus = "accepted" | "rejected" | "undone"
 export type ExtractionProposalStatusMap = Record<string, ExtractionProposalStatus | undefined>
@@ -136,10 +136,10 @@ export function filterReviewProposals(
   if (filter === "all" || filter === "ambiguous" || filter === "unreconciled" || filter === "ai-pending") return [...proposals]
   return proposals.filter((proposal) => {
     const status = statuses[proposal.id]
-    if (filter === "pending") return !status && proposal.operation !== "needs_human_review"
+    if (filter === "pending") return !status && isReviewActionableOperation(proposal.operation)
     if (filter === "accepted") return status === "accepted"
     if (filter === "rejected") return status === "rejected"
-    return proposal.operation === "needs_human_review" || proposal.stale || !proposal.evidenceValid || !proposal.reconciled
+    return !isReviewActionableOperation(proposal.operation) || proposal.stale || !proposal.evidenceValid || !proposal.reconciled
   })
 }
 
@@ -297,7 +297,7 @@ export function acceptAllValidatedProposalIds(
   statuses: ExtractionProposalStatusMap,
 ): string[] {
   return proposals.filter((proposal) => (
-    proposal.operation !== "needs_human_review"
+    isReviewActionableOperation(proposal.operation)
     && proposal.confidence >= 0.9
     && proposal.evidenceValid === true
     && proposal.reconciled === true

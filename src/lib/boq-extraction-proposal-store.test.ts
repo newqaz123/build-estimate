@@ -1,15 +1,22 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { buildDraftImport, parseDoclingResult } from './boq-ingestion'
 import {
   buildExtractionRun,
+  checksumSourceRows,
   extractionRunIdentityFingerprint,
   fingerprintParserConfig,
   stableSourceRowFingerprint,
+  type BoqExtractionRun,
 } from './boq-extraction-run'
 import { createFirestoreExtractionProposalStore } from './boq-extraction-proposal-store'
+import { createFirestoreExtractionStore } from './boq-extraction-storage'
+import { buildExtractionCandidates } from './boq-extraction-evidence'
+import { prepareProviderProposalV2 } from './boq-extraction-proposal-contract'
 import { v3Fixture } from './boq-extraction-test-fixtures'
-import type { Boq } from './boq-schema'
+import type { Boq, BoqPricedItem, BoqSection } from './boq-schema'
+import type { BoqSourceRowV3 } from './boq-extraction-schema'
 import { fingerprintCanonicalItem, type ExtractionProposal, type ValidatedProposal } from './boq-extraction-proposals'
 
 type RecordData = Record<string, unknown>
@@ -123,11 +130,111 @@ function harness(clock: () => Date = () => new Date('2026-07-20T12:00:00.000Z'))
     db,
     store: createFirestoreExtractionProposalStore(db as never, clock),
     boq: db.docs.get('boqs/boq-1') as unknown as Boq,
+    run,
+    sourceRows: parsed.sourceRows,
     runPath,
     proposal: {
       ...proposal(), affectedItemFingerprints: { combined: fingerprintCanonicalItem(target) },
       evidenceValid: true, reconciled: true, stale: false,
     } as ValidatedProposal,
+  }
+}
+
+interface SurasakFixture {
+  sourceRows: BoqSourceRowV3[]
+  expectedSections: BoqExtractionRun['sections']
+  expectedReconciliation: BoqExtractionRun['reconciliation']
+}
+
+function surasakHarness(clock: () => Date = () => new Date('2026-07-20T12:00:00.000Z')) {
+  const fixture = JSON.parse(readFileSync(
+    new URL('../../py-sidecar/fixtures/compound/surasak-unit-price.json', import.meta.url),
+    'utf8',
+  )) as SurasakFixture
+  const run: BoqExtractionRun = {
+    id: 'run-surasak', boqId: 'boq-surasak', contractVersion: 3, status: 'ready',
+    createdAt: '2026-07-20T00:00:00.000Z', updatedAt: '2026-07-20T00:00:00.000Z', stagingExpiresAt: null,
+    sourceFile: { path: 'boqs/boq-surasak/source.pdf', name: 'surasak.pdf', digest: 'sha256:surasak' },
+    parser: { name: 'docling', contractVersion: 3, configFingerprint: 'sha256:config' },
+    metadataCandidates: {
+      vendor: { value: 'SURASAK ENGINEERING CO.,LTD.', confidence: 1, source: 'fixture' },
+      project: { value: 'MODIFY STAGE FLOOR', confidence: 1, source: 'fixture' },
+      date: { value: '2026-01-15', confidence: 1, source: 'fixture' },
+      workType: { value: 'MEP', confidence: 1, source: 'fixture' },
+    },
+    metadataConfidence: { vendor: 1, project: 1, date: 1, workType: 1 },
+    sourceRowCount: fixture.sourceRows.length,
+    sourceRowChecksum: checksumSourceRows(fixture.sourceRows),
+    reconciliation: fixture.expectedReconciliation,
+    warnings: [], sections: fixture.expectedSections, totalItems: 19,
+    aiReviewStatus: 'queued',
+    reviewTargeting: { candidateRowIds: [], candidateCount: 0, unreconciled: false },
+  }
+  const candidates = buildExtractionCandidates(run, fixture.sourceRows)
+  const retainedIds = new Set([
+    'di-sr-surasak-7-combined-1',
+    'di-sr-surasak-8-combined-1',
+    'di-sr-surasak-24-standard-1',
+  ])
+  const toCanonical = (candidate: ReturnType<typeof buildExtractionCandidates> extends Map<string, infer T> ? T : never): BoqPricedItem => ({
+    id: candidate.id,
+    desc: candidate.desc,
+    pricingRole: 'standard',
+    sourceRowId: candidate.sourceRowIds[0],
+    sourceRowIds: [...candidate.sourceRowIds],
+    sourceRef: candidate.sourceRefs[0],
+    entryOrigin: 'docling',
+    unit: candidate.unit,
+    qty: candidate.qty,
+    rate: candidate.rate,
+    total: candidate.total,
+    type: candidate.costComponent === 'lump_sum' ? 'lump_sum' : 'unit',
+    costComponent: candidate.costComponent as BoqPricedItem['costComponent'],
+    ...(candidate.sourceCosts ? {
+      sourceCosts: {
+        material: { ...candidate.sourceCosts.material, present: true as const },
+        labour: { ...candidate.sourceCosts.labour, present: true as const },
+      },
+    } : {}),
+    stdStatus: 'unmatched',
+  })
+  const staleSections: BoqSection[] = fixture.expectedSections.map((section) => ({
+    header: section.header,
+    items: section.items
+      .filter((item) => retainedIds.has(item.id))
+      .map((item) => toCanonical(candidates.get(item.id)!)),
+  }))
+  const staleTotal = staleSections.flatMap((section) => section.items)
+    .reduce((sum, item) => sum + ('total' in item ? item.total : 0), 0)
+  const boq: Boq = {
+    id: 'boq-surasak', project: 'MODIFY STAGE FLOOR', vendor: 'SURASAK ENGINEERING CO.,LTD.',
+    workType: 'MEP', date: '2026-01-15', status: 'draft', stdStatus: 'none', sections: staleSections,
+    totalItems: 3, grandTotal: staleTotal, sourceTotal: 47000,
+    sourceFileName: 'surasak.pdf', sourceStoragePath: 'boqs/boq-surasak/source.pdf',
+    activeExtractionRunId: run.id, createdAt: '2026-07-20T00:00:00.000Z', updatedAt: '2026-07-20T00:00:00.000Z',
+  }
+  const db = new MemoryDb()
+  const runPath = 'boqs/boq-surasak/extractionRuns/run-surasak'
+  const runMetadata = { ...run } as RecordData
+  delete runMetadata.sections
+  runMetadata.identityFingerprint = extractionRunIdentityFingerprint(run)
+  runMetadata.deterministicSections = {
+    checksum: fingerprintParserConfig(run.sections), reference: `${runPath}/sectionSnapshots`, chunkCount: run.sections.length,
+  }
+  db.docs.set(runPath, runMetadata)
+  run.sections.forEach((section, sectionIndex) => {
+    db.docs.set(`${runPath}/sectionSnapshots/${String(sectionIndex).padStart(6, '0')}`, {
+      order: sectionIndex, sectionIndex, sectionChunkIndex: 0, sections: [section],
+    })
+  })
+  for (const row of fixture.sourceRows) {
+    db.docs.set(`${runPath}/sourceRows/${row.id}`, { ...row, fingerprint: stableSourceRowFingerprint(row) })
+  }
+  db.docs.set('boqs/boq-surasak', structuredClone(boq) as unknown as RecordData)
+  return {
+    db, run, runPath, sourceRows: fixture.sourceRows, candidates, staleSections,
+    expectedSections: fixture.expectedSections,
+    store: createFirestoreExtractionProposalStore(db as never, clock),
   }
 }
 
@@ -191,7 +298,7 @@ test('validated proposals persist durably and action status is reconstructed fro
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
   let state = await fixture.store.getReviewState('boq-1', 'run-1')
   assert.deepEqual(state?.proposals.map((entry) => entry.id), ['proposal-1'])
-  assert.deepEqual(state?.proposalStatuses, { 'proposal-1': { status: 'pending', canUndo: false, stale: false, eligible: true } })
+  assert.deepEqual(state?.proposalStatuses, { 'proposal-1': { status: 'pending', canUndo: false, stale: false, eligible: false } })
 
   const accepted = await fixture.store.accept('boq-1', 'run-1', 'proposal-1', 'user-1')
   assert.equal(accepted.status, 200)
@@ -234,7 +341,109 @@ test('batch acceptance is one transaction and leaves BOQ and audits unchanged on
   assert.equal(fixture.db.docs.has(`${fixture.runPath}/proposalAudits/proposal-1`), false)
 })
 
-test('batch acceptance exposes undo only in LIFO order and advances eligibility after reload', async () => {
+test('batch acceptance atomically restores multiple targetless source-backed inserts in source order', async () => {
+  const fixture = harness()
+  const candidates = buildExtractionCandidates(fixture.run, fixture.sourceRows)
+  const missing = [...candidates.values()].filter((candidate) => candidate.pricingRole === 'standard').slice(0, 2)
+  assert.equal(missing.length, 2)
+  const boqRecord = fixture.db.docs.get('boqs/boq-1')! as unknown as Boq
+  const missingIds = new Set(missing.map((candidate) => candidate.id))
+  boqRecord.sections = boqRecord.sections.map((section) => ({
+    ...section, items: section.items.filter((item) => !missingIds.has(item.id ?? '')),
+  }))
+  const targetItems = new Map(boqRecord.sections.flatMap((section) => section.items)
+    .flatMap((item) => item.id ? [[item.id, item] as const] : []))
+  const proposals = missing.map((candidate, index) => {
+    const prepared = prepareProviderProposalV2({
+      id: `insert-${index}`, operation: 'insert_missing_item', sourceRowIds: candidate.sourceRowIds,
+      targetItemIds: [], candidateItemIds: [candidate.id], confidence: 0.95,
+      explanation: 'Restore immutable source candidate.',
+    }, { extractionRunId: fixture.run.id, sections: boqRecord.sections, targetItems, candidateItems: candidates })
+    assert.equal(prepared.ok, true)
+    if (!prepared.ok) throw new Error('Preparation failed')
+    return { ...prepared.proposal, evidenceValid: true as const, reconciled: true as const, stale: false }
+  })
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', proposals)
+  const beforeTransactions = fixture.db.transactionCount
+  const result = await fixture.store.acceptBatch('boq-1', 'run-1', proposals.map((proposal) => proposal.id), 'user-1')
+  assert.equal(result.status, 200)
+  assert.equal(fixture.db.transactionCount - beforeTransactions, 1)
+  const restored = fixture.db.docs.get('boqs/boq-1')! as unknown as Boq
+  const restoredIds = restored.sections.flatMap((section) => section.items).map((item) => item.id)
+  for (const candidate of missing) assert.equal(restoredIds.includes(candidate.id), true)
+  assert.ok(restoredIds.indexOf(missing[0].id) < restoredIds.indexOf(missing[1].id))
+})
+
+test('Surasak stale 3-item draft atomically accepts 16 inserts into 19 source-ordered items totaling 47,000', async () => {
+  const fixture = surasakHarness()
+  const canonicalSourceRows = new Set(fixture.staleSections.flatMap((section) => section.items)
+    .flatMap((item) => item.sourceRowIds ?? []))
+  const missing = [...fixture.candidates.values()]
+    .filter((candidate) => !candidate.sourceRowIds.some((id) => canonicalSourceRows.has(id)))
+    .sort((left, right) => left.sourceOrder - right.sourceOrder)
+  assert.equal(missing.length, 16)
+  const current = fixture.db.docs.get('boqs/boq-surasak')! as unknown as Boq
+  const targetItems = new Map(current.sections.flatMap((section) => section.items)
+    .flatMap((item) => item.id ? [[item.id, item] as const] : []))
+  const proposals = missing.map((candidate, index) => {
+    const prepared = prepareProviderProposalV2({
+      id: `insert-surasak-${index + 1}`,
+      operation: 'insert_missing_item',
+      sourceRowIds: candidate.sourceRowIds,
+      targetItemIds: [],
+      candidateItemIds: [candidate.id],
+      confidence: 0.99,
+      explanation: 'Restore immutable source-backed quotation row.',
+    }, {
+      extractionRunId: fixture.run.id,
+      sections: current.sections,
+      targetItems,
+      candidateItems: fixture.candidates,
+    })
+    assert.equal(prepared.ok, true)
+    if (!prepared.ok) throw new Error('Surasak proposal preparation failed')
+    return { ...prepared.proposal, evidenceValid: true as const, reconciled: true as const, stale: false }
+  })
+  const immutableStore = createFirestoreExtractionStore(fixture.db as never)
+  const loaded = await immutableStore.getReadyImport('boq-surasak', fixture.run.id)
+  assert.ok(loaded)
+  assert.equal(extractionRunIdentityFingerprint(loaded.run), extractionRunIdentityFingerprint(fixture.run))
+  assert.equal(fingerprintParserConfig(loaded.run.sections), fingerprintParserConfig(fixture.run.sections))
+  assert.equal((await immutableStore.getSourceRows('boq-surasak', fixture.run.id)).length, fixture.sourceRows.length)
+  await fixture.store.saveValidatedProposals('boq-surasak', fixture.run.id, proposals)
+  const transactionsBefore = fixture.db.transactionCount
+  const result = await fixture.store.acceptBatch(
+    'boq-surasak', fixture.run.id, proposals.map((proposal) => proposal.id), 'user-1',
+  )
+  assert.equal(result.status, 200)
+  assert.equal(fixture.db.transactionCount - transactionsBefore, 1)
+  const accepted = fixture.db.docs.get('boqs/boq-surasak')! as unknown as Boq
+  assert.equal(accepted.totalItems, 19)
+  assert.equal(accepted.grandTotal, 47000)
+  assert.deepEqual(
+    accepted.sections.flatMap((section) => section.items).map((item) => item.id),
+    fixture.expectedSections.flatMap((section) => section.items).map((item) => item.id),
+  )
+  for (const id of ['di-sr-surasak-7-combined-1', 'di-sr-surasak-8-combined-1']) {
+    const combined = accepted.sections.flatMap((section) => section.items).find((item) => item.id === id) as BoqPricedItem
+    assert.equal(combined.costComponent, 'combined')
+    assert.ok(combined.sourceCosts)
+  }
+  for (const proposal of proposals) {
+    const audit = fixture.db.docs.get(`${fixture.runPath}/proposalAudits/${proposal.id}`)!
+    assert.equal(Array.isArray(audit.beforeSections), true)
+    assert.equal(Array.isArray(audit.afterSections), true)
+    assert.equal((audit.batchProposalIds as string[]).length, 16)
+    assert.equal((audit.resultBoq as Boq).totalItems, 19)
+    assert.equal((audit.resultBoq as Boq).grandTotal, 47000)
+  }
+  const beforeUnsafeUndo = structuredClone(fixture.db.docs.get('boqs/boq-surasak'))
+  const undo = await fixture.store.undo('boq-surasak', fixture.run.id, proposals[0].id, 'user-1')
+  assert.equal(undo.status, 409)
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-surasak'), beforeUnsafeUndo)
+})
+
+test('batch acceptance rejects legacy no-op and restructuring proposals', async () => {
   const fixture = harness()
   const bundle = fixture.boq.sections.flatMap((section) => section.items).find((item) => item.id === 'bundle')!
   const option = fixture.boq.sections.flatMap((section) => section.items).find((item) => item.id === 'option')!
@@ -244,25 +453,11 @@ test('batch acceptance exposes undo only in LIFO order and advances eligibility 
     fixture.proposal,
   ]
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', proposals as never)
-  const beforeTransactions = fixture.db.transactionCount
+  const before = structuredClone(fixture.db.docs.get('boqs/boq-1'))
   const result = await fixture.store.acceptBatch('boq-1', 'run-1', proposals.map((proposal) => proposal.id), 'user-1')
-  assert.equal(result.status, 200)
-  assert.equal(fixture.db.transactionCount - beforeTransactions, 1)
-  assert.equal(fixture.db.docs.has(`${fixture.runPath}/proposalAudits/keep-bundle`), true)
-  assert.equal(fixture.db.docs.has(`${fixture.runPath}/proposalAudits/keep-option`), true)
-  assert.equal(fixture.db.docs.has(`${fixture.runPath}/proposalAudits/proposal-1`), true)
-
-  let state = await fixture.store.getReviewState('boq-1', 'run-1')
-  assert.deepEqual(Object.fromEntries(proposals.map((proposal) => [proposal.id, state?.proposalStatuses[proposal.id]?.canUndo])), {
-    'keep-bundle': false, 'keep-option': false, 'proposal-1': true,
-  })
-  assert.equal((await fixture.store.undo('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
-  state = await fixture.store.getReviewState('boq-1', 'run-1')
-  assert.equal(state?.proposalStatuses['keep-option']?.canUndo, true)
-  assert.equal(state?.proposalStatuses['keep-bundle']?.canUndo, false)
-  assert.equal((await fixture.store.undo('boq-1', 'run-1', 'keep-option', 'user-1')).status, 200)
-  state = await fixture.store.getReviewState('boq-1', 'run-1')
-  assert.equal(state?.proposalStatuses['keep-bundle']?.canUndo, true)
+  assert.equal(result.status, 400)
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+  for (const proposal of proposals) assert.equal(fixture.db.docs.has(`${fixture.runPath}/proposalAudits/${proposal.id}`), false)
 })
 
 test('a refreshed row supersedes old pending proposals and safely versions a reused model id', async () => {

@@ -1,4 +1,4 @@
-import type { ProposalOperation, ProposalValidationFailureCode, ProposalValidationSummary, ValidatedProposal } from './boq-extraction-proposals'
+import { isReviewActionableOperation, type ProposalOperation, type ProposalValidationFailureCode, type ProposalValidationSummary, type ValidatedProposal } from './boq-extraction-proposals'
 import type { ExtractionReviewResponse } from './boq-extraction-ai-review'
 
 type ReviewableProposal = Pick<ValidatedProposal, 'confidence'> & {
@@ -13,11 +13,12 @@ export function proposalIsHighConfidence(proposal: ReviewableProposal): boolean 
   return proposal.confidence >= 0.9
     && proposal.evidenceValid === true
     && proposal.reconciled === true
+    && isReviewActionableOperation(proposal.operation)
     && proposal.stale !== true
 }
 
 export function proposalCanBeAccepted(proposal: ReviewableProposal): boolean {
-  if (proposal.operation === 'needs_human_review') return false
+  if (!isReviewActionableOperation(proposal.operation)) return false
   return proposalIsHighConfidence(proposal) || (
     proposal.evidenceValid === true
     && proposal.reconciled === true
@@ -154,6 +155,9 @@ const REJECTION_LABELS: Partial<Record<ProposalValidationFailureCode, string>> =
   duplicate_source_row: 'Duplicate / overlap conflict',
   overlapping_target: 'Duplicate / overlap conflict',
   overlapping_source_row: 'Duplicate / overlap conflict',
+  unknown_candidate_item: 'Source evidence mismatch',
+  duplicate_canonical_source: 'Duplicate / overlap conflict',
+  spurious_removal_blocked: 'Unsafe shape or operation',
 }
 
 export interface RejectionLabelGroup {
