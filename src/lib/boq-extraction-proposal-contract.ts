@@ -12,10 +12,14 @@ import type { BoqItem, BoqSection, BoqSourceRef } from './boq-schema'
 import {
   resolveSourceCellMapping,
   type SourceBackedReviewDraft,
+  type SourceBackedResolvedValues,
   type SourceCellMapping,
   type SourceCellRef,
+  type SourceMappingResolution,
+  type SourceReviewMissingField,
 } from './boq-extraction-cell-mapping'
 import type { BoqSourceRowV3 } from './boq-extraction-schema'
+import { projectProviderVisibleSourceRow } from './boq-extraction-evidence'
 
 /**
  * Provider-facing DTO — the exact JSON shape the LLM must return.
@@ -322,6 +326,94 @@ function mappingSection(
   return null
 }
 
+interface TargetItemState {
+  optional: boolean
+  excludedFromTotal: boolean
+  exclusionReason: string | null
+}
+
+function targetItemState(item: BoqItem): TargetItemState {
+  return {
+    optional: item.optional === true,
+    excludedFromTotal: item.excludedFromTotal === true,
+    exclusionReason: item.exclusionReason ?? null,
+  }
+}
+
+function commonTargetItemState(
+  targetItemIds: readonly string[],
+  targetItems: ReadonlyMap<string, BoqItem>,
+): { kind: 'none' } | { kind: 'common'; state: TargetItemState } | { kind: 'conflict' } {
+  if (targetItemIds.length === 0) return { kind: 'none' }
+  const states = targetItemIds.map((id) => targetItemState(targetItems.get(id)!))
+  const first = states[0]
+  if (states.some((state) => state.optional !== first.optional
+    || state.excludedFromTotal !== first.excludedFromTotal
+    || state.exclusionReason !== first.exclusionReason)) return { kind: 'conflict' }
+  return { kind: 'common', state: first }
+}
+
+function candidateResolvedValues(candidate: ProviderCandidateRef): SourceBackedResolvedValues {
+  const values: SourceBackedResolvedValues = {
+    description: candidate.desc,
+    unit: candidate.unit,
+    quantity: candidate.qty,
+    rate: candidate.rate,
+    total: candidate.total,
+  }
+  if (candidate.sourceCosts) {
+    values.materialRate = candidate.sourceCosts.material.rate
+    values.materialTotal = candidate.sourceCosts.material.total
+    values.labourRate = candidate.sourceCosts.labour.rate
+    values.labourTotal = candidate.sourceCosts.labour.total
+    values.amount = candidate.total
+  }
+  return values
+}
+
+function reviewDraftWithRequirements(
+  resolution: Exclude<SourceMappingResolution, { kind: 'invalid' }>,
+  section: { index: number; header: string } | null,
+  requirements: readonly SourceReviewMissingField[],
+): SourceBackedReviewDraft {
+  if (resolution.kind === 'draft') {
+    return {
+      ...resolution.draft,
+      missingFields: [...resolution.draft.missingFields, ...requirements]
+        .filter((field, index, fields) => fields.indexOf(field) === index),
+      section: section ? { ...section } : null,
+    }
+  }
+  return {
+    mapping: resolution.mapping,
+    resolvedValues: candidateResolvedValues(resolution.candidate),
+    missingFields: [...requirements],
+    sourceRowIds: [...resolution.candidate.sourceRowIds],
+    sourceRefs: resolution.candidate.sourceRefs?.map((ref) => ({ ...ref })) ?? [],
+    section: section ? { ...section } : null,
+  }
+}
+
+function prepareMappedHumanReview(
+  value: Record<string, unknown>,
+  context: ProviderProposalContextV2,
+  sourceRowIds: string[],
+  targetItemIds: string[],
+  reviewDraft: SourceBackedReviewDraft,
+): ProviderProposalPreparationV2 {
+  const canonical = prepareProviderProposalV2({
+    id: value.id,
+    operation: 'needs_human_review',
+    sourceRowIds,
+    targetItemIds,
+    candidateItemIds: [],
+    confidence: value.confidence,
+    explanation: value.explanation,
+  }, context)
+  if (!canonical.ok) return canonical
+  return { ok: true, proposal: { ...canonical.proposal, reviewDraft } }
+}
+
 function itemSourceRows(item: BoqItem): string[] {
   if (Array.isArray(item.sourceRowIds) && item.sourceRowIds.length > 0) return item.sourceRowIds
   return item.sourceRowId ? [item.sourceRowId] : []
@@ -351,7 +443,8 @@ function itemSourceOrder(item: BoqItem, candidates: ReadonlyMap<string, Provider
  *  into full proposedItems using immutable server-owned candidate data.
  *
  *  The model never authors description, unit, qty, rate, total, or component
- *  prices — those come exclusively from the server-owned candidates. */
+ *  prices. The server reconstructs them from deterministic candidates or the
+ *  exact provider-visible projection of immutable source cells. */
 export function prepareProviderProposalV2(
   value: unknown,
   context: ProviderProposalContextV2,
@@ -373,26 +466,39 @@ export function prepareProviderProposalV2(
       || new Set(targetItemIds).size !== targetItemIds.length
       || targetItemIds.some((id) => !context.targetItems.has(id))) return { ok: false }
     const section = mappingSection(context, sourceRowIds, targetItemIds)
-    if (!section) return { ok: false }
     const resolution = resolveSourceCellMapping({
       mapping,
       allowedSourceRowIds: context.allowedSourceRowIds,
-      sourceRows: context.sourceRows.map((row) => ({
-        ...row,
-        rawCells: row.rawCells.filter((cell) => !cell.carried),
-      })),
-      section,
+      sourceRows: context.sourceRows.map((row) => projectProviderVisibleSourceRow(row, { addressableOnly: true })),
+      section: section ?? { index: -1, header: '' },
     })
     if (resolution.kind === 'invalid') return { ok: false }
+    const targetState = commonTargetItemState(targetItemIds, context.targetItems)
+    const reviewRequirements: SourceReviewMissingField[] = [
+      ...(section ? [] : ['destinationSection' as const]),
+      ...(targetState.kind === 'conflict' ? ['targetItemState' as const] : []),
+    ]
+    if (reviewRequirements.length > 0) {
+      return prepareMappedHumanReview(
+        value,
+        context,
+        sourceRowIds,
+        targetItemIds,
+        reviewDraftWithRequirements(resolution, section, reviewRequirements),
+      )
+    }
     if (resolution.kind === 'candidate') {
+      const mappedCandidate: ProviderCandidateRef = targetState.kind === 'common'
+        ? { ...resolution.candidate, ...targetState.state }
+        : resolution.candidate
       const candidateItems = new Map(context.candidateItems)
-      candidateItems.set(resolution.candidate.id, resolution.candidate)
+      candidateItems.set(mappedCandidate.id, mappedCandidate)
       const canonical = prepareProviderProposalV2({
         id: value.id,
         operation: targetItemIds.length === 0 ? 'insert_missing_item' : 'replace_item',
         sourceRowIds,
         targetItemIds,
-        candidateItemIds: [resolution.candidate.id],
+        candidateItemIds: [mappedCandidate.id],
         confidence: value.confidence,
         explanation: value.explanation,
       }, { ...context, candidateItems })
@@ -402,21 +508,11 @@ export function prepareProviderProposalV2(
         proposal: {
           ...canonical.proposal,
           sourceCellMapping: resolution.mapping,
-          mappedCandidate: resolution.candidate,
+          mappedCandidate,
         },
       }
     }
-    const canonical = prepareProviderProposalV2({
-      id: value.id,
-      operation: 'needs_human_review',
-      sourceRowIds,
-      targetItemIds,
-      candidateItemIds: [],
-      confidence: value.confidence,
-      explanation: value.explanation,
-    }, context)
-    if (!canonical.ok) return canonical
-    return { ok: true, proposal: { ...canonical.proposal, reviewDraft: resolution.draft } }
+    return prepareMappedHumanReview(value, context, sourceRowIds, targetItemIds, resolution.draft)
   }
 
   if (!V2_OPERATIONS.includes(value.operation as ProposalOperation)
@@ -539,7 +635,7 @@ export function providerContractInstructionsV2(): string {
     '  map_source_item: A priced source row has no deterministic candidate. Return cell coordinates only. Never return source values.',
     '    Use only cellRefs on reviewSelected sourceRows; context-only rows are not addressable.',
     '',
-    'NEVER invent prices, rates, quantities, descriptions, or units. All values come from the provided candidateItems.',
+    'NEVER invent prices, rates, quantities, descriptions, or units. Values are reconstructed server-side from immutable deterministic candidates or mapped source cells.',
     'NEVER include proposedItems, extractionRunId, fingerprints, or entryOrigin.',
     'NEVER propose keep or separate_components — those are not valid v2 operations.',
     'NEVER propose splitting a combined material/labour row into separate items — keep combined rows as one line.',

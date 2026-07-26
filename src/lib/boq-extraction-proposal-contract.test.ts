@@ -480,6 +480,123 @@ test('v2 map_source_item becomes replace_item when it safely addresses an existi
   assert.deepEqual(prepared.proposal.targetItemIds, ['target-1'])
 })
 
+test('v2 mapping resolves only provider-visible cell text and lines', () => {
+  const longDescription = 'x'.repeat(600)
+  const longLines = Array.from({ length: 12 }, (_, index) => `line-${index}`)
+  const longRow = {
+    ...mappedSourceRow,
+    rawCells: mappedSourceRow.rawCells.map((cell) => cell.column === 1
+      ? { ...cell, rawText: longDescription, lines: longLines }
+      : cell),
+  }
+  const context = { ...mappedContext, sourceRows: [longRow] }
+  const prepared = prepareProviderProposalV2(mappedDecision, context)
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) return
+  assert.equal(prepared.proposal.mappedCandidate?.desc, longDescription.slice(0, 500))
+  assert.equal(prepareProviderProposalV2({
+    ...mappedDecision,
+    cellMapping: {
+      ...mappedDecision.cellMapping,
+      description: [{ sourceRowId: 'mapped-row', column: 1, line: 10 }],
+    },
+  }, context).ok, false)
+})
+
+for (const [name, rowSection, sectionHeaders] of [
+  ['null', null, ['Section A', 'Section B']],
+  ['unfamiliar', 'New layout section', ['Section A', 'Section B']],
+  ['duplicate', 'Works', ['Works', 'Works']],
+] as const) {
+  test(`v2 targetless ${name} section mapping becomes a destination-selection draft`, () => {
+    const row = { ...mappedSourceRow, section: rowSection }
+    const prepared = prepareProviderProposalV2(mappedDecision, {
+      ...mappedContext,
+      sourceRows: [row],
+      sections: sectionHeaders.map((header) => ({ header, items: [] })),
+      targetItems: new Map(),
+    })
+    assert.equal(prepared.ok, true)
+    if (!prepared.ok) return
+    assert.equal(prepared.proposal.operation, 'needs_human_review')
+    assert.deepEqual(prepared.proposal.reviewDraft?.missingFields, ['destinationSection'])
+    assert.equal(prepared.proposal.reviewDraft?.section, null)
+    assert.equal(prepared.proposal.reviewDraft?.resolvedValues.total, 100)
+  })
+}
+
+test('v2 mapped replacement preserves common optional and exclusion state', () => {
+  const mappedTarget = {
+    ...target,
+    sourceRowIds: ['mapped-row'],
+    optional: true,
+    excludedFromTotal: true,
+    exclusionReason: 'Client option',
+  }
+  const mappedSections: BoqSection[] = [{ header: 'Works', items: [mappedTarget] }]
+  const prepared = prepareProviderProposalV2(
+    { ...mappedDecision, targetItemIds: ['target-1'] },
+    {
+      ...mappedContext,
+      sections: mappedSections,
+      targetItems: new Map([['target-1', mappedTarget]]),
+    },
+  )
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) return
+  assert.equal(prepared.proposal.operation, 'replace_item')
+  assert.deepEqual({
+    optional: prepared.proposal.mappedCandidate?.optional,
+    excludedFromTotal: prepared.proposal.mappedCandidate?.excludedFromTotal,
+    exclusionReason: prepared.proposal.mappedCandidate?.exclusionReason,
+  }, { optional: true, excludedFromTotal: true, exclusionReason: 'Client option' })
+  assert.deepEqual({
+    optional: prepared.proposal.proposedItems[0]?.optional,
+    excludedFromTotal: prepared.proposal.proposedItems[0]?.excludedFromTotal,
+    exclusionReason: prepared.proposal.proposedItems[0]?.exclusionReason,
+  }, { optional: true, excludedFromTotal: true, exclusionReason: 'Client option' })
+  const validation = validateProposal(prepared.proposal, {
+    extractionRunId: 'run-1',
+    sourceRows: [mappedSourceRow],
+    sourceEvidence: {},
+    sections: mappedSections,
+    candidateItems: new Map([[prepared.proposal.mappedCandidate!.id, prepared.proposal.mappedCandidate!]]),
+  })
+  assert.equal(validation.valid, true)
+})
+
+test('v2 mapped replacement with conflicting target state becomes human review', () => {
+  const included = { ...target, id: 'target-included', sourceRowIds: ['mapped-row'] }
+  const excluded = {
+    ...target,
+    id: 'target-excluded',
+    sourceRowIds: ['mapped-row'],
+    optional: true,
+    excludedFromTotal: true,
+    exclusionReason: 'Client option',
+  }
+  const conflictingSections: BoqSection[] = [{ header: 'Works', items: [included, excluded] }]
+  const prepared = prepareProviderProposalV2(
+    { ...mappedDecision, targetItemIds: ['target-included', 'target-excluded'] },
+    {
+      ...mappedContext,
+      sections: conflictingSections,
+      targetItems: new Map([['target-included', included], ['target-excluded', excluded]]),
+    },
+  )
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) return
+  assert.equal(prepared.proposal.operation, 'needs_human_review')
+  assert.deepEqual(prepared.proposal.reviewDraft?.missingFields, ['targetItemState'])
+  assert.equal(prepared.proposal.reviewDraft?.resolvedValues.total, 100)
+  assert.equal(validateProposal(prepared.proposal, {
+    extractionRunId: 'run-1',
+    sourceRows: [mappedSourceRow],
+    sourceEvidence: {},
+    sections: conflictingSections,
+  }).valid, true)
+})
+
 test('v2 mapping boundary rejects provider-authored source values and invalid coordinates', () => {
   for (const [key, value] of Object.entries({ qty: 2, rate: 50, total: 100, description: 'Invented', unit: 'pcs' })) {
     assert.equal(prepareProviderProposalV2({ ...mappedDecision, [key]: value }, mappedContext).ok, false)
@@ -540,4 +657,6 @@ test('v2 contract asks only for source-backed add, replace, remove or human-revi
   assert.match(instructions, /NEVER propose keep or separate_components/)
   assert.match(instructions, /map_source_item/)
   assert.match(instructions, /Return cell coordinates only\. Never return source values\./)
+  assert.doesNotMatch(instructions, /All values come from the provided candidateItems/)
+  assert.match(instructions, /immutable deterministic candidates or mapped source cells/)
 })

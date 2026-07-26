@@ -38,6 +38,8 @@ export type SourceMappingField =
   | 'labourTotal'
   | 'amount'
 
+export type SourceReviewMissingField = SourceMappingField | 'destinationSection' | 'targetItemState'
+
 export interface SourceBackedResolvedValues {
   description?: string
   unit?: string
@@ -54,10 +56,10 @@ export interface SourceBackedResolvedValues {
 export interface SourceBackedReviewDraft {
   mapping: SourceCellMapping
   resolvedValues: SourceBackedResolvedValues
-  missingFields: SourceMappingField[]
+  missingFields: SourceReviewMissingField[]
   sourceRowIds: string[]
   sourceRefs: Array<{ page: number; table: number; row: number }>
-  section: { index: number; header: string }
+  section: { index: number; header: string } | null
 }
 
 export type SourceCellMappingFailureCode =

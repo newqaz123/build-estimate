@@ -175,6 +175,26 @@ test('evidence packet exposes only non-carried cell coordinates on addressable r
   ])
 })
 
+test('cellRefs describe exactly the provider-visible line projection', () => {
+  const { run, sourceRows, boqSections } = surasakScenario()
+  const lines = Array.from({ length: 12 }, (_, index) => `line-${index}`)
+  const selectedRow = {
+    ...sourceRows[0],
+    rawCells: sourceRows[0].rawCells.map((value, index) => index === 0
+      ? { ...value, rawText: 'x'.repeat(600), lines }
+      : value),
+  }
+  const nextRows = [selectedRow, ...sourceRows.slice(1)]
+  const packet = buildExtractionEvidencePacket({
+    run, sourceRows: nextRows, candidates: buildExtractionCandidates(run, nextRows), boqSections,
+    selectedSourceRowIds: new Set([selectedRow.id]),
+  })
+  const visible = packet.sourceRows.find((row) => row.id === selectedRow.id)!
+  assert.equal(visible.rawCells[0].rawText.length, 500)
+  assert.deepEqual(visible.rawCells[0].lines, lines.slice(0, 10))
+  assert.deepEqual(visible.cellRefs?.[0], { column: 0, lineCount: 10 })
+})
+
 test('evidence packet includes current target items from BOQ', () => {
   const { run, sourceRows, boqSections } = surasakScenario()
   const candidates = buildExtractionCandidates(run, sourceRows)

@@ -110,6 +110,26 @@ function compareSourceRows(left: Pick<BoqSourceRowV3, 'page' | 'table' | 'row' |
   return left.page - right.page || left.table - right.table || left.row - right.row || left.id.localeCompare(right.id)
 }
 
+/** Exact source projection visible to the provider. Mapping resolution must
+ * consume this same projection so hidden/truncated content cannot become
+ * durable evidence. Addressable projections also remove carried cells. */
+export function projectProviderVisibleSourceRow(
+  row: BoqSourceRowV3,
+  options: { addressableOnly?: boolean } = {},
+): BoqSourceRowV3 {
+  return {
+    ...row,
+    rawText: row.rawText.slice(0, 4_000),
+    rawCells: row.rawCells
+      .filter((cell) => options.addressableOnly !== true || !cell.carried)
+      .map((cell) => ({
+        ...cell,
+        lines: cell.lines.slice(0, 10),
+        rawText: cell.rawText.slice(0, 500),
+      })),
+  }
+}
+
 function sourceRefFromRows(rows: readonly BoqSourceRowV3[], ids: readonly string[]): Array<{ page: number; table: number; row: number }> {
   const known = new Map(rows.map((row) => [row.id, row]))
   return ids.flatMap((id) => {
@@ -289,29 +309,28 @@ export function buildExtractionEvidencePacket(input: {
   return {
     extractionRunId: input.run.id,
     allowedSourceRowIds: selectedRows.map((row) => row.id),
-    sourceRows: contextRows.map((row) => ({
-      id: row.id,
-      reviewSelected: input.selectedSourceRowIds.has(row.id),
-      page: row.page,
-      table: row.table,
-      row: row.row,
-      section: row.section,
-      headers: [...row.headers],
-      rawText: row.rawText.slice(0, 4_000),
-      rawCells: row.rawCells.map((cell) => ({
-        ...cell,
-        lines: cell.lines.slice(0, 10),
-        rawText: cell.rawText.slice(0, 500),
-      })),
-      ...(input.selectedSourceRowIds.has(row.id) ? {
-        cellRefs: row.rawCells
-          .filter((cell) => !cell.carried)
-          .map((cell) => ({ column: cell.column, lineCount: cell.lines.length })),
-      } : {}),
-      classification: row.classification,
-      confidence: row.confidence,
-      warnings: row.warnings,
-    })),
+    sourceRows: contextRows.map((row) => {
+      const visibleRow = projectProviderVisibleSourceRow(row)
+      return {
+        id: visibleRow.id,
+        reviewSelected: input.selectedSourceRowIds.has(row.id),
+        page: visibleRow.page,
+        table: visibleRow.table,
+        row: visibleRow.row,
+        section: visibleRow.section,
+        headers: [...visibleRow.headers],
+        rawText: visibleRow.rawText,
+        rawCells: visibleRow.rawCells,
+        ...(input.selectedSourceRowIds.has(row.id) ? {
+          cellRefs: visibleRow.rawCells
+            .filter((cell) => !cell.carried)
+            .map((cell) => ({ column: cell.column, lineCount: cell.lines.length })),
+        } : {}),
+        classification: visibleRow.classification,
+        confidence: visibleRow.confidence,
+        warnings: visibleRow.warnings,
+      }
+    }),
     candidateItems: promptCandidates,
     currentTargetItems: targetItems,
     reconciliation: { ...input.run.reconciliation },
