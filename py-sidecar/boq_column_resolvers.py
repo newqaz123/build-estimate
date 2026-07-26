@@ -50,10 +50,10 @@ def _unit_cost_component_pairs(headers: Sequence[str]) -> ColumnResolution | Non
         return None
     if len({material_rate, material_total, labour_rate, labour_total}) != 4:
         return None
-    cost_group = paths[material_rate][:-1]
+    cost_group = ("unit cost",)
     if (
-        cost_group != paths[labour_rate][:-1]
-        or "cost" not in " ".join(cost_group).split()
+        paths[material_rate] != (*cost_group, "material")
+        or paths[labour_rate] != (*cost_group, "labour")
         or paths[material_total] != (*cost_group, "total")
         or paths[labour_total] != (*cost_group, "total")
         or {index for index, leaf in enumerate(leaves) if leaf == "total"}

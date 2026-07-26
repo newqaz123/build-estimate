@@ -117,6 +117,31 @@ class BoqParserTest(unittest.TestCase):
             "labour_unit": 6, "amount": 10,
         })
 
+    def test_direct_cost_component_band_does_not_activate_resolver(self):
+        headers = [
+            "ITEM", "DESCRIPTION", "UNIT", "Q'TY",
+            "DIRECT COST / MATERIAL", "DIRECT COST / TOTAL",
+            "DIRECT COST / LABOUR", "DIRECT COST / TOTAL", "AMOUNT", "Remark",
+        ]
+        row = self._component_cost_source_row({}, headers).model_dump()
+
+        self.assertEqual(_find_columns(row), {
+            "desc": 1, "unit": 2, "qty": 3, "amount": 8,
+        })
+
+    def test_three_level_unit_cost_component_band_does_not_activate_resolver(self):
+        headers = [
+            "ITEM", "DESCRIPTION", "UNIT", "Q'TY",
+            "ESTIMATE / UNIT COST / MATERIAL", "ESTIMATE / UNIT COST / TOTAL",
+            "ESTIMATE / UNIT COST / LABOUR", "ESTIMATE / UNIT COST / TOTAL", "AMOUNT", "Remark",
+        ]
+        row = self._component_cost_source_row({}, headers).model_dump()
+
+        self.assertEqual(_find_columns(row), {
+            "desc": 1, "unit": 2, "qty": 3, "material_unit": 4,
+            "labour_unit": 6, "amount": 8,
+        })
+
     def test_extracts_eastern_group_metadata(self):
         text = """EASTERN GROUP E.T.G. CO., LTD
 QUOTATION NO.: ETG.2026/AYT074
