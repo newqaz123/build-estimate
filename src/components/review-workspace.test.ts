@@ -90,7 +90,7 @@ test("canonical detail data pane preserves review context and controls", () => {
   assert.match(source, /placeholder="Search items…"/)
   assert.match(source, /aria-label="Filter BOQ items"/)
   assert.match(source, /metadataConfidence/)
-  assert.match(source, /Document extraction notes/)
+  assert.match(source, /Extraction notes/)
   assert.match(source, /Catalog readiness/)
   assert.match(source, /Grand Total:/)
   assert.doesNotMatch(source, /LLM Suggest|Accept All/)

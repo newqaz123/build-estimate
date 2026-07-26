@@ -35,6 +35,7 @@ import { CatalogMatchModal } from "./catalog-match-modal"
 import { calculateBoqTotals, isPricedBoqItem } from "@/lib/boq-pricing"
 import { sourceReferenceLabel } from "@/lib/boq-extraction-review-ui"
 import { ExtractionReview } from "./extraction-review"
+import { ExtractionWarnings } from "./extraction-warnings"
 import { PdfReviewViewer } from "./pdf-review-viewer"
 
 interface ReviewPanelProps {
@@ -462,10 +463,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
             </div>
 
             {boq.extractionWarnings?.length ? (
-              <div className="review-warning-list" role="status">
-                <strong>Document extraction notes</strong>
-                {boq.extractionWarnings.map((warning, index) => <span key={`${warning.code}-${index}`}>{warning.message}</span>)}
-              </div>
+              <ExtractionWarnings warnings={boq.extractionWarnings} title="Extraction notes" />
             ) : null}
 
             <ExtractionReview

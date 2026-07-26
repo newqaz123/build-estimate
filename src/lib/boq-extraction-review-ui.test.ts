@@ -11,7 +11,7 @@ import {
   sourceReferenceLabel,
 } from './boq-extraction-review-ui'
 import type { ExtractionReviewResponse } from './boq-extraction-ai-review'
-import type { ValidatedProposal } from './boq-extraction-proposals'
+import { PROPOSAL_VALIDATION_FAILURE_CODES, type ProposalValidationFailureCode, type ProposalValidationSummary, type ValidatedProposal } from './boq-extraction-proposals'
 
 type ReviewableProposalFixture = Omit<ValidatedProposal, 'evidenceValid' | 'reconciled' | 'stale'> & {
   evidenceValid: boolean
@@ -92,8 +92,8 @@ test('outcome: validation-blocked when all suggestions rejected', () => {
     },
   })
   assert.equal(selectExtractionReviewOutcome(review), 'validation-blocked')
-  assert.equal(extractionReviewOutcomeTitle(selectExtractionReviewOutcome(review)), 'Suggestions blocked by validation')
-  assert.match(extractionReviewOutcomeMessage(review, 'validation-blocked'), /AI returned 3 suggestions, but none passed/)
+  assert.equal(extractionReviewOutcomeTitle(selectExtractionReviewOutcome(review)), 'AI review completed \u2014 no safe corrections found')
+  assert.match(extractionReviewOutcomeMessage(review, 'validation-blocked'), /The BOQ remains unchanged\. 3 AI responses did not pass safety checks/)
 })
 
 test('outcome: proposals-partially-blocked when some valid and some rejected', () => {
@@ -106,7 +106,7 @@ test('outcome: proposals-partially-blocked when some valid and some rejected', (
     },
   })
   assert.equal(selectExtractionReviewOutcome(review), 'proposals-partially-blocked')
-  assert.equal(extractionReviewOutcomeTitle(selectExtractionReviewOutcome(review)), 'AI suggestions ready \u2014 some blocked')
+  assert.equal(extractionReviewOutcomeTitle(selectExtractionReviewOutcome(review)), 'AI suggestions ready \u2014 some not applied')
 })
 
 test('outcome: no-correction when completed with zero proposals and zero rejections', () => {
@@ -171,4 +171,126 @@ test('rejection label groups aggregate codes into safe user-facing categories', 
 
 test('rejection label groups return empty for null summary', () => {
   assert.deepEqual(rejectionLabelGroups(null), [])
+})
+
+/* ------------------------------------------------------------------
+ * Table-driven coverage: every production rejection code must map to a
+ * known user-facing category and produce a neutral primary summary that
+ * never falsely attributes all failures to source evidence.
+ * ------------------------------------------------------------------ */
+
+function summaryFor(code: ProposalValidationFailureCode, count = 1): ProposalValidationSummary {
+  return { validatedProposalCount: 0, rejectedProposalCount: count, rejectionCounts: { [code]: count } }
+}
+
+const EVIDENCE_CODES: ProposalValidationFailureCode[] = [
+  'missing_source_evidence', 'source_provenance_mismatch', 'target_source_mismatch',
+  'unknown_source_row', 'unknown_candidate_item',
+]
+
+const NON_EVIDENCE_CODES = PROPOSAL_VALIDATION_FAILURE_CODES.filter((code) => !EVIDENCE_CODES.includes(code))
+
+for (const code of PROPOSAL_VALIDATION_FAILURE_CODES) {
+  test(`rejection label maps every production code: ${code}`, () => {
+    const groups = rejectionLabelGroups(summaryFor(code))
+    assert.equal(groups.length, 1)
+    assert.notEqual(groups[0].label, 'Other validation issue')
+    assert.equal(groups[0].count, 1)
+  })
+}
+
+for (const code of PROPOSAL_VALIDATION_FAILURE_CODES) {
+  test(`validation-blocked summary stays neutral for code: ${code}`, () => {
+    const review = reviewResponse({
+      reviewRun: {
+        status: 'partial',
+        validationSummary: summaryFor(code),
+        reviewTargeting: { candidateRowIds: ['sr-1'], ambiguousRowIds: ['sr-1'], unreconciledRowIds: [], unreconciled: false },
+      },
+    })
+    assert.equal(selectExtractionReviewOutcome(review), 'validation-blocked')
+    const message = extractionReviewOutcomeMessage(review, 'validation-blocked')
+    assert.doesNotMatch(message, /did not reference valid source-backed evidence/i)
+    assert.match(message, /safety checks/i)
+  })
+
+  test(`proposals-partially-blocked summary stays neutral for code: ${code}`, () => {
+    const review = reviewResponse({
+      proposals: [{ id: 'p1' } as ValidatedProposal],
+      reviewRun: {
+        status: 'partial',
+        validationSummary: summaryFor(code),
+        reviewTargeting: { candidateRowIds: ['sr-1'], ambiguousRowIds: ['sr-1'], unreconciledRowIds: [], unreconciled: false },
+      },
+    })
+    assert.equal(selectExtractionReviewOutcome(review), 'proposals-partially-blocked')
+    const message = extractionReviewOutcomeMessage(review, 'proposals-partially-blocked')
+    assert.doesNotMatch(message, /did not reference valid source-backed evidence/i)
+    assert.match(message, /safety checks/i)
+  })
+}
+
+for (const code of NON_EVIDENCE_CODES) {
+  test(`validation-blocked message does not attribute non-evidence code to evidence: ${code}`, () => {
+    const review = reviewResponse({
+      reviewRun: {
+        status: 'partial',
+        validationSummary: summaryFor(code),
+        reviewTargeting: { candidateRowIds: ['sr-1'], ambiguousRowIds: ['sr-1'], unreconciledRowIds: [], unreconciled: false },
+      },
+    })
+    const message = extractionReviewOutcomeMessage(review, 'validation-blocked')
+    assert.doesNotMatch(message, /evidence/i)
+  })
+}
+
+test('partially-blocked message uses singular "was" for one rejected response', () => {
+  const review = reviewResponse({
+    proposals: [{ id: 'p1' } as ValidatedProposal],
+    reviewRun: {
+      status: 'partial',
+      validationSummary: summaryFor('arithmetic_mismatch', 1),
+      reviewTargeting: { candidateRowIds: ['sr-1'], ambiguousRowIds: ['sr-1'], unreconciledRowIds: [], unreconciled: false },
+    },
+  })
+  const message = extractionReviewOutcomeMessage(review, 'proposals-partially-blocked')
+  assert.match(message, /1 response .* was not applied/)
+  assert.doesNotMatch(message, /1 response .* were not applied/)
+})
+
+test('partially-blocked message uses plural "were" for multiple rejected responses', () => {
+  const review = reviewResponse({
+    proposals: [{ id: 'p1' } as ValidatedProposal],
+    reviewRun: {
+      status: 'partial',
+      validationSummary: summaryFor('arithmetic_mismatch', 2),
+      reviewTargeting: { candidateRowIds: ['sr-1'], ambiguousRowIds: ['sr-1'], unreconciledRowIds: [], unreconciled: false },
+    },
+  })
+  const message = extractionReviewOutcomeMessage(review, 'proposals-partially-blocked')
+  assert.match(message, /2 responses .* were not applied/)
+})
+
+test('validation-blocked message is grammatically correct for one rejected response', () => {
+  const review = reviewResponse({
+    reviewRun: {
+      status: 'partial',
+      validationSummary: summaryFor('arithmetic_mismatch', 1),
+      reviewTargeting: { candidateRowIds: ['sr-1'], ambiguousRowIds: ['sr-1'], unreconciledRowIds: [], unreconciled: false },
+    },
+  })
+  const message = extractionReviewOutcomeMessage(review, 'validation-blocked')
+  assert.match(message, /1 AI response did not pass safety checks/)
+})
+
+test('validation-blocked message is grammatically correct for multiple rejected responses', () => {
+  const review = reviewResponse({
+    reviewRun: {
+      status: 'partial',
+      validationSummary: summaryFor('arithmetic_mismatch', 3),
+      reviewTargeting: { candidateRowIds: ['sr-1'], ambiguousRowIds: ['sr-1'], unreconciledRowIds: [], unreconciled: false },
+    },
+  })
+  const message = extractionReviewOutcomeMessage(review, 'validation-blocked')
+  assert.match(message, /3 AI responses did not pass safety checks/)
 })

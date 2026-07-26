@@ -1052,6 +1052,26 @@
 .review-local-warnings ul { display: grid; gap: var(--space-2); margin: var(--space-1) 0 0; padding: 0; list-style: none; }
 .review-local-warnings li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px var(--space-2); align-items: start; }
 .review-local-warnings li small { grid-column: 2; color: var(--muted-text); }
+
+.extraction-warnings .extraction-warnings-summary { margin: 2px 0 0; color: var(--muted-text); }
+.extraction-warning-groups { display: grid; gap: var(--space-1); margin: var(--space-1) 0 0; padding: 0; list-style: none; }
+.extraction-warning-group { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px var(--space-2); align-items: start; }
+.extraction-warning-group-count { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--fg-2); }
+.extraction-warning-group-label { color: var(--muted-text); }
+.extraction-warning-group-locations { grid-column: 2; color: var(--muted-text); opacity: 0.85; }
+.extraction-warning-details { margin-top: var(--space-1); padding: var(--space-2); border-radius: var(--radius-sm); background: color-mix(in oklab, var(--surface) 60%, var(--border)); }
+.extraction-warning-details-summary { cursor: pointer; color: var(--muted-text); font-size: 11px; list-style: none; }
+.extraction-warning-details-summary::-webkit-details-marker { display: none; }
+.extraction-warning-details[open] .extraction-warning-details-summary::before { content: '▾ '; }
+.extraction-warning-details:not([open]) .extraction-warning-details-summary::before { content: '▸ '; }
+.extraction-warning-details ul { display: grid; gap: var(--space-1); margin: var(--space-1) 0 0; padding: 0; list-style: none; }
+.extraction-warning-detail { display: grid; gap: 2px; }
+.extraction-warning-detail code { font-size: 10px; color: var(--muted-text); }
+.extraction-warning-detail small { color: var(--muted-text); opacity: 0.85; }
+.extraction-review-technical-details { margin-top: var(--space-2); padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); background: color-mix(in oklab, var(--surface) 70%, var(--border)); }
+.extraction-review-technical-details summary { cursor: pointer; color: var(--muted-text); font-size: 10px; }
+.extraction-review-technical-details ul { display: grid; gap: 2px; margin: var(--space-1) 0 0; padding: 0; list-style: none; }
+.extraction-review-technical-details li { color: var(--muted-text); }
 .review-verification-severity { display: inline-flex; padding: 1px 6px; border-radius: var(--radius-pill); font-size: 9px; font-weight: 700; line-height: 1.6; text-transform: uppercase; }
 .review-verification-severity.warning { background: color-mix(in oklab, #eab308 14%, transparent); color: #8a6500; }
 .review-verification-severity.blocking { background: color-mix(in oklab, #dc2626 12%, transparent); color: #b91c1c; }

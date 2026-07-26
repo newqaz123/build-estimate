@@ -23,6 +23,7 @@ import { toast } from "sonner"
 
 import { CatalogMatchModal } from "@/components/catalog-match-modal"
 import { ExtractionReview } from "@/components/extraction-review"
+import { ExtractionWarnings } from "@/components/extraction-warnings"
 import { PdfReviewViewer } from "@/components/pdf-review-viewer"
 import { ProtoBadge } from "@/components/proto-badge"
 import { ReviewWorkspace } from "@/components/review-workspace"
@@ -607,10 +608,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
           </div>
 
           {boq.extractionWarnings?.length ? (
-            <div className="review-warning-list" role="status">
-              <strong>Document extraction notes</strong>
-              {boq.extractionWarnings.map((warning, index) => <span key={`${warning.code}-${index}`}>{warning.message}</span>)}
-            </div>
+            <ExtractionWarnings warnings={boq.extractionWarnings} title="Extraction notes" />
           ) : null}
 
           <div className="boq-detail-toolbar" data-od-id="toolbar">

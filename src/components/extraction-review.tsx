@@ -415,17 +415,32 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
           <div className="extraction-review-result-copy"><strong>{reviewOutcome ? extractionReviewOutcomeTitle(reviewOutcome) : ""}</strong><span>{reviewOutcome ? extractionReviewOutcomeMessage(review, reviewOutcome) : review.message}</span></div>
           <div className="extraction-review-result-counts">
             {reviewProgress && reviewProgress.candidateCount > 0 ? <small>{reviewProgress.progressText}</small> : null}
-            {blockedGroups.length > 0 ? <><small>{review.reviewRun?.validationSummary?.rejectedProposalCount ?? 0} unsafe suggestion{(review.reviewRun?.validationSummary?.rejectedProposalCount ?? 0) === 1 ? "" : "s"} blocked by server validation.</small>{blockedGroups.map((group) => <small key={group.label}>{group.count} {group.label.toLowerCase()}{group.count === 1 ? "" : "s"}.</small>)}</> : null}
-
           </div>
         </div>
       ) : null}
+
+      {(() => {
+        const rejectedCount = review?.reviewRun?.validationSummary?.rejectedProposalCount ?? 0
+        if (rejectedCount === 0) return null
+        return (
+          <details className="extraction-review-technical-details">
+            <summary>Technical details — {rejectedCount} response{rejectedCount === 1 ? "" : "s"} not applied</summary>
+            {blockedGroups.length > 0 ? (
+              <ul>
+                {blockedGroups.map((group) => <li key={group.label}>{group.count} {group.label.toLowerCase()}{group.count === 1 ? "" : "s"}.</li>)}
+              </ul>
+            ) : (
+              <p>{rejectedCount} response{rejectedCount === 1 ? "" : "s"} did not pass safety checks. A detailed breakdown was not retained.</p>
+            )}
+          </details>
+        )
+      })()}
 
       {review?.remainingCandidateRowIds.length ? <div className="extraction-remaining-rows" role="group" aria-label="Additional candidate source rows"><span>Follow-up rows:</span>{review.remainingCandidateRowIds.map((sourceRowId, index) => { const label = sourceRowLabels.get(sourceRowId) ?? `Row ${index + 1}`; const checking = requestedSourceRowId === sourceRowId; return <button type="button" key={sourceRowId} onClick={() => void runReview({ sourceRowId, force: true, notify: true })} disabled={readOnly || busy} aria-label={checking ? `Checking ${label}` : `Recheck ${label} with AI`}>{checking ? "Checking…" : label}</button> })}</div> : null}
 
       {error ? <div className="review-save-error" role="alert">{error}</div> : null}
 
-      {mutationBlockedReason ? <div className="review-save-error" role="status"><strong>Save draft before applying or undoing extraction corrections</strong><span>{mutationBlockedReason}</span></div> : null}
+      {mutationBlockedReason ? <div className="review-save-error" role="status"><strong>Save draft to continue</strong><span>{mutationBlockedReason}</span></div> : null}
 
       {hasStaleProposals ? <div className="review-save-error" role="status"><strong>Canonical BOQ changed. Recheck with AI</strong><span>Saved item or detail changes made these suggestions stale. Recheck before accepting them.</span></div> : null}
 

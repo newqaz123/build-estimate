@@ -102,8 +102,8 @@ export function extractionReviewOutcomeTitle(outcome: ExtractionReviewOutcome): 
     case 'queued-or-running': return 'AI review in progress'
     case 'provider-unavailable': return 'AI review unavailable'
     case 'proposals-ready': return 'AI suggestions ready'
-    case 'proposals-partially-blocked': return 'AI suggestions ready — some blocked'
-    case 'validation-blocked': return 'Suggestions blocked by validation'
+    case 'proposals-partially-blocked': return 'AI suggestions ready — some not applied'
+    case 'validation-blocked': return 'AI review completed — no safe corrections found'
     case 'no-correction': return 'No correction recommended'
     case 'pending-follow-up': return 'Review partially completed'
     case 'legacy-partial': return 'Review partially completed'
@@ -119,11 +119,11 @@ export function extractionReviewOutcomeMessage(review: ExtractionReviewResponse,
     case 'proposals-ready': return 'Saved extraction suggestions loaded for review.'
     case 'proposals-partially-blocked': {
       const blocked = summary?.rejectedProposalCount ?? 0
-      return `${review.proposals.length} suggestion${review.proposals.length === 1 ? '' : 's'} ready; ${blocked} blocked by validation.`
+      return `${review.proposals.length} suggestion${review.proposals.length === 1 ? '' : 's'} ready to review. ${blocked} response${blocked === 1 ? '' : 's'} did not pass safety checks and ${blocked === 1 ? 'was' : 'were'} not applied.`
     }
     case 'validation-blocked': {
       const blocked = summary?.rejectedProposalCount ?? 0
-      return `AI returned ${blocked} suggestion${blocked === 1 ? '' : 's'}, but none passed evidence and reconciliation checks. The BOQ remains unchanged.`
+      return `The BOQ remains unchanged. ${blocked} AI response${blocked === 1 ? '' : 's'} did not pass safety checks, so none could be applied.`
     }
     case 'no-correction': return 'No correction recommended for the reviewed rows.'
     case 'pending-follow-up': return 'Review partially completed. Some candidate rows remain unreviewed — recheck to continue.'

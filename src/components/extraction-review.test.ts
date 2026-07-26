@@ -23,7 +23,7 @@ test("focused extraction review renders evidence, reconciliation, source navigat
   assert.match(source, /Recheck with AI/)
   assert.match(source, /onNavigateToPage/)
   assert.match(source, /remainingCandidateRowIds/)
-  assert.match(source, /unsafe suggestion/)
+  assert.match(source, /extraction-review-technical-details/)
   assert.doesNotMatch(source, /dangerouslySetInnerHTML/)
 })
 
@@ -108,7 +108,7 @@ test("unsaved detail and compare edits block structural extraction mutations unt
   const compareSource = readFileSync(new URL("./review-panel.tsx", import.meta.url), "utf8")
   assert.match(componentSource, /mutationBlockedReason\?: string/)
   assert.match(componentSource, /mutationBlockedReason && \(action === "accept" \|\| action === "undo"\)/)
-  assert.match(componentSource, /Save draft before applying or undoing extraction corrections/)
+  assert.match(componentSource, /Save draft to continue/)
   assert.match(componentSource, /disabled=\{readOnly \|\| Boolean\(mutationBlockedReason\)/)
   assert.match(detailSource, /mutationBlockedReason=\{invalidDraftKeys\.size > 0 \? /)
   assert.match(detailSource, /: pendingChanges > 0 \? /)
@@ -157,4 +157,34 @@ test("responsive review follows the 920px and 520px Open Design breakpoints", ()
   const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8")
   assert.match(css, /@media \(max-width: 920px\)[\s\S]*?\.review-body[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/)
   assert.match(css, /@media \(max-width: 520px\)[\s\S]*?\.extraction-proposal-footer/)
+})
+
+test("blocked diagnostics are hidden behind a collapsed technical-details section, not inline jargon", () => {
+  const source = readFileSync(componentUrl, "utf8")
+  // Reject diagnostics render only inside a collapsible <details>, not in the default result-counts
+  assert.match(source, /extraction-review-technical-details/)
+  assert.match(source, /Technical details/)
+  // The inline result-counts no longer carry 'unsafe suggestion' jargon
+  assert.doesNotMatch(source, /unsafe suggestion\{[^}]*\} blocked by server validation/)
+})
+
+test("technical-details fallback renders when rejectedProposalCount exists without rejectionCounts", () => {
+  const source = readFileSync(componentUrl, "utf8")
+  // When blockedGroups is empty but rejectedProposalCount > 0, a fallback diagnostic renders
+  assert.match(source, /detailed breakdown was not retained/)
+  // The condition is gated on rejectedProposalCount, not blockedGroups.length
+  assert.match(source, /rejectedCount === 0/) // guard
+  assert.match(source, /blockedGroups\.length > 0/) // fallback branch
+})
+
+test("dirty-draft warning uses concise actionable wording", () => {
+  const source = readFileSync(componentUrl, "utf8")
+  assert.match(source, /Save draft to continue/)
+})
+
+test("detail page renders the grouped extraction notes component instead of a flat list", () => {
+  const detailSource = readFileSync(detailUrl, "utf8")
+  assert.match(detailSource, /ExtractionWarnings warnings=\{boq\.extractionWarnings\}/)
+  // The old flat repetitive mapping is gone
+  assert.doesNotMatch(detailSource, /extractionWarnings\.map\(\(warning, index\) => <span[^>]*>\{warning\.message\}<\/span>\)/)
 })
