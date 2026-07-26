@@ -5,9 +5,11 @@ import {
   prepareProviderProposalV2,
   providerContractInstructions,
   providerContractInstructionsV2,
+  reconstructSourceMappedItem,
   type ProviderCandidateRef,
 } from './boq-extraction-proposal-contract'
 import { fingerprintCanonicalItem, validateProposal, type ProposalValidationContext } from './boq-extraction-proposals'
+import { stableCanonicalJson } from './boq-extraction-run'
 import type { BoqItem, BoqSection } from './boq-schema'
 import type { BoqSourceRowV3 } from './boq-extraction-schema'
 
@@ -565,6 +567,42 @@ test('v2 mapped replacement preserves common optional and exclusion state', () =
   assert.equal(validation.valid, true)
 })
 
+test('server-owned reconstruction deterministically reproduces the final excluded replacement candidate', () => {
+  const mappedTarget = {
+    ...target,
+    sourceRowIds: ['mapped-row'],
+    optional: true,
+    excludedFromTotal: true,
+    exclusionReason: 'Client option',
+  }
+  const reconstructionInput = {
+    mapping: mappedDecision.cellMapping,
+    targetItemIds: ['target-1'],
+    sourceRows: [mappedSourceRow],
+    allowedSourceRowIds: new Set(['mapped-row']),
+    sections: [{ header: 'Works', items: [mappedTarget] }],
+    targetItems: new Map([['target-1', mappedTarget]]),
+  }
+  const first = reconstructSourceMappedItem(reconstructionInput)
+  const second = reconstructSourceMappedItem(reconstructionInput)
+  assert.equal(first.kind, 'candidate')
+  assert.equal(second.kind, 'candidate')
+  if (first.kind !== 'candidate' || second.kind !== 'candidate') return
+  assert.equal(stableCanonicalJson(first.candidate), stableCanonicalJson(second.candidate))
+  const prepared = prepareProviderProposalV2(
+    { ...mappedDecision, targetItemIds: ['target-1'] },
+    { ...mappedContext, sections: reconstructionInput.sections, targetItems: reconstructionInput.targetItems },
+  )
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) return
+  assert.equal(stableCanonicalJson(first.candidate), stableCanonicalJson(prepared.proposal.mappedCandidate))
+  assert.deepEqual({
+    optional: first.candidate.optional,
+    excludedFromTotal: first.candidate.excludedFromTotal,
+    exclusionReason: first.candidate.exclusionReason,
+  }, { optional: true, excludedFromTotal: true, exclusionReason: 'Client option' })
+})
+
 test('v2 mapped replacement with conflicting target state becomes human review', () => {
   const included = { ...target, id: 'target-included', sourceRowIds: ['mapped-row'] }
   const excluded = {
@@ -595,6 +633,51 @@ test('v2 mapped replacement with conflicting target state becomes human review',
     sourceEvidence: {},
     sections: conflictingSections,
   }).valid, true)
+})
+
+test('complete component mapping review draft preserves component-shaped resolved values', () => {
+  const componentRow: BoqSourceRowV3 = {
+    ...mappedSourceRow,
+    section: null,
+    rawCells: [
+      ...mappedSourceRow.rawCells.filter((cell) => cell.column <= 3),
+      { ...mappedSourceRow.rawCells[3], column: 4, rawText: '20', lines: ['20'], carried: false },
+      { ...mappedSourceRow.rawCells[4], column: 5, rawText: '40', lines: ['40'], carried: false },
+      { ...mappedSourceRow.rawCells[3], column: 6, rawText: '30', lines: ['30'], carried: false },
+      { ...mappedSourceRow.rawCells[4], column: 7, rawText: '60', lines: ['60'], carried: false },
+      { ...mappedSourceRow.rawCells[4], column: 8, rawText: '100', lines: ['100'], carried: false },
+    ],
+  }
+  const prepared = prepareProviderProposalV2({
+    ...mappedDecision,
+    cellMapping: {
+      sourceRowIds: ['mapped-row'],
+      description: [{ sourceRowId: 'mapped-row', column: 1 }],
+      unit: { sourceRowId: 'mapped-row', column: 2 },
+      quantity: { sourceRowId: 'mapped-row', column: 3 },
+      materialRate: { sourceRowId: 'mapped-row', column: 4 },
+      materialTotal: { sourceRowId: 'mapped-row', column: 5 },
+      labourRate: { sourceRowId: 'mapped-row', column: 6 },
+      labourTotal: { sourceRowId: 'mapped-row', column: 7 },
+      amount: { sourceRowId: 'mapped-row', column: 8 },
+    },
+  }, {
+    ...mappedContext,
+    sourceRows: [componentRow],
+    sections: [{ header: 'Section A', items: [] }, { header: 'Section B', items: [] }],
+  })
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) return
+  assert.deepEqual(prepared.proposal.reviewDraft?.resolvedValues, {
+    description: 'Mapped valve',
+    unit: 'pcs',
+    quantity: 2,
+    materialRate: 20,
+    materialTotal: 40,
+    labourRate: 30,
+    labourTotal: 60,
+    amount: 100,
+  })
 })
 
 test('v2 mapping boundary rejects provider-authored source values and invalid coordinates', () => {

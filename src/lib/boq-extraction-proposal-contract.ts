@@ -13,6 +13,7 @@ import {
   resolveSourceCellMapping,
   type SourceBackedReviewDraft,
   type SourceBackedResolvedValues,
+  type SourceCellMappingFailureCode,
   type SourceCellMapping,
   type SourceCellRef,
   type SourceMappingResolution,
@@ -302,27 +303,28 @@ function parseSourceCellMapping(value: unknown): SourceCellMapping | null {
 }
 
 function mappingSection(
-  context: ProviderProposalContextV2,
+  sections: readonly BoqSection[],
+  sourceRows: readonly BoqSourceRowV3[],
   sourceRowIds: readonly string[],
   targetItemIds: readonly string[],
 ): { index: number; header: string } | null {
   if (targetItemIds.length > 0) {
     const indexes = new Set<number>()
-    context.sections.forEach((section, index) => {
+    sections.forEach((section, index) => {
       if (section.items.some((item) => item.id && targetItemIds.includes(item.id))) indexes.add(index)
     })
     if (indexes.size !== 1) return null
     const index = [...indexes][0]
-    return { index, header: context.sections[index].header }
+    return { index, header: sections[index].header }
   }
-  const rowById = new Map((context.sourceRows ?? []).map((row) => [row.id, row]))
+  const rowById = new Map(sourceRows.map((row) => [row.id, row]))
   const headers = new Set(sourceRowIds.map((id) => rowById.get(id)?.section).filter(nonBlankString))
   if (headers.size === 1) {
     const header = [...headers][0]
-    const matches = context.sections.flatMap((section, index) => section.header === header ? [index] : [])
+    const matches = sections.flatMap((section, index) => section.header === header ? [index] : [])
     if (matches.length === 1) return { index: matches[0], header }
   }
-  if (context.sections.length === 1) return { index: 0, header: context.sections[0].header }
+  if (sections.length === 1) return { index: 0, header: sections[0].header }
   return null
 }
 
@@ -358,8 +360,6 @@ function candidateResolvedValues(candidate: ProviderCandidateRef): SourceBackedR
     description: candidate.desc,
     unit: candidate.unit,
     quantity: candidate.qty,
-    rate: candidate.rate,
-    total: candidate.total,
   }
   if (candidate.sourceCosts) {
     values.materialRate = candidate.sourceCosts.material.rate
@@ -367,8 +367,68 @@ function candidateResolvedValues(candidate: ProviderCandidateRef): SourceBackedR
     values.labourRate = candidate.sourceCosts.labour.rate
     values.labourTotal = candidate.sourceCosts.labour.total
     values.amount = candidate.total
+  } else {
+    values.rate = candidate.rate
+    values.total = candidate.total
   }
   return values
+}
+
+export interface SourceMappedItemReconstructionInput {
+  mapping: SourceCellMapping
+  targetItemIds: readonly string[]
+  sourceRows: readonly BoqSourceRowV3[]
+  allowedSourceRowIds: ReadonlySet<string>
+  sections: readonly BoqSection[]
+  targetItems: ReadonlyMap<string, BoqItem>
+}
+
+export type SourceMappedItemReconstruction =
+  | {
+    kind: 'candidate'
+    candidate: ProviderCandidateRef
+    mapping: SourceCellMapping
+    section: { index: number; header: string }
+  }
+  | { kind: 'draft'; draft: SourceBackedReviewDraft }
+  | { kind: 'invalid'; code: SourceCellMappingFailureCode | 'unknown_target_item' | 'duplicate_target_item' }
+
+/** Reconstruct the final mapped item from server-owned state only.
+ *
+ * This is the shared review/acceptance boundary: it applies the exact
+ * provider-visible projection, resolves immutable cell coordinates, derives
+ * destination-section requirements, and copies common target option state.
+ * Provider prose and provider-authored values are deliberately absent. */
+export function reconstructSourceMappedItem(
+  input: SourceMappedItemReconstructionInput,
+): SourceMappedItemReconstruction {
+  if (new Set(input.targetItemIds).size !== input.targetItemIds.length) {
+    return { kind: 'invalid', code: 'duplicate_target_item' }
+  }
+  if (input.targetItemIds.some((id) => !input.targetItems.has(id))) {
+    return { kind: 'invalid', code: 'unknown_target_item' }
+  }
+  const section = mappingSection(input.sections, input.sourceRows, input.mapping.sourceRowIds, input.targetItemIds)
+  const resolution = resolveSourceCellMapping({
+    mapping: input.mapping,
+    allowedSourceRowIds: input.allowedSourceRowIds,
+    sourceRows: input.sourceRows.map((row) => projectProviderVisibleSourceRow(row, { addressableOnly: true })),
+    section: section ?? { index: -1, header: '' },
+  })
+  if (resolution.kind === 'invalid') return resolution
+  const targetState = commonTargetItemState(input.targetItemIds, input.targetItems)
+  const reviewRequirements: SourceReviewMissingField[] = [
+    ...(section ? [] : ['destinationSection' as const]),
+    ...(targetState.kind === 'conflict' ? ['targetItemState' as const] : []),
+  ]
+  if (reviewRequirements.length > 0) {
+    return { kind: 'draft', draft: reviewDraftWithRequirements(resolution, section, reviewRequirements) }
+  }
+  if (resolution.kind === 'draft') return resolution
+  const candidate: ProviderCandidateRef = targetState.kind === 'common'
+    ? { ...resolution.candidate, ...targetState.state }
+    : resolution.candidate
+  return { kind: 'candidate', candidate, mapping: resolution.mapping, section: section! }
 }
 
 function reviewDraftWithRequirements(
@@ -465,32 +525,17 @@ export function prepareProviderProposalV2(
       || sourceRowIds.some((id) => !mapping.sourceRowIds.includes(id) || !context.allowedSourceRowIds!.has(id))
       || new Set(targetItemIds).size !== targetItemIds.length
       || targetItemIds.some((id) => !context.targetItems.has(id))) return { ok: false }
-    const section = mappingSection(context, sourceRowIds, targetItemIds)
-    const resolution = resolveSourceCellMapping({
+    const reconstruction = reconstructSourceMappedItem({
       mapping,
+      targetItemIds,
+      sourceRows: context.sourceRows,
       allowedSourceRowIds: context.allowedSourceRowIds,
-      sourceRows: context.sourceRows.map((row) => projectProviderVisibleSourceRow(row, { addressableOnly: true })),
-      section: section ?? { index: -1, header: '' },
+      sections: context.sections,
+      targetItems: context.targetItems,
     })
-    if (resolution.kind === 'invalid') return { ok: false }
-    const targetState = commonTargetItemState(targetItemIds, context.targetItems)
-    const reviewRequirements: SourceReviewMissingField[] = [
-      ...(section ? [] : ['destinationSection' as const]),
-      ...(targetState.kind === 'conflict' ? ['targetItemState' as const] : []),
-    ]
-    if (reviewRequirements.length > 0) {
-      return prepareMappedHumanReview(
-        value,
-        context,
-        sourceRowIds,
-        targetItemIds,
-        reviewDraftWithRequirements(resolution, section, reviewRequirements),
-      )
-    }
-    if (resolution.kind === 'candidate') {
-      const mappedCandidate: ProviderCandidateRef = targetState.kind === 'common'
-        ? { ...resolution.candidate, ...targetState.state }
-        : resolution.candidate
+    if (reconstruction.kind === 'invalid') return { ok: false }
+    if (reconstruction.kind === 'candidate') {
+      const mappedCandidate = reconstruction.candidate
       const candidateItems = new Map(context.candidateItems)
       candidateItems.set(mappedCandidate.id, mappedCandidate)
       const canonical = prepareProviderProposalV2({
@@ -507,12 +552,12 @@ export function prepareProviderProposalV2(
         ok: true,
         proposal: {
           ...canonical.proposal,
-          sourceCellMapping: resolution.mapping,
+          sourceCellMapping: reconstruction.mapping,
           mappedCandidate,
         },
       }
     }
-    return prepareMappedHumanReview(value, context, sourceRowIds, targetItemIds, resolution.draft)
+    return prepareMappedHumanReview(value, context, sourceRowIds, targetItemIds, reconstruction.draft)
   }
 
   if (!V2_OPERATIONS.includes(value.operation as ProposalOperation)
