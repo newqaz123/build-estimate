@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto'
 import { BOQ_RECONCILIATION_TOLERANCE, type BoqSourceRowV3 } from './boq-extraction-schema'
 import { stableCanonicalJson } from './boq-extraction-run'
 import type { BoqItem, BoqPricedItem, BoqSection, BoqSourceRef } from './boq-schema'
+import type { ExtractionCandidateItem } from './boq-extraction-evidence'
+import type { SourceBackedReviewDraft, SourceCellMapping } from './boq-extraction-cell-mapping'
 
 export const PROPOSAL_OPERATIONS = [
   'keep', 'split', 'merge', 'separate_components', 'create_bundle', 'needs_human_review',
@@ -164,6 +166,12 @@ export interface ExtractionProposal {
   confidence: number
   explanation: string
   proposedItems: ProposedExtractionItem[]
+  /** Server-resolved coordinates into immutable Docling cells. Never model-authored values. */
+  sourceCellMapping?: SourceCellMapping
+  /** Review-time reconstruction snapshot. Acceptance must reconstruct and compare it byte-for-byte. */
+  mappedCandidate?: ExtractionCandidateItem
+  /** Source-backed partial resolution for a non-actionable human-review decision. */
+  reviewDraft?: SourceBackedReviewDraft
 }
 
 /** Server-owned immutable candidate used to validate expanded v2 decisions. */
@@ -260,6 +268,85 @@ function validOptionalState(item: Record<string, unknown>): boolean {
   if (excluded && (!optional || typeof reason !== 'string' || reason.trim() === '')) return false
   if (!excluded && reason !== undefined && reason !== null) return false
   return true
+}
+
+const SOURCE_MAPPING_KEYS = new Set([
+  'sourceRowIds', 'description', 'unit', 'quantity', 'rate', 'total',
+  'materialRate', 'materialTotal', 'labourRate', 'labourTotal', 'amount',
+])
+const SOURCE_REF_KEYS = new Set(['sourceRowId', 'column', 'line'])
+const REVIEW_DRAFT_KEYS = new Set(['mapping', 'resolvedValues', 'missingFields', 'sourceRowIds', 'sourceRefs', 'section'])
+const RESOLVED_VALUE_KEYS = new Set([
+  'description', 'unit', 'quantity', 'rate', 'total',
+  'materialRate', 'materialTotal', 'labourRate', 'labourTotal', 'amount',
+])
+const REVIEW_MISSING_FIELDS = new Set([...RESOLVED_VALUE_KEYS, 'destinationSection', 'targetItemState'])
+
+function exactKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
+  return Object.keys(value).every((key) => allowed.has(key))
+}
+
+function validSourceCellRef(value: unknown): boolean {
+  return isRecord(value) && exactKeys(value, SOURCE_REF_KEYS)
+    && nonBlankString(value.sourceRowId) && Number.isInteger(value.column) && (value.column as number) >= 0
+    && (value.line === undefined || Number.isInteger(value.line) && (value.line as number) >= 0)
+}
+
+function validSourceCellMapping(value: unknown, proposalSourceRowIds: readonly string[]): value is SourceCellMapping {
+  if (!isRecord(value) || !exactKeys(value, SOURCE_MAPPING_KEYS) || !hasUniqueStrings(value.sourceRowIds)
+    || value.sourceRowIds.length === 0
+    || stableCanonicalJson(value.sourceRowIds) !== stableCanonicalJson(proposalSourceRowIds)) return false
+  if (value.description !== undefined && (!Array.isArray(value.description) || value.description.length === 0
+    || !value.description.every(validSourceCellRef))) return false
+  for (const key of [...SOURCE_MAPPING_KEYS].filter((entry) => entry !== 'sourceRowIds' && entry !== 'description')) {
+    if (value[key] !== undefined && !validSourceCellRef(value[key])) return false
+  }
+  const refs = [
+    ...(Array.isArray(value.description) ? value.description : []),
+    ...[...SOURCE_MAPPING_KEYS].filter((key) => key !== 'sourceRowIds' && key !== 'description')
+      .flatMap((key) => value[key] === undefined ? [] : [value[key]]),
+  ] as Array<{ sourceRowId: string }>
+  return refs.every((ref) => proposalSourceRowIds.includes(ref.sourceRowId))
+}
+
+function validReviewDraft(value: unknown, proposalSourceRowIds: readonly string[]): value is SourceBackedReviewDraft {
+  if (!isRecord(value) || !exactKeys(value, REVIEW_DRAFT_KEYS)
+    || !validSourceCellMapping(value.mapping, proposalSourceRowIds)
+    || !isRecord(value.resolvedValues) || !exactKeys(value.resolvedValues, RESOLVED_VALUE_KEYS)
+    || !Array.isArray(value.missingFields) || value.missingFields.length === 0
+    || !value.missingFields.every((field) => typeof field === 'string' && REVIEW_MISSING_FIELDS.has(field))
+    || new Set(value.missingFields).size !== value.missingFields.length
+    || !hasUniqueStrings(value.sourceRowIds)
+    || stableCanonicalJson(value.sourceRowIds) !== stableCanonicalJson(proposalSourceRowIds)
+    || !Array.isArray(value.sourceRefs)
+    || !value.sourceRefs.every((ref) => isRecord(ref) && exactKeys(ref, new Set(['page', 'table', 'row']))
+      && Number.isInteger(ref.page) && Number.isInteger(ref.table) && Number.isInteger(ref.row))
+  ) return false
+  if (value.section !== null && (!isRecord(value.section) || !Number.isInteger(value.section.index)
+    || (value.section.index as number) < 0 || !nonBlankString(value.section.header))) return false
+  return Object.entries(value.resolvedValues).every(([key, entry]) => {
+    if (key === 'description' || key === 'unit') return nonBlankString(entry)
+    return finiteNonNegative(entry)
+  })
+}
+
+function validateSourceBackedMetadata(proposal: ExtractionProposal): ProposalValidationResult | null {
+  const hasMapping = proposal.sourceCellMapping !== undefined
+  const hasCandidate = proposal.mappedCandidate !== undefined
+  const hasDraft = proposal.reviewDraft !== undefined
+  if (hasMapping !== hasCandidate) return fail('invalid_operation_shape')
+  if (hasDraft) {
+    if (proposal.operation !== 'needs_human_review' || hasMapping
+      || !validReviewDraft(proposal.reviewDraft, proposal.sourceRowIds)) return fail('invalid_operation_shape')
+  }
+  if (hasMapping) {
+    if (!['insert_missing_item', 'replace_item'].includes(proposal.operation)
+      || !validSourceCellMapping(proposal.sourceCellMapping, proposal.sourceRowIds)
+      || !isRecord(proposal.mappedCandidate) || !nonBlankString(proposal.mappedCandidate.id)) {
+      return fail('invalid_operation_shape')
+    }
+  }
+  return null
 }
 
 function digest(value: unknown): string {
@@ -660,6 +747,8 @@ export function validateProposal(value: unknown, context: ProposalValidationCont
   if (new Set(proposal.targetItemIds).size !== proposal.targetItemIds.length) return fail('invalid_operation_shape')
   const knownSourceRows = new Set(context.sourceRows.map((row) => row.id))
   if (proposal.sourceRowIds.some((sourceRowId) => !knownSourceRows.has(sourceRowId))) return fail('unknown_source_row')
+  const metadataFailure = validateSourceBackedMetadata(proposal)
+  if (metadataFailure) return metadataFailure
   const known = knownItems(context.sections)
   const requiresTargets = OPERATIONS_REQUIRING_TARGETS.has(proposal.operation)
   const hasTargets = proposal.targetItemIds.length > 0

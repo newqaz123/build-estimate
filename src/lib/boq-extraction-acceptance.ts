@@ -3,6 +3,7 @@ import { calculateBoqTotals } from './boq-pricing'
 import { stableCanonicalJson, type BoqExtractionRun } from './boq-extraction-run'
 import type { BoqSourceRowV3, DerivedPricedItemV3 } from './boq-extraction-schema'
 import { buildExtractionCandidates } from './boq-extraction-evidence'
+import { reconstructSourceMappedItem } from './boq-extraction-proposal-contract'
 import {
   applyValidatedProposal,
   fingerprintCanonicalSections,
@@ -42,6 +43,9 @@ export interface ExtractionProposalAudit {
   sourceRowIds: string[]
   sourceRefs: Array<{ sourceRowId: string; page: number; table: number; row: number }>
   proposedItems: ProposedExtractionItem[]
+  sourceCellMapping?: ExtractionProposal['sourceCellMapping']
+  mappedCandidate?: ExtractionProposal['mappedCandidate']
+  reviewDraft?: ExtractionProposal['reviewDraft']
   evidenceValid?: boolean
   reconciled?: boolean
   stale?: boolean
@@ -143,6 +147,9 @@ function toAudit(
     sourceRowIds: [...input.proposal.sourceRowIds],
     sourceRefs: sourceRefs(input.sourceRows, input.proposal.sourceRowIds),
     proposedItems: structuredClone(input.proposal.proposedItems),
+    ...(input.proposal.sourceCellMapping ? { sourceCellMapping: structuredClone(input.proposal.sourceCellMapping) } : {}),
+    ...(input.proposal.mappedCandidate ? { mappedCandidate: structuredClone(input.proposal.mappedCandidate) } : {}),
+    ...(input.proposal.reviewDraft ? { reviewDraft: structuredClone(input.proposal.reviewDraft) } : {}),
     ...(proposal.evidenceValid === undefined ? {} : { evidenceValid: proposal.evidenceValid }),
     ...(proposal.reconciled === undefined ? {} : { reconciled: proposal.reconciled }),
     ...(proposal.stale === undefined ? {} : { stale: proposal.stale }),
@@ -165,6 +172,42 @@ export function validateExtractionProposal(
     return { valid: false, code: 'run_identity_mismatch' }
   }
   const candidates = buildExtractionCandidates(run, sourceRows)
+  const targetItems = new Map(boq.sections.flatMap((section) => section.items)
+    .flatMap((item) => item.id ? [[item.id, item] as const] : []))
+  if (proposal.sourceCellMapping !== undefined || proposal.mappedCandidate !== undefined) {
+    if (!proposal.sourceCellMapping || !proposal.mappedCandidate) return { valid: false, code: 'invalid_operation_shape' }
+    const reconstruction = reconstructSourceMappedItem({
+      mapping: proposal.sourceCellMapping,
+      targetItemIds: proposal.targetItemIds,
+      sourceRows,
+      allowedSourceRowIds: new Set(proposal.sourceRowIds),
+      sections: boq.sections,
+      targetItems,
+    })
+    if (reconstruction.kind !== 'candidate'
+      || stableCanonicalJson(reconstruction.mapping) !== stableCanonicalJson(proposal.sourceCellMapping)
+      || stableCanonicalJson(reconstruction.candidate) !== stableCanonicalJson(proposal.mappedCandidate)) {
+      return { valid: false, code: 'source_provenance_mismatch' }
+    }
+    candidates.set(reconstruction.candidate.id, {
+      ...reconstruction.candidate,
+      sourceRefs: reconstruction.candidate.sourceRefs?.map((ref) => ({ ...ref })) ?? [],
+    })
+  }
+  if (proposal.reviewDraft !== undefined) {
+    const reconstruction = reconstructSourceMappedItem({
+      mapping: proposal.reviewDraft.mapping,
+      targetItemIds: proposal.targetItemIds,
+      sourceRows,
+      allowedSourceRowIds: new Set(proposal.sourceRowIds),
+      sections: boq.sections,
+      targetItems,
+    })
+    if (reconstruction.kind !== 'draft'
+      || stableCanonicalJson(reconstruction.draft) !== stableCanonicalJson(proposal.reviewDraft)) {
+      return { valid: false, code: 'source_provenance_mismatch' }
+    }
+  }
   return validateProposal(proposal, {
     extractionRunId: run.id,
     sourceRows,
@@ -191,6 +234,9 @@ export function proposalMatchesAudit(proposal: ExtractionProposal, audit: Extrac
     confidence: proposal.confidence,
     explanation: proposal.explanation,
     proposedItems: proposal.proposedItems,
+    sourceCellMapping: proposal.sourceCellMapping,
+    mappedCandidate: proposal.mappedCandidate,
+    reviewDraft: proposal.reviewDraft,
     evidenceValid: validated.evidenceValid ?? true,
     reconciled: validated.reconciled ?? true,
     stale: validated.stale ?? false,
@@ -209,6 +255,9 @@ export function proposalMatchesAudit(proposal: ExtractionProposal, audit: Extrac
     confidence: audit.confidence,
     explanation: audit.explanation,
     proposedItems: audit.proposedItems,
+    sourceCellMapping: audit.sourceCellMapping,
+    mappedCandidate: audit.mappedCandidate,
+    reviewDraft: audit.reviewDraft,
     evidenceValid: audit.evidenceValid ?? true,
     reconciled: audit.reconciled ?? true,
     stale: audit.stale ?? false,
@@ -223,8 +272,8 @@ export function acceptExtractionProposal(input: {
   actorId: string
   now: string
   existingAudit: ExtractionProposalAudit | null
-  /** Batch acceptance may prevalidate all proposals against one canonical revision. */
-  prevalidatedProposal?: ValidatedProposal
+  /** Batch proposals are all reconstructed against their shared canonical base revision. */
+  validationBoq?: Boq
   skipBaseRevisionCheck?: boolean
 }): ProposalAcceptanceResult {
   if (input.existingAudit) {
@@ -237,9 +286,7 @@ export function acceptExtractionProposal(input: {
     if (input.existingAudit.status === 'rejected') return { kind: 'rejected', audit: input.existingAudit }
     return { kind: 'invalid', code: 'stale_item' }
   }
-  const validation = input.prevalidatedProposal
-    ? { valid: true as const, proposal: input.prevalidatedProposal }
-    : validateExtractionProposal(input.boq, input.run, input.sourceRows, input.proposal)
+  const validation = validateExtractionProposal(input.validationBoq ?? input.boq, input.run, input.sourceRows, input.proposal)
   if (!validation.valid) return { kind: 'invalid', code: validation.code }
   if (validation.proposal.operation === 'needs_human_review') return { kind: 'invalid', code: 'needs_human_review' }
   try {
@@ -286,6 +333,9 @@ export function rejectExtractionProposal(input: {
     targetItemIds: [...input.proposal.targetItemIds], affectedItemFingerprints: { ...input.proposal.affectedItemFingerprints },
     sourceRowIds: [...input.proposal.sourceRowIds], sourceRefs: sourceRefs(input.sourceRows ?? [], input.proposal.sourceRowIds),
     proposedItems: structuredClone(input.proposal.proposedItems),
+    ...(input.proposal.sourceCellMapping ? { sourceCellMapping: structuredClone(input.proposal.sourceCellMapping) } : {}),
+    ...(input.proposal.mappedCandidate ? { mappedCandidate: structuredClone(input.proposal.mappedCandidate) } : {}),
+    ...(input.proposal.reviewDraft ? { reviewDraft: structuredClone(input.proposal.reviewDraft) } : {}),
     ...((input.proposal as Partial<ValidatedProposal>).evidenceValid === undefined ? {} : { evidenceValid: (input.proposal as Partial<ValidatedProposal>).evidenceValid }),
     ...((input.proposal as Partial<ValidatedProposal>).reconciled === undefined ? {} : { reconciled: (input.proposal as Partial<ValidatedProposal>).reconciled }),
     ...((input.proposal as Partial<ValidatedProposal>).stale === undefined ? {} : { stale: (input.proposal as Partial<ValidatedProposal>).stale }),

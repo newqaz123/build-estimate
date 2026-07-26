@@ -313,3 +313,34 @@ test('separate_components only accepts standard priced children', () => {
   component.pricingRole = 'bundle_parent'
   assert.deepEqual(validateProposal(components, context()), { valid: false, code: 'invalid_operation_shape' })
 })
+
+test('source-backed metadata is restricted to its canonical operation shape', () => {
+  const mapping = {
+    sourceRowIds: ['row-combined'],
+    description: [{ sourceRowId: 'row-combined', column: 0 }],
+  }
+  const mappedCandidate = {
+    id: 'mapped', sectionIndex: 0, sectionHeader: 'Pump Works', sourceOrder: 0,
+    sourceRowIds: ['row-combined'], desc: 'Mapped pump', pricingRole: 'standard', parentBundleId: null,
+    unit: 'set', qty: 1, rate: 100, total: 100, costComponent: 'combined', sourceCosts: null,
+    optional: false, excludedFromTotal: false, exclusionReason: null,
+  }
+  const reviewDraft = {
+    mapping,
+    resolvedValues: { description: 'Mapped pump' },
+    missingFields: ['rate', 'total'],
+    sourceRowIds: ['row-combined'],
+    sourceRefs: [],
+    section: { index: 0, header: 'Pump Works' },
+  }
+  const human = {
+    id: 'human-mapped', extractionRunId: 'run-1', operation: 'needs_human_review', sourceRowIds: ['row-combined'],
+    targetItemIds: [], affectedItemFingerprints: {}, confidence: 0.8, explanation: 'Missing source price.', proposedItems: [],
+  }
+
+  assert.equal(validateProposal({ ...human, reviewDraft }, context()).valid, true)
+  assert.deepEqual(validateProposal({ ...human, sourceCellMapping: mapping, mappedCandidate }, context()), { valid: false, code: 'invalid_operation_shape' })
+  assert.deepEqual(validateProposal({ ...separateComponentsProposal(), reviewDraft }, context()), { valid: false, code: 'invalid_operation_shape' })
+  assert.deepEqual(validateProposal({ ...separateComponentsProposal(), sourceCellMapping: mapping }, context()), { valid: false, code: 'invalid_operation_shape' })
+  assert.deepEqual(validateProposal({ ...separateComponentsProposal(), mappedCandidate }, context()), { valid: false, code: 'invalid_operation_shape' })
+})

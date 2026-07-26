@@ -140,6 +140,46 @@ function harness(clock: () => Date = () => new Date('2026-07-20T12:00:00.000Z'))
   }
 }
 
+function mappedStoreHarness() {
+  const fixture = harness()
+  const boq = fixture.db.docs.get('boqs/boq-1')! as unknown as Boq
+  const sectionHeader = boq.sections[0].header
+  const row: BoqSourceRowV3 = {
+    id: 'mapped-row', page: 9, table: 1, row: 1, section: sectionHeader, headers: [],
+    rawCells: [
+      { column: 1, rawText: 'Mapped valve', lines: ['Mapped valve'], rowSpan: 1, columnSpan: 1, startRowOffset: 0, endRowOffset: 1, startColumnOffset: 1, endColumnOffset: 2, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+      { column: 2, rawText: 'pcs', lines: ['pcs'], rowSpan: 1, columnSpan: 1, startRowOffset: 0, endRowOffset: 1, startColumnOffset: 2, endColumnOffset: 3, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+      { column: 3, rawText: '2', lines: ['2'], rowSpan: 1, columnSpan: 1, startRowOffset: 0, endRowOffset: 1, startColumnOffset: 3, endColumnOffset: 4, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+      { column: 4, rawText: '50', lines: ['50'], rowSpan: 1, columnSpan: 1, startRowOffset: 0, endRowOffset: 1, startColumnOffset: 4, endColumnOffset: 5, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+      { column: 5, rawText: '100', lines: ['100'], rowSpan: 1, columnSpan: 1, startRowOffset: 0, endRowOffset: 1, startColumnOffset: 5, endColumnOffset: 6, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+    ],
+    rawText: 'Mapped valve | pcs | 2 | 50 | 100', classification: 'unknown', confidence: 0.96, warnings: [],
+  }
+  const sourceRows = [...fixture.sourceRows, row]
+  const run = { ...fixture.run, sourceRowCount: sourceRows.length, sourceRowChecksum: checksumSourceRows(sourceRows) }
+  const runRecord = fixture.db.docs.get(fixture.runPath)!
+  runRecord.sourceRowCount = run.sourceRowCount
+  runRecord.sourceRowChecksum = run.sourceRowChecksum
+  runRecord.identityFingerprint = extractionRunIdentityFingerprint(run)
+  fixture.db.docs.set(`${fixture.runPath}/sourceRows/${row.id}`, { ...row, fingerprint: stableSourceRowFingerprint(row) })
+  const targetItems = new Map(boq.sections.flatMap((section) => section.items)
+    .flatMap((entry) => entry.id ? [[entry.id, entry] as const] : []))
+  const decision = {
+    id: 'mapped-store', operation: 'map_source_item', sourceRowIds: [row.id], targetItemIds: [], confidence: 0.96,
+    explanation: 'Mapped from retained source cells.',
+    cellMapping: {
+      sourceRowIds: [row.id], description: [{ sourceRowId: row.id, column: 1 }],
+      unit: { sourceRowId: row.id, column: 2 }, quantity: { sourceRowId: row.id, column: 3 },
+      rate: { sourceRowId: row.id, column: 4 }, total: { sourceRowId: row.id, column: 5 },
+    },
+  }
+  const context = {
+    extractionRunId: run.id, sections: boq.sections, targetItems,
+    candidateItems: buildExtractionCandidates(run, sourceRows), sourceRows, allowedSourceRowIds: new Set([row.id]),
+  }
+  return { ...fixture, boq, run, row, sourceRows, decision, context }
+}
+
 interface SurasakFixture {
   sourceRows: BoqSourceRowV3[]
   expectedSections: BoqExtractionRun['sections']
@@ -306,6 +346,57 @@ test('validated proposals persist durably and action status is reconstructed fro
   assert.equal(state?.proposalStatuses['proposal-1']?.status, 'accepted')
   assert.equal(state?.proposalStatuses['proposal-1']?.canUndo, true)
   assert.equal(state?.auditEvents.length, 1)
+})
+
+test('mapped proposal metadata persists, reloads, and is revalidated on acceptance', async () => {
+  const fixture = mappedStoreHarness()
+  const prepared = prepareProviderProposalV2(fixture.decision, fixture.context)
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) return
+  const proposal = { ...prepared.proposal, evidenceValid: true as const, reconciled: true as const, stale: false }
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [proposal])
+  const state = await fixture.store.getReviewState('boq-1', 'run-1')
+  assert.deepEqual(state?.proposals[0].sourceCellMapping, proposal.sourceCellMapping)
+  assert.deepEqual(state?.proposals[0].mappedCandidate, proposal.mappedCandidate)
+  const result = await fixture.store.accept('boq-1', 'run-1', proposal.id, 'user-1')
+  assert.equal(result.status, 200)
+  assert.equal((fixture.db.docs.get('boqs/boq-1') as unknown as Boq).sections
+    .flatMap((section) => section.items).some((item) => item.id === proposal.mappedCandidate?.id), true)
+})
+
+test('stored mapped candidate tampering is rejected before canonical mutation', async () => {
+  const fixture = mappedStoreHarness()
+  const prepared = prepareProviderProposalV2(fixture.decision, fixture.context)
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) return
+  const proposal = { ...prepared.proposal, evidenceValid: true as const, reconciled: true as const, stale: false }
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [proposal])
+  const path = `${fixture.runPath}/proposals/${proposal.id}`
+  const stored = fixture.db.docs.get(path)! as { proposal: typeof proposal }
+  stored.proposal.mappedCandidate = { ...stored.proposal.mappedCandidate!, total: 999 }
+  const before = structuredClone(fixture.db.docs.get('boqs/boq-1'))
+  const result = await fixture.store.accept('boq-1', 'run-1', proposal.id, 'user-1')
+  assert.equal(result.status, 400)
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+})
+
+test('source-backed review draft persists but remains non-acceptable', async () => {
+  const fixture = mappedStoreHarness()
+  const incomplete = {
+    ...fixture.decision,
+    cellMapping: {
+      sourceRowIds: ['mapped-row'], description: [{ sourceRowId: 'mapped-row', column: 1 }],
+      unit: { sourceRowId: 'mapped-row', column: 2 }, quantity: { sourceRowId: 'mapped-row', column: 3 },
+    },
+  }
+  const prepared = prepareProviderProposalV2(incomplete, fixture.context)
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) return
+  const proposal = { ...prepared.proposal, evidenceValid: true as const, reconciled: true as const, stale: false }
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [proposal])
+  const state = await fixture.store.getReviewState('boq-1', 'run-1')
+  assert.deepEqual(state?.proposals[0].reviewDraft, proposal.reviewDraft)
+  assert.equal((await fixture.store.accept('boq-1', 'run-1', proposal.id, 'user-1')).status, 400)
 })
 
 test('single actions reload the stored proposal and reject approved BOQ mutation', async () => {

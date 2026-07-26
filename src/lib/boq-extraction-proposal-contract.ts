@@ -20,7 +20,7 @@ import {
   type SourceReviewMissingField,
 } from './boq-extraction-cell-mapping'
 import type { BoqSourceRowV3 } from './boq-extraction-schema'
-import { projectProviderVisibleSourceRow } from './boq-extraction-evidence'
+import { projectProviderVisibleSourceRow, type ExtractionCandidateItem } from './boq-extraction-evidence'
 
 /**
  * Provider-facing DTO — the exact JSON shape the LLM must return.
@@ -265,7 +265,7 @@ export interface ProviderProposalContextV2 {
 
 export type PreparedProviderProposalV2 = ExtractionProposal & {
   sourceCellMapping?: SourceCellMapping
-  mappedCandidate?: ProviderCandidateRef
+  mappedCandidate?: ExtractionCandidateItem
   reviewDraft?: SourceBackedReviewDraft
 }
 
@@ -386,7 +386,7 @@ export interface SourceMappedItemReconstructionInput {
 export type SourceMappedItemReconstruction =
   | {
     kind: 'candidate'
-    candidate: ProviderCandidateRef
+    candidate: ExtractionCandidateItem
     mapping: SourceCellMapping
     section: { index: number; header: string }
   }
@@ -425,7 +425,7 @@ export function reconstructSourceMappedItem(
     return { kind: 'draft', draft: reviewDraftWithRequirements(resolution, section, reviewRequirements) }
   }
   if (resolution.kind === 'draft') return resolution
-  const candidate: ProviderCandidateRef = targetState.kind === 'common'
+  const candidate: ExtractionCandidateItem = targetState.kind === 'common'
     ? { ...resolution.candidate, ...targetState.state }
     : resolution.candidate
   return { kind: 'candidate', candidate, mapping: resolution.mapping, section: section! }

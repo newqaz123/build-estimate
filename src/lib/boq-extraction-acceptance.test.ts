@@ -11,12 +11,51 @@ import {
   type ExtractionProposalAudit,
 } from './boq-extraction-acceptance'
 import { fingerprintCanonicalItem, type ExtractionProposal } from './boq-extraction-proposals'
+import { prepareProviderProposalV2 } from './boq-extraction-proposal-contract'
 
 const item: BoqPricedItem = { id: 'combined', desc: 'Pump supply and install', unit: 'set', qty: 1, rate: 100, total: 100, type: 'unit', costComponent: 'combined', stdStatus: 'pending', sourceRowId: 'row-1', sourceRowIds: ['row-1'], entryOrigin: 'docling' }
 const sections: BoqSection[] = [{ header: 'Pumps', items: [item] }]
 const boq = { id: 'boq-1', sections, totalItems: 1, grandTotal: 100, activeExtractionRunId: 'run-1' } as unknown as Boq
 const run = { id: 'run-1', boqId: 'boq-1', status: 'ready', sections } as unknown as BoqExtractionRun
 const rows = [{ id: 'row-1' }] as BoqSourceRowV3[]
+
+const mappedRow: BoqSourceRowV3 = {
+  id: 'mapped-row', page: 2, table: 1, row: 3, section: 'Works', headers: [],
+  rawCells: [
+    { column: 1, rawText: 'Mapped valve', lines: ['Mapped valve'], rowSpan: 1, columnSpan: 1, startRowOffset: 2, endRowOffset: 3, startColumnOffset: 1, endColumnOffset: 2, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+    { column: 2, rawText: 'pcs', lines: ['pcs'], rowSpan: 1, columnSpan: 1, startRowOffset: 2, endRowOffset: 3, startColumnOffset: 2, endColumnOffset: 3, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+    { column: 3, rawText: '2', lines: ['2'], rowSpan: 1, columnSpan: 1, startRowOffset: 2, endRowOffset: 3, startColumnOffset: 3, endColumnOffset: 4, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+    { column: 4, rawText: '50', lines: ['50'], rowSpan: 1, columnSpan: 1, startRowOffset: 2, endRowOffset: 3, startColumnOffset: 4, endColumnOffset: 5, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+    { column: 5, rawText: '100', lines: ['100'], rowSpan: 1, columnSpan: 1, startRowOffset: 2, endRowOffset: 3, startColumnOffset: 5, endColumnOffset: 6, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+  ],
+  rawText: 'Mapped valve | pcs | 2 | 50 | 100', classification: 'unknown', confidence: 0.96, warnings: [],
+}
+
+const mappedBoq = { id: 'boq-mapped', sections: [{ header: 'Works', items: [] }], totalItems: 0, grandTotal: 0 } as unknown as Boq
+const mappedRun = { id: 'run-mapped', boqId: 'boq-mapped', status: 'ready', sections: [] } as unknown as BoqExtractionRun
+
+function mappedProposal(input: { boq?: Boq; row?: BoqSourceRowV3; targetItemIds?: string[] } = {}) {
+  const currentBoq = input.boq ?? mappedBoq
+  const sourceRow = input.row ?? mappedRow
+  const targetItems = new Map(currentBoq.sections.flatMap((section) => section.items)
+    .flatMap((entry) => entry.id ? [[entry.id, entry] as const] : []))
+  const prepared = prepareProviderProposalV2({
+    id: 'mapped-proposal', operation: 'map_source_item', sourceRowIds: ['mapped-row'], targetItemIds: input.targetItemIds ?? [],
+    confidence: 0.96, explanation: 'Mapped from retained source cells.',
+    cellMapping: {
+      sourceRowIds: ['mapped-row'],
+      description: [{ sourceRowId: 'mapped-row', column: 1 }],
+      unit: { sourceRowId: 'mapped-row', column: 2 }, quantity: { sourceRowId: 'mapped-row', column: 3 },
+      rate: { sourceRowId: 'mapped-row', column: 4 }, total: { sourceRowId: 'mapped-row', column: 5 },
+    },
+  }, {
+    extractionRunId: 'run-mapped', sections: currentBoq.sections, targetItems, candidateItems: new Map(),
+    sourceRows: [sourceRow], allowedSourceRowIds: new Set(['mapped-row']),
+  })
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) throw new Error('Mapped proposal preparation failed')
+  return prepared.proposal
+}
 
 function proposal(overrides: Partial<ExtractionProposal> = {}): ExtractionProposal {
   return {
@@ -125,3 +164,56 @@ test('undo restores exactly the recorded before state and refuses later edits', 
 })
 
 void (null as unknown as ExtractionProposalAudit)
+
+test('mapped proposal is reconstructed from immutable cells before acceptance and audited canonically', () => {
+  const proposal = mappedProposal()
+  const result = acceptExtractionProposal({
+    boq: mappedBoq, run: mappedRun, sourceRows: [mappedRow], proposal,
+    actorId: 'user-1', now: '2026-07-20T10:00:00.000Z', existingAudit: null,
+  })
+  assert.equal(result.kind, 'accepted')
+  if (result.kind !== 'accepted') return
+  assert.equal((result.boq.sections[0].items[0] as BoqPricedItem).total, 100)
+  assert.deepEqual(result.audit.sourceCellMapping, proposal.sourceCellMapping)
+  assert.deepEqual(result.audit.mappedCandidate, proposal.mappedCandidate)
+  assert.equal(proposalMatchesAudit(proposal, result.audit), true)
+})
+
+test('mapped acceptance fails closed for mapping, candidate, source evidence, section, and revision tampering', () => {
+  const canonical = mappedProposal()
+  const attempts: Array<{ boq?: Boq; rows?: BoqSourceRowV3[]; proposal: typeof canonical }> = [
+    { proposal: { ...canonical, sourceCellMapping: { ...canonical.sourceCellMapping!, total: { sourceRowId: 'mapped-row', column: 4 } } } },
+    { proposal: { ...canonical, mappedCandidate: { ...canonical.mappedCandidate!, total: 101 } } },
+    { rows: [{ ...mappedRow, rawCells: mappedRow.rawCells.map((cell) => cell.column === 5 ? { ...cell, rawText: '120', lines: ['120'] } : cell) }], proposal: canonical },
+    { proposal: { ...canonical, destinationSectionIndex: 1 } },
+    { boq: { ...mappedBoq, sections: [{ header: 'Changed', items: [] }] }, proposal: canonical },
+  ]
+  for (const attempt of attempts) {
+    const result = acceptExtractionProposal({
+      boq: attempt.boq ?? mappedBoq, run: mappedRun, sourceRows: attempt.rows ?? [mappedRow], proposal: attempt.proposal,
+      actorId: 'user-1', now: '2026-07-20T10:00:00.000Z', existingAudit: null,
+    })
+    assert.equal(result.kind, 'invalid')
+  }
+})
+
+test('mapped excluded replacement re-derives target state during acceptance', () => {
+  const target: BoqPricedItem = {
+    id: 'target', desc: 'Old valve', unit: 'pcs', qty: 2, rate: 50, total: 100, type: 'unit',
+    costComponent: 'combined', stdStatus: 'pending', sourceRowId: 'mapped-row', sourceRowIds: ['mapped-row'], entryOrigin: 'docling',
+    optional: true, excludedFromTotal: true, exclusionReason: 'Client option',
+  }
+  const replacementBoq = { ...mappedBoq, sections: [{ header: 'Works', items: [target] }], totalItems: 1 }
+  const proposal = mappedProposal({ boq: replacementBoq, targetItemIds: ['target'] })
+  const result = acceptExtractionProposal({
+    boq: replacementBoq, run: mappedRun, sourceRows: [mappedRow], proposal,
+    actorId: 'user-1', now: '2026-07-20T10:00:00.000Z', existingAudit: null,
+  })
+  assert.equal(result.kind, 'accepted')
+  if (result.kind !== 'accepted') return
+  assert.deepEqual({
+    optional: result.boq.sections[0].items[0].optional,
+    excludedFromTotal: result.boq.sections[0].items[0].excludedFromTotal,
+    exclusionReason: result.boq.sections[0].items[0].exclusionReason,
+  }, { optional: true, excludedFromTotal: true, exclusionReason: 'Client option' })
+})

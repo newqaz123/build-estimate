@@ -685,7 +685,7 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
           for (const proposal of mutationOrder) {
             const result = acceptExtractionProposal({
               boq: currentBoq, run: immutable.run, sourceRows: immutable.sourceRows,
-              proposal, prevalidatedProposal: proposal, skipBaseRevisionCheck: true,
+              proposal, validationBoq: boq, skipBaseRevisionCheck: true,
               actorId, now: actionTimestamp, existingAudit: null,
             })
             if (result.kind !== 'accepted') {
