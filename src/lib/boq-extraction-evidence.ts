@@ -53,6 +53,8 @@ export interface EvidenceSourceRow {
   headers: string[]
   rawText: string
   rawCells: BoqSourceRowV3['rawCells']
+  /** Coordinates available to map_source_item. Omitted for context-only rows. */
+  cellRefs?: Array<{ column: number; lineCount: number }>
   classification: string
   confidence: number
   warnings: BoqSourceRowV3['warnings']
@@ -301,6 +303,11 @@ export function buildExtractionEvidencePacket(input: {
         lines: cell.lines.slice(0, 10),
         rawText: cell.rawText.slice(0, 500),
       })),
+      ...(input.selectedSourceRowIds.has(row.id) ? {
+        cellRefs: row.rawCells
+          .filter((cell) => !cell.carried)
+          .map((cell) => ({ column: cell.column, lineCount: cell.lines.length })),
+      } : {}),
       classification: row.classification,
       confidence: row.confidence,
       warnings: row.warnings,

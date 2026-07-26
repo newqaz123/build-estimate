@@ -403,6 +403,97 @@ const v2Context = {
   ]),
 }
 
+const mappedSourceRow: BoqSourceRowV3 = {
+  id: 'mapped-row', page: 2, table: 1, row: 3, section: 'Works', headers: [],
+  rawCells: [
+    { column: 1, rawText: 'Mapped valve', lines: ['Mapped valve'], rowSpan: 1, columnSpan: 1, startRowOffset: 2, endRowOffset: 3, startColumnOffset: 1, endColumnOffset: 2, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+    { column: 2, rawText: 'pcs', lines: ['pcs'], rowSpan: 1, columnSpan: 1, startRowOffset: 2, endRowOffset: 3, startColumnOffset: 2, endColumnOffset: 3, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+    { column: 3, rawText: '2', lines: ['2'], rowSpan: 1, columnSpan: 1, startRowOffset: 2, endRowOffset: 3, startColumnOffset: 3, endColumnOffset: 4, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+    { column: 4, rawText: '50', lines: ['50'], rowSpan: 1, columnSpan: 1, startRowOffset: 2, endRowOffset: 3, startColumnOffset: 4, endColumnOffset: 5, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+    { column: 5, rawText: '100', lines: ['100'], rowSpan: 1, columnSpan: 1, startRowOffset: 2, endRowOffset: 3, startColumnOffset: 5, endColumnOffset: 6, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+    { column: 6, rawText: 'carried-unit', lines: ['carried-unit'], rowSpan: 1, columnSpan: 1, startRowOffset: 2, endRowOffset: 3, startColumnOffset: 6, endColumnOffset: 7, columnHeader: false, rowHeader: false, rowSection: false, carried: true },
+  ],
+  rawText: 'Mapped valve | pcs | 2 | 50 | 100', classification: 'unknown', confidence: 0.96, warnings: [],
+}
+
+const mappedDecision = {
+  id: 'mapped-1', operation: 'map_source_item', sourceRowIds: ['mapped-row'], targetItemIds: [],
+  confidence: 0.96, explanation: 'Mapped from retained cells.',
+  cellMapping: {
+    sourceRowIds: ['mapped-row'],
+    description: [{ sourceRowId: 'mapped-row', column: 1 }],
+    unit: { sourceRowId: 'mapped-row', column: 2 },
+    quantity: { sourceRowId: 'mapped-row', column: 3 },
+    rate: { sourceRowId: 'mapped-row', column: 4 },
+    total: { sourceRowId: 'mapped-row', column: 5 },
+  },
+}
+
+const mappedContext = {
+  ...v2Context,
+  sourceRows: [mappedSourceRow],
+  allowedSourceRowIds: new Set(['mapped-row']),
+}
+
+test('v2 map_source_item resolves immutable cells into an actionable canonical insert', () => {
+  const prepared = prepareProviderProposalV2(mappedDecision, mappedContext)
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) return
+  assert.equal(prepared.proposal.operation, 'insert_missing_item')
+  assert.deepEqual(prepared.proposal.sourceCellMapping, mappedDecision.cellMapping)
+  assert.equal(prepared.proposal.mappedCandidate?.desc, 'Mapped valve')
+  assert.equal(prepared.proposal.mappedCandidate?.total, 100)
+  assert.deepEqual(prepared.proposal.candidateItemIds, [prepared.proposal.mappedCandidate?.id])
+})
+
+test('v2 incomplete map_source_item becomes a source-backed human review draft', () => {
+  const incomplete = {
+    ...mappedDecision,
+    cellMapping: {
+      sourceRowIds: ['mapped-row'],
+      description: [{ sourceRowId: 'mapped-row', column: 1 }],
+      unit: { sourceRowId: 'mapped-row', column: 2 },
+      quantity: { sourceRowId: 'mapped-row', column: 3 },
+    },
+  }
+  const prepared = prepareProviderProposalV2(incomplete, mappedContext)
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) return
+  assert.equal(prepared.proposal.operation, 'needs_human_review')
+  assert.deepEqual(prepared.proposal.reviewDraft?.missingFields, ['rate', 'total'])
+  assert.deepEqual(prepared.proposal.proposedItems, [])
+})
+
+test('v2 map_source_item becomes replace_item when it safely addresses an existing target', () => {
+  const mappedTarget = { ...target, sourceRowIds: ['mapped-row'] }
+  const prepared = prepareProviderProposalV2(
+    { ...mappedDecision, targetItemIds: ['target-1'] },
+    {
+      ...mappedContext,
+      sections: [{ header: 'Works', items: [mappedTarget] }],
+      targetItems: new Map([['target-1', mappedTarget]]),
+    },
+  )
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) return
+  assert.equal(prepared.proposal.operation, 'replace_item')
+  assert.deepEqual(prepared.proposal.targetItemIds, ['target-1'])
+})
+
+test('v2 mapping boundary rejects provider-authored source values and invalid coordinates', () => {
+  for (const [key, value] of Object.entries({ qty: 2, rate: 50, total: 100, description: 'Invented', unit: 'pcs' })) {
+    assert.equal(prepareProviderProposalV2({ ...mappedDecision, [key]: value }, mappedContext).ok, false)
+  }
+  assert.equal(prepareProviderProposalV2({
+    ...mappedDecision,
+    cellMapping: { ...mappedDecision.cellMapping, total: { sourceRowId: 'mapped-row', column: 99 } },
+  }, mappedContext).ok, false)
+  assert.equal(prepareProviderProposalV2({
+    ...mappedDecision,
+    cellMapping: { ...mappedDecision.cellMapping, unit: { sourceRowId: 'mapped-row', column: 6 } },
+  }, mappedContext).ok, false)
+})
+
 test('v2 decision expands immutable candidates and injects revision and destination metadata', () => {
   const prepared = prepareProviderProposalV2({
     id: 'insert-2', operation: 'insert_missing_item', sourceRowIds: ['sr-2'], targetItemIds: [],
@@ -447,4 +538,6 @@ test('v2 contract asks only for source-backed add, replace, remove or human-revi
   assert.match(instructions, /remove_spurious_item/)
   assert.match(instructions, /NEVER invent prices/)
   assert.match(instructions, /NEVER propose keep or separate_components/)
+  assert.match(instructions, /map_source_item/)
+  assert.match(instructions, /Return cell coordinates only\. Never return source values\./)
 })

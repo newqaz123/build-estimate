@@ -22,8 +22,14 @@ const rows: BoqSourceRowV3[] = [
   },
   {
     id: 'row-missing', page: 1, table: 1, row: 4, section: 'Pump Works', headers: ['Description'],
-    rawCells: [{ column: 0, rawText: 'Valve', lines: ['Valve'], rowSpan: 1, columnSpan: 1, startRowOffset: 3, endRowOffset: 4, startColumnOffset: 0, endColumnOffset: 1, columnHeader: false, rowHeader: false, rowSection: false, carried: false }],
-    rawText: 'Valve', classification: 'item', confidence: 0.99, warnings: [],
+    rawCells: [
+      { column: 0, rawText: 'Valve', lines: ['Valve'], rowSpan: 1, columnSpan: 1, startRowOffset: 3, endRowOffset: 4, startColumnOffset: 0, endColumnOffset: 1, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+      { column: 1, rawText: 'pcs', lines: ['pcs'], rowSpan: 1, columnSpan: 1, startRowOffset: 3, endRowOffset: 4, startColumnOffset: 1, endColumnOffset: 2, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+      { column: 2, rawText: '1', lines: ['1'], rowSpan: 1, columnSpan: 1, startRowOffset: 3, endRowOffset: 4, startColumnOffset: 2, endColumnOffset: 3, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+      { column: 3, rawText: '30', lines: ['30'], rowSpan: 1, columnSpan: 1, startRowOffset: 3, endRowOffset: 4, startColumnOffset: 3, endColumnOffset: 4, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+      { column: 4, rawText: '30', lines: ['30'], rowSpan: 1, columnSpan: 1, startRowOffset: 3, endRowOffset: 4, startColumnOffset: 4, endColumnOffset: 5, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+    ],
+    rawText: 'Valve | pcs | 1 | 30 | 30', classification: 'item', confidence: 0.99, warnings: [],
   },
 ]
 
@@ -183,6 +189,68 @@ test('insert_missing_item proposal with valid candidate is accepted', async () =
   assert.equal(result.body.rejectedProposals.length, 0)
 })
 
+const completeMappedDecision = {
+  id: 'mapped-valve', operation: 'map_source_item', sourceRowIds: ['row-missing'], targetItemIds: [],
+  confidence: 0.96, explanation: 'Mapped retained cells.',
+  cellMapping: {
+    sourceRowIds: ['row-missing'],
+    description: [{ sourceRowId: 'row-missing', column: 0 }],
+    unit: { sourceRowId: 'row-missing', column: 1 },
+    quantity: { sourceRowId: 'row-missing', column: 2 },
+    rate: { sourceRowId: 'row-missing', column: 3 },
+    total: { sourceRowId: 'row-missing', column: 4 },
+  },
+}
+
+test('complete source-cell mapping becomes a validated actionable proposal', async () => {
+  const result = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+    callProvider: async (_messages, provider, model) => ({
+      content: JSON.stringify({ proposals: [completeMappedDecision] }), provider, model,
+    }),
+  }))
+  assert.equal(result.status, 200)
+  if (result.status !== 200) return
+  assert.equal(result.body.proposals.length, 1)
+  assert.equal(result.body.proposals[0].operation, 'insert_missing_item')
+  assert.equal((result.body.proposals[0] as typeof result.body.proposals[0] & { mappedCandidate?: { total: number } }).mappedCandidate?.total, 30)
+  assert.deepEqual(result.body.rejectedProposals, [])
+})
+
+test('incomplete source-cell mapping becomes needs_human_review with a source-backed draft', async () => {
+  const incomplete = {
+    ...completeMappedDecision,
+    cellMapping: {
+      sourceRowIds: ['row-missing'],
+      description: [{ sourceRowId: 'row-missing', column: 0 }],
+      unit: { sourceRowId: 'row-missing', column: 1 },
+      quantity: { sourceRowId: 'row-missing', column: 2 },
+    },
+  }
+  const result = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+    callProvider: async (_messages, provider, model) => ({ content: JSON.stringify({ proposals: [incomplete] }), provider, model }),
+  }))
+  assert.equal(result.status, 200)
+  if (result.status !== 200) return
+  assert.equal(result.body.proposals[0].operation, 'needs_human_review')
+  assert.deepEqual((result.body.proposals[0] as typeof result.body.proposals[0] & { reviewDraft?: { missingFields: string[] } }).reviewDraft?.missingFields, ['rate', 'total'])
+})
+
+test('provider-authored values and invalid mappings are sanitized as invalid_shape', async () => {
+  const result = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+    callProvider: async (_messages, provider, model) => ({ content: JSON.stringify({ proposals: [
+      { ...completeMappedDecision, qty: 999 },
+      { ...completeMappedDecision, id: 'bad-coordinate', cellMapping: { ...completeMappedDecision.cellMapping, total: { sourceRowId: 'row-missing', column: 99 } } },
+    ] }), provider, model }),
+  }))
+  assert.equal(result.status, 200)
+  if (result.status !== 200) return
+  assert.deepEqual(result.body.proposals, [])
+  assert.deepEqual(result.body.rejectedProposals, [
+    { index: 0, code: 'invalid_shape' },
+    { index: 1, code: 'invalid_shape' },
+  ])
+})
+
 test('insert_missing_item with unknown candidate ID is rejected', async () => {
   const result = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
     callProvider: async (_messages, provider, model) => ({ content: JSON.stringify({ proposals: [{
@@ -257,6 +325,8 @@ test('v2 contract instructions reference insert/replace/remove operations', asyn
   assert.match(systemPrompt, /NEVER invent prices/)
   assert.match(systemPrompt, /NEVER propose keep/)
   assert.match(systemPrompt, /combined material\/labour/)
+  assert.match(systemPrompt, /map_source_item/)
+  assert.match(systemPrompt, /Return cell coordinates only\. Never return source values\./)
 })
 
 test('provider DTO with server-owned fields is rejected as invalid_shape', async () => {

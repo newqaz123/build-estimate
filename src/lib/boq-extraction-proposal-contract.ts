@@ -9,6 +9,13 @@ import {
   type ProposalSourceComponentEvidence,
 } from './boq-extraction-proposals'
 import type { BoqItem, BoqSection, BoqSourceRef } from './boq-schema'
+import {
+  resolveSourceCellMapping,
+  type SourceBackedReviewDraft,
+  type SourceCellMapping,
+  type SourceCellRef,
+} from './boq-extraction-cell-mapping'
+import type { BoqSourceRowV3 } from './boq-extraction-schema'
 
 /**
  * Provider-facing DTO — the exact JSON shape the LLM must return.
@@ -206,8 +213,14 @@ export function providerContractInstructions(): string {
 // packet; the server expands those references into full proposedItems.
 
 const V2_PROPOSAL_KEYS = new Set([
-  'id', 'operation', 'sourceRowIds', 'targetItemIds', 'candidateItemIds', 'confidence', 'explanation',
+  'id', 'operation', 'sourceRowIds', 'targetItemIds', 'candidateItemIds', 'confidence', 'explanation', 'cellMapping',
 ])
+
+const SOURCE_CELL_MAPPING_KEYS = new Set([
+  'sourceRowIds', 'description', 'unit', 'quantity', 'rate', 'total',
+  'materialRate', 'materialTotal', 'labourRate', 'labourTotal', 'amount',
+])
+const SOURCE_CELL_REF_KEYS = new Set(['sourceRowId', 'column', 'line'])
 
 const V2_OPERATIONS: readonly ProposalOperation[] = [
   'insert_missing_item', 'replace_item', 'remove_spurious_item', 'needs_human_review',
@@ -239,11 +252,75 @@ export interface ProviderProposalContextV2 {
   sections: readonly BoqSection[]
   targetItems: ReadonlyMap<string, BoqItem>
   candidateItems: ReadonlyMap<string, ProviderCandidateRef>
+  /** Required only for provider-only map_source_item decisions. */
+  sourceRows?: readonly BoqSourceRowV3[]
+  /** Selected rows the provider is permitted to address. */
+  allowedSourceRowIds?: ReadonlySet<string>
+}
+
+export type PreparedProviderProposalV2 = ExtractionProposal & {
+  sourceCellMapping?: SourceCellMapping
+  mappedCandidate?: ProviderCandidateRef
+  reviewDraft?: SourceBackedReviewDraft
 }
 
 export type ProviderProposalPreparationV2 =
-  | { ok: true; proposal: ExtractionProposal }
+  | { ok: true; proposal: PreparedProviderProposalV2 }
   | { ok: false }
+
+function parseSourceCellRef(value: unknown): SourceCellRef | null {
+  if (!isRecord(value) || hasUnknownKeys(value, SOURCE_CELL_REF_KEYS)) return null
+  if (!nonBlankString(value.sourceRowId) || !Number.isInteger(value.column) || (value.column as number) < 0) return null
+  if (value.line !== undefined && (!Number.isInteger(value.line) || (value.line as number) < 0)) return null
+  return {
+    sourceRowId: value.sourceRowId,
+    column: value.column as number,
+    ...(value.line === undefined ? {} : { line: value.line as number }),
+  }
+}
+
+function parseSourceCellMapping(value: unknown): SourceCellMapping | null {
+  if (!isRecord(value) || hasUnknownKeys(value, SOURCE_CELL_MAPPING_KEYS) || !isStringArray(value.sourceRowIds)) return null
+  const mapping: SourceCellMapping = { sourceRowIds: [...value.sourceRowIds] }
+  if (value.description !== undefined) {
+    if (!Array.isArray(value.description)) return null
+    const refs = value.description.map(parseSourceCellRef)
+    if (refs.some((ref) => ref === null)) return null
+    mapping.description = refs as SourceCellRef[]
+  }
+  for (const field of ['unit', 'quantity', 'rate', 'total', 'materialRate', 'materialTotal', 'labourRate', 'labourTotal', 'amount'] as const) {
+    if (value[field] === undefined) continue
+    const ref = parseSourceCellRef(value[field])
+    if (!ref) return null
+    mapping[field] = ref
+  }
+  return mapping
+}
+
+function mappingSection(
+  context: ProviderProposalContextV2,
+  sourceRowIds: readonly string[],
+  targetItemIds: readonly string[],
+): { index: number; header: string } | null {
+  if (targetItemIds.length > 0) {
+    const indexes = new Set<number>()
+    context.sections.forEach((section, index) => {
+      if (section.items.some((item) => item.id && targetItemIds.includes(item.id))) indexes.add(index)
+    })
+    if (indexes.size !== 1) return null
+    const index = [...indexes][0]
+    return { index, header: context.sections[index].header }
+  }
+  const rowById = new Map((context.sourceRows ?? []).map((row) => [row.id, row]))
+  const headers = new Set(sourceRowIds.map((id) => rowById.get(id)?.section).filter(nonBlankString))
+  if (headers.size === 1) {
+    const header = [...headers][0]
+    const matches = context.sections.flatMap((section, index) => section.header === header ? [index] : [])
+    if (matches.length === 1) return { index: matches[0], header }
+  }
+  if (context.sections.length === 1) return { index: 0, header: context.sections[0].header }
+  return null
+}
 
 function itemSourceRows(item: BoqItem): string[] {
   if (Array.isArray(item.sourceRowIds) && item.sourceRowIds.length > 0) return item.sourceRowIds
@@ -280,10 +357,70 @@ export function prepareProviderProposalV2(
   context: ProviderProposalContextV2,
 ): ProviderProposalPreparationV2 {
   if (!isRecord(value) || hasUnknownKeys(value, V2_PROPOSAL_KEYS)) return { ok: false }
-  if (!nonBlankString(value.id) || !V2_OPERATIONS.includes(value.operation as ProposalOperation)) return { ok: false }
+  if (!nonBlankString(value.id)) return { ok: false }
   if (!isStringArray(value.sourceRowIds) || !isStringArray(value.targetItemIds)
-    || !isStringArray(value.candidateItemIds) || !finiteNumber(value.confidence)
+    || !finiteNumber(value.confidence)
     || value.confidence < 0 || value.confidence > 1 || !nonBlankString(value.explanation)) return { ok: false }
+
+  if (value.operation === 'map_source_item') {
+    if ('candidateItemIds' in value || !context.sourceRows || !context.allowedSourceRowIds) return { ok: false }
+    const mapping = parseSourceCellMapping(value.cellMapping)
+    const sourceRowIds = value.sourceRowIds as string[]
+    const targetItemIds = value.targetItemIds as string[]
+    if (!mapping || sourceRowIds.length === 0 || new Set(sourceRowIds).size !== sourceRowIds.length
+      || mapping.sourceRowIds.length !== sourceRowIds.length
+      || sourceRowIds.some((id) => !mapping.sourceRowIds.includes(id) || !context.allowedSourceRowIds!.has(id))
+      || new Set(targetItemIds).size !== targetItemIds.length
+      || targetItemIds.some((id) => !context.targetItems.has(id))) return { ok: false }
+    const section = mappingSection(context, sourceRowIds, targetItemIds)
+    if (!section) return { ok: false }
+    const resolution = resolveSourceCellMapping({
+      mapping,
+      allowedSourceRowIds: context.allowedSourceRowIds,
+      sourceRows: context.sourceRows.map((row) => ({
+        ...row,
+        rawCells: row.rawCells.filter((cell) => !cell.carried),
+      })),
+      section,
+    })
+    if (resolution.kind === 'invalid') return { ok: false }
+    if (resolution.kind === 'candidate') {
+      const candidateItems = new Map(context.candidateItems)
+      candidateItems.set(resolution.candidate.id, resolution.candidate)
+      const canonical = prepareProviderProposalV2({
+        id: value.id,
+        operation: targetItemIds.length === 0 ? 'insert_missing_item' : 'replace_item',
+        sourceRowIds,
+        targetItemIds,
+        candidateItemIds: [resolution.candidate.id],
+        confidence: value.confidence,
+        explanation: value.explanation,
+      }, { ...context, candidateItems })
+      if (!canonical.ok) return canonical
+      return {
+        ok: true,
+        proposal: {
+          ...canonical.proposal,
+          sourceCellMapping: resolution.mapping,
+          mappedCandidate: resolution.candidate,
+        },
+      }
+    }
+    const canonical = prepareProviderProposalV2({
+      id: value.id,
+      operation: 'needs_human_review',
+      sourceRowIds,
+      targetItemIds,
+      candidateItemIds: [],
+      confidence: value.confidence,
+      explanation: value.explanation,
+    }, context)
+    if (!canonical.ok) return canonical
+    return { ok: true, proposal: { ...canonical.proposal, reviewDraft: resolution.draft } }
+  }
+
+  if (!V2_OPERATIONS.includes(value.operation as ProposalOperation)
+    || !isStringArray(value.candidateItemIds) || 'cellMapping' in value) return { ok: false }
 
   const operation = value.operation as ProposalOperation
   const sourceRowIds = value.sourceRowIds as string[]
@@ -380,12 +517,15 @@ export function providerContractInstructionsV2(): string {
     '',
     'Each decision has EXACTLY these keys:',
     '  id: string',
-    '  operation: "insert_missing_item" | "replace_item" | "remove_spurious_item" | "needs_human_review"',
+    '  operation: "insert_missing_item" | "replace_item" | "remove_spurious_item" | "needs_human_review" | "map_source_item"',
     '  sourceRowIds: string[]   (use only IDs from allowedSourceRowIds)',
     '  targetItemIds: string[]  (use only IDs from currentTargetItems[].id; empty for insert_missing_item)',
     '  candidateItemIds: string[]  (use only IDs from candidateItems[].id; empty for remove_spurious_item and needs_human_review)',
     '  confidence: number       (0.0–1.0)',
     '  explanation: string      (why this correction is needed)',
+    '  cellMapping: source-cell coordinates (required only for map_source_item; omit candidateItemIds)',
+    '    Shape: {sourceRowIds:string[], description?:SourceCellRef[], unit?:SourceCellRef, quantity?:SourceCellRef, rate?:SourceCellRef, total?:SourceCellRef, materialRate?:SourceCellRef, materialTotal?:SourceCellRef, labourRate?:SourceCellRef, labourTotal?:SourceCellRef, amount?:SourceCellRef}',
+    '    SourceCellRef has exactly {sourceRowId:string,column:number,line?:number}.',
     '',
     'DECISION RULES:',
     '  insert_missing_item: A priced source row exists in candidateItems but has no matching item in currentTargetItems.',
@@ -396,6 +536,8 @@ export function providerContractInstructionsV2(): string {
     '    Set targetItemIds to the spurious item(s), candidateItemIds to [].',
     '  needs_human_review: A source row needs manual attention and no safe automatic correction exists.',
     '    Set candidateItemIds to []. Bundle rows without an actionable candidate must use this decision.',
+    '  map_source_item: A priced source row has no deterministic candidate. Return cell coordinates only. Never return source values.',
+    '    Use only cellRefs on reviewSelected sourceRows; context-only rows are not addressable.',
     '',
     'NEVER invent prices, rates, quantities, descriptions, or units. All values come from the provided candidateItems.',
     'NEVER include proposedItems, extractionRunId, fingerprints, or entryOrigin.',

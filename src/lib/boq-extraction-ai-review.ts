@@ -3,7 +3,7 @@ import type { Boq, BoqItem, BoqSection } from './boq-schema'
 import type { BoqSourceRowV3, DerivedPricedItemV3 } from './boq-extraction-schema'
 import type { BoqExtractionRun } from './boq-extraction-run'
 import {
-  validateProposalBatch,
+  validateProposal,
   type ProposalSourceEvidence,
   type ProposalValidationFailureCode,
   type ProposalValidationSummary,
@@ -442,42 +442,55 @@ export async function executeExtractionReview(
     // Build candidate refs map for v2 provider DTO expansion.
     const candidateRefs = new Map<string, ProviderCandidateRef>()
     for (const [id, candidate] of candidates) candidateRefs.set(id, candidate)
-    const preparedProposals: unknown[] = []
-    const preparationOk = rawProposals.map((raw) => {
+    const preparations = rawProposals.map((raw) => {
       const preparation = prepareProviderProposalV2(raw, {
         extractionRunId: context.run.id,
         sections: context.boq.sections,
         targetItems,
         candidateItems: candidateRefs,
+        sourceRows: context.sourceRows,
+        allowedSourceRowIds: selectedSourceRowIds,
       })
-      if (preparation.ok) {
-        preparedProposals.push(preparation.proposal)
-        return true
-      }
-      return false
-    })
-    const validation = validateProposalBatch(preparedProposals, {
-      extractionRunId: context.run.id,
-      sourceRows: selection.rows,
-      sourceEvidence: scopedEvidence,
-      sections: context.boq.sections,
-      candidateItems: candidates,
+      return preparation
     })
     const accepted: ValidatedProposal[] = []
     const rejected: ExtractionReviewRejectedProposal[] = []
-    let batchIndex = 0
-    rawProposals.forEach((_, originalIndex) => {
-      if (!preparationOk[originalIndex]) {
+    const seenProposalIds = new Set<string>()
+    const seenTargets = new Set<string>()
+    const seenRows = new Set<string>()
+    preparations.forEach((preparation, originalIndex) => {
+      if (!preparation.ok) {
         rejected.push({ index: originalIndex, code: 'invalid_shape' })
         return
       }
-      const entry = validation.results[batchIndex]
-      batchIndex++
+      const perDecisionCandidates = new Map<string, ProviderCandidateRef>()
+      for (const [id, candidate] of candidates) perDecisionCandidates.set(id, candidate)
+      if (preparation.proposal.mappedCandidate) {
+        perDecisionCandidates.set(preparation.proposal.mappedCandidate.id, preparation.proposal.mappedCandidate)
+      }
+      const entry = validateProposal(preparation.proposal, {
+        extractionRunId: context.run.id,
+        sourceRows: selection.rows,
+        sourceEvidence: scopedEvidence,
+        sections: context.boq.sections,
+        candidateItems: perDecisionCandidates,
+      })
       if (entry?.valid) {
+        let overlapCode: ProposalValidationFailureCode | null = null
+        if (seenProposalIds.has(entry.proposal.id)) overlapCode = 'duplicate_proposal'
+        else if (entry.proposal.targetItemIds.some((id) => seenTargets.has(id))) overlapCode = 'overlapping_target'
+        else if (entry.proposal.sourceRowIds.some((id) => seenRows.has(id))) overlapCode = 'overlapping_source_row'
+        if (overlapCode) {
+          rejected.push({ index: originalIndex, code: overlapCode })
+          return
+        }
+        seenProposalIds.add(entry.proposal.id)
+        entry.proposal.targetItemIds.forEach((id) => seenTargets.add(id))
+        entry.proposal.sourceRowIds.forEach((id) => seenRows.add(id))
         // Do not persist no-op keep proposals. They are valid for legacy reads
         // but should never appear as stored AI suggestions.
         if (entry.proposal.operation !== 'keep') accepted.push(entry.proposal)
-      } else if (entry) rejected.push({ index: originalIndex, code: entry.code })
+      } else rejected.push({ index: originalIndex, code: entry.code })
     })
     return {
       status: 200,

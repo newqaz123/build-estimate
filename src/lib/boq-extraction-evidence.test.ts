@@ -146,6 +146,33 @@ test('evidence packet orders candidates by source row position', () => {
   assert.equal(packet.sourceRows.length, 20)
   assert.deepEqual(packet.sourceRows.map((row) => row.row), Array.from({ length: 20 }, (_, index) => index + 1))
   assert.equal(packet.sourceRows[0].rawCells[0].startRowOffset, 0)
+  const selectedRow = packet.sourceRows.find((row) => row.id === 'sr-2')!
+  const contextRow = packet.sourceRows.find((row) => row.id === 'sr-1')!
+  assert.deepEqual(selectedRow.cellRefs, [
+    { column: 0, lineCount: 1 },
+    { column: 4, lineCount: 1 },
+  ])
+  assert.equal(contextRow.cellRefs, undefined)
+})
+
+test('evidence packet exposes only non-carried cell coordinates on addressable rows', () => {
+  const { run, sourceRows, boqSections } = surasakScenario()
+  const selectedRow = {
+    ...sourceRows[0],
+    rawCells: [
+      ...sourceRows[0].rawCells,
+      { ...sourceRows[0].rawCells[0], column: 9, carried: true },
+    ],
+  }
+  const nextRows = [selectedRow, ...sourceRows.slice(1)]
+  const packet = buildExtractionEvidencePacket({
+    run, sourceRows: nextRows, candidates: buildExtractionCandidates(run, nextRows), boqSections,
+    selectedSourceRowIds: new Set([selectedRow.id]),
+  })
+  assert.deepEqual(packet.sourceRows.find((row) => row.id === selectedRow.id)?.cellRefs, [
+    { column: 0, lineCount: 1 },
+    { column: 4, lineCount: 1 },
+  ])
 })
 
 test('evidence packet includes current target items from BOQ', () => {
