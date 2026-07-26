@@ -20,25 +20,45 @@ def _normal(header: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", header.casefold()).strip()
 
 
-def _leaf(header: str) -> str:
-    return _normal(header.rsplit("/", 1)[-1])
+def _path(header: str) -> tuple[str, ...]:
+    return tuple(
+        normalized
+        for part in header.split("/")
+        if (normalized := _normal(part))
+    )
 
 
 def _unit_cost_component_pairs(headers: Sequence[str]) -> ColumnResolution | None:
     """Resolve shared unit/quantity with material and labour rate/total pairs."""
-    normalized = [_normal(str(header or "")) for header in headers]
-    leaves = [_leaf(str(header or "")) for header in headers]
-    material = [index for index, header in enumerate(normalized) if "material" in header]
-    labour = [index for index, header in enumerate(normalized) if "labour" in header]
+    paths = [_path(str(header or "")) for header in headers]
+    leaves = [path[-1] if path else "" for path in paths]
+    material = [
+        index for index, path in enumerate(paths)
+        if len(path) >= 2 and path[-1] == "material"
+    ]
+    labour = [
+        index for index, path in enumerate(paths)
+        if len(path) >= 2 and path[-1] == "labour"
+    ]
     if len(material) != 1 or len(labour) != 1:
         return None
     material_rate, labour_rate = material[0], labour[0]
     if material_rate >= labour_rate:
         return None
     material_total, labour_total = material_rate + 1, labour_rate + 1
-    if labour_total >= len(headers) or leaves[material_total] != "total" or leaves[labour_total] != "total":
+    if labour_total >= len(headers):
         return None
     if len({material_rate, material_total, labour_rate, labour_total}) != 4:
+        return None
+    cost_group = paths[material_rate][:-1]
+    if (
+        cost_group != paths[labour_rate][:-1]
+        or "cost" not in " ".join(cost_group).split()
+        or paths[material_total] != (*cost_group, "total")
+        or paths[labour_total] != (*cost_group, "total")
+        or {index for index, leaf in enumerate(leaves) if leaf == "total"}
+        != {material_total, labour_total}
+    ):
         return None
 
     shared_unit = [

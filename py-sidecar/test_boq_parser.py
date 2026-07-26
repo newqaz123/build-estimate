@@ -92,6 +92,31 @@ class BoqParserTest(unittest.TestCase):
             "labour_unit": 6, "rate": 7, "amount": 8,
         })
 
+    def test_material_rate_lookalike_does_not_activate_component_pair_resolver(self):
+        headers = [
+            "ITEM", "DESCRIPTION", "UNIT", "Q'TY", "MATERIAL RATE", "TOTAL",
+            "LABOUR RATE", "TOTAL", "AMOUNT", "Remark",
+        ]
+        row = self._component_cost_source_row({}, headers).model_dump()
+
+        self.assertEqual(_find_columns(row), {
+            "desc": 1, "unit": 2, "qty": 3, "material_rate": 4,
+            "labour_rate": 6, "amount": 8,
+        })
+
+    def test_trailing_total_leaf_does_not_activate_component_pair_resolver(self):
+        headers = [
+            "ITEM", "DESCRIPTION", "UNIT", "Q'TY",
+            "UNIT COST / MATERIAL", "UNIT COST / TOTAL",
+            "UNIT COST / LABOUR", "UNIT COST / TOTAL", "AMOUNT", "Remark", "TOTAL",
+        ]
+        row = self._component_cost_source_row({}, headers).model_dump()
+
+        self.assertEqual(_find_columns(row), {
+            "desc": 1, "unit": 2, "qty": 3, "material_unit": 4,
+            "labour_unit": 6, "amount": 10,
+        })
+
     def test_extracts_eastern_group_metadata(self):
         text = """EASTERN GROUP E.T.G. CO., LTD
 QUOTATION NO.: ETG.2026/AYT074
