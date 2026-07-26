@@ -125,6 +125,7 @@ def _find_columns(row: dict[str, Any]) -> dict[str, int]:
             roles["rate"] = column
         elif "amount" in leaf_header or leaf_header in {"total", "total price", "value"}:
             roles["amount"] = column
+    _resolve_component_qty_span(row, roles)
     if "desc" not in roles and _cells(row):
         assigned_pricing_columns = {
             column for role, column in roles.items()
@@ -137,6 +138,60 @@ def _find_columns(row: dict[str, Any]) -> dict[str, int]:
         if description_columns:
             roles["desc"] = min(description_columns)
     return roles
+
+
+def _resolve_component_qty_span(row: dict[str, Any], roles: dict[str, int]) -> None:
+    """Correct column roles when a Q'TY header spans two columns.
+
+    AYT-style quotations use a layout where the Q'TY leaf header spans the
+    quantity and unit-of-measure columns, while the next column labelled
+    "UNIT" actually means unit price (rate), and "TOTAL" means the line total.
+
+    Pattern::
+
+        MATERIAL COST / Q'TY  MATERIAL COST / Q'TY  MATERIAL COST / UNIT  MATERIAL COST / TOTAL
+        (qty)                 (unit of measure)     (unit price / rate)    (line total)
+
+    This is distinct from the Surasak layout where each column has its own
+    distinct leaf header.  The pattern only triggers when two adjacent
+    component columns share the exact same Q'TY leaf header.
+    """
+    _qty_leaves = {"qty", "q ty", "quantity"}
+    resolved_any = False
+    for component in ("material", "labour"):
+        comp_cols: list[int] = []
+        for col in range(len(row.get("headers", []))):
+            if component in _header(row, col):
+                comp_cols.append(col)
+        if len(comp_cols) < 4:
+            continue
+        comp_cols.sort()
+        leaves = [_header_leaf(row, col) for col in comp_cols]
+        if (
+            leaves[0] in _qty_leaves
+            and leaves[1] == leaves[0]
+            and leaves[2] in {"unit", "uom"}
+            and leaves[3] in {"total", "amount", "total price"}
+        ):
+            roles[f"{component}_qty"] = comp_cols[0]
+            roles[f"{component}_unit"] = comp_cols[1]
+            roles[f"{component}_rate"] = comp_cols[2]
+            roles[f"{component}_total"] = comp_cols[3]
+            resolved_any = True
+    # Remove generic qty/unit roles when they are subsumed by component-specific
+    # roles.  The main loop may have set qty/unit to spanning columns that are
+    # now correctly identified as component-specific qty, unit, rate, or total.
+    if resolved_any:
+        component_columns = {
+            column
+            for component in ("material", "labour")
+            for role in ("qty", "unit")
+            if (column := roles.get(f"{component}_{role}")) is not None
+        }
+        if "qty" in roles and roles["qty"] in component_columns:
+            del roles["qty"]
+        if "unit" in roles and roles["unit"] in component_columns:
+            del roles["unit"]
 
 
 def _lines(row: dict[str, Any], column: int | None) -> list[str]:

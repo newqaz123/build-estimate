@@ -95,6 +95,171 @@ def _raw_cell(cell: Any, document: Any | None) -> dict[str, Any]:
     return model.model_dump()
 
 
+# Pricing/BOQ table structure vocabulary. Used to detect header-band rows
+# and filter quotation metadata (addresses, dates, quotation numbers) from
+# leaking into pricing column headers.
+_PRICING_VOCABULARY_WORDS = frozenset({
+    "description", "desc", "particular", "qty", "quantity",
+    "unit", "uom", "rate", "price", "amount", "total", "material",
+    "labour", "labor", "cost", "value", "remark", "remarks",
+    "item", "work", "no", "pricing",
+})
+
+# Maps pricing vocabulary words to a distinct role concept so header-band
+# detection can require multiple *different* concepts, not a single word
+# repeated across cells.
+_PRICING_ROLE_CONCEPTS: dict[str, str] = {
+    "qty": "quantity", "quantity": "quantity",
+    "unit": "unit", "uom": "unit",
+    "rate": "rate", "price": "rate",
+    "amount": "amount", "total": "amount", "value": "amount",
+    "description": "description", "desc": "description", "particular": "description",
+    "material": "material", "labour": "labour", "labor": "labour",
+    "cost": "cost",
+    "no": "identifier", "item": "identifier", "work": "work",
+    "remark": "remark", "remarks": "remark",
+}
+
+# Indicators that a cell is quotation metadata, not a pricing header.
+_METADATA_INDICATORS = frozenset({
+    "quotation", "delivery", "attn", "attention", "tel", "fax", "email",
+    "address", "road", "bangkok", "thailand", "ayutthaya", "page",
+    "mr", "mrs", "ms", "dr",
+})
+
+
+# Matches a standalone numeric value (possibly with currency/comma/decimal
+# formatting), NOT a digit embedded in descriptive text like "Phase 2".
+# Used to distinguish real priced data rows from scope titles that happen to
+# contain a number as part of their description.
+_STANDALONE_NUMBER = re.compile(r"^\(?[-+]?\d[\d,]*(?:\.\d+)?\)?$")
+
+
+def _normalize_cell_text(text: str) -> str:
+    """Normalize cell text for vocabulary matching."""
+    normalized = re.sub(r"[^a-z0-9\s]+", " ", text.lower()).strip()
+    return re.sub(r"\s+", " ", normalized)
+
+
+# Full-text phrases recognized as pricing headers (handles Q'TY apostrophe variants)
+_PRICING_HEADER_PHRASES = frozenset({
+    "q ty", "qty", "unit price", "total price",
+    "material cost", "labour cost", "labor cost",
+})
+
+
+def _cell_is_pricing_header(text: str) -> bool:
+    """Check if a raw cell text token is recognized pricing/BOQ header vocabulary."""
+    normalized = _normalize_cell_text(text)
+    if not normalized:
+        return False
+    if normalized in _PRICING_HEADER_PHRASES:
+        return True
+    words = normalized.split()
+    vocab_count = sum(1 for w in words if w in _PRICING_VOCABULARY_WORDS)
+    return vocab_count >= max(1, (len(words) + 1) // 2)
+
+
+def _cell_pricing_concepts(text: str) -> set[str]:
+    """Return the set of distinct pricing role concepts found in a cell."""
+    normalized = _normalize_cell_text(text)
+    if not normalized:
+        return set()
+    concepts: set[str] = set()
+    for word in normalized.split():
+        if word in _PRICING_ROLE_CONCEPTS:
+            concepts.add(_PRICING_ROLE_CONCEPTS[word])
+    return concepts
+
+
+def _cell_is_metadata(text: str) -> bool:
+    """Check if cell text looks like quotation metadata (addresses, dates, etc.)."""
+    normalized = _normalize_cell_text(text)
+    if not normalized or len(normalized) < 15:
+        return False
+    words = set(normalized.split())
+    metadata_hits = len(words & _METADATA_INDICATORS)
+    return metadata_hits >= 2
+
+
+def _is_header_band_row(anchor_cells: list[dict[str, Any]]) -> bool:
+    """Detect a pricing header-band row using vocabulary, not just Docling flags.
+
+    A genuine header band carries multiple *distinct* pricing-role concepts
+    (e.g. quantity + amount, or description + material) and never a standalone
+    priced value.  This prevents false positives on descriptions like
+    "Concrete work" (one concept) or lump-sum rows like "Material | 500"
+    (numeric evidence).
+
+    The concepts must also be distributed across multiple distinct cells: a
+    real header band labels separate column groups, one cell per group.  A
+    single merged cell carrying several vocabulary words (e.g. the scope title
+    "Material and Labour Work") is descriptive, not structural, and is rejected
+    so that scope-title detection can classify it as a section.
+    """
+    non_empty = [c for c in anchor_cells if c["rawText"].strip()]
+    if not non_empty:
+        return False
+    raw_text = " | ".join(c["rawText"] for c in non_empty).strip()
+    # Total/summary/adjustment rows are never header band rows
+    if TOTAL_ROW.search(raw_text):
+        return False
+    if OPTION_ROW.search(raw_text):
+        return False
+    if NOTE_ROW.search(raw_text):
+        return False
+    # Reject rows that carry standalone numeric pricing — a real header band
+    # never has a price value in it.
+    if _row_has_numeric_evidence(anchor_cells):
+        return False
+    concept_cells = [
+        cell for cell in non_empty
+        if _cell_pricing_concepts(cell["rawText"])
+    ]
+    concepts: set[str] = set()
+    for cell in concept_cells:
+        concepts |= _cell_pricing_concepts(cell["rawText"])
+    # Require multiple distinct concepts AND multiple concept-carrying cells.
+    # A single merged cell with several vocabulary words is a scope title,
+    # not a structural header band.
+    return len(concepts) >= 2 and len(concept_cells) >= 2
+
+
+def _row_has_numeric_evidence(anchor_cells: list[dict[str, Any]]) -> bool:
+    """Check if a row has standalone numeric pricing evidence.
+
+    Distinguishes a real priced value (e.g. '3,854.00') from a digit embedded
+    in descriptive text (e.g. 'Phase 2 installation').  Only cells whose entire
+    content is a number count as pricing evidence.
+    """
+    for cell in anchor_cells:
+        text = cell["rawText"].strip()
+        if text and text not in {"-", "—", "–", "n/a", "N/A"}:
+            if _STANDALONE_NUMBER.match(text):
+                return True
+    return False
+
+
+def _is_scope_title_row(anchor_cells: list[dict[str, Any]]) -> bool:
+    """Detect a scope/section title between a header band and priced data rows.
+
+    A scope title typically spans multiple columns, has no numeric evidence,
+    and contains substantial descriptive text.
+    """
+    text_cells = [c for c in anchor_cells if c["rawText"].strip()]
+    if not text_cells:
+        return False
+    # A scope title spans multiple columns (typical of merged section headers
+    # in quotation tables).  Single-cell continuation tails do not.
+    has_spanning = any(c["columnSpan"] > 1 for c in text_cells)
+    if not has_spanning:
+        return False
+    total_text = " ".join(c["rawText"].strip() for c in text_cells)
+    if len(total_text) < 10:
+        return False
+    return True
+
+
 def _has_option_context(section: str | None, headers: list[str]) -> bool:
     return bool(
         OPTION_CONTEXT.search(section or "")
@@ -171,27 +336,59 @@ def build_source_rows(tables: list[Any], *, document: Any | None = None) -> list
         indexed_cells = _index_cells_by_row(cells, row_count)
         for row_offset, covered_cells in enumerate(indexed_cells):
             anchor_cells = [cell for cell in covered_cells if not cell["carried"]]
-            header_cells = [cell for cell in anchor_cells if cell["columnHeader"]]
-            if header_cells and not previous_was_header:
+            is_vocab_header = _is_header_band_row(anchor_cells)
+            docling_header_cells = [cell for cell in anchor_cells if cell["columnHeader"]]
+            # Reset header paths when a new header band starts.  Both Docling-flagged
+            # headers and vocabulary-detected headers can start a band.
+            if (is_vocab_header or docling_header_cells) and not previous_was_header:
                 header_paths = [[] for _ in range(column_count)]
-            for cell in header_cells:
+            # Add header cells to paths.  For vocabulary header rows, add all
+            # pricing-vocabulary cells (even without the Docling columnHeader
+            # flag).  For non-vocabulary rows, add only Docling-flagged cells
+            # that are pricing vocabulary (filters out quotation metadata).
+            if is_vocab_header:
+                cells_to_add = [
+                    cell for cell in anchor_cells
+                    if cell["rawText"].strip() and _cell_is_pricing_header(cell["rawText"])
+                ]
+            else:
+                cells_to_add = [
+                    cell for cell in docling_header_cells
+                    if cell["rawText"].strip()
+                    and _cell_is_pricing_header(cell["rawText"])
+                    and not _cell_is_metadata(cell["rawText"])
+                ]
+            for cell in cells_to_add:
                 token = cell["rawText"].strip()
-                if token:
-                    for column in range(cell["startColumnOffset"], cell["endColumnOffset"]):
-                        if not header_paths[column] or header_paths[column][-1].casefold() != token.casefold():
-                            header_paths[column].append(token)
+                for column in range(cell["startColumnOffset"], cell["endColumnOffset"]):
+                    if not header_paths[column] or header_paths[column][-1].casefold() != token.casefold():
+                        header_paths[column].append(token)
             section_cells = [
                 cell["rawText"] for cell in anchor_cells if cell["rowSection"] and cell["rawText"]
             ]
             if section_cells:
                 section = " | ".join(section_cells)
             raw_text = " | ".join(cell["rawText"] for cell in anchor_cells if cell["rawText"])
+            headers = [" / ".join(path) for path in header_paths]
+            # Classification: vocabulary header rows are "header".  Description-
+            # spanning scope rows after a header band are "section".
+            if is_vocab_header:
+                classification = "header"
+            else:
+                classification = _classify(anchor_cells, raw_text, section, headers)
+                if (
+                    classification == "item"
+                    and previous_was_header
+                    and not _row_has_numeric_evidence(anchor_cells)
+                    and _is_scope_title_row(anchor_cells)
+                ):
+                    classification = "section"
+                    section = raw_text.strip()
             evidence = json.dumps(covered_cells, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             evidence_hash = hashlib.sha256(evidence.encode("utf-8")).hexdigest()
             occurrence_key = (page, table, row_offset + 1, evidence_hash)
             occurrence = occurrences[occurrence_key]
             occurrences[occurrence_key] += 1
-            headers = [" / ".join(path) for path in header_paths]
             source_row = SourceRow(
                 id=_row_id(page, table, row_offset + 1, covered_cells, occurrence),
                 page=page,
@@ -201,12 +398,12 @@ def build_source_rows(tables: list[Any], *, document: Any | None = None) -> list
                 headers=headers,
                 rawCells=covered_cells,
                 rawText=raw_text,
-                classification=_classify(anchor_cells, raw_text, section, headers),
+                classification=classification,
                 confidence=1.0,
                 warnings=[],
             )
             rows.append(source_row.model_dump())
-            previous_was_header = bool(header_cells)
+            previous_was_header = is_vocab_header or bool(docling_header_cells)
     return rows
 
 

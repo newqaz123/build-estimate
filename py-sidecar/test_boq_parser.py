@@ -1663,11 +1663,12 @@ class CompoundDerivationTest(unittest.TestCase):
         self.assertIsNotNone(derive_document, "compound derivation API must exist")
         fixture_dir = Path(__file__).resolve().parent / "fixtures" / "compound"
         paths = sorted(fixture_dir.glob("*.json"))
-        self.assertEqual(len(paths), 9)
+        self.assertEqual(len(paths), 10)
         self.assertEqual(
             {path.name for path in paths},
             {
                 "aggregate-bundle.json", "aligned-multiline.json",
+                "ayt248-multiband-components.json",
                 "continuation-cross-page.json", "merged-and-repeated-headers.json",
                 "options.json", "separate-components.json", "shared-components.json",
                 "unequal-lines.json", "surasak-unit-price.json",
@@ -2537,6 +2538,449 @@ class CompoundDerivationTest(unittest.TestCase):
         self.assertEqual(result["reconciliation"]["itemTotal"], 100.0)
         self.assertEqual(result["sourceTotal"], 100.0)
         self.assertTrue(result["reconciliation"]["reconciled"])
+
+    # ── AYT248 multi-band header regression ──────────────────────────────
+
+    def test_ayt248_multiband_fixture_derives_eighteen_items_summing_to_subtotal(self):
+        """Golden regression: AYT248-style multi-band material/labour tables
+        with Q'TY spanning two columns must produce 18 priced component items
+        that sum to the 55,000 subtotal."""
+        fixture = json.loads(
+            (Path(__file__).resolve().parent / "fixtures/compound/ayt248-multiband-components.json").read_text()
+        )
+        original_rows = json.loads(json.dumps(fixture["sourceRows"]))
+        result = derive_document(fixture["sourceRows"])
+
+        self.assertEqual(result["totalItems"], 18)
+        self.assertEqual(result["sourceTotal"], 55000.0)
+        self.assertEqual(result["reconciliation"], {
+            "itemTotal": 55000.0, "sourceTotal": 55000.0,
+            "reconciled": True, "difference": 0.0,
+        })
+        # The only warnings should be on the amount-in-words/VAT row, not on
+        # any priced material/labour row.
+        priced_row_ids = {
+            item["sourceRowIds"][0]
+            for section in result["sections"]
+            for item in section["items"]
+        }
+        warned_row_ids = {
+            warning.get("sourceRowId")
+            for warning in result["warnings"]
+            if warning.get("sourceRowId") in priced_row_ids
+        }
+        self.assertEqual(warned_row_ids, set())
+        self.assertEqual(fixture["sourceRows"], original_rows)
+
+    def test_ayt248_qty_spanning_header_resolves_component_roles(self):
+        """Q'TY spanning two columns must assign qty/unit/rate/total correctly.
+
+        AYT layout: Q'TY(span 2) | UNIT | TOTAL under each MATERIAL/LABOUR band.
+        The first span column is quantity, the second is unit-of-measure,
+        the UNIT column is unit price (rate), and TOTAL is the line total.
+        """
+        self.assertIsNotNone(_find_columns)
+        cell = LosslessContractV3Test._cell
+        cells = [
+            cell("NO.", 0, 0, column_header=True, row_span=2, end_row_offset_idx=2),
+            cell("DESCRIPTION", 0, 1, column_header=True, row_span=2, end_row_offset_idx=2),
+            cell("MATERIAL COST", 0, 2, column_header=False, col_span=4, end_col_offset_idx=6),
+            cell("LABOUR COST", 0, 6, column_header=True, col_span=4, end_col_offset_idx=10),
+            cell("AMOUNT", 0, 10, column_header=True, row_span=2, end_row_offset_idx=2),
+            cell("Q'TY", 1, 2, column_header=False, col_span=2, end_col_offset_idx=4),
+            cell("UNIT", 1, 4, column_header=False),
+            cell("TOTAL", 1, 5, column_header=False),
+            cell("Q'TY", 1, 6, column_header=True, col_span=2, end_col_offset_idx=8),
+            cell("UNIT", 1, 8, column_header=True),
+            cell("TOTAL", 1, 9, column_header=True),
+        ]
+        cells.extend(
+            cell(value, 2, column)
+            for column, value in enumerate(
+                ("1", "Item desc", "3", "Pcs.", "117.00", "351.00",
+                 "12", "Db.", "260.00", "3,120.00", "3,471.00")
+            )
+        )
+        rows = build_source_rows([LosslessContractV3Test._table(
+            page=1, table=1, cells=cells, num_rows=3, num_cols=11,
+        )])
+        # Row 3 (Q'TY sub-header) must be classified as header
+        self.assertEqual(rows[1]["classification"], "header")
+        # Row 1 (quotation metadata) must NOT leak into pricing headers
+        self.assertNotIn("QUOTATION", " ".join(rows[2]["headers"]))
+        # Data row column roles
+        roles = _find_columns(rows[2])
+        self.assertEqual(roles["material_qty"], 2)
+        self.assertEqual(roles["material_unit"], 3)
+        self.assertEqual(roles["material_rate"], 4)
+        self.assertEqual(roles["material_total"], 5)
+        self.assertEqual(roles["labour_qty"], 6)
+        self.assertEqual(roles["labour_unit"], 7)
+        self.assertEqual(roles["labour_rate"], 8)
+        self.assertEqual(roles["labour_total"], 9)
+        # Stale generic qty role must not survive
+        self.assertNotIn("qty", roles)
+        # Derivation produces two linked siblings
+        result = derive_document(rows)
+        items = result["sections"][0]["items"]
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["costComponent"], "material")
+        self.assertEqual(items[1]["costComponent"], "labour")
+        self.assertEqual(items[0]["total"], 351.0)
+        self.assertEqual(items[1]["total"], 3120.0)
+
+    def test_ayt248_vocabulary_header_detection_does_not_classify_totals_as_headers(self):
+        """Rows containing header vocabulary words like TOTAL must still be
+        classified as totals, not as header-band rows."""
+        cell = LosslessContractV3Test._cell
+        cells = [
+            cell("Description", 0, 0, column_header=True),
+            cell("Amount", 0, 1, column_header=True),
+            cell("Base work", 1, 0),
+            cell("100", 1, 1),
+            cell("SUB TOTAL", 2, 0),
+            cell("100", 2, 1),
+            cell("GRAND TOTAL", 3, 0),
+            cell("100", 3, 1),
+        ]
+        rows = build_source_rows([LosslessContractV3Test._table(
+            page=1, table=1, cells=cells, num_rows=4, num_cols=2,
+        )])
+        self.assertEqual(rows[2]["classification"], "total")
+        self.assertEqual(rows[3]["classification"], "total")
+
+    def test_ayt248_quotation_metadata_does_not_leak_into_pricing_headers(self):
+        """Quotation header text (addresses, dates, delivery info) must not
+        contaminate the pricing column header paths."""
+        cell = LosslessContractV3Test._cell
+        cells = [
+            # Row 0: quotation metadata with columnHeader=True (Docling artifact)
+            cell("TO.", 0, 0),
+            cell("QUOTATION NO. DATE DELIVERY TO", 0, 6, column_header=True,
+                 col_span=4, end_col_offset_idx=10),
+            cell(": QUOTE INFO", 0, 10),
+            # Row 1: actual pricing headers
+            cell("NO.", 1, 0, column_header=True),
+            cell("DESCRIPTION", 1, 1, column_header=True),
+            cell("AMOUNT", 1, 2, column_header=True),
+            # Row 2: data
+            cell("1", 2, 0),
+            cell("Pump", 2, 1),
+            cell("100", 2, 2),
+        ]
+        rows = build_source_rows([LosslessContractV3Test._table(
+            page=1, table=1, cells=cells, num_rows=3, num_cols=11,
+        )])
+        data_row = rows[2]
+        for header in data_row["headers"]:
+            self.assertNotIn("QUOTATION", header)
+            self.assertNotIn("DELIVERY", header)
+        self.assertIn("NO.", data_row["headers"][0])
+        self.assertIn("DESCRIPTION", data_row["headers"][1])
+
+    def test_ayt248_scope_title_between_header_and_data_is_section(self):
+        """A multi-column spanning scope title between the header band and
+        the first priced row should be classified as section, not item."""
+        cell = LosslessContractV3Test._cell
+        cells = [
+            cell("NO.", 0, 0, column_header=True),
+            cell("DESCRIPTION", 0, 1, column_header=True),
+            cell("AMOUNT", 0, 4, column_header=True),
+            # Scope title spanning columns 1-3
+            cell("SCOPE TITLE FOR SANITIZED WORK", 1, 1, col_span=3, end_col_offset_idx=4),
+            # Data row
+            cell("1", 2, 0),
+            cell("Item", 2, 1),
+            cell("100", 2, 4),
+        ]
+        rows = build_source_rows([LosslessContractV3Test._table(
+            page=1, table=1, cells=cells, num_rows=3, num_cols=5,
+        )])
+        self.assertEqual(rows[1]["classification"], "section")
+        self.assertEqual(rows[1]["section"], "SCOPE TITLE FOR SANITIZED WORK")
+
+    # ── Reviewer-requested blocker fixes ────────────────────────────────
+
+    def test_material_only_qty_spanning_header_resolves_component_roles(self):
+        """A material-only Q'TY-spanning band must resolve roles without
+        KeyError and without leaving stale generic qty/unit roles."""
+        self.assertIsNotNone(_find_columns)
+        cell = LosslessContractV3Test._cell
+        cells = [
+            cell("NO.", 0, 0, column_header=True),
+            cell("DESCRIPTION", 0, 1, column_header=True),
+            cell("MATERIAL COST", 0, 2, column_header=True, col_span=4, end_col_offset_idx=6),
+            cell("AMOUNT", 0, 6, column_header=True),
+            cell("Q'TY", 1, 2, col_span=2, end_col_offset_idx=4),
+            cell("UNIT", 1, 4),
+            cell("TOTAL", 1, 5),
+            cell("1", 2, 0),
+            cell("Widget", 2, 1),
+            cell("10", 2, 2),
+            cell("Pcs.", 2, 3),
+            cell("5.00", 2, 4),
+            cell("50.00", 2, 5),
+            cell("50.00", 2, 6),
+        ]
+        rows = build_source_rows([LosslessContractV3Test._table(
+            page=1, table=1, cells=cells, num_rows=3, num_cols=7,
+        )])
+        roles = _find_columns(rows[2])
+        self.assertEqual(roles["material_qty"], 2)
+        self.assertEqual(roles["material_unit"], 3)
+        self.assertEqual(roles["material_rate"], 4)
+        self.assertEqual(roles["material_total"], 5)
+        # No labour roles should exist, and no stale generic qty/unit.
+        self.assertNotIn("labour_qty", roles)
+        self.assertNotIn("qty", roles)
+        self.assertNotIn("unit", roles)
+        result = derive_document(rows)
+        items = result["sections"][0]["items"]
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["costComponent"], "material")
+        self.assertEqual(items[0]["total"], 50.0)
+
+    def test_labour_only_qty_spanning_header_resolves_component_roles(self):
+        """A labour-only Q'TY-spanning band must resolve roles without
+        KeyError and without leaving stale generic qty/unit roles."""
+        self.assertIsNotNone(_find_columns)
+        cell = LosslessContractV3Test._cell
+        cells = [
+            cell("NO.", 0, 0, column_header=True),
+            cell("DESCRIPTION", 0, 1, column_header=True),
+            cell("LABOUR COST", 0, 2, column_header=True, col_span=4, end_col_offset_idx=6),
+            cell("AMOUNT", 0, 6, column_header=True),
+            cell("Q'TY", 1, 2, col_span=2, end_col_offset_idx=4),
+            cell("UNIT", 1, 4),
+            cell("TOTAL", 1, 5),
+            cell("1", 2, 0),
+            cell("Service", 2, 1),
+            cell("8", 2, 2),
+            cell("Hr.", 2, 3),
+            cell("100.00", 2, 4),
+            cell("800.00", 2, 5),
+            cell("800.00", 2, 6),
+        ]
+        rows = build_source_rows([LosslessContractV3Test._table(
+            page=1, table=1, cells=cells, num_rows=3, num_cols=7,
+        )])
+        roles = _find_columns(rows[2])
+        self.assertEqual(roles["labour_qty"], 2)
+        self.assertEqual(roles["labour_unit"], 3)
+        self.assertEqual(roles["labour_rate"], 4)
+        self.assertEqual(roles["labour_total"], 5)
+        self.assertNotIn("material_qty", roles)
+        self.assertNotIn("qty", roles)
+        self.assertNotIn("unit", roles)
+        result = derive_document(rows)
+        items = result["sections"][0]["items"]
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["costComponent"], "labour")
+        self.assertEqual(items[0]["total"], 800.0)
+
+    def test_sparse_description_row_not_classified_as_header(self):
+        """A single-cell description like 'Concrete work' must not be
+        mistaken for a header band just because 'work' is pricing vocabulary."""
+        cell = LosslessContractV3Test._cell
+        cells = [
+            cell("DESCRIPTION", 0, 0, column_header=True),
+            cell("AMOUNT", 0, 1, column_header=True),
+            cell("Concrete work", 1, 0),
+            cell("500", 1, 1),
+        ]
+        rows = build_source_rows([LosslessContractV3Test._table(
+            page=1, table=1, cells=cells, num_rows=2, num_cols=2,
+        )])
+        self.assertEqual(rows[1]["classification"], "item")
+
+    def test_numeric_lump_sum_row_not_classified_as_header(self):
+        """A row like 'Material | 500' with a priced value must not be
+        classified as a header band even though 'Material' is vocabulary."""
+        cell = LosslessContractV3Test._cell
+        cells = [
+            cell("DESCRIPTION", 0, 0, column_header=True),
+            cell("COST", 0, 1, column_header=True),
+            cell("Material", 1, 0),
+            cell("500", 1, 1),
+        ]
+        rows = build_source_rows([LosslessContractV3Test._table(
+            page=1, table=1, cells=cells, num_rows=2, num_cols=2,
+        )])
+        self.assertEqual(rows[1]["classification"], "item")
+
+    def test_phase_number_scope_title_classified_as_section(self):
+        """A scope title with an embedded number like 'PHASE 2 INSTALLATION'
+        must still be classified as section, not blocked by numeric evidence."""
+        cell = LosslessContractV3Test._cell
+        cells = [
+            cell("NO.", 0, 0, column_header=True),
+            cell("DESCRIPTION", 0, 1, column_header=True),
+            cell("AMOUNT", 0, 4, column_header=True),
+            # Scope title spanning columns 1-3, contains an embedded number
+            cell("PHASE 2 INSTALLATION WORK", 1, 1, col_span=3, end_col_offset_idx=4),
+            cell("1", 2, 0),
+            cell("Item", 2, 1),
+            cell("100", 2, 4),
+        ]
+        rows = build_source_rows([LosslessContractV3Test._table(
+            page=1, table=1, cells=cells, num_rows=3, num_cols=5,
+        )])
+        self.assertEqual(rows[1]["classification"], "section")
+        self.assertEqual(rows[1]["section"], "PHASE 2 INSTALLATION WORK")
+
+    def test_merged_scope_title_with_multiple_concepts_is_section(self):
+        """An unpriced merged scope title like 'MATERIAL AND LABOUR WORK' that
+        contains two pricing vocabulary concepts (material + labour) must
+        remain a section, not be mistaken for a header band.
+
+        The header-band detector must require that pricing concepts are
+        distributed across distinct cells (structural column labels), not
+        concentrated in a single descriptive merged cell.  The following data
+        row must still derive correctly from the intact header paths.
+        """
+        cell = LosslessContractV3Test._cell
+        cells = [
+            cell("NO.", 0, 0, column_header=True),
+            cell("DESCRIPTION", 0, 1, column_header=True),
+            cell("AMOUNT", 0, 4, column_header=True),
+            # Merged scope title with multiple pricing concepts but no price
+            cell("MATERIAL AND LABOUR WORK", 1, 1, col_span=3, end_col_offset_idx=4),
+            # Data row with a shared price
+            cell("1", 2, 0),
+            cell("Widget", 2, 1),
+            cell("500", 2, 4),
+        ]
+        rows = build_source_rows([LosslessContractV3Test._table(
+            page=1, table=1, cells=cells, num_rows=3, num_cols=5,
+        )])
+        # The merged scope title must be a section, not a header band.
+        self.assertEqual(rows[1]["classification"], "section")
+        self.assertEqual(rows[1]["section"], "MATERIAL AND LABOUR WORK")
+        # Header paths must be intact — the scope title did not reset them.
+        self.assertIn("AMOUNT", rows[2]["headers"][4])
+        self.assertIn("DESCRIPTION", rows[2]["headers"][1])
+        # The data row must derive as a priced item under the scope section.
+        result = derive_document(rows)
+        items = result["sections"][0]["items"]
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["desc"], "Widget")
+        self.assertEqual(items[0]["total"], 500.0)
+
+    def test_ayt248_end_to_end_docling_table_derives_eighteen_items(self):
+        """End-to-end: a sanitized AYT248-style Docling table through
+        build_source_rows then derive_document must yield exactly 18 priced
+        component items reconciling to 55,000, with the scope row classified
+        as section and no false unsupported_row warnings on priced rows."""
+        cell = LosslessContractV3Test._cell
+        cells: list[dict] = []
+        # Row 0 — quotation metadata
+        cells += [
+            cell("TO.", 0, 0),
+            cell("VENDOR ADDRESS", 0, 1, col_span=5, end_col_offset_idx=6),
+            cell("QUOTATION HEADER", 0, 6, column_header=True, col_span=4, end_col_offset_idx=10),
+            cell("QUOTE INFO", 0, 10),
+        ]
+        # Row 1 — main pricing header
+        cells += [
+            cell("NO.", 1, 0, row_span=2, end_row_offset_idx=3),
+            cell("DESCRIPTION", 1, 1, row_span=2, end_row_offset_idx=3),
+            cell("MATERIAL COST", 1, 2, col_span=4, end_col_offset_idx=6),
+            cell("LABOUR COST", 1, 6, column_header=True, col_span=4, end_col_offset_idx=10),
+            cell("AMOUNT", 1, 10, row_span=2, end_row_offset_idx=3),
+        ]
+        # Row 2 — Q'TY sub-header
+        cells += [
+            cell("Q'TY", 2, 2, col_span=2, end_col_offset_idx=4),
+            cell("UNIT", 2, 4),
+            cell("TOTAL", 2, 5),
+            cell("Q'TY", 2, 6, col_span=2, end_col_offset_idx=8),
+            cell("UNIT", 2, 8),
+            cell("TOTAL", 2, 9),
+        ]
+        # Row 3 — scope title
+        cells += [
+            cell("SCOPE TITLE FOR PIPE WORK", 3, 1, col_span=5, end_col_offset_idx=6),
+        ]
+        # Rows 4-16 — 13 priced items (material cols 2-5, labour cols 6-9, amount 10)
+        # Each tuple: (no, desc, m_qty, m_unit, m_rate, m_total, l_qty, l_unit, l_rate, l_total, amount)
+        items = [
+            ("1", "Item A", "1", "Pcs.", "3,854.00", "3,854.00", None, None, None, None, "3,854.00"),
+            ("2", "Item B", "3", "Pcs.", "117.00", "351.00", "12", "Db.", "260.00", "3,120.00", "3,471.00"),
+            ("3", "Item C", "1", "Pc.", "288.00", "288.00", "6", "Db.", "260.00", "1,560.00", "1,848.00"),
+            ("4", "Item D", "1", "Pc.", "325.00", "325.00", "5", "Db.", "260.00", "1,300.00", "1,625.00"),
+            ("5", "Item E", "1", "Pc.", "15,548.00", "15,548.00", "1", "Lot", "1,000.00", "1,000.00", "16,548.00"),
+            ("6", "Item F", "1", "Sets.", "420.00", "420.00", "1", "Lot", "1,000.00", "1,000.00", "1,420.00"),
+            ("7", "Item G", "2", "Pcs.", "408.00", "816.00", None, None, None, "-", "816.00"),
+            ("8", "Item H", "2", "Pcs.", "288.00", "576.00", None, None, None, "-", "576.00"),
+            ("9", "Item I", "16", "Pcs.", "32.00", "512.00", None, None, None, "-", "512.00"),
+            ("10", "Item J", None, None, None, None, "1", "Lot", "5,000.00", "5,000.00", "5,000.00"),
+            ("11", "Item K", None, None, None, None, "1", "Lot", "8,000.00", "8,000.00", "8,000.00"),
+            ("12", "Item L", None, None, None, None, "1", "Lot", "4,000.00", "4,000.00", "4,000.00"),
+            ("13", "Item M", None, None, None, None, "1", "Lot", "7,330.00", "7,330.00", "7,330.00"),
+        ]
+        for i, (no, desc, mq, mu, mr, mt, lq, lu, lr, lt, amt) in enumerate(items):
+            r = 4 + i
+            cells.append(cell(no, r, 0))
+            cells.append(cell(desc, r, 1))
+            if mq is not None:
+                cells.append(cell(mq, r, 2))
+                cells.append(cell(mu, r, 3))
+                cells.append(cell(mr, r, 4))
+                cells.append(cell(mt, r, 5))
+            if lq is not None:
+                cells.append(cell(lq, r, 6))
+                cells.append(cell(lu, r, 7))
+                cells.append(cell(lr, r, 8))
+            if lt is not None:
+                cells.append(cell(lt, r, 9))
+            cells.append(cell(amt, r, 10))
+        # Row 17 — SUB TOTAL
+        cells += [
+            cell("SUB TOTAL", 17, 8, col_span=2, end_col_offset_idx=10),
+            cell("55,000.00", 17, 10),
+        ]
+        # Row 18 — VAT
+        cells += [
+            cell("AMOUNT IN WORDS", 18, 0, col_span=8, end_col_offset_idx=8),
+            cell("VAT 7%", 18, 8, col_span=2, end_col_offset_idx=10),
+            cell("3,850.00", 18, 10),
+        ]
+        # Row 19 — GRAND TOTAL
+        cells += [
+            cell("GRAND TOTAL", 19, 8, col_span=2, end_col_offset_idx=10),
+            cell("58,850.00", 19, 10),
+        ]
+        rows = build_source_rows([LosslessContractV3Test._table(
+            page=1, table=1, cells=cells, num_rows=20, num_cols=11,
+        )])
+        # Row 3 (scope title, 0-indexed offset 3) must be a section
+        scope_row = rows[3]
+        self.assertEqual(scope_row["classification"], "section",
+                         f"Scope row misclassified as {scope_row['classification']}: {scope_row['rawText']}")
+        self.assertEqual(scope_row["section"], "SCOPE TITLE FOR PIPE WORK")
+        # Row 2 (Q'TY sub-header) must be a header, not an item
+        self.assertEqual(rows[2]["classification"], "header",
+                         f"Sub-header misclassified as {rows[2]['classification']}")
+        # Derive items
+        result = derive_document(rows)
+        self.assertEqual(result["totalItems"], 18)
+        self.assertEqual(result["sourceTotal"], 55000.0)
+        self.assertEqual(result["reconciliation"], {
+            "itemTotal": 55000.0, "sourceTotal": 55000.0,
+            "reconciled": True, "difference": 0.0,
+        })
+        # No priced row should carry an unsupported_row warning
+        priced_row_ids = {
+            item["sourceRowIds"][0]
+            for section in result["sections"]
+            for item in section["items"]
+        }
+        warned_row_ids = {
+            warning.get("sourceRowId")
+            for warning in result["warnings"]
+            if warning.get("sourceRowId") in priced_row_ids
+        }
+        self.assertEqual(warned_row_ids, set())
 
 
 if __name__ == "__main__":
