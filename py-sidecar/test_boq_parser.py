@@ -25,6 +25,73 @@ except ImportError:
 
 
 class BoqParserTest(unittest.TestCase):
+    @staticmethod
+    def _component_cost_source_row(values: dict[int, str], headers: list[str] | None = None) -> SourceRow:
+        headers = headers or [
+            "ITEM", "DESCRIPTION", "UNIT", "Q'TY",
+            "UNIT COST / MATERIAL", "UNIT COST / TOTAL",
+            "UNIT COST / LABOUR", "UNIT COST / TOTAL", "AMOUNT", "Remark",
+        ]
+        return SourceRow(
+            id="component-cost-row", page=1, table=1, row=1, headers=headers,
+            rawCells=[
+                RawCell(
+                    column=column, rawText=value, lines=[value],
+                    startRowOffset=0, endRowOffset=1,
+                    startColumnOffset=column, endColumnOffset=column + 1,
+                )
+                for column, value in values.items()
+            ],
+            rawText=" ".join(values.values()), classification="item", confidence=1.0, warnings=[],
+        )
+
+    def test_unit_cost_component_pairs_resolve_shared_quantity_and_unit(self):
+        row = self._component_cost_source_row({
+            1: "Installation New Wall", 2: "m2", 3: "18.00", 4: "980.00",
+            5: "17,640.00", 6: "650.00", 7: "11,700.00", 8: "29,340.00",
+        }).model_dump()
+
+        self.assertEqual(_find_columns(row), {
+            "desc": 1, "unit": 2, "qty": 3, "material_rate": 4,
+            "material_total": 5, "labour_rate": 6, "labour_total": 7, "amount": 8,
+        })
+        item = derive_document([row])["sections"][0]["items"][0]
+        self.assertEqual(
+            (item["qty"], item["rate"], item["total"], item["costComponent"]),
+            (18.0, 1630.0, 29340.0, "combined"),
+        )
+        self.assertEqual(item["sourceCosts"], {
+            "material": {"qty": 18.0, "unit": "m2", "rate": 980.0, "total": 17640.0},
+            "labour": {"qty": 18.0, "unit": "m2", "rate": 650.0, "total": 11700.0},
+        })
+
+    def test_unit_cost_component_pairs_resolve_labour_only_row(self):
+        row = self._component_cost_source_row({
+            1: "Installation New Wall", 2: "L/S", 3: "1", 4: "-", 5: "-",
+            6: "7,000.00", 7: "7,000.00", 8: "7,000.00",
+        }).model_dump()
+
+        result = derive_document([row])
+
+        self.assertEqual(
+            [(item["costComponent"], item["qty"], item["rate"], item["total"]) for section in result["sections"] for item in section["items"]],
+            [("labour", 1.0, 7000.0, 7000.0)],
+        )
+        self.assertNotIn("incomplete_component_evidence", result["warningCodes"])
+
+    def test_incomplete_component_pair_does_not_activate_resolver(self):
+        headers = [
+            "ITEM", "DESCRIPTION", "UNIT", "Q'TY",
+            "UNIT COST / MATERIAL", "UNIT COST / TOTAL",
+            "UNIT COST / LABOUR", "UNIT COST / RATE", "AMOUNT", "Remark",
+        ]
+        row = self._component_cost_source_row({}, headers).model_dump()
+
+        self.assertEqual(_find_columns(row), {
+            "desc": 1, "unit": 2, "qty": 3, "material_unit": 4,
+            "labour_unit": 6, "rate": 7, "amount": 8,
+        })
+
     def test_extracts_eastern_group_metadata(self):
         text = """EASTERN GROUP E.T.G. CO., LTD
 QUOTATION NO.: ETG.2026/AYT074

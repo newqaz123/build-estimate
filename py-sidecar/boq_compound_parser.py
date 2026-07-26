@@ -15,6 +15,7 @@ import re
 from typing import Any
 
 from boq_contract import RECONCILIATION_TOLERANCE, build_reconciliation, checked_contributing_total
+from boq_column_resolvers import resolve_columns
 
 
 OPTION = re.compile(
@@ -126,6 +127,12 @@ def _find_columns(row: dict[str, Any]) -> dict[str, int]:
         elif "amount" in leaf_header or leaf_header in {"total", "total price", "value"}:
             roles["amount"] = column
     _resolve_component_qty_span(row, roles)
+    resolution = resolve_columns(headers)
+    if resolution is not None:
+        for role in list(roles):
+            if role in {"unit", "qty", "amount"} or role.startswith(("material_", "labour_")):
+                del roles[role]
+        roles.update(resolution.roles)
     if "desc" not in roles and _cells(row):
         assigned_pricing_columns = {
             column for role, column in roles.items()
