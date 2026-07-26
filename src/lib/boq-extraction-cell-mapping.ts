@@ -157,20 +157,102 @@ function allBindings(mapping: SourceCellMapping): Array<{ field: SourceMappingFi
   return bindings
 }
 
-function approximatelyEqual(left: number, right: number): boolean {
-  return Number.isFinite(left)
-    && Number.isFinite(right)
-    && Math.abs(left - right) <= BOQ_RECONCILIATION_TOLERANCE
-}
-
 const STRICT_NUMBER = /^(?:([A-Z]{3}|[$£¥฿€])\s*)?(\()?((?:0|[1-9]\d*|\d{1,3}(?:,\d{3})+)(?:\.\d+)?)(\))?(?:\s*([A-Z]{3}))?$/
 
-function parseSourceNumber(text: string): number | null {
+interface ExactDecimal {
+  coefficient: bigint
+  scale: number
+}
+
+const BIGINT_ZERO = BigInt(0)
+const BIGINT_TEN = BigInt(10)
+
+function normalizeDecimal(value: ExactDecimal): ExactDecimal {
+  let { coefficient, scale } = value
+  while (scale > 0 && coefficient % BIGINT_TEN === BIGINT_ZERO) {
+    coefficient /= BIGINT_TEN
+    scale -= 1
+  }
+  return { coefficient, scale }
+}
+
+function exactDecimalFromDigits(text: string): ExactDecimal {
+  const [integer, fraction = ''] = text.split('.')
+  return normalizeDecimal({
+    coefficient: BigInt(`${integer}${fraction}`),
+    scale: fraction.length,
+  })
+}
+
+function exactDecimalFromNumber(value: number): ExactDecimal {
+  const text = value.toString().toLowerCase()
+  const [mantissa, exponentText] = text.split('e')
+  const exponent = exponentText === undefined ? 0 : Number(exponentText)
+  const point = mantissa.indexOf('.')
+  const fractionDigits = point === -1 ? 0 : mantissa.length - point - 1
+  const digits = mantissa.replace('.', '')
+  let coefficient = BigInt(digits)
+  let scale = fractionDigits - exponent
+  if (scale < 0) {
+    coefficient *= BIGINT_TEN ** BigInt(-scale)
+    scale = 0
+  }
+  return normalizeDecimal({ coefficient, scale })
+}
+
+function alignDecimals(left: ExactDecimal, right: ExactDecimal): [bigint, bigint, number] {
+  const scale = Math.max(left.scale, right.scale)
+  return [
+    left.coefficient * BIGINT_TEN ** BigInt(scale - left.scale),
+    right.coefficient * BIGINT_TEN ** BigInt(scale - right.scale),
+    scale,
+  ]
+}
+
+function decimalsEqual(left: ExactDecimal, right: ExactDecimal): boolean {
+  const [leftCoefficient, rightCoefficient] = alignDecimals(left, right)
+  return leftCoefficient === rightCoefficient
+}
+
+function addDecimals(left: ExactDecimal, right: ExactDecimal): ExactDecimal {
+  const [leftCoefficient, rightCoefficient, scale] = alignDecimals(left, right)
+  return normalizeDecimal({ coefficient: leftCoefficient + rightCoefficient, scale })
+}
+
+function multiplyDecimals(left: ExactDecimal, right: ExactDecimal): ExactDecimal {
+  return normalizeDecimal({
+    coefficient: left.coefficient * right.coefficient,
+    scale: left.scale + right.scale,
+  })
+}
+
+const DECIMAL_TOLERANCE = exactDecimalFromNumber(BOQ_RECONCILIATION_TOLERANCE)
+
+function decimalsApproximatelyEqual(left: ExactDecimal, right: ExactDecimal): boolean {
+  const [leftCoefficient, rightCoefficient, scale] = alignDecimals(left, right)
+  const difference = leftCoefficient < rightCoefficient
+    ? rightCoefficient - leftCoefficient
+    : leftCoefficient - rightCoefficient
+  const [alignedDifference, alignedTolerance] = alignDecimals(
+    { coefficient: difference, scale },
+    DECIMAL_TOLERANCE,
+  )
+  return alignedDifference <= alignedTolerance
+}
+
+function exactDecimalToNumber(value: ExactDecimal): number | null {
+  const parsed = Number(`${value.coefficient}e-${value.scale}`)
+  if (!Number.isFinite(parsed) || parsed < 0) return null
+  return decimalsEqual(value, exactDecimalFromNumber(parsed)) ? parsed : null
+}
+
+function parseSourceNumber(text: string): { number: number; decimal: ExactDecimal } | null {
   const match = STRICT_NUMBER.exec(text.trim())
   if (!match || (match[1] !== undefined && match[5] !== undefined) || Boolean(match[2]) !== Boolean(match[4])) return null
-  const unsigned = Number(match[3].replaceAll(',', ''))
-  const parsed = match[2] ? -unsigned : unsigned
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+  if (match[2]) return null
+  const decimal = exactDecimalFromDigits(match[3].replaceAll(',', ''))
+  const parsed = exactDecimalToNumber(decimal)
+  return parsed === null ? null : { number: parsed, decimal }
 }
 
 function sourceRefs(rows: readonly BoqSourceRowV3[], ids: readonly string[]) {
@@ -243,6 +325,7 @@ export function resolveSourceCellMapping(input: ResolveSourceCellMappingArgs): S
   }
 
   const resolvedValues: SourceBackedResolvedValues = {}
+  const resolvedDecimals: Partial<Record<Exclude<SourceMappingField, 'description' | 'unit'>, ExactDecimal>> = {}
   const descriptions = evidence.filter((item) => item.field === 'description').map((item) => item.text)
   if (descriptions.length > 0) resolvedValues.description = descriptions.join('\n')
   const unit = evidence.find((item) => item.field === 'unit')
@@ -250,9 +333,10 @@ export function resolveSourceCellMapping(input: ResolveSourceCellMappingArgs): S
   for (const field of ['quantity', 'rate', 'total', ...COMPONENT_PRICE_FIELDS] as const) {
     const item = evidence.find((entry) => entry.field === field)
     if (!item) continue
-    const value = parseSourceNumber(item.text)
-    if (value === null) return invalid('invalid_source_value')
-    resolvedValues[field] = value
+    const parsed = parseSourceNumber(item.text)
+    if (parsed === null) return invalid('invalid_source_value')
+    resolvedValues[field] = parsed.number
+    resolvedDecimals[field] = parsed.decimal
   }
 
   const requiredFields = hasComponentPrices ? COMPONENT_FIELDS : GENERIC_FIELDS
@@ -285,11 +369,25 @@ export function resolveSourceCellMapping(input: ResolveSourceCellMappingArgs): S
     const labourRate = resolvedValues.labourRate!
     const labourTotal = resolvedValues.labourTotal!
     total = resolvedValues.amount!
-    if (!approximatelyEqual(qty * materialRate, materialTotal)
-      || !approximatelyEqual(qty * labourRate, labourTotal)) return invalid('arithmetic_mismatch')
-    if (!approximatelyEqual(materialTotal + labourTotal, total)) return invalid('component_sum_mismatch')
-    rate = materialRate + labourRate
-    if (!approximatelyEqual(qty * rate, total)) return invalid('arithmetic_mismatch')
+    const quantityDecimal = resolvedDecimals.quantity!
+    const materialRateDecimal = resolvedDecimals.materialRate!
+    const materialTotalDecimal = resolvedDecimals.materialTotal!
+    const labourRateDecimal = resolvedDecimals.labourRate!
+    const labourTotalDecimal = resolvedDecimals.labourTotal!
+    const amountDecimal = resolvedDecimals.amount!
+    if (!decimalsApproximatelyEqual(multiplyDecimals(quantityDecimal, materialRateDecimal), materialTotalDecimal)
+      || !decimalsApproximatelyEqual(multiplyDecimals(quantityDecimal, labourRateDecimal), labourTotalDecimal)) {
+      return invalid('arithmetic_mismatch')
+    }
+    const combinedTotalDecimal = addDecimals(materialTotalDecimal, labourTotalDecimal)
+    if (!decimalsApproximatelyEqual(combinedTotalDecimal, amountDecimal)) return invalid('component_sum_mismatch')
+    const combinedRateDecimal = addDecimals(materialRateDecimal, labourRateDecimal)
+    const combinedRate = exactDecimalToNumber(combinedRateDecimal)
+    if (combinedRate === null) return invalid('invalid_source_value')
+    rate = combinedRate
+    if (!decimalsApproximatelyEqual(multiplyDecimals(quantityDecimal, combinedRateDecimal), amountDecimal)) {
+      return invalid('arithmetic_mismatch')
+    }
     sourceCosts = {
       material: { qty, unit: resolvedValues.unit!, rate: materialRate, total: materialTotal },
       labour: { qty, unit: resolvedValues.unit!, rate: labourRate, total: labourTotal },
@@ -297,7 +395,10 @@ export function resolveSourceCellMapping(input: ResolveSourceCellMappingArgs): S
   } else {
     rate = resolvedValues.rate!
     total = resolvedValues.total!
-    if (!approximatelyEqual(qty * rate, total)) return invalid('arithmetic_mismatch')
+    if (!decimalsApproximatelyEqual(
+      multiplyDecimals(resolvedDecimals.quantity!, resolvedDecimals.rate!),
+      resolvedDecimals.total!,
+    )) return invalid('arithmetic_mismatch')
   }
 
   const evidenceFingerprint = createHash('sha256').update(stableJson(evidence)).digest('hex')

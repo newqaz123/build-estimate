@@ -200,6 +200,52 @@ test('strictly parses currency and commas but rejects malformed, negative, and n
   assertInvalid(generic, 'invalid_source_value', [conflictingCurrencies])
 })
 
+test('rejects retained integers and decimals that cannot round-trip without precision loss', () => {
+  const generic: SourceCellMapping = {
+    sourceRowIds: ['row-1'],
+    description: [{ sourceRowId: 'row-1', column: 1 }],
+    unit: { sourceRowId: 'row-1', column: 2 },
+    quantity: { sourceRowId: 'row-1', column: 3 },
+    rate: { sourceRowId: 'row-1', column: 4 },
+    total: { sourceRowId: 'row-1', column: 5 },
+  }
+  for (const lossy of ['9007199254740993', '0.1234567890123456789']) {
+    const row = {
+      ...pricedSourceRow,
+      rawCells: pricedSourceRow.rawCells.map((value) => {
+        if (value.column === 3) return cell(3, '1')
+        if (value.column === 4 || value.column === 5) return cell(value.column, lossy)
+        return value
+      }),
+    }
+    assertInvalid(generic, 'invalid_source_value', [row])
+  }
+})
+
+test('keeps exactly round-trippable source decimals valid and checks them with decimal arithmetic', () => {
+  const row = {
+    ...pricedSourceRow,
+    rawCells: pricedSourceRow.rawCells.map((value) => {
+      if (value.column === 3) return cell(3, '3')
+      if (value.column === 4) return cell(4, 'THB 0.10')
+      if (value.column === 5) return cell(5, '0.300')
+      return value
+    }),
+  }
+  const result = resolve({
+    sourceRowIds: ['row-1'],
+    description: [{ sourceRowId: 'row-1', column: 1 }],
+    unit: { sourceRowId: 'row-1', column: 2 },
+    quantity: { sourceRowId: 'row-1', column: 3 },
+    rate: { sourceRowId: 'row-1', column: 4 },
+    total: { sourceRowId: 'row-1', column: 5 },
+  }, [row])
+
+  assert.equal(result.kind, 'candidate')
+  assert.equal(result.candidate.rate, 0.1)
+  assert.equal(result.candidate.total, 0.3)
+})
+
 test('rejects qty times rate inconsistencies', () => {
   const row = { ...pricedSourceRow, rawCells: pricedSourceRow.rawCells.map((value) => value.column === 5 ? cell(5, '17,000') : value) }
   assertInvalid(completeComponentMapping, 'arithmetic_mismatch', [row])
