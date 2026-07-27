@@ -14,6 +14,9 @@ const ROUTES: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['boqs/[id]/extraction-runs/[runId]/proposals/[proposalId]/reject/route.ts', ['POST']],
   ['boqs/[id]/extraction-runs/[runId]/proposals/[proposalId]/undo/route.ts', ['POST']],
   ['boqs/[id]/extraction-runs/[runId]/proposals/[proposalId]/add-source-item/route.ts', ['POST']],
+  ['boqs/preflight/route.ts', ['POST', 'GET', 'PATCH', 'DELETE']],
+  ['boqs/preflight/[id]/route.ts', ['GET', 'PATCH', 'DELETE']],
+  ['internal/cleanup/preflight/route.ts', ['DELETE']],
 ]
 
 test('new BOQ ingestion route modules export only supported HTTP handlers', () => {
