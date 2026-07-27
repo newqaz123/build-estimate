@@ -1,9 +1,12 @@
+import { randomUUID } from 'node:crypto'
 import type { Firestore } from 'firebase-admin/firestore'
-import type { Boq } from './boq-schema'
+import type { Boq, BoqPricedItem, BoqSection, BoqSourceCosts } from './boq-schema'
 import { extractionRunPath, sourceRowPath, createFirestoreExtractionStore } from './boq-extraction-storage'
 import { checksumSourceRows, extractionRunIdentityFingerprint, fingerprintParserConfig, stableCanonicalJson, type BoqExtractionRun } from './boq-extraction-run'
 import type { BoqSourceRowV3 } from './boq-extraction-schema'
 import { fingerprintCanonicalItem, fingerprintCanonicalSections, isHighConfidenceProposal, isStructurallyValidExtractionProposal, normalizeValidationSummary, type ExtractionProposal, type ProposalValidationSummary, type ValidatedProposal } from './boq-extraction-proposals'
+import { reconstructSourceMappedItem } from './boq-extraction-proposal-contract'
+import type { SourceBackedResolvedValues } from './boq-extraction-cell-mapping'
 import {
   acceptExtractionProposal,
   proposalMatchesAudit,
@@ -13,6 +16,7 @@ import {
   type ExtractionProposalAudit,
   type ExtractionProposalUndoEvent,
 } from './boq-extraction-acceptance'
+import { addSourceBackedBoqItem, MissingBoqItemError, type SourceBackedItemRequest, type ValidatedSourceMapping } from './boq-user-entry'
 
 export type ProposalStoreResponse =
   | { status: 200; body: Record<string, unknown> }
@@ -191,11 +195,81 @@ function auditIdentityValid(proposal: ExtractionProposal, audit: ExtractionPropo
   return isAudit(audit) && proposalMatchesAudit(proposal, audit)
 }
 
+function auditSourceRefs(rows: readonly BoqSourceRowV3[], ids: readonly string[]) {
+  const known = new Map(rows.map((row) => [row.id, row]))
+  return ids.flatMap((id) => {
+    const row = known.get(id)
+    return row ? [{ sourceRowId: id, page: row.page, table: row.table, row: row.row }] : []
+  })
+}
+
+/** Reconstructs the source-derived component breakdown (provenance only) from
+ *  the immutable cell mapping. Returns null unless every component field was
+ *  resolved by `resolveSourceCellMapping` — partial drafts carry no source Costs. */
+function sourceCostsFromResolvedValues(resolved: SourceBackedResolvedValues): BoqSourceCosts | null {
+  if (resolved.materialRate === undefined || resolved.materialTotal === undefined
+    || resolved.labourRate === undefined || resolved.labourTotal === undefined) return null
+  const qty = resolved.quantity ?? 0
+  const unit = resolved.unit ?? ''
+  return {
+    material: { present: true, qty, unit, rate: resolved.materialRate, total: resolved.materialTotal },
+    labour: { present: true, qty, unit, rate: resolved.labourRate, total: resolved.labourTotal },
+  }
+}
+
+/** Builds the manual-entry audit mirroring `toAudit`'s shape: the proposal's
+ *  source provenance is preserved, `proposedItems` is empty (the user authored
+ *  the values), and `reviewDraft` keeps the source-derived resolution distinct
+ *  from the user-entered correction now committed in `afterSections`. */
+function buildSourceItemAudit(input: {
+  proposal: ValidatedProposal
+  beforeSections: readonly BoqSection[]
+  afterSections: readonly BoqSection[]
+  actorId: string
+  now: string
+  sourceRows: readonly BoqSourceRowV3[]
+}): ExtractionProposalAudit {
+  const proposal = input.proposal
+  const beforeSections = structuredClone(input.beforeSections) as BoqSection[]
+  const afterSections = structuredClone(input.afterSections) as BoqSection[]
+  return {
+    auditId: `${proposal.id}:${input.now}`,
+    proposalId: proposal.id,
+    extractionRunId: proposal.extractionRunId,
+    status: 'accepted',
+    actorId: input.actorId,
+    timestamp: input.now,
+    operation: proposal.operation,
+    ...(proposal.candidateItemIds ? { candidateItemIds: [...proposal.candidateItemIds] } : {}),
+    ...(proposal.baseSectionsFingerprint ? { baseSectionsFingerprint: proposal.baseSectionsFingerprint } : {}),
+    ...(proposal.destinationSectionIndex === undefined ? {} : { destinationSectionIndex: proposal.destinationSectionIndex }),
+    ...(proposal.destinationItemIndex === undefined ? {} : { destinationItemIndex: proposal.destinationItemIndex }),
+    ...(proposal.candidateSourceOrder === undefined ? {} : { candidateSourceOrder: proposal.candidateSourceOrder }),
+    targetItemIds: [...proposal.targetItemIds],
+    affectedItemFingerprints: { ...proposal.affectedItemFingerprints },
+    confidence: proposal.confidence,
+    explanation: proposal.explanation,
+    sourceRowIds: [...proposal.sourceRowIds],
+    sourceRefs: auditSourceRefs(input.sourceRows, proposal.sourceRowIds),
+    proposedItems: [],
+    ...(proposal.sourceCellMapping ? { sourceCellMapping: structuredClone(proposal.sourceCellMapping) } : {}),
+    ...(proposal.mappedCandidate ? { mappedCandidate: structuredClone(proposal.mappedCandidate) } : {}),
+    ...(proposal.reviewDraft ? { reviewDraft: structuredClone(proposal.reviewDraft) } : {}),
+    ...(proposal.evidenceValid === undefined ? {} : { evidenceValid: proposal.evidenceValid }),
+    ...(proposal.reconciled === undefined ? {} : { reconciled: proposal.reconciled }),
+    ...(proposal.stale === undefined ? {} : { stale: proposal.stale }),
+    beforeSections,
+    beforeSectionsFingerprint: fingerprintCanonicalSections(beforeSections),
+    afterSections,
+    afterSectionsFingerprint: fingerprintCanonicalSections(afterSections),
+  }
+}
+
 /**
  * Firestore action store. The canonical BOQ write and audit record write occur
  * in the same transaction. Source rows/run sections are immutable once ready.
  */
-export function createFirestoreExtractionProposalStore(db: Firestore, now: () => Date = () => new Date()) {
+export function createFirestoreExtractionProposalStore(db: Firestore, now: () => Date = () => new Date(), randomId: () => string = () => randomUUID()) {
   const evidence = createFirestoreExtractionStore(db)
 
   async function loadImmutable(boqId: string, runId: string) {
@@ -710,6 +784,107 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
         })
       } catch {
         return { status: 500, body: { error: 'Proposal batch acceptance could not be saved' } }
+      }
+    },
+
+    async addSourceItem(
+      boqId: string,
+      runId: string,
+      proposalId: string,
+      request: SourceBackedItemRequest,
+      actorId: string,
+    ): Promise<ProposalStoreResponse> {
+      let immutable: Awaited<ReturnType<typeof loadImmutable>>
+      try { immutable = await loadImmutable(boqId, runId) } catch { return { status: 404, body: { error: 'Extraction run not found' } } }
+      if (!immutable) return { status: 404, body: { error: 'Extraction run not found' } }
+      try {
+        return await db.runTransaction(async (transaction) => {
+          const boqRef = db.collection('boqs').doc(boqId)
+          const runRef = db.doc(extractionRunPath(boqId, runId))
+          const auditRef = db.doc(auditPath(boqId, runId, proposalId))
+          const proposalRef = db.doc(proposalPath(boqId, runId, proposalId))
+          const undoRef = auditRef.collection('events').doc('undo')
+          const [boqSnap, runSnap, proposalSnap, auditSnap, undoSnap] = await Promise.all([
+            transaction.get(boqRef), transaction.get(runRef), transaction.get(proposalRef),
+            transaction.get(auditRef), transaction.get(undoRef),
+          ])
+          if (!boqSnap.exists || !runSnap.exists || runSnap.data()?.status !== 'ready') {
+            return { status: 404, body: { error: 'Extraction run not found' } }
+          }
+          const proposal = proposalSnap.exists ? storedProposal(proposalSnap.data(), proposalId) : null
+          if (!proposal) return { status: 404, body: { error: 'Stored proposal not found' } }
+          if (!await verifyImmutableContext(transaction, db, boqId, runId, runSnap, immutable)) {
+            return { status: 409, body: { error: 'Extraction evidence changed; recheck the proposal' } }
+          }
+          if (auditSnap.exists && !isAudit(auditSnap.data())) {
+            return { status: 409, body: { error: 'Proposal audit record is invalid' } }
+          }
+          const boq = { id: boqSnap.id, ...boqSnap.data() } as Boq
+          if (boq.status === 'approved') return { status: 409, body: { error: 'Approved BOQs cannot be changed by extraction proposals' } }
+          const existingAudit = auditSnap.exists && isAudit(auditSnap.data()) ? auditSnap.data() as ExtractionProposalAudit : null
+          if (undoSnap.exists && isUndoEvent(undoSnap.data())) return { status: 409, body: { error: 'Proposal was already undone' } }
+          if (existingAudit && !auditIdentityValid(proposal, existingAudit)) return invalidResponse('run_identity_mismatch')
+          if (existingAudit) {
+            if (existingAudit.status === 'accepted' && existingAudit.resultBoq) {
+              return { status: 200, body: { status: 'accepted', boq: structuredClone(existingAudit.resultBoq), audit: existingAudit, idempotent: true } }
+            }
+            return { status: 409, body: { error: 'proposal_rejected', audit: existingAudit } }
+          }
+          if (!proposal.reviewDraft) {
+            return { status: 409, body: { error: 'Proposal is not a source-backed review draft' } }
+          }
+          const targetItems = new Map(boq.sections.flatMap((section) => section.items)
+            .flatMap((item) => item.id ? [[item.id, item] as const] : []))
+          const reconstruction = reconstructSourceMappedItem({
+            mapping: proposal.reviewDraft.mapping,
+            targetItemIds: proposal.targetItemIds,
+            sourceRows: immutable.sourceRows,
+            allowedSourceRowIds: new Set(proposal.sourceRowIds),
+            sections: boq.sections,
+            targetItems,
+          })
+          if (reconstruction.kind === 'invalid') {
+            return { status: 400, body: { error: reconstruction.code } }
+          }
+          if (reconstruction.kind === 'candidate') {
+            return { status: 409, body: { error: 'Proposal already resolves to a complete mapping' } }
+          }
+          const draft = reconstruction.draft
+          const validatedSourceMapping: ValidatedSourceMapping = {
+            sourceRowId: draft.sourceRowIds[0] ?? '',
+            sourceRowIds: [...draft.sourceRowIds],
+            ...(draft.sourceRefs[0] ? { sourceRef: { ...draft.sourceRefs[0] } } : {}),
+          }
+          const sourceCosts = sourceCostsFromResolvedValues(draft.resolvedValues)
+          if (sourceCosts) validatedSourceMapping.sourceCosts = sourceCosts
+          const itemId = `user-${randomId()}`
+          let result: { boq: Boq; item: BoqPricedItem }
+          try {
+            result = addSourceBackedBoqItem({ boq, validatedSourceMapping, userValues: request, itemId })
+          } catch (error) {
+            if (error instanceof MissingBoqItemError) return { status: 400, body: { error: error.message } }
+            throw error
+          }
+          const actionTimestamp = now().toISOString()
+          const updatedBoq = { ...result.boq, updatedAt: actionTimestamp }
+          const audit = buildSourceItemAudit({
+            proposal, beforeSections: boq.sections, afterSections: updatedBoq.sections,
+            actorId, now: actionTimestamp, sourceRows: immutable.sourceRows,
+          })
+          const acceptedAudit = { ...audit, resultBoq: structuredClone(updatedBoq) }
+          transaction.update(boqRef, {
+            sections: updatedBoq.sections,
+            totalItems: updatedBoq.totalItems,
+            grandTotal: updatedBoq.grandTotal,
+            stdStatus: updatedBoq.stdStatus,
+            updatedAt: actionTimestamp,
+          })
+          transaction.update(proposalRef, { lifecycleStatus: 'accepted', updatedAt: actionTimestamp })
+          transaction.create(auditRef, acceptedAudit)
+          return { status: 200, body: { status: 'accepted', boq: updatedBoq, audit: acceptedAudit } }
+        })
+      } catch {
+        return { status: 500, body: { error: 'Source-backed item could not be added' } }
       }
     },
   }

@@ -10,6 +10,7 @@ const handlers = createExtractionProposalActionHandlers({
   acceptBatch: (boqId, runId, proposalIds, actorId) => store().acceptBatch(boqId, runId, proposalIds, actorId),
   reject: (boqId, runId, proposalId, actorId) => store().reject(boqId, runId, proposalId, actorId),
   undo: (boqId, runId, proposalId, actorId) => store().undo(boqId, runId, proposalId, actorId),
+  addSourceItem: (boqId, runId, proposalId, request, actorId) => store().addSourceItem(boqId, runId, proposalId, request, actorId),
 })
 
 export async function POST(request: Request, context: ExtractionProposalBatchContext) {

@@ -14,6 +14,7 @@ import { createFirestoreExtractionProposalStore } from './boq-extraction-proposa
 import { createFirestoreExtractionStore } from './boq-extraction-storage'
 import { buildExtractionCandidates } from './boq-extraction-evidence'
 import { prepareProviderProposalV2 } from './boq-extraction-proposal-contract'
+import { parseSourceBackedItemRequest } from './boq-user-entry'
 import { v3Fixture } from './boq-extraction-test-fixtures'
 import type { Boq, BoqPricedItem, BoqSection } from './boq-schema'
 import type { BoqSourceRowV3 } from './boq-extraction-schema'
@@ -397,6 +398,150 @@ test('source-backed review draft persists but remains non-acceptable', async () 
   const state = await fixture.store.getReviewState('boq-1', 'run-1')
   assert.deepEqual(state?.proposals[0].reviewDraft, proposal.reviewDraft)
   assert.equal((await fixture.store.accept('boq-1', 'run-1', proposal.id, 'user-1')).status, 400)
+})
+
+function reviewDraftHarness() {
+  const fixture = mappedStoreHarness()
+  const incomplete = {
+    ...fixture.decision,
+    cellMapping: {
+      sourceRowIds: ['mapped-row'], description: [{ sourceRowId: 'mapped-row', column: 1 }],
+      unit: { sourceRowId: 'mapped-row', column: 2 }, quantity: { sourceRowId: 'mapped-row', column: 3 },
+    },
+  }
+  const prepared = prepareProviderProposalV2(incomplete, fixture.context)
+  if (!prepared.ok) throw new Error('reviewDraft preparation failed')
+  const proposal = { ...prepared.proposal, evidenceValid: true as const, reconciled: true as const, stale: false }
+  const userValues = parseSourceBackedItemRequest({
+    sectionIndex: 0,
+    item: { desc: 'Wall installation', unit: 'pcs', qty: 2, materialCost: 50, labourCost: 50 },
+  })
+  return { ...fixture, proposal, userValues }
+}
+
+test('addSourceItem writes a user-origin item with source provenance, audit, and accepted lifecycle', async () => {
+  const fixture = reviewDraftHarness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
+
+  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  assert.equal(result.status, 200)
+  if (result.status !== 200) return
+
+  const stored = fixture.db.docs.get('boqs/boq-1') as unknown as Boq
+  const previous = (before as unknown as Boq).sections[0].items.length
+  const added = stored.sections[0].items[previous] as BoqPricedItem | undefined
+  assert.ok(added, 'a user-origin item was appended')
+  assert.equal(added.entryOrigin, 'user')
+  assert.equal(added.sourceRowId, 'mapped-row')
+  assert.deepEqual(added.sourceRowIds, ['mapped-row'])
+  assert.equal(added.costAllocation?.origin, 'manual')
+  assert.equal(added.costAllocation?.material, 50)
+  assert.equal(added.costAllocation?.labour, 50)
+  assert.equal(added.rate, 100)
+  assert.equal(added.total, 200)
+  assert.equal(stored.totalItems, (before as unknown as Boq).totalItems + 1)
+  assert.equal(stored.grandTotal, (before as unknown as Boq).grandTotal + 200)
+
+  const proposalRecord = fixture.db.docs.get(`${fixture.runPath}/proposals/${fixture.proposal.id}`)!
+  assert.equal(proposalRecord.lifecycleStatus, 'accepted')
+
+  const audit = fixture.db.docs.get(`${fixture.runPath}/proposalAudits/${fixture.proposal.id}`)!
+  assert.equal(audit.status, 'accepted')
+  assert.equal(audit.actorId, 'user-7')
+  assert.equal(audit.operation, 'needs_human_review')
+  assert.deepEqual(audit.proposedItems, [])
+  assert.ok(audit.reviewDraft, 'audit preserves the source-derived review draft')
+  assert.ok(audit.beforeSections && audit.afterSections, 'audit records before/after sections')
+  assert.ok(audit.resultBoq, 'audit pins the exact accepted BOQ')
+  assert.equal((audit.resultBoq as Boq).grandTotal, stored.grandTotal)
+})
+
+test('addSourceItem is idempotent when retried with the same accepted proposal', async () => {
+  const fixture = reviewDraftHarness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  const first = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  assert.equal(first.status, 200)
+  const firstBoq = (first.body as { boq: Boq }).boq
+
+  const edited = fixture.db.docs.get('boqs/boq-1')!
+  ;(edited as { project: string }).project = 'User-edited project'
+  ;(edited as { updatedAt: string }).updatedAt = '2026-07-20T12:01:00.000Z'
+  const retry = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  assert.equal(retry.status, 200)
+  assert.deepEqual((retry.body as { boq: Boq }).boq, firstBoq)
+  assert.equal((retry.body as { idempotent?: boolean }).idempotent, true)
+  assert.equal((fixture.db.docs.get('boqs/boq-1') as { project: string }).project, 'User-edited project')
+})
+
+test('addSourceItem rejects approved BOQs, missing drafts, stale evidence, and missing proposals', async () => {
+  const fixture = reviewDraftHarness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+
+  fixture.db.docs.get('boqs/boq-1')!.status = 'approved'
+  const approvedBefore = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
+  const approved = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  assert.equal(approved.status, 409)
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), approvedBefore)
+  fixture.db.docs.get('boqs/boq-1')!.status = 'draft'
+
+  const missing = await fixture.store.addSourceItem('boq-1', 'run-1', 'no-such-proposal', fixture.userValues, 'user-7')
+  assert.equal(missing.status, 404)
+
+  const runRecord = fixture.db.docs.get(fixture.runPath)! as { deterministicSections: { checksum: string } }
+  const savedChecksum = runRecord.deterministicSections.checksum
+  runRecord.deterministicSections.checksum = 'sha256:changed'
+  const stale = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  assert.equal(stale.status, 409)
+  runRecord.deterministicSections.checksum = savedChecksum
+})
+
+test('addSourceItem rejects proposals without a source-backed review draft', async () => {
+  const fixture = harness()
+  const userValues = parseSourceBackedItemRequest({
+    sectionIndex: 0,
+    item: { desc: 'Wall', unit: 'pcs', qty: 1, materialCost: 10, labourCost: 5 },
+  })
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
+  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, userValues, 'user-7')
+  assert.equal(result.status, 409)
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+})
+
+test('addSourceItem rejects invalid section destinations and bad arithmetic as 400 errors', async () => {
+  const fixture = reviewDraftHarness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
+
+  const badSection = await fixture.store.addSourceItem(
+    'boq-1', 'run-1', fixture.proposal.id,
+    { ...fixture.userValues, sectionIndex: 99 },
+    'user-7',
+  )
+  assert.equal(badSection.status, 400)
+
+  const badCosts = await fixture.store.addSourceItem(
+    'boq-1', 'run-1', fixture.proposal.id,
+    { ...fixture.userValues, materialCost: Number.NaN },
+    'user-7',
+  )
+  assert.equal(badCosts.status, 400)
+
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+  const proposalRecord = fixture.db.docs.get(`${fixture.runPath}/proposals/${fixture.proposal.id}`)!
+  assert.notEqual(proposalRecord.lifecycleStatus, 'accepted')
+  assert.equal(fixture.db.docs.has(`${fixture.runPath}/proposalAudits/${fixture.proposal.id}`), false)
+})
+
+test('addSourceItem conflicts with a prior rejected audit', async () => {
+  const fixture = reviewDraftHarness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  await fixture.store.reject('boq-1', 'run-1', fixture.proposal.id, 'user-1')
+  const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
+  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  assert.equal(result.status, 409)
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
 })
 
 test('store reload and acceptance reject mapped provenance with an unused declared row', async () => {

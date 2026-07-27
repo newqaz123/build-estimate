@@ -1,4 +1,5 @@
 import type { ExtractionProposalAudit } from '@/lib/boq-extraction-acceptance'
+import { MissingBoqItemError, parseSourceBackedItemRequest, type SourceBackedItemRequest } from '@/lib/boq-user-entry'
 
 export type ExtractionProposalActionContext = { params: Promise<{ id: string; runId: string; proposalId: string }> }
 export type ExtractionProposalBatchContext = { params: Promise<{ id: string; runId: string }> }
@@ -13,6 +14,7 @@ export interface ExtractionProposalActionDependencies {
   acceptBatch(boqId: string, runId: string, proposalIds: string[], actorId: string): Promise<ProposalActionResult>
   reject(boqId: string, runId: string, proposalId: string, actorId: string): Promise<ProposalActionResult>
   undo(boqId: string, runId: string, proposalId: string, actorId: string): Promise<ProposalActionResult>
+  addSourceItem(boqId: string, runId: string, proposalId: string, request: SourceBackedItemRequest, actorId: string): Promise<ProposalActionResult>
 }
 
 function validPathId(value: string): boolean {
@@ -82,7 +84,29 @@ export function createExtractionProposalActionHandlers(dependencies: ExtractionP
     return Response.json(result.body, { status: result.status })
   }
 
-  return { accept, acceptBatch, reject, undo }
+  async function addSourceItem(request: Request, context: ExtractionProposalActionContext): Promise<Response> {
+    const user = actorId(await dependencies.authenticate())
+    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
+    const { id, runId, proposalId } = await context.params
+    if (![id, runId, proposalId].every(validPathId)) return Response.json({ error: 'Invalid extraction proposal path' }, { status: 400 })
+    let body: unknown
+    try {
+      body = await request.json()
+    } catch {
+      return Response.json({ error: 'Request body must be valid JSON.' }, { status: 400 })
+    }
+    let parsed: SourceBackedItemRequest
+    try {
+      parsed = parseSourceBackedItemRequest(body)
+    } catch (error) {
+      if (error instanceof MissingBoqItemError) return Response.json({ error: error.message }, { status: 400 })
+      throw error
+    }
+    const result = await dependencies.addSourceItem(id, runId, proposalId, parsed, user)
+    return Response.json(result.body, { status: result.status })
+  }
+
+  return { accept, acceptBatch, reject, undo, addSourceItem }
 }
 
 export type { ExtractionProposalAudit }
