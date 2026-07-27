@@ -171,9 +171,10 @@ export function createFirestorePreflightStore(db: Firestore, bucket: Bucket, now
           if (!current.exists) return false
           const data = current.data() as PreflightRecord
           if (['consumed', 'cancelled', 'expired'].includes(data.status)) return false
+          const cleanupTime = now()
           const lease = Date.parse(data.cleanupLeaseExpiresAt ?? '')
-          if (data.cleanupState === 'deleting' && Number.isFinite(lease) && lease > expiry.getTime()) return false
-          transaction.update(snapshot.ref, { status: 'expired', cleanupState: 'deleting', cleanupToken: randomUUID(), cleanupLeaseExpiresAt: iso(new Date(expiry.getTime() + CLEANUP_LEASE_MS)), updatedAt: iso(expiry) })
+          if (data.cleanupState === 'deleting' && Number.isFinite(lease) && lease > cleanupTime.getTime()) return false
+          transaction.update(snapshot.ref, { status: 'expired', cleanupState: 'deleting', cleanupToken: randomUUID(), cleanupLeaseExpiresAt: iso(new Date(cleanupTime.getTime() + CLEANUP_LEASE_MS)), updatedAt: iso(cleanupTime) })
           return true
         })
         if (ok) claimed.push({ id: snapshot.id, ownerId: owner })

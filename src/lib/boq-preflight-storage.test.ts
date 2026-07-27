@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { PreflightUpload } from './boq-preflight-schema'
-import { cleanupExpiredPreflightUploads, type PreflightStore, type PreflightRecord } from './boq-preflight-storage'
+import { cleanupExpiredPreflightUploads, createFirestorePreflightStore, type PreflightStore, type PreflightRecord } from './boq-preflight-storage'
 
 function seed(ownerId: string): PreflightRecord {
   return {
@@ -51,5 +51,104 @@ test('cleanup rejects unbounded requests', async () => {
   await assert.rejects(() => cleanupExpiredPreflightUploads(harness([]), new Date(), 201), /between 1 and 200/)
 })
 
-// Keep the contract import checked by TypeScript even when this test is run alone.
+
+class FakeSnapshot {
+  constructor(public readonly ref: FakeRef, private readonly value?: Record<string, unknown>) {}
+  get exists(): boolean { return this.value !== undefined }
+  data(): Record<string, unknown> | undefined { return this.value }
+  get id(): string { return this.ref.id }
+}
+
+class FakeRef {
+  constructor(public readonly db: FakeDb, public readonly path: string) {}
+  get id(): string { return this.path.split('/').at(-1)! }
+  get parent(): FakeCollection { return new FakeCollection(this.db, this.path.split('/').slice(0, -1).join('/')) }
+  async get(): Promise<FakeSnapshot> { return new FakeSnapshot(this, this.db.docs.get(this.path)) }
+  async delete(): Promise<void> { this.db.docs.delete(this.path) }
+}
+class FakeCollection {
+  constructor(public readonly db: FakeDb, public readonly path: string) {}
+  get parent(): FakeRef | undefined {
+    const parts = this.path.split('/'); return parts.length >= 2 ? new FakeRef(this.db, parts.slice(0, -1).join('/')) : undefined
+  }
+  doc(id: string): FakeRef { return new FakeRef(this.db, `${this.path}/${id}`) }
+}
+class FakeTransaction {
+  constructor(private readonly db: FakeDb) {}
+  async get(ref: FakeRef): Promise<FakeSnapshot> { return ref.get() }
+  create(ref: FakeRef, data: Record<string, unknown>): void { if (this.db.docs.has(ref.path)) throw new Error('exists'); this.db.docs.set(ref.path, data) }
+  update(ref: FakeRef, patch: Record<string, unknown>): void { this.db.docs.set(ref.path, { ...this.db.docs.get(ref.path), ...patch }) }
+  delete(ref: FakeRef): void { this.db.docs.delete(ref.path) }
+}
+class FakeQuery {
+  private cutoff?: string; private max = Infinity
+  constructor(private readonly db: FakeDb) {}
+  where(_field: string, _op: string, value: string): FakeQuery { this.cutoff = value; return this }
+  limit(value: number): FakeQuery { this.max = value; return this }
+  async get(): Promise<{ docs: FakeSnapshot[] }> {
+    const docs = [...this.db.docs.entries()].filter(([path, value]) => path.includes('/uploads/') && (!this.cutoff || String(value.expiresAt) <= this.cutoff)).slice(0, this.max)
+    return { docs: docs.map(([path, value]) => new FakeSnapshot(new FakeRef(this.db, path), value)) }
+  }
+}
+class FakeDb {
+  readonly docs = new Map<string, Record<string, unknown>>()
+  doc(path: string): FakeRef { return new FakeRef(this, path) }
+  collectionGroup(name: string): FakeQuery { if (name !== 'uploads') throw new Error('unexpected collection'); return new FakeQuery(this) }
+  async runTransaction<T>(fn: (transaction: FakeTransaction) => Promise<T>): Promise<T> { return fn(new FakeTransaction(this)) }
+}
+class FakeBucket {
+  readonly deletedPaths: string[] = []
+  readonly missing = new Set<string>()
+  file(path: string): { delete: () => Promise<void> } {
+    return { delete: async () => { if (this.missing.has(path)) throw Object.assign(new Error('missing'), { code: 404 }); this.deletedPaths.push(path) } }
+  }
+}
+
+function firestoreHarness(clock = new Date('2026-07-27T00:00:00.000Z')) {
+  const db = new FakeDb(); const bucket = new FakeBucket()
+  return { db, bucket, store: createFirestorePreflightStore(db as never, bucket as never, () => clock) }
+}
+
+test('Firestore adapter enforces lifecycle and terminal cleanup', async () => {
+  const harness = firestoreHarness()
+  const upload = await harness.store.create(seed('owner-a'))
+  assert.equal((await harness.store.getOwned(upload.id, 'owner-a'))?.status, 'uploaded')
+  await assert.rejects(() => harness.store.update(upload.id, 'owner-a', { status: 'consumed' }), /Invalid preflight transition/)
+  await harness.store.update(upload.id, 'owner-a', { status: 'analyzing' })
+  await harness.store.update(upload.id, 'owner-a', { status: 'failed' },)
+})
+
+test('failed preserveForRetry retains record and artifacts; failed cleanup deletes them', async () => {
+  const keep = firestoreHarness(); const upload = await keep.store.create(seed('keep'))
+  const retained = await keep.store.update(upload.id, 'keep', { status: 'analyzing' })
+  assert.equal(retained?.status, 'analyzing')
+  const failed = await keep.store.update(upload.id, 'keep', { status: 'failed', preserveForRetry: true })
+  assert.equal(failed?.status, 'failed'); assert.ok(await keep.store.getOwned(upload.id, 'keep'))
+
+  const remove = firestoreHarness(); const doomed = await remove.store.create(seed('remove'))
+  await remove.store.update(doomed.id, 'remove', { status: 'failed' })
+  assert.equal(await remove.store.getOwned(doomed.id, 'remove'), null)
+})
+
+test('expired cleanup lease uses invocation time and blocks a concurrent claim', async () => {
+  const invocation = new Date('2026-07-27T00:00:00.000Z'); const cleanupClock = new Date('2026-07-27T00:10:00.000Z'); const harness = firestoreHarness(cleanupClock)
+  const upload = await harness.store.create(seed('owner-a'))
+  const claimed = await harness.store.claimExpired(invocation, 10)
+  assert.deepEqual(claimed, [{ id: upload.id, ownerId: 'owner-a' }])
+  const secondClaim = await harness.store.claimExpired(new Date(invocation.getTime() + 60_000), 10)
+  assert.deepEqual(secondClaim, [])
+  const stored = await harness.store.getOwned(upload.id, 'owner-a')
+  assert.equal(stored?.cleanupLeaseExpiresAt, '2026-07-27T00:15:00.000Z')
+})
+
+test('missing preview and OCR artifacts do not prevent cleanup', async () => {
+  const harness = firestoreHarness(); const upload = await harness.store.create(seed('owner-a'))
+  harness.bucket.missing.add(`preflight/owner-a/${upload.id}/previews/1.png`)
+  harness.bucket.missing.add(`preflight/owner-a/${upload.id}/ocr/1.json`)
+  await harness.store.update(upload.id, 'owner-a', { status: 'analyzing' })
+  await harness.store.update(upload.id, 'owner-a', { status: 'cancelled' })
+  assert.equal(await harness.store.getOwned(upload.id, 'owner-a'), null)
+  assert.deepEqual(harness.bucket.deletedPaths, [`preflight/owner-a/${upload.id}/source.pdf`])
+})
+
 void ({} as PreflightUpload)
