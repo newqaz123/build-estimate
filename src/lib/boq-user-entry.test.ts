@@ -74,6 +74,7 @@ test("parseSourceBackedItemRequest rejects malformed editable payloads", () => {
     { sectionIndex: 0, item: { ...valid, materialCost: 12.345 } },
     { sectionIndex: 0, item: { ...valid, labourCost: 0.001 } },
     { sectionIndex: 0, item: { ...valid, extra: "ignored" } },
+    { sectionIndex: 0, item: valid, sourceRowId: "client-supplied" },
     null,
     "not-an-object",
   ]) {

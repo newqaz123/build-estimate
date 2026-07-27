@@ -57,6 +57,7 @@ export interface SourceBackedItemRequest {
 }
 
 const SOURCE_ITEM_KEYS = new Set(["desc", "unit", "qty", "materialCost", "labourCost"])
+const SOURCE_REQUEST_KEYS = new Set(["sectionIndex", "item"])
 const COMPONENT_FIELDS: ReadonlyArray<keyof Pick<SourceBackedItemRequest, "materialCost" | "labourCost">> = ["materialCost", "labourCost"]
 
 function requireFiniteNonNegative(field: string, value: unknown): number {
@@ -79,6 +80,9 @@ export function parseSourceBackedItemRequest(value: unknown): SourceBackedItemRe
   if (!isRecord(value)) throw new MissingBoqItemError("Request body must be an object.")
   if (!Number.isInteger(value.sectionIndex) || Number(value.sectionIndex) < 0) {
     throw new MissingBoqItemError("sectionIndex must be a non-negative integer.")
+  }
+  for (const key of Object.keys(value)) {
+    if (!SOURCE_REQUEST_KEYS.has(key)) throw new MissingBoqItemError(`Unexpected request field: ${key}.`)
   }
   const item = value.item
   if (!isRecord(item)) throw new MissingBoqItemError("item must be an object with editable values.")

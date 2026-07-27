@@ -269,7 +269,7 @@ function buildSourceItemAudit(input: {
  * Firestore action store. The canonical BOQ write and audit record write occur
  * in the same transaction. Source rows/run sections are immutable once ready.
  */
-export function createFirestoreExtractionProposalStore(db: Firestore, now: () => Date = () => new Date(), randomId: () => string = () => randomUUID()) {
+export function createFirestoreExtractionProposalStore(db: Firestore, now: () => Date = () => new Date()) {
   const evidence = createFirestoreExtractionStore(db)
 
   async function loadImmutable(boqId: string, runId: string) {
@@ -857,7 +857,7 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
           }
           const sourceCosts = sourceCostsFromResolvedValues(draft.resolvedValues)
           if (sourceCosts) validatedSourceMapping.sourceCosts = sourceCosts
-          const itemId = `user-${randomId()}`
+          const itemId = `user-${randomUUID()}`
           let result: { boq: Boq; item: BoqPricedItem }
           try {
             result = addSourceBackedBoqItem({ boq, validatedSourceMapping, userValues: request, itemId })
