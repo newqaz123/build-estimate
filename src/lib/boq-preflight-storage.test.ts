@@ -109,13 +109,48 @@ function firestoreHarness(clock = new Date('2026-07-27T00:00:00.000Z')) {
   return { db, bucket, store: createFirestorePreflightStore(db as never, bucket as never, () => clock) }
 }
 
-test('Firestore adapter enforces lifecycle and terminal cleanup', async () => {
+test('Firestore adapter rejects invalid transitions and cleans up on cancel from uploaded', async () => {
   const harness = firestoreHarness()
   const upload = await harness.store.create(seed('owner-a'))
   assert.equal((await harness.store.getOwned(upload.id, 'owner-a'))?.status, 'uploaded')
+  // uploaded -> consumed is invalid: consumption requires analyzing -> ready first
   await assert.rejects(() => harness.store.update(upload.id, 'owner-a', { status: 'consumed' }), /Invalid preflight transition/)
+  // cancellation is allowed directly from an active state and deletes all artifacts
+  const cancelled = await harness.store.update(upload.id, 'owner-a', { status: 'cancelled' })
+  assert.equal(cancelled, null)
+  assert.equal(await harness.store.getOwned(upload.id, 'owner-a'), null)
+  assert.deepEqual(harness.bucket.deletedPaths, [
+    `preflight/owner-a/${upload.id}/source.pdf`,
+    `preflight/owner-a/${upload.id}/previews/1.png`,
+    `preflight/owner-a/${upload.id}/ocr/1.json`,
+  ])
+})
+
+test('consumed transition from ready deletes source, preview, and OCR artifacts', async () => {
+  const harness = firestoreHarness()
+  const upload = await harness.store.create(seed('owner-a'))
   await harness.store.update(upload.id, 'owner-a', { status: 'analyzing' })
-  await harness.store.update(upload.id, 'owner-a', { status: 'failed' },)
+  await harness.store.update(upload.id, 'owner-a', { status: 'ready' })
+  const consumed = await harness.store.update(upload.id, 'owner-a', { status: 'consumed' })
+  assert.equal(consumed, null)
+  assert.equal(await harness.store.getOwned(upload.id, 'owner-a'), null)
+  assert.deepEqual(harness.bucket.deletedPaths, [
+    `preflight/owner-a/${upload.id}/source.pdf`,
+    `preflight/owner-a/${upload.id}/previews/1.png`,
+    `preflight/owner-a/${upload.id}/ocr/1.json`,
+  ])
+})
+
+test('failed state only allows retry or terminal transitions', async () => {
+  const harness = firestoreHarness()
+  const upload = await harness.store.create(seed('owner-a'))
+  await harness.store.update(upload.id, 'owner-a', { status: 'analyzing' })
+  await harness.store.update(upload.id, 'owner-a', { status: 'failed', preserveForRetry: true })
+  // failed -> ready is rejected: a retry must re-enter analyzing first
+  await assert.rejects(() => harness.store.update(upload.id, 'owner-a', { status: 'ready' }), /Invalid preflight transition: failed -> ready/)
+  // failed -> analyzing is the allowed retry path
+  const retry = await harness.store.update(upload.id, 'owner-a', { status: 'analyzing' })
+  assert.equal(retry?.status, 'analyzing')
 })
 
 test('failed preserveForRetry retains record and artifacts; failed cleanup deletes them', async () => {
@@ -128,6 +163,11 @@ test('failed preserveForRetry retains record and artifacts; failed cleanup delet
   const remove = firestoreHarness(); const doomed = await remove.store.create(seed('remove'))
   await remove.store.update(doomed.id, 'remove', { status: 'failed' })
   assert.equal(await remove.store.getOwned(doomed.id, 'remove'), null)
+  assert.deepEqual(remove.bucket.deletedPaths, [
+    `preflight/remove/${doomed.id}/source.pdf`,
+    `preflight/remove/${doomed.id}/previews/1.png`,
+    `preflight/remove/${doomed.id}/ocr/1.json`,
+  ])
 })
 
 test('expired cleanup lease uses invocation time and blocks a concurrent claim', async () => {
