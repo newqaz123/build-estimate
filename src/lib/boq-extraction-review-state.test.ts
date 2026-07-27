@@ -325,3 +325,111 @@ test("real-shape filter counts: 22 ambiguous, 2 reviewed, 20 remaining, 0 unreco
   const unreconciled = selectReviewVisibility(review, statuses, "unreconciled")
   assert.equal(unreconciled.proposals.length + unreconciled.sourceRows.length, 0)
 })
+
+test("normalizeExtractionReviewResponse preserves a valid source-backed reviewDraft and rejects malformed drafts", () => {
+  const baseReview: ExtractionReviewResponse = {
+    mode: "ai", aiStatus: "completed", message: "Ready",
+    sourceRowIds: ["row-1"], remainingCandidateRowIds: [],
+    sourceRefs: [{ sourceRowId: "row-1", page: 2, table: 1, row: 4 }],
+    sourceRows: [sourceRow],
+    proposals: [{
+      id: "prop-1", extractionRunId: "run-1", operation: "needs_human_review",
+      sourceRowIds: ["row-1"], targetItemIds: [], affectedItemFingerprints: {},
+      confidence: 0.4, explanation: "Ambiguous", proposedItems: [],
+      evidenceValid: true, reconciled: true, stale: false,
+      reviewDraft: {
+        mapping: { sourceRowIds: ["row-1"], description: [{ sourceRowId: "row-1", column: 0 }] },
+        resolvedValues: { description: "Wall installation", unit: "m2", quantity: 18, rate: 1630, total: 29340 },
+        missingFields: ["materialRate"],
+        sourceRowIds: ["row-1"],
+        sourceRefs: [{ page: 2, table: 1, row: 4 }],
+        section: { index: 0, header: "Substructure" },
+      },
+    }],
+    rejectedProposals: [],
+  }
+  const accepted = normalizeExtractionReviewResponse(baseReview)
+  assert.ok(accepted)
+  assert.equal(accepted?.proposals[0]?.reviewDraft?.resolvedValues.description, "Wall installation")
+  assert.equal(accepted?.proposals[0]?.reviewDraft?.section?.index, 0)
+
+  // A malformed reviewDraft (bad resolvedValues type) rejects the entire response.
+  assert.equal(
+    normalizeExtractionReviewResponse({
+      ...baseReview,
+      proposals: [{
+        ...baseReview.proposals[0],
+        reviewDraft: { ...baseReview.proposals[0]!.reviewDraft!, resolvedValues: { description: 12 } },
+      }],
+    }),
+    null,
+  )
+
+  // A malformed sourceRefs entry rejects the entire response.
+  assert.equal(
+    normalizeExtractionReviewResponse({
+      ...baseReview,
+      proposals: [{
+        ...baseReview.proposals[0],
+        reviewDraft: { ...baseReview.proposals[0]!.reviewDraft!, sourceRefs: [{ page: "two", table: 1, row: 4 }] },
+      }],
+    }),
+    null,
+  )
+
+  // A malformed missingFields list rejects the entire response.
+  assert.equal(
+    normalizeExtractionReviewResponse({
+      ...baseReview,
+      proposals: [{
+        ...baseReview.proposals[0],
+        reviewDraft: { ...baseReview.proposals[0]!.reviewDraft!, missingFields: ["bogus_field"] },
+      }],
+    }),
+    null,
+  )
+
+  // A null section is acceptable for unfamiliar layouts.
+  const nullSection = normalizeExtractionReviewResponse({
+    ...baseReview,
+    proposals: [{
+      ...baseReview.proposals[0],
+      reviewDraft: { ...baseReview.proposals[0]!.reviewDraft!, section: null },
+    }],
+  })
+  assert.ok(nullSection)
+  assert.equal(nullSection?.proposals[0]?.reviewDraft?.section, null)
+})
+
+test("normalizeExtractionReviewResponse rejects proposals that pair reviewDraft with bad source cell mapping", () => {
+  const baseReview: ExtractionReviewResponse = {
+    mode: "ai", aiStatus: "completed", message: "Ready",
+    sourceRowIds: ["row-1"], remainingCandidateRowIds: [],
+    sourceRefs: [{ sourceRowId: "row-1", page: 2, table: 1, row: 4 }],
+    sourceRows: [sourceRow],
+    proposals: [],
+    rejectedProposals: [],
+  }
+  // sourceCellMapping paired with a reviewDraft (must be needs_human_review without mapping) is malformed.
+  assert.equal(
+    normalizeExtractionReviewResponse({
+      ...baseReview,
+      proposals: [{
+        id: "prop-1", extractionRunId: "run-1", operation: "needs_human_review",
+        sourceRowIds: ["row-1"], targetItemIds: [], affectedItemFingerprints: {},
+        confidence: 0.4, explanation: "Ambiguous", proposedItems: [],
+        evidenceValid: true, reconciled: true, stale: false,
+        reviewDraft: {
+          mapping: { sourceRowIds: ["row-1"], description: [{ sourceRowId: "row-1", column: 0 }] },
+          resolvedValues: { description: "Wall", unit: "m2", quantity: 1, rate: 10, total: 10 },
+          missingFields: ["materialRate"],
+          sourceRowIds: ["row-1"],
+          sourceRefs: [{ page: 2, table: 1, row: 4 }],
+          section: { index: 0, header: "Substructure" },
+        },
+        sourceCellMapping: { sourceRowIds: ["row-1"] },
+      }],
+    }),
+    null,
+  )
+})

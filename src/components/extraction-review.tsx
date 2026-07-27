@@ -14,6 +14,7 @@ import {
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { SourceBackedItemEditor, type SourceBackedItemPayload } from "@/components/source-backed-item-editor"
 import type { ExtractionReviewSourceRow } from "@/lib/boq-extraction-ai-review"
 import {
   acceptAllValidatedProposalIds,
@@ -156,6 +157,8 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
   const [extractionRunId, setExtractionRunId] = useState(boq.activeExtractionRunId)
   const [state, dispatch] = useReducer(extractionReviewReducer, undefined, initialExtractionReviewState)
   const [reextracting, setReextracting] = useState(false)
+  const [editingProposalId, setEditingProposalId] = useState<string | null>(null)
+  const [sourceBackedError, setSourceBackedError] = useState<string | null>(null)
   const autoReviewedRunRef = useRef<string | null>(null)
   const recoveryAttemptRef = useRef<string | null>(null)
   const canonicalRevisionRef = useRef(canonicalRevisionKey)
@@ -315,6 +318,42 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
     } catch (cause) {
       dispatch({ type: "proposal_action_failed", proposalId: proposal.id, error: cause instanceof Error ? cause.message : `Suggestion could not be ${action}ed.` })
       return false
+    }
+  }, [boq.id, extractionRunId, mutationBlockedReason, onBoqChange, readOnly, refreshStoredReview])
+
+  const submitSourceBackedItem = useCallback(async (proposal: ValidatedProposal, payload: SourceBackedItemPayload) => {
+    if (!extractionRunId || readOnly) return { ok: false as const, error: "This BOQ is read-only." }
+    if (mutationBlockedReason) {
+      setSourceBackedError(mutationBlockedReason)
+      return { ok: false as const, error: mutationBlockedReason }
+    }
+    dispatch({ type: "proposal_action_started", proposalId: proposal.id, action: "adding" })
+    setSourceBackedError(null)
+    try {
+      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/extraction-runs/${encodeURIComponent(extractionRunId)}/proposals/${encodeURIComponent(proposal.id)}/add-source-item`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+      if (!response.ok) {
+        const message = await readError(response, "BOQ item could not be added from the reviewed source.")
+        dispatch({ type: "proposal_action_failed", proposalId: proposal.id, error: message })
+        setSourceBackedError(message)
+        return { ok: false as const, error: message }
+      }
+      const result = await response.json() as { boq?: Boq }
+      if (result.boq) onBoqChange(result.boq)
+      dispatch({ type: "proposal_status", proposalId: proposal.id, status: "accepted", canUndo: false })
+      await refreshStoredReview()
+      setEditingProposalId(null)
+      setSourceBackedError(null)
+      toast.success("BOQ item added from reviewed source.")
+      return { ok: true as const }
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "BOQ item could not be added from the reviewed source."
+      dispatch({ type: "proposal_action_failed", proposalId: proposal.id, error: message })
+      setSourceBackedError(message)
+      return { ok: false as const, error: message }
     }
   }, [boq.id, extractionRunId, mutationBlockedReason, onBoqChange, readOnly, refreshStoredReview])
 
@@ -489,10 +528,23 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
                     {status === "accepted" && state.proposalCanUndo[proposal.id] && !readOnly ? <Button type="button" variant="outline" size="sm" onClick={() => void executeAction(proposal, "undo")} disabled={Boolean(action) || Boolean(mutationBlockedReason)}>Undo{action === "undoing" ? <Loader2 className="animate-spin" /> : <Undo2 aria-hidden="true" />}</Button> : null}
                     {!status ? <>
                       {canAccept ? <Button type="button" size="sm" onClick={() => void executeAction(proposal, "accept")} disabled={readOnly || Boolean(mutationBlockedReason) || Boolean(action)}>Accept{action === "accepting" ? <Loader2 className="animate-spin" /> : <Check aria-hidden="true" />}</Button> : null}
+                      {humanReview && proposal.reviewDraft && !readOnly ? (
+                        <Button type="button" variant="outline" size="sm" onClick={() => { setEditingProposalId(proposal.id); setSourceBackedError(null) }} disabled={Boolean(action)}>Review &amp; add</Button>
+                      ) : null}
                       <Button type="button" variant="ghost" size="sm" onClick={() => void executeAction(proposal, "reject")} disabled={readOnly || Boolean(action)}>Reject{action === "rejecting" ? <Loader2 className="animate-spin" /> : <X aria-hidden="true" />}</Button>
                     </> : status !== "accepted" ? <span className="extraction-action-status">{status === "rejected" ? "Rejected" : "Undone"}</span> : null}
                   </div>
                 </div>
+                {editingProposalId === proposal.id && humanReview && proposal.reviewDraft && !readOnly ? (
+                  <SourceBackedItemEditor
+                    boq={boq}
+                    proposal={proposal}
+                    busy={action === "adding"}
+                    serverError={sourceBackedError}
+                    onCancel={() => { setEditingProposalId(null); setSourceBackedError(null) }}
+                    onSubmit={(payload) => submitSourceBackedItem(proposal, payload)}
+                  />
+                ) : null}
               </article>
             )
           })}

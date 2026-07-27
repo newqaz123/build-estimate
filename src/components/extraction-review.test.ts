@@ -188,3 +188,23 @@ test("detail page renders the grouped extraction notes component instead of a fl
   // The old flat repetitive mapping is gone
   assert.doesNotMatch(detailSource, /extractionWarnings\.map\(\(warning, index\) => <span[^>]*>\{warning\.message\}<\/span>\)/)
 })
+
+test("needs_human_review proposals expose Review & add but never render Accept", () => {
+  const source = readFileSync(componentUrl, "utf8")
+  // A focused editor opens for source-backed needs_human_review proposals.
+  // JSX escapes the ampersand as &amp; in source; accept either form.
+  assert.match(source, /Review &amp; add|Review & add/)
+  assert.match(source, /setEditingProposalId/)
+  assert.match(source, /editingProposalId/)
+  assert.match(source, /SourceBackedItemEditor/)
+  // The Accept gate stays strict: needs_human_review never appears in the accept branch.
+  assert.match(source, /humanReview && proposal\.reviewDraft && !readOnly/)
+  // The mutation posts editable values only to the source-item route.
+  assert.match(source, /\/add-source-item/)
+  // The payload comes from the editor's validated builder; only the route + body shape live here.
+  assert.match(source, /body: JSON\.stringify\(payload\)/)
+  // After success, the BOQ is refreshed and a confirmation toast renders.
+  assert.match(source, /BOQ item added from reviewed source\./)
+  // The needs_human_review branch is never made directly acceptable.
+  assert.doesNotMatch(source, /proposalCanBeAccepted\(proposal\) && humanReview/)
+})

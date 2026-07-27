@@ -5,7 +5,7 @@ export type ExtractionProposalStatus = "accepted" | "rejected" | "undone"
 export type ExtractionProposalStatusMap = Record<string, ExtractionProposalStatus | undefined>
 export type ExtractionReviewFilter = "all" | "pending" | "accepted" | "rejected" | "needs-attention" | "ambiguous" | "unreconciled" | "ai-pending"
 export type ExtractionReviewSourceFilter = Extract<ExtractionReviewFilter, "ambiguous" | "unreconciled" | "ai-pending">
-export type ExtractionProposalAction = "accepting" | "rejecting" | "undoing"
+export type ExtractionProposalAction = "accepting" | "rejecting" | "undoing" | "adding"
 
 export interface ReviewSnapshotGeneration {
   current: number
@@ -279,6 +279,132 @@ function validReviewRun(value: unknown): boolean {
     .every((key) => value[key] === undefined || typeof value[key] === "string")
 }
 
+const REVIEW_DRAFT_RESOLVED_KEYS = new Set([
+  "description", "unit", "quantity", "rate", "total",
+  "materialRate", "materialTotal", "labourRate", "labourTotal", "amount",
+])
+const REVIEW_MISSING_FIELDS = new Set([
+  ...REVIEW_DRAFT_RESOLVED_KEYS, "destinationSection", "targetItemState",
+])
+const SOURCE_REF_KEYS = new Set(["sourceRowId", "column", "line"])
+const SOURCE_LOCATION_KEYS = new Set(["page", "table", "row"])
+
+function isInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value)
+}
+
+function isFiniteNonNegativeNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+}
+
+function nonBlankString(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== ""
+}
+
+function exactKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
+  return Object.keys(value).every((key) => allowed.has(key))
+}
+
+function uniqueStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(nonBlankString) && new Set(value).size === value.length
+}
+
+function validSourceCellRefShape(value: unknown): boolean {
+  if (!isRecord(value) || !exactKeys(value, SOURCE_REF_KEYS)) return false
+  if (!nonBlankString(value.sourceRowId) || !isInteger(value.column) || (value.column as number) < 0) return false
+  return value.line === undefined || (isInteger(value.line) && (value.line as number) >= 0)
+}
+
+/** Loose shape check for a `SourceCellMapping`. This is a secondary defense —
+ *  the server's `validSourceCellMapping` performs the full prove-nance check
+ *  against the proposal's sourceRowIds; here we only reject obviously
+ *  malformed payloads so they cannot reach review UI state. */
+function validSourceCellMappingShape(value: unknown, proposalSourceRowIds: readonly string[]): boolean {
+  if (!isRecord(value) || !Array.isArray(value.sourceRowIds) || !uniqueStringArray(value.sourceRowIds)) return false
+  if (value.sourceRowIds.length !== proposalSourceRowIds.length) return false
+  const known = new Set(proposalSourceRowIds)
+  if (!value.sourceRowIds.every((id: string) => known.has(id))) return false
+  if (value.description !== undefined) {
+    if (!Array.isArray(value.description) || value.description.length === 0
+      || !value.description.every(validSourceCellRefShape)) return false
+  }
+  for (const key of ["unit", "quantity", "rate", "total", "materialRate", "materialTotal", "labourRate", "labourTotal", "amount"] as const) {
+    if (value[key] !== undefined && !validSourceCellRefShape(value[key])) return false
+  }
+  return true
+}
+
+function validMappedCandidateShape(value: unknown, proposalSourceRowIds: readonly string[]): boolean {
+  if (!isRecord(value)) return false
+  if (!nonBlankString(value.id) || !isInteger(value.sectionIndex) || (value.sectionIndex as number) < 0) return false
+  if (!nonBlankString(value.sectionHeader) || !isInteger(value.sourceOrder) || (value.sourceOrder as number) < 0) return false
+  if (!uniqueStringArray(value.sourceRowIds) || value.sourceRowIds.length !== proposalSourceRowIds.length) return false
+  if (!Array.isArray(value.sourceRefs) || value.sourceRefs.length !== proposalSourceRowIds.length) return false
+  if (!value.sourceRefs.every((ref: unknown) => isRecord(ref) && exactKeys(ref, SOURCE_LOCATION_KEYS)
+    && isInteger(ref.page) && (ref.page as number) >= 0
+    && isInteger(ref.table) && (ref.table as number) >= 0
+    && isInteger(ref.row) && (ref.row as number) >= 0)) return false
+  if (!nonBlankString(value.unit) || !isFiniteNonNegativeNumber(value.qty)
+    || !isFiniteNonNegativeNumber(value.rate) || !isFiniteNonNegativeNumber(value.total)) return false
+  return typeof value.optional === "boolean" && typeof value.excludedFromTotal === "boolean"
+}
+
+/** Shape-checks a `SourceBackedReviewDraft`. The server's `validReviewDraft`
+ *  performs the canonical source-row ID match; this predicate only rejects
+ *  payloads whose draft has clearly malformed refs/fields so they cannot
+ *  reach the client editor. */
+function validReviewDraftShape(value: unknown, proposalSourceRowIds: readonly string[]): boolean {
+  if (!isRecord(value)) return false
+  if (!validSourceCellMappingShape(value.mapping, proposalSourceRowIds)) return false
+  if (!isRecord(value.resolvedValues)) return false
+  for (const [key, entry] of Object.entries(value.resolvedValues)) {
+    if (!REVIEW_DRAFT_RESOLVED_KEYS.has(key)) return false
+    if (key === "description" || key === "unit") {
+      if (entry !== undefined && !nonBlankString(entry)) return false
+    } else if (entry !== undefined && !isFiniteNonNegativeNumber(entry)) return false
+  }
+  if (!Array.isArray(value.missingFields) || value.missingFields.length === 0) return false
+  if (!value.missingFields.every((field) => typeof field === "string" && REVIEW_MISSING_FIELDS.has(field))) return false
+  if (new Set(value.missingFields).size !== value.missingFields.length) return false
+  if (!uniqueStringArray(value.sourceRowIds) || value.sourceRowIds.length !== proposalSourceRowIds.length) return false
+  const known = new Set(proposalSourceRowIds)
+  if (!value.sourceRowIds.every((id: string) => known.has(id))) return false
+  if (!Array.isArray(value.sourceRefs)) return false
+  if (!value.sourceRefs.every((ref: unknown) => isRecord(ref) && exactKeys(ref, SOURCE_LOCATION_KEYS)
+    && isInteger(ref.page) && (ref.page as number) >= 0
+    && isInteger(ref.table) && (ref.table as number) >= 0
+    && isInteger(ref.row) && (ref.row as number) >= 0)) return false
+  if (value.section !== null) {
+    if (!isRecord(value.section)) return false
+    if (!isInteger(value.section.index) || (value.section.index as number) < 0) return false
+    if (!nonBlankString(value.section.header)) return false
+  }
+  return true
+}
+
+/** Per-proposal shape check. Mirrors the server decoder's metadata rules:
+ *  reviewDraft requires needs_human_review + no mapping; mapping requires
+ *  a paired mappedCandidate. Kept loose — the server runs the full
+ *  structural validation pipeline before persisting. */
+function validProposalShape(value: unknown): boolean {
+  if (!isRecord(value) || !nonBlankString(value.id) || typeof value.operation !== "string") return false
+  if (!Array.isArray(value.sourceRowIds) || !uniqueStringArray(value.sourceRowIds) || value.sourceRowIds.length === 0) return false
+  const hasMapping = value.sourceCellMapping !== undefined
+  const hasCandidate = value.mappedCandidate !== undefined
+  const hasDraft = value.reviewDraft !== undefined
+  if (hasMapping !== hasCandidate) return false
+  if (hasDraft) {
+    if (value.operation !== "needs_human_review" || hasMapping) return false
+    if (!validReviewDraftShape(value.reviewDraft, value.sourceRowIds)) return false
+  }
+  if (hasMapping) {
+    if (!["insert_missing_item", "replace_item"].includes(value.operation)) return false
+    if (!validSourceCellMappingShape(value.sourceCellMapping, value.sourceRowIds)) return false
+    if (!validMappedCandidateShape(value.mappedCandidate, value.sourceRowIds)) return false
+  }
+  return true
+}
+
 /** Rejects malformed client payloads instead of allowing a partial provider response into review state. */
 export function normalizeExtractionReviewResponse(value: unknown): ExtractionReviewResponse | null {
   if (!isRecord(value) || !["ai", "fallback", "not_required"].includes(String(value.mode))) return null
@@ -286,7 +412,7 @@ export function normalizeExtractionReviewResponse(value: unknown): ExtractionRev
   if (typeof value.aiStatus !== "string" || typeof value.message !== "string") return null
   if (!isStringArray(value.sourceRowIds) || !isStringArray(value.remainingCandidateRowIds)) return null
   if (!Array.isArray(value.sourceRefs) || !Array.isArray(value.sourceRows) || !value.sourceRows.every(isSourceRow)) return null
-  if (!Array.isArray(value.proposals) || !Array.isArray(value.rejectedProposals)) return null
+  if (!Array.isArray(value.proposals) || !value.proposals.every(validProposalShape) || !Array.isArray(value.rejectedProposals)) return null
   if (!validProposalStatuses(value.proposalStatuses) || !validReviewRun(value.reviewRun)
     || (value.auditEvents !== undefined && !Array.isArray(value.auditEvents))) return null
   return value as unknown as ExtractionReviewResponse
