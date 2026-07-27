@@ -22,6 +22,22 @@ test('recognizes English BOQ signals deterministically', () => {
   assert.ok(result.reasons.includes('numeric_columns'))
 })
 
+test('does not suggest a page with only description and quantity', () => {
+  const [result] = analyzePreflightPages([
+    { page: 3, embeddedText: 'Description Quantity 10 20 30 40 50 60', geometry: { tableCount: 1, numericTokenCount: 6 } },
+  ])
+  assert.equal(result.suggested, false)
+  assert.ok(!result.reasons.includes('quantity_rate_amount'))
+})
+
+test('requires bounded BOQ terms instead of matching words inside other words', () => {
+  const [result] = analyzePreflightPages([
+    { page: 4, embeddedText: 'Descriptions quantities units amounts totals', geometry: { tableCount: 1, numericTokenCount: 12 } },
+  ])
+  assert.equal(result.suggested, false)
+  assert.deepEqual(result.reasons, ['table_layout', 'numeric_columns'])
+})
+
 test('fails closed when no page reaches confidence threshold', () => {
   const result = analyzePreflightPages([
     { page: 1, embeddedText: 'Description', geometry: { tableCount: 0, numericTokenCount: 0 } },
