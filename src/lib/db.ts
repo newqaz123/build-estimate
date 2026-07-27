@@ -1,5 +1,6 @@
-import { getDb as _getDb } from './firebase-admin'
+import { getDb as _getDb, getStorageBucket as _getStorageBucket } from './firebase-admin'
 export const getDb = _getDb
+export const getBucket = _getStorageBucket
 import type { WhereFilterOp } from 'firebase-admin/firestore'
 
 export async function runTransaction<T>(
