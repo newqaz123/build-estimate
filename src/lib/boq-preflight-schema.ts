@@ -26,20 +26,6 @@ export interface PreflightUpload {
   confirmedPages: number[] | null
 }
 
-export interface PreflightRecord extends PreflightUpload {
-  ownerId: string
-  sourceDigest: string
-  sourceName: string
-  sourceType: string
-  sourceSize: number
-  expiresAt: string
-  createdAt: string
-  updatedAt: string
-  cleanupState?: 'deleting'
-  cleanupToken?: string
-  cleanupLeaseExpiresAt?: string
-}
-
 function invalid(message: string): never {
   throw new Error(`Invalid confirmed page selection: ${message}`)
 }

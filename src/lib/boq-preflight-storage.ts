@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Bucket } from '@google-cloud/storage'
 import type { Firestore } from 'firebase-admin/firestore'
-import type { PreflightStatus, PreflightUpload, PreflightRecord } from './boq-preflight-schema'
+import type { PreflightStatus, PreflightUpload } from './boq-preflight-schema'
 
 const CLEANUP_LEASE_MS = 5 * 60 * 1000
 const MAX_CLEANUP_LIMIT = 200
@@ -13,6 +13,20 @@ export interface PreflightCreateInput extends PreflightUpload {
   sourceType?: string
   sourceSize?: number
   expiresAt?: string
+}
+
+export interface PreflightRecord extends PreflightUpload {
+  ownerId: string
+  sourceDigest: string
+  sourceName: string
+  sourceType: string
+  sourceSize: number
+  expiresAt: string
+  createdAt: string
+  updatedAt: string
+  cleanupState?: 'deleting'
+  cleanupToken?: string
+  cleanupLeaseExpiresAt?: string
 }
 
 export interface PreflightStore {
