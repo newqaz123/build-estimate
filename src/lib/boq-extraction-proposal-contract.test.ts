@@ -694,6 +694,23 @@ test('v2 mapping boundary rejects provider-authored source values and invalid co
   }, mappedContext).ok, false)
 })
 
+test('v2 mapping boundary rejects declared source rows that contribute no mapped cell', () => {
+  const unusedRow = { ...mappedSourceRow, id: 'unused-row', row: 4 }
+  const prepared = prepareProviderProposalV2({
+    ...mappedDecision,
+    sourceRowIds: ['mapped-row', 'unused-row'],
+    cellMapping: {
+      ...mappedDecision.cellMapping,
+      sourceRowIds: ['mapped-row', 'unused-row'],
+    },
+  }, {
+    ...mappedContext,
+    sourceRows: [mappedSourceRow, unusedRow],
+    allowedSourceRowIds: new Set(['mapped-row', 'unused-row']),
+  })
+  assert.equal(prepared.ok, false)
+})
+
 test('v2 decision expands immutable candidates and injects revision and destination metadata', () => {
   const prepared = prepareProviderProposalV2({
     id: 'insert-2', operation: 'insert_missing_item', sourceRowIds: ['sr-2'], targetItemIds: [],

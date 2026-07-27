@@ -3,7 +3,7 @@ import type { Boq } from './boq-schema'
 import { extractionRunPath, sourceRowPath, createFirestoreExtractionStore } from './boq-extraction-storage'
 import { checksumSourceRows, extractionRunIdentityFingerprint, fingerprintParserConfig, stableCanonicalJson, type BoqExtractionRun } from './boq-extraction-run'
 import type { BoqSourceRowV3 } from './boq-extraction-schema'
-import { fingerprintCanonicalItem, fingerprintCanonicalSections, isHighConfidenceProposal, normalizeValidationSummary, type ExtractionProposal, type ProposalValidationSummary, type ValidatedProposal } from './boq-extraction-proposals'
+import { fingerprintCanonicalItem, fingerprintCanonicalSections, isHighConfidenceProposal, isStructurallyValidExtractionProposal, normalizeValidationSummary, type ExtractionProposal, type ProposalValidationSummary, type ValidatedProposal } from './boq-extraction-proposals'
 import {
   acceptExtractionProposal,
   proposalMatchesAudit,
@@ -61,7 +61,7 @@ function proposalPath(boqId: string, runId: string, proposalId: string): string 
 function storedProposal(value: unknown, expectedId?: string): ValidatedProposal | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const proposal = (value as { proposal?: unknown }).proposal
-  if (!proposal || typeof proposal !== 'object' || Array.isArray(proposal)) return null
+  if (!isStructurallyValidExtractionProposal(proposal)) return null
   const candidate = proposal as ValidatedProposal
   if (typeof candidate.id !== 'string' || (expectedId !== undefined && candidate.id !== expectedId)
     || candidate.evidenceValid !== true || candidate.reconciled !== true || candidate.stale !== false) return null

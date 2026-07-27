@@ -306,7 +306,49 @@ function validSourceCellMapping(value: unknown, proposalSourceRowIds: readonly s
     ...[...SOURCE_MAPPING_KEYS].filter((key) => key !== 'sourceRowIds' && key !== 'description')
       .flatMap((key) => value[key] === undefined ? [] : [value[key]]),
   ] as Array<{ sourceRowId: string }>
+  const boundSourceRowIds = new Set(refs.map((ref) => ref.sourceRowId))
   return refs.every((ref) => proposalSourceRowIds.includes(ref.sourceRowId))
+    && boundSourceRowIds.size === proposalSourceRowIds.length
+    && proposalSourceRowIds.every((id) => boundSourceRowIds.has(id))
+}
+
+const MAPPED_CANDIDATE_KEYS = new Set([
+  'id', 'sectionIndex', 'sectionHeader', 'sourceOrder', 'sourceRowIds', 'sourceRefs',
+  'desc', 'pricingRole', 'parentBundleId', 'unit', 'qty', 'rate', 'total',
+  'costComponent', 'sourceCosts', 'optional', 'excludedFromTotal', 'exclusionReason',
+])
+const SOURCE_LOCATION_KEYS = new Set(['page', 'table', 'row'])
+const STORED_PROPOSAL_KEYS = new Set([
+  'id', 'extractionRunId', 'operation', 'candidateItemIds', 'baseSectionsFingerprint',
+  'destinationSectionIndex', 'destinationItemIndex', 'candidateSourceOrder',
+  'sourceRowIds', 'targetItemIds', 'affectedItemFingerprints', 'confidence',
+  'explanation', 'proposedItems', 'sourceCellMapping', 'mappedCandidate', 'reviewDraft',
+  'evidenceValid', 'reconciled', 'stale',
+])
+
+function validMappedCandidate(value: unknown, proposalSourceRowIds: readonly string[]): value is ExtractionCandidateItem {
+  return isRecord(value) && exactKeys(value, MAPPED_CANDIDATE_KEYS)
+    && nonBlankString(value.id)
+    && Number.isInteger(value.sectionIndex) && (value.sectionIndex as number) >= 0
+    && nonBlankString(value.sectionHeader)
+    && Number.isInteger(value.sourceOrder) && (value.sourceOrder as number) >= 0
+    && hasUniqueStrings(value.sourceRowIds)
+    && stableCanonicalJson(value.sourceRowIds) === stableCanonicalJson(proposalSourceRowIds)
+    && Array.isArray(value.sourceRefs) && value.sourceRefs.length === value.sourceRowIds.length
+    && value.sourceRefs.every((ref) => isRecord(ref) && exactKeys(ref, SOURCE_LOCATION_KEYS)
+      && Number.isInteger(ref.page) && (ref.page as number) >= 0
+      && Number.isInteger(ref.table) && (ref.table as number) >= 0
+      && Number.isInteger(ref.row) && (ref.row as number) >= 0)
+    && nonBlankString(value.desc)
+    && value.pricingRole === 'standard' && value.parentBundleId === null
+    && nonBlankString(value.unit)
+    && finiteNonNegative(value.qty) && finiteNonNegative(value.rate) && finiteNonNegative(value.total)
+    && approximatelyEqual(value.qty * value.rate, value.total)
+    && COST_COMPONENTS.has(value.costComponent as string)
+    && validSourceCosts(value.sourceCosts, value.total)
+    && typeof value.optional === 'boolean'
+    && typeof value.excludedFromTotal === 'boolean'
+    && validOptionalState(value)
 }
 
 function validReviewDraft(value: unknown, proposalSourceRowIds: readonly string[]): value is SourceBackedReviewDraft {
@@ -342,11 +384,41 @@ function validateSourceBackedMetadata(proposal: ExtractionProposal): ProposalVal
   if (hasMapping) {
     if (!['insert_missing_item', 'replace_item'].includes(proposal.operation)
       || !validSourceCellMapping(proposal.sourceCellMapping, proposal.sourceRowIds)
-      || !isRecord(proposal.mappedCandidate) || !nonBlankString(proposal.mappedCandidate.id)) {
+      || !validMappedCandidate(proposal.mappedCandidate, proposal.sourceRowIds)) {
       return fail('invalid_operation_shape')
     }
   }
   return null
+}
+
+/** Context-free Firestore/API decoder. Immutable evidence and canonical target
+ * checks still belong to validateExtractionProposal, but malformed proposal
+ * records must never be exposed to review clients. */
+export function isStructurallyValidExtractionProposal(value: unknown): value is ExtractionProposal {
+  if (!isRecord(value)
+    || !exactKeys(value, STORED_PROPOSAL_KEYS)
+    || !nonBlankString(value.id)
+    || !nonBlankString(value.extractionRunId)
+    || !PROPOSAL_OPERATIONS.includes(value.operation as ProposalOperation)
+    || !hasUniqueStrings(value.sourceRowIds) || value.sourceRowIds.length === 0
+    || !hasUniqueStrings(value.targetItemIds)
+    || !isRecord(value.affectedItemFingerprints)
+    || !Object.values(value.affectedItemFingerprints).every((fingerprint) => typeof fingerprint === 'string')
+    || !finiteNonNegative(value.confidence) || value.confidence > 1
+    || !nonBlankString(value.explanation)
+    || !Array.isArray(value.proposedItems)
+  ) return false
+  const proposal = value as unknown as ExtractionProposal
+  for (const marker of ['evidenceValid', 'reconciled', 'stale'] as const) {
+    if (value[marker] !== undefined && typeof value[marker] !== 'boolean') return false
+  }
+  if (proposal.candidateItemIds !== undefined && !hasUniqueStrings(proposal.candidateItemIds)) return false
+  if (proposal.baseSectionsFingerprint !== undefined && !nonBlankString(proposal.baseSectionsFingerprint)) return false
+  for (const index of [proposal.destinationSectionIndex, proposal.destinationItemIndex, proposal.candidateSourceOrder]) {
+    if (index !== undefined && (!Number.isInteger(index) || index < 0)) return false
+  }
+  if (!proposal.proposedItems.every((item) => validProposedItem(item, proposal.sourceRowIds))) return false
+  return validateSourceBackedMetadata(proposal) === null
 }
 
 function digest(value: unknown): string {

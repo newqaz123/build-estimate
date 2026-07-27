@@ -376,7 +376,7 @@ test('stored mapped candidate tampering is rejected before canonical mutation', 
   stored.proposal.mappedCandidate = { ...stored.proposal.mappedCandidate!, total: 999 }
   const before = structuredClone(fixture.db.docs.get('boqs/boq-1'))
   const result = await fixture.store.accept('boq-1', 'run-1', proposal.id, 'user-1')
-  assert.equal(result.status, 400)
+  assert.equal(result.status, 404)
   assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
 })
 
@@ -397,6 +397,83 @@ test('source-backed review draft persists but remains non-acceptable', async () 
   const state = await fixture.store.getReviewState('boq-1', 'run-1')
   assert.deepEqual(state?.proposals[0].reviewDraft, proposal.reviewDraft)
   assert.equal((await fixture.store.accept('boq-1', 'run-1', proposal.id, 'user-1')).status, 400)
+})
+
+test('store reload and acceptance reject mapped provenance with an unused declared row', async () => {
+  const fixture = mappedStoreHarness()
+  const prepared = prepareProviderProposalV2(fixture.decision, fixture.context)
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) return
+  const proposal = { ...prepared.proposal, evidenceValid: true as const, reconciled: true as const, stale: false }
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [proposal])
+  const path = `${fixture.runPath}/proposals/${proposal.id}`
+  const stored = fixture.db.docs.get(path)! as { proposal: typeof proposal }
+  stored.proposal.sourceRowIds = ['mapped-row', fixture.sourceRows[0].id]
+  stored.proposal.sourceCellMapping = {
+    ...stored.proposal.sourceCellMapping!,
+    sourceRowIds: ['mapped-row', fixture.sourceRows[0].id],
+  }
+  const before = structuredClone(fixture.db.docs.get('boqs/boq-1'))
+  await assert.rejects(() => fixture.store.getReviewState('boq-1', 'run-1'), /Stored proposal record is invalid/)
+  assert.equal((await fixture.store.accept('boq-1', 'run-1', proposal.id, 'user-1')).status, 404)
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+})
+
+test('store reload rejects malformed source-backed mapping and candidate metadata', async () => {
+  for (const mutate of [
+    (proposal: Record<string, unknown>) => {
+      const mapping = proposal.sourceCellMapping as { unit: Record<string, unknown> }
+      mapping.unit.column = 'bad'
+    },
+    (proposal: Record<string, unknown>) => {
+      const candidate = proposal.mappedCandidate as Record<string, unknown>
+      candidate.total = '100'
+    },
+  ]) {
+    const fixture = mappedStoreHarness()
+    const prepared = prepareProviderProposalV2(fixture.decision, fixture.context)
+    assert.equal(prepared.ok, true)
+    if (!prepared.ok) continue
+    const proposal = { ...prepared.proposal, evidenceValid: true as const, reconciled: true as const, stale: false }
+    await fixture.store.saveValidatedProposals('boq-1', 'run-1', [proposal])
+    const stored = fixture.db.docs.get(`${fixture.runPath}/proposals/${proposal.id}`)! as { proposal: Record<string, unknown> }
+    mutate(stored.proposal)
+    await assert.rejects(() => fixture.store.getReviewState('boq-1', 'run-1'), /Stored proposal record is invalid/)
+  }
+})
+
+test('store reload rejects malformed source-backed review draft metadata', async () => {
+  const fixture = mappedStoreHarness()
+  const prepared = prepareProviderProposalV2({
+    ...fixture.decision,
+    cellMapping: {
+      sourceRowIds: ['mapped-row'], description: [{ sourceRowId: 'mapped-row', column: 1 }],
+      unit: { sourceRowId: 'mapped-row', column: 2 }, quantity: { sourceRowId: 'mapped-row', column: 3 },
+    },
+  }, fixture.context)
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) return
+  const proposal = { ...prepared.proposal, evidenceValid: true as const, reconciled: true as const, stale: false }
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [proposal])
+  const stored = fixture.db.docs.get(`${fixture.runPath}/proposals/${proposal.id}`)! as {
+    proposal: { reviewDraft: { missingFields: string[] } }
+  }
+  stored.proposal.reviewDraft.missingFields = ['provider-authored-field']
+  await assert.rejects(() => fixture.store.getReviewState('boq-1', 'run-1'), /Stored proposal record is invalid/)
+})
+
+test('store reload rejects unexpected proposal fields instead of exposing stored provider data', async () => {
+  const fixture = mappedStoreHarness()
+  const prepared = prepareProviderProposalV2(fixture.decision, fixture.context)
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) return
+  const proposal = { ...prepared.proposal, evidenceValid: true as const, reconciled: true as const, stale: false }
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [proposal])
+  const stored = fixture.db.docs.get(`${fixture.runPath}/proposals/${proposal.id}`)! as {
+    proposal: Record<string, unknown>
+  }
+  stored.proposal.providerResponse = { text: 'must not reach the client' }
+  await assert.rejects(() => fixture.store.getReviewState('boq-1', 'run-1'), /Stored proposal record is invalid/)
 })
 
 test('single actions reload the stored proposal and reject approved BOQ mutation', async () => {

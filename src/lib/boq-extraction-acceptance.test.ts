@@ -217,3 +217,21 @@ test('mapped excluded replacement re-derives target state during acceptance', ()
     exclusionReason: result.boq.sections[0].items[0].exclusionReason,
   }, { optional: true, excludedFromTotal: true, exclusionReason: 'Client option' })
 })
+
+test('mapped acceptance rejects a declared source row with no mapped cell evidence', () => {
+  const canonical = mappedProposal()
+  const unusedRow = { ...mappedRow, id: 'unused-row', row: 4 }
+  const tampered = {
+    ...canonical,
+    sourceRowIds: ['mapped-row', 'unused-row'],
+    sourceCellMapping: {
+      ...canonical.sourceCellMapping!,
+      sourceRowIds: ['mapped-row', 'unused-row'],
+    },
+  }
+  const result = acceptExtractionProposal({
+    boq: mappedBoq, run: mappedRun, sourceRows: [mappedRow, unusedRow], proposal: tampered,
+    actorId: 'user-1', now: '2026-07-20T10:00:00.000Z', existingAudit: null,
+  })
+  assert.equal(result.kind, 'invalid')
+})

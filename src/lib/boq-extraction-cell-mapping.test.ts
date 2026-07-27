@@ -280,3 +280,58 @@ test('returns a source-backed draft with explicit missing fields for incomplete 
     quantity: { sourceRowId: 'row-1', column: 3 },
   })
 })
+
+test('rejects complete mappings that declare an unused source row', () => {
+  const unusedRow = { ...pricedSourceRow, id: 'row-2', row: 4 }
+  const result = resolveSourceCellMapping({
+    mapping: { ...completeComponentMapping, sourceRowIds: ['row-1', 'row-2'] },
+    allowedSourceRowIds: new Set(['row-1', 'row-2']),
+    sourceRows: [pricedSourceRow, unusedRow],
+    section: { index: 0, header: 'Unsectioned' },
+  })
+  assert.deepEqual(result, { kind: 'invalid', code: 'unknown_source_row' })
+})
+
+test('rejects incomplete drafts that declare an unused source row', () => {
+  const unusedRow = { ...pricedSourceRow, id: 'row-2', row: 4 }
+  const result = resolveSourceCellMapping({
+    mapping: {
+      sourceRowIds: ['row-1', 'row-2'],
+      description: [{ sourceRowId: 'row-1', column: 1 }],
+      unit: { sourceRowId: 'row-1', column: 2 },
+      quantity: { sourceRowId: 'row-1', column: 3 },
+    },
+    allowedSourceRowIds: new Set(['row-1', 'row-2']),
+    sourceRows: [pricedSourceRow, unusedRow],
+    section: { index: 0, header: 'Unsectioned' },
+  })
+  assert.deepEqual(result, { kind: 'invalid', code: 'unknown_source_row' })
+})
+
+test('accepts multi-row descriptions when every declared row contributes evidence', () => {
+  const secondRow = {
+    ...pricedSourceRow,
+    id: 'row-2',
+    row: 4,
+    rawCells: [cell(1, 'and associated controls')],
+    rawText: 'and associated controls',
+  }
+  const result = resolveSourceCellMapping({
+    mapping: {
+      ...completeComponentMapping,
+      sourceRowIds: ['row-1', 'row-2'],
+      description: [
+        { sourceRowId: 'row-1', column: 1 },
+        { sourceRowId: 'row-2', column: 1 },
+      ],
+    },
+    allowedSourceRowIds: new Set(['row-1', 'row-2']),
+    sourceRows: [pricedSourceRow, secondRow],
+    section: { index: 0, header: 'Unsectioned' },
+  })
+  assert.equal(result.kind, 'candidate')
+  if (result.kind === 'candidate') {
+    assert.deepEqual(result.candidate.sourceRowIds, ['row-1', 'row-2'])
+    assert.deepEqual(result.candidate.sourceRefs, [{ page: 2, table: 1, row: 3 }, { page: 2, table: 1, row: 4 }])
+  }
+})

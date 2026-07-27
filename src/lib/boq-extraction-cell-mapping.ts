@@ -286,6 +286,11 @@ export function resolveSourceCellMapping(input: ResolveSourceCellMappingArgs): S
     || !rowsById.has(ref.sourceRowId))) {
     return invalid('unknown_source_row')
   }
+  const boundSourceRowIds = new Set(bindings.map(({ ref }) => ref.sourceRowId))
+  if (boundSourceRowIds.size !== mapping.sourceRowIds.length
+    || mapping.sourceRowIds.some((id) => !boundSourceRowIds.has(id))) {
+    return invalid('unknown_source_row')
+  }
 
   const hasGenericPrices = mapping.rate !== undefined || mapping.total !== undefined
   const hasComponentPrices = COMPONENT_PRICE_FIELDS.some((field) => mapping[field] !== undefined)
