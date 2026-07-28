@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import type { PreflightUpload, PreflightPage } from '@/lib/boq-preflight-schema'
+import type { PreflightUpload } from '@/lib/boq-preflight-schema'
+import type { PreflightCreateInput } from '@/lib/boq-preflight-storage'
 import { createPreflightService } from '@/lib/boq-preflight-service'
+
+type PreflightUpdatePatch = Partial<PreflightUpload> & { preserveForRetry?: boolean }
 
 function mockPreflightUpload(overrides: Partial<PreflightUpload> = {}): PreflightUpload {
   return {
@@ -104,7 +107,7 @@ test('createPreflight stores source, runs analysis, and persists ready record', 
   let analysisCalled = false
 
   const store = {
-    create: async (input: any) => {
+    create: async (input: PreflightCreateInput) => {
       createCalled = true
       assert.equal(input.ownerId, 'user-1')
       assert.equal(input.fileName, 'test.pdf')
@@ -112,7 +115,7 @@ test('createPreflight stores source, runs analysis, and persists ready record', 
       return mockPreflightRecord({ status: 'uploaded', id: input.id })
     },
     getOwned: async () => null,
-    update: async (_id: string, _ownerId: string, patch: any) => {
+    update: async (_id: string, _ownerId: string, patch: PreflightUpdatePatch) => {
       updateCalled = true
       assert.equal(patch.status, 'ready')
       assert.ok(Array.isArray(patch.pages))
@@ -179,7 +182,7 @@ test('createPreflight marks failed when analysis throws', async () => {
   const store = {
     create: async () => mockPreflightRecord({ status: 'uploaded' }),
     getOwned: async () => null,
-    update: async (_id: string, _ownerId: string, patch: any) => {
+    update: async (_id: string, _ownerId: string, patch: PreflightUpdatePatch) => {
       updateCalled = true
       assert.equal(patch.status, 'failed')
       return mockPreflightRecord({ ...patch, status: 'failed' })
@@ -244,7 +247,7 @@ test('consumePreflight validates page selection', async () => {
     store: {
       create: async () => mockPreflightRecord(),
       getOwned: async () => record,
-      update: async (_id: string, _ownerId: string, patch: any) => {
+      update: async (_id: string, _ownerId: string, patch: PreflightUpdatePatch) => {
         assert.equal(patch.status, 'consumed')
         assert.deepEqual(patch.confirmedPages, [1])
         return { ...record, ...patch }
@@ -277,7 +280,7 @@ test('consumePreflight throws on invalid page selection', async () => {
     store: {
       create: async () => mockPreflightRecord(),
       getOwned: async () => record,
-      update: async (_id: string, _ownerId: string, patch: any) => {
+      update: async (_id: string, _ownerId: string, patch: PreflightUpdatePatch) => {
         assert.equal(patch.status, 'consumed')
         assert.deepEqual(patch.confirmedPages, [1])
         return { ...record, ...patch }
@@ -337,7 +340,7 @@ test('consumePreflight does NOT create Boq or ExtractionRun', async () => {
     store: {
       create: async () => mockPreflightRecord(),
       getOwned: async () => record,
-      update: async (_id: string, _ownerId: string, patch: any) => {
+      update: async (_id: string, _ownerId: string, patch: PreflightUpdatePatch) => {
         updateCalled = true
         assert.equal(patch.status, 'consumed')
         assert.ok(patch.confirmedPages !== undefined)
@@ -371,7 +374,7 @@ test('cancelPreflight marks record as cancelled', async () => {
     store: {
       create: async () => mockPreflightRecord(),
       getOwned: async () => record,
-      update: async (_id: string, _ownerId: string, patch: any) => {
+      update: async (_id: string, _ownerId: string, patch: PreflightUpdatePatch) => {
         assert.equal(patch.status, 'cancelled')
         return { ...record, ...patch }
       },

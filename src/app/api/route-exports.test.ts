@@ -14,7 +14,7 @@ const ROUTES: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['boqs/[id]/extraction-runs/[runId]/proposals/[proposalId]/reject/route.ts', ['POST']],
   ['boqs/[id]/extraction-runs/[runId]/proposals/[proposalId]/undo/route.ts', ['POST']],
   ['boqs/[id]/extraction-runs/[runId]/proposals/[proposalId]/add-source-item/route.ts', ['POST']],
-  ['boqs/preflight/route.ts', ['POST', 'GET', 'PATCH', 'DELETE']],
+  ['boqs/preflight/route.ts', ['POST']],
   ['boqs/preflight/[id]/route.ts', ['GET', 'PATCH', 'DELETE']],
   ['internal/cleanup/preflight/route.ts', ['DELETE']],
 ]
@@ -26,6 +26,13 @@ test('new BOQ ingestion route modules export only supported HTTP handlers', () =
       source.matchAll(/export\s+(?:async\s+)?(?:function|const|let|var|class|type|interface|enum)\s+(\w+)/g),
       (match) => match[1],
     )
+    // Also collect destructured const exports: `export const { A, B } = ...`
+    for (const match of source.matchAll(/export\s+const\s+\{([^}]*)\}/g)) {
+      for (const name of match[1].split(',')) {
+        const trimmed = name.trim().split(':')[0].trim()
+        if (trimmed) exports.push(trimmed)
+      }
+    }
 
     assert.deepEqual(exports.sort(), [...expectedExports].sort(), relativePath)
   }

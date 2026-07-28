@@ -37,17 +37,11 @@ export interface PreflightAnalysisAdapter {
   analyzePdf(file: File, signal?: AbortSignal): Promise<PreflightPageInput[]>
 }
 
-export interface CreatePreflightAnalysisAdapterOptions {
-  // Reserved for future options like timeout, max pages, etc.
-}
-
 /**
  * Create a real adapter using pdfjs-dist to extract text from PDFs.
  * This adapter loads the PDF, extracts per-page text content, and maps it to the analysis input format.
  */
-export function createPreflightAnalysisAdapter(
-  _options: CreatePreflightAnalysisAdapterOptions = {},
-): PreflightAnalysisAdapter {
+export function createPreflightAnalysisAdapter(): PreflightAnalysisAdapter {
 
   return {
     async analyzePdf(file: File, signal?: AbortSignal): Promise<PreflightPageInput[]> {
@@ -82,8 +76,8 @@ export function createPreflightAnalysisAdapter(
         const page = await pdf.getPage(pageNum)
         const textContent = await page.getTextContent()
 
-        const textItems = textContent.items.map((item: any) => ({
-          str: item.str ?? '',
+        const textItems = textContent.items.map((item) => ({
+          str: 'str' in item ? (item.str ?? '') : '',
         }))
 
         pages.push({

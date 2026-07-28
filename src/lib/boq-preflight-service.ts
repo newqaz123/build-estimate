@@ -29,7 +29,7 @@ export interface CreatePreflightServiceOptions {
   store: PreflightStore
   storageAdapter: PreflightStorageAdapter
   analysisAdapter: PreflightAnalysisAdapter
-  requireSinglePdf: (formData: File) => File
+  requireSinglePdf: (file: File) => File
   createId: () => string
   now: () => Date
 }

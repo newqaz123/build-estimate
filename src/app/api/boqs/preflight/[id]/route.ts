@@ -1,10 +1,10 @@
 import { auth } from '@/lib/auth'
 import { createPreflightHandlers } from '@/lib/boq-preflight-api'
 import { createPreflightService } from '@/lib/boq-preflight-service'
-import { createFirestorePreflightStore, cleanupExpiredPreflightUploads } from '@/lib/boq-preflight-storage'
+import { createFirestorePreflightStore } from '@/lib/boq-preflight-storage'
 import { createGcsPreflightStorageAdapter } from '@/lib/boq-preflight-storage-adapter'
 import { createPreflightAnalysisAdapter } from '@/lib/boq-preflight-analysis-adapter'
-import { requireSinglePdf } from '@/lib/boq-import-request'
+import { validatePdfFile } from '@/lib/boq-import-request'
 import { getStorageBucket } from '@/lib/firebase-admin'
 import { getDb } from '@/lib/db'
 
@@ -18,7 +18,7 @@ export const { GET, PATCH, DELETE } = createPreflightHandlers({
       store,
       storageAdapter,
       analysisAdapter,
-      requireSinglePdf,
+      requireSinglePdf: validatePdfFile,
       createId: () => crypto.randomUUID(),
       now: () => new Date(),
     })
@@ -43,7 +43,7 @@ export const { GET, PATCH, DELETE } = createPreflightHandlers({
       store,
       storageAdapter,
       analysisAdapter,
-      requireSinglePdf,
+      requireSinglePdf: validatePdfFile,
       createId: () => crypto.randomUUID(),
       now: () => new Date(),
     })
@@ -57,11 +57,11 @@ export const { GET, PATCH, DELETE } = createPreflightHandlers({
       store,
       storageAdapter,
       analysisAdapter,
-      requireSinglePdf,
+      requireSinglePdf: validatePdfFile,
       createId: () => crypto.randomUUID(),
       now: () => new Date(),
     })
     return service.cancelPreflight(id, actorId)
   },
-  requireSinglePdf,
+  requireSinglePdf: validatePdfFile,
 })

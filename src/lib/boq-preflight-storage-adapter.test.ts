@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import type { Bucket } from '@google-cloud/storage'
 
 import { createGcsPreflightStorageAdapter } from '@/lib/boq-preflight-storage-adapter'
 
@@ -13,7 +14,7 @@ test('GCS adapter saves source PDF and returns storage path', async () => {
     }),
   }
 
-  const adapter = createGcsPreflightStorageAdapter({ bucket: mockBucket as any })
+  const adapter = createGcsPreflightStorageAdapter({ bucket: mockBucket as unknown as Bucket })
 
   const file = new File([Buffer.from('%PDF-1.4\n%')], 'test.pdf', { type: 'application/pdf' })
   const result = await adapter.saveSource(file, 'user-1', 'preflight-123')
@@ -33,7 +34,7 @@ test('GCS adapter loads source PDF and returns File', async () => {
     }),
   }
 
-  const adapter = createGcsPreflightStorageAdapter({ bucket: mockBucket as any })
+  const adapter = createGcsPreflightStorageAdapter({ bucket: mockBucket as unknown as Bucket })
 
   const result = await adapter.loadSource('user-1', 'preflight-123')
 
@@ -56,7 +57,7 @@ test('GCS adapter load creates Blob from Buffer correctly', async () => {
     }),
   }
 
-  const adapter = createGcsPreflightStorageAdapter({ bucket: mockBucket as any })
+  const adapter = createGcsPreflightStorageAdapter({ bucket: mockBucket as unknown as Bucket })
 
   const result = await adapter.loadSource('user-1', 'preflight-123')
 
@@ -73,7 +74,7 @@ test('GCS adapter throws on save error', async () => {
     }),
   }
 
-  const adapter = createGcsPreflightStorageAdapter({ bucket: mockBucket as any })
+  const adapter = createGcsPreflightStorageAdapter({ bucket: mockBucket as unknown as Bucket })
 
   const file = new File([Buffer.from('%PDF')], 'test.pdf', { type: 'application/pdf' })
   await assert.rejects(async () => await adapter.saveSource(file, 'user-1', 'preflight-123'), {
@@ -91,7 +92,7 @@ test('GCS adapter throws on load error', async () => {
     }),
   }
 
-  const adapter = createGcsPreflightStorageAdapter({ bucket: mockBucket as any })
+  const adapter = createGcsPreflightStorageAdapter({ bucket: mockBucket as unknown as Bucket })
 
   await assert.rejects(async () => await adapter.loadSource('user-1', 'preflight-123'), {
     message: 'Object not found',

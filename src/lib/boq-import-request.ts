@@ -3,17 +3,20 @@ import { DoclingClientError } from './docling-client'
 const MAX_PDF_BYTES = 20 * 1024 * 1024
 const INVALID_PDF_MESSAGE = 'Upload one PDF between 1 byte and 20 MB.'
 
-export function requireSinglePdf(formData: FormData): File {
-  const files = formData.getAll('file')
-  const file = files[0]
-  const valid = files.length === 1
-    && file instanceof File
-    && file.size >= 1
+export function validatePdfFile(file: File): File {
+  const valid = file.size >= 1
     && file.size <= MAX_PDF_BYTES
     && file.name.toLowerCase().endsWith('.pdf')
     && file.type.toLowerCase() === 'application/pdf'
   if (!valid) throw new TypeError(INVALID_PDF_MESSAGE)
   return file
+}
+
+export function requireSinglePdf(formData: FormData): File {
+  const files = formData.getAll('file')
+  const file = files[0]
+  if (files.length !== 1 || !(file instanceof File)) throw new TypeError(INVALID_PDF_MESSAGE)
+  return validatePdfFile(file)
 }
 
 export function invalidPdfResponse(): Response {

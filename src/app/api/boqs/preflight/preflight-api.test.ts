@@ -4,7 +4,9 @@ import test from 'node:test'
 import type { PreflightUpload } from '@/lib/boq-preflight-schema'
 import { createPreflightHandlers } from '@/lib/boq-preflight-api'
 
-function mockPreflightUpload(overrides: Partial<PreflightUpload> = {}) {
+type PreflightConsumeResult = { file: File; pages: number[]; preflightId: string }
+
+function mockPreflightUpload(overrides: Partial<PreflightUpload> = {}): PreflightUpload {
   return {
     id: 'preflight-1',
     fileName: 'test.pdf',
@@ -24,7 +26,10 @@ const context = { params: Promise.resolve({ id: 'preflight-1' }) }
 test('POST /api/boqs/preflight requires authentication before reading formData', async () => {
   const POST = createPreflightHandlers({
     authenticate: async () => null,
-    createPreflight: async () => ({} as any),
+    createPreflight: async () => ({} as unknown as PreflightUpload),
+    getPreflight: async () => null,
+    consumePreflight: async () => ({ file: new File([], 'source.pdf'), pages: [], preflightId: '' }),
+    cancelPreflight: async () => {},
   }).POST
 
   const formData = new FormData()
@@ -67,7 +72,7 @@ test('POST /api/boqs/preflight validates PDF before processing', async () => {
       return file
     },
     getPreflight: async () => null,
-    consumePreflight: async () => ({ file: new File(), pages: [], preflightId: '' }),
+    consumePreflight: async () => ({ file: new File([], 'source.pdf'), pages: [], preflightId: '' }),
     cancelPreflight: async () => {},
   })
 
@@ -91,12 +96,12 @@ test('POST /api/boqs/preflight validates PDF before processing', async () => {
 test('POST /api/boqs/preflight returns 400 for invalid PDF', async () => {
   const handlers = createPreflightHandlers({
     authenticate: async () => ({ user: {} }),
-    createPreflight: async () => ({} as any),
+    createPreflight: async () => ({} as unknown as PreflightUpload),
     requireSinglePdf: () => {
       throw new TypeError('Upload one PDF between 1 byte and 20 MB.')
     },
     getPreflight: async () => null,
-    consumePreflight: async () => ({ file: new File(), pages: [], preflightId: '' }),
+    consumePreflight: async () => ({ file: new File([], 'source.pdf'), pages: [], preflightId: '' }),
     cancelPreflight: async () => {},
   })
 
@@ -118,7 +123,7 @@ test('GET /api/boqs/preflight/[id] requires authentication', async () => {
     authenticate: async () => null,
     getPreflight: async () => null,
     createPreflight: async () => ({ id: '', fileName: '', pageCount: 0, status: 'uploaded' as const, pages: [], confirmedPages: null }),
-    consumePreflight: async () => ({ file: new File(), pages: [], preflightId: '' }),
+    consumePreflight: async () => ({ file: new File([], 'source.pdf'), pages: [], preflightId: '' }),
     cancelPreflight: async () => {},
   })
 
@@ -136,7 +141,7 @@ test('GET /api/boqs/preflight/[id] returns 404 for other users preflight', async
       return null
     },
     createPreflight: async () => ({ id: '', fileName: '', pageCount: 0, status: 'uploaded' as const, pages: [], confirmedPages: null }),
-    consumePreflight: async () => ({ file: new File(), pages: [], preflightId: '' }),
+    consumePreflight: async () => ({ file: new File([], 'source.pdf'), pages: [], preflightId: '' }),
     cancelPreflight: async () => {},
   })
 
@@ -150,7 +155,7 @@ test('GET /api/boqs/preflight/[id] returns safe metadata only', async () => {
     authenticate: async () => ({ user: { id: 'user-1' } }),
     getPreflight: async () => mockPreflightUpload(),
     createPreflight: async () => ({ id: '', fileName: '', pageCount: 0, status: 'uploaded' as const, pages: [], confirmedPages: null }),
-    consumePreflight: async () => ({ file: new File(), pages: [], preflightId: '' }),
+    consumePreflight: async () => ({ file: new File([], 'source.pdf'), pages: [], preflightId: '' }),
     cancelPreflight: async () => {},
   })
 
@@ -170,7 +175,7 @@ test('GET /api/boqs/preflight/[id] returns safe metadata only', async () => {
 test('PATCH /api/boqs/preflight/[id] requires authentication', async () => {
   const handlers = createPreflightHandlers({
     authenticate: async () => null,
-    consumePreflight: async () => ({} as any),
+    consumePreflight: async () => ({} as unknown as PreflightConsumeResult),
     getPreflight: async () => null,
     createPreflight: async () => ({ id: '', fileName: '', pageCount: 0, status: 'uploaded' as const, pages: [], confirmedPages: null }),
     cancelPreflight: async () => {},
@@ -218,7 +223,7 @@ test('PATCH /api/boqs/preflight/[id] returns 400 for invalid page selection', as
   const handlers = createPreflightHandlers({
     authenticate: async () => ({ user: { id: 'user-1' } }),
     getPreflight: async () => mockPreflightUpload({ pageCount: 2 }),
-    consumePreflight: async () => ({} as any),
+    consumePreflight: async () => ({} as unknown as PreflightConsumeResult),
     createPreflight: async () => ({ id: '', fileName: '', pageCount: 0, status: 'uploaded' as const, pages: [], confirmedPages: null }),
     cancelPreflight: async () => {},
   })
@@ -257,7 +262,7 @@ test('DELETE /api/boqs/preflight/[id] requires authentication', async () => {
     cancelPreflight: async () => undefined,
     getPreflight: async () => null,
     createPreflight: async () => ({ id: '', fileName: '', pageCount: 0, status: 'uploaded' as const, pages: [], confirmedPages: null }),
-    consumePreflight: async () => ({ file: new File(), pages: [], preflightId: '' }),
+    consumePreflight: async () => ({ file: new File([], 'source.pdf'), pages: [], preflightId: '' }),
   })
 
   const response = await handlers.DELETE(new Request('http://localhost/api/boqs/preflight/preflight-1', { method: 'DELETE' }), context)
@@ -276,7 +281,7 @@ test('DELETE /api/boqs/preflight/[id] validates ownership', async () => {
     },
     getPreflight: async () => null,
     createPreflight: async () => ({ id: '', fileName: '', pageCount: 0, status: 'uploaded' as const, pages: [], confirmedPages: null }),
-    consumePreflight: async () => ({ file: new File(), pages: [], preflightId: '' }),
+    consumePreflight: async () => ({ file: new File([], 'source.pdf'), pages: [], preflightId: '' }),
   })
 
   const response = await handlers.DELETE(new Request('http://localhost/api/boqs/preflight/preflight-1', { method: 'DELETE' }), context)
@@ -293,7 +298,7 @@ test('DELETE /api/boqs/preflight/[id] returns 404 for other users preflight', as
     },
     getPreflight: async () => null,
     createPreflight: async () => ({ id: '', fileName: '', pageCount: 0, status: 'uploaded' as const, pages: [], confirmedPages: null }),
-    consumePreflight: async () => ({ file: new File(), pages: [], preflightId: '' }),
+    consumePreflight: async () => ({ file: new File([], 'source.pdf'), pages: [], preflightId: '' }),
   })
 
   const response = await handlers.DELETE(new Request('http://localhost/api/boqs/preflight/preflight-1', { method: 'DELETE' }), context)
