@@ -20,6 +20,7 @@
 /.superpowers/
 /.playwright-mcp/
 /.pi-subagents/
+/graphify-out/
 
 # Python cache
 __pycache__/
