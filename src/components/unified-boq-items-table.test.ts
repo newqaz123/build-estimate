@@ -42,6 +42,7 @@ function renderTable(
   {
     catalogState = () => ({ suggestion: null, busy: null, error: null }),
     onIncludeOptional = () => undefined,
+    onDelete = () => undefined,
     readOnly = false,
     disabled = false,
     onComponentDraftValidityChange = () => undefined,
@@ -50,6 +51,7 @@ function renderTable(
   }: {
     catalogState?: (row: { item: BoqPricedItem }) => InlineCatalogRowState
     onIncludeOptional?: (row: unknown) => void
+    onDelete?: (row: unknown) => void
     readOnly?: boolean
     disabled?: boolean
     onComponentDraftValidityChange?: (key: string, isInvalid: boolean) => void
@@ -70,6 +72,7 @@ function renderTable(
     onFindMatch: noopRow,
     onExclude: noopRow,
     onIncludeOptional,
+    onDelete,
     onComponentDraftValidityChange,
     units,
     onAddUnit,
@@ -80,7 +83,7 @@ test('keeps rate visible in the canonical BOQ columns and removes legacy row det
   const html = renderTable([{ header: 'Valves', items: [item()] }])
   const headers = [...html.matchAll(/<th[^>]*>(.*?)<\/th>/g)].map((match) => match[1].replace(/<[^>]+>/g, ''))
 
-  assert.deepEqual(headers, ['Description', 'Unit', 'Qty', 'Rate', 'Material', 'Labour', 'Total', 'Catalog'])
+  assert.deepEqual(headers, ['Description', 'Unit', 'Qty', 'Rate', 'Material', 'Labour', 'Total', 'Catalog', ''])
   assert.equal(headers.includes('Type'), false)
   assert.equal(headers.includes('Code'), false)
   assert.match(html, /aria-label="Rate for Valve installation, row 1"/)
@@ -338,4 +341,15 @@ test('informational bundle children remain on the non-editable placeholder path'
   assert.doesNotMatch(html, /aria-label="Material for Informational bundle component, row 2"/)
   assert.doesNotMatch(html, /aria-label="Labour for Informational bundle component, row 2"/)
   assert.match(html, />Included</)
+})
+
+test('renders a hover-revealed delete action on each priced row when editable', () => {
+  const html = renderTable([{ header: 'Valves', items: [item()] }])
+  assert.match(html, /unified-boq-row-actions/)
+  assert.match(html, /aria-label="Delete row 1"/)
+})
+
+test('omits the delete action when readOnly', () => {
+  const html = renderTable([{ header: 'Valves', items: [item()] }], { readOnly: true })
+  assert.doesNotMatch(html, /Delete row/)
 })

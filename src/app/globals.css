@@ -1273,7 +1273,8 @@
 .unified-boq-items-table th:nth-child(5),
 .unified-boq-items-table th:nth-child(6) { width: 8%; }
 .unified-boq-items-table th:nth-child(7) { width: 9%; }
-.unified-boq-items-table th:last-child { width: 30%; }
+.unified-boq-items-table th:nth-child(8) { width: 30%; }
+.unified-boq-items-table th:last-child { width: 44px; }
 .unified-boq-items-table input { height: 28px; min-width: 0; padding-inline: 7px; font-size: 12px; }
 .unified-boq-items-table input[type="number"] { text-align: right; font-variant-numeric: tabular-nums; }
 .unified-boq-items-table input[type="number"]::-webkit-inner-spin-button,
@@ -1302,6 +1303,12 @@
 .unified-boq-component-error { justify-self: end; color: var(--danger); font-size: 9px; }
 .unified-boq-total { padding-top: 10px !important; font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .unified-boq-catalog-cell { padding: 6px 8px !important; }
+.unified-boq-items-table .unified-boq-row-actions { opacity: 0; transition: opacity 0.12s ease; text-align: right; white-space: nowrap; }
+.unified-boq-items-table tbody tr:hover .unified-boq-row-actions,
+.unified-boq-items-table .unified-boq-row-actions:focus-within { opacity: 1; }
+@media (hover: none) { .unified-boq-items-table .unified-boq-row-actions { opacity: 1; } }
+.unified-boq-row-actions button { color: var(--muted-text); }
+.unified-boq-row-actions button:hover { color: var(--danger); }
 .inline-catalog-cell { display: grid; min-width: 0; gap: 3px; }
 .inline-catalog-status { color: var(--muted-text); font-size: 10px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; }
 .catalog-status-matched { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); }

@@ -1,6 +1,8 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import { Trash2 } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { InlineCatalogCell } from "@/components/inline-catalog-cell"
 import { UnitCombobox } from "@/components/unit-combobox"
@@ -27,6 +29,7 @@ export interface UnifiedBoqItemsTableProps {
   onDismissSuggestion: (row: UnifiedBoqPricedRow) => void
   onFindMatch: (row: UnifiedBoqPricedRow) => void
   onExclude: (row: UnifiedBoqPricedRow) => void
+  onDelete?: (row: UnifiedBoqPricedRow) => void
   onIncludeOptional?: (row: UnifiedBoqPricedRow) => void
   onClearCatalogError?: (key: string) => void
   onComponentDraftValidityChange?: (key: string, isInvalid: boolean) => void
@@ -213,6 +216,7 @@ export function UnifiedBoqItemsTable({
   onDismissSuggestion,
   onFindMatch,
   onExclude,
+  onDelete = () => undefined,
   onIncludeOptional = () => undefined,
   onClearCatalogError = () => undefined,
   onComponentDraftValidityChange,
@@ -238,6 +242,7 @@ export function UnifiedBoqItemsTable({
             <th className="num-col">Labour</th>
             <th className="num-col">Total</th>
             <th>Catalog</th>
+            <th aria-label="Actions" />
           </tr>
         </thead>
         <tbody>
@@ -255,6 +260,7 @@ export function UnifiedBoqItemsTable({
               onDismissSuggestion={onDismissSuggestion}
               onFindMatch={onFindMatch}
               onExclude={onExclude}
+              onDelete={onDelete}
               onIncludeOptional={onIncludeOptional}
               onClearCatalogError={onClearCatalogError}
               onComponentDraftValidityChange={onComponentDraftValidityChange}
@@ -285,6 +291,7 @@ function FragmentSection({
   onDismissSuggestion,
   onFindMatch,
   onExclude,
+  onDelete = () => undefined,
   onIncludeOptional = () => undefined,
   onClearCatalogError = () => undefined,
   onComponentDraftValidityChange,
@@ -311,6 +318,7 @@ function FragmentSection({
               <td colSpan={5} className="unified-boq-informational-placeholder" data-label="Pricing">—</td>
               <td className="num-col unified-boq-total" data-label="Total">Included</td>
               <td className="unified-boq-catalog-cell" data-label="Catalog"><span className="inline-catalog-status">Informational</span></td>
+              <td className="unified-boq-row-actions" data-label="Actions" aria-hidden="true" />
             </tr>
           )
         }
@@ -446,6 +454,20 @@ function FragmentSection({
                 onExclude={onExclude}
                 onClearError={onClearCatalogError}
               />
+            </td>
+            <td className="unified-boq-row-actions" data-label="Actions">
+              {!readOnly ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Delete row ${rowNumber}`}
+                  disabled={disabled}
+                  onClick={() => onDelete?.(row)}
+                >
+                  <Trash2 className="size-4" aria-hidden="true" />
+                </Button>
+              ) : null}
             </td>
           </tr>
         )
