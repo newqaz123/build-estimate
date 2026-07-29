@@ -21,8 +21,8 @@ Measurement method: at each viewport the dialog was opened, ≥200 ms settled, t
 | Viewport | Dialog center error X/Y | Computed translate | Computed transform | Portal outside dialog | Minimum safe inset | Intersection ratio | Hover/focus selection stable | Activation toggles | Inner scroll | Focus trap/Escape/close |
 | --- | ---: | --- | --- | --- | ---: | ---: | --- | --- | --- | --- |
 | 1440×900 | 0.0 / 0.0 | `-50% -50%` | `none` | true (portaled to `document.body`, `parentIsBody=true`, `insideDialog=false`) | 8.0 | 1 | stable (3 → 3 across hover/focus of pages 1/5/9) | click page 1: 3→2; focus page 5 + Space: 2→1 | scrollHeight 694 > clientHeight 629; scrollTop 0→40 moves; magnifier ratio 1 unchanged | Tab/Shift+Tab ×8 stay inside; Escape closes; Close button closes |
-| 768×900 | 0.0 / 0.0 | `-50% -50%` | `none` | true (portaled to `document.body`) | 8.0 | 1 | stable (3 → 3) | (verified at 1440; logic is viewport-independent) | scrollHeight 694 > clientHeight 629; scrollTop 0→40 moves; magnifier ratio 1 unchanged | (verified at 1440) |
-| 320×600 | 0.0 / 0.0 | `-50% -50%` | `none` | true (portaled to `document.body`) | 8.0 | 1 | stable (3 → 3) | (verified at 1440; logic is viewport-independent) | scrollHeight 670 > clientHeight 389; scrollTop 24→140 moves; magnifier ratio 1 unchanged | (verified at 1440) |
+| 768×900 | 0.0 / 0.0 | `-50% -50%` | `none` | true (portaled to `document.body`) | 8.0 | 1 | stable (3 → 3) | click page 1: 3→2; focus page 5 + Space: 2→1 | scrollHeight 694 > clientHeight 629; scrollTop 0→40 moves; magnifier ratio 1 unchanged | Tab/Shift+Tab ×8 stay inside; Escape closes; reopen succeeds; Close button closes |
+| 320×600 | 0.0 / 0.0 | `-50% -50%` | `none` | true (portaled to `document.body`) | 8.0 | 1 | stable (3 → 3) | click page 1: 3→2; focus page 5 + Space: 2→1 | scrollHeight 670 > clientHeight 389; scrollTop 24→140 moves; magnifier ratio 1 unchanged | Tab/Shift+Tab ×8 stay inside; Escape closes; reopen succeeds; Close button closes |
 
 All per-sample thresholds hold for every recorded sample: `centerErrorX ≤ 1` and `centerErrorY ≤ 1`; `position === "fixed"`; the dialog never has **both** a non-`none` `transform` and non-`none` `translate` (here `transform: none`, `translate: -50% -50%` → single owner); `parentIsBody === true` and `insideDialog === false`; `intersection.ratio === 1`; all four magnifier borders are `1px` (nonzero); `infoContained === true`; every safe inset ≥ 8 px.
 
@@ -99,9 +99,18 @@ The popup stays fully on-screen (ratio 1, minimum safe inset 8) for every extrem
 ## Interaction invariants
 
 - Selection stability: hovering and keyboard-focusing pages 1/5/9 left the selected count unchanged (3 → 3) at all three viewports.
-- Activation toggles (1440×900): clicking page 1 changed the count 3 → 2; focusing page 5 and pressing Space changed it 2 → 1 (remaining selection: page 9 only).
-- Focus trap: 8× Tab and 8× Shift+Tab each kept `document.activeElement` inside `[data-od-id="upload-modal"]` on every step (cycled through page buttons).
-- Close behaviors: Escape closed the dialog (open true → false); reopening via "Upload BOQ" succeeded (false → true); the Close button then closed it (true → false).
+- Activation toggles, measured independently at every viewport:
+  - 1440×900: clicking page 1 changed 3 → 2; focusing page 5 and pressing Space changed 2 → 1.
+  - 768×900: clicking page 1 changed 3 → 2; focusing page 5 and pressing Space changed 2 → 1.
+  - 320×600: a real pointer click at the visible page-1 thumbnail center changed 3 → 2; focusing page 5 and pressing Space changed 2 → 1.
+- Focus trap, measured independently at every viewport: 8× Tab and 8× Shift+Tab each kept `document.activeElement` inside `[data-od-id="upload-modal"]` on all 16 steps at 1440×900, 768×900, and 320×600.
+- Close behaviors, measured independently at every viewport: Escape closed the dialog; reopening via "Upload BOQ" succeeded; the real Close button then closed it at 1440×900, 768×900, and 320×600.
+
+## Fix Round 1 Browser Evidence
+
+Reviewer-requested real-browser interaction coverage was rerun in the isolated Chromium session at 768×900 and 320×600. Each run began with three selected pages, exercised hover and keyboard focus on pages 1/5/9 without changing that count, then independently produced click `3→2` and Space `2→1`. After a 100 ms settle following each keyboard event, all eight Tab and eight Shift+Tab samples remained inside the dialog. Escape returned the dialog to closed, "Upload BOQ" reopened it, and the Close button returned it to closed at both viewports.
+
+The development-only `nextjs-portal` indicator was hidden in the browser DOM for these checks and the replacement 320×600 capture. This removes non-application focus targets and ensures the complete magnifier information strip is unobscured; no application source or test code was changed. The replacement `320x600.png` is exactly 320×600 and shows the complete page-5 magnifier strip, including the magnifier icon, "Page 5", and "Suggested" badge.
 
 ## Console and Residual Notes
 
