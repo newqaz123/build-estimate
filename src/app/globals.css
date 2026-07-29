@@ -978,8 +978,17 @@
 .boq-name-cell { max-width: 220px; }
 .boq-cell-truncate { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.upload-modal { width: min(520px, calc(100vw - 32px)); max-height: min(80vh, 720px); padding: 0; gap: 0; transform: translate(-50%, -50%); }
-.upload-modal[data-open] { transform: translate(-50%, -50%); }
+.upload-modal {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elev-raised), 0 8px 32px rgba(4, 14, 32, 0.12);
+  width: min(520px, calc(100vw - 32px));
+  max-height: min(80vh, 720px);
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  gap: 0;
+}
 .upload-modal .modal-header { display: block; }
 .upload-modal-body { display: grid; gap: var(--space-4); }
 .drop-zone.dragover { border-color: var(--accent); background: color-mix(in oklab, var(--accent) 5%, var(--bg)); }

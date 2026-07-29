@@ -157,7 +157,7 @@ export function UploadModal({
 	return (
 		<Dialog open={open} onOpenChange={handleOpenChange}>
 			<DialogContent
-				className="modal upload-modal max-w-[720px]"
+				className="upload-modal max-w-[720px]"
 				data-od-id="upload-modal"
 				showCloseButton={!uploading}
 			>
