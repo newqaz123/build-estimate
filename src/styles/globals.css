@@ -323,3 +323,17 @@
 	font-size: var(--text-xs);
 	margin: var(--space-2) 0 0 0;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Dialog centering — base-ui Popup can override Tailwind translate utilities
+ * (transform collision). Pin centering defensively for modal-class dialogs.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+[data-slot="dialog-content"].upload-modal,
+[data-slot="dialog-content"].modal {
+	position: fixed !important;
+	top: 50% !important;
+	left: 50% !important;
+	transform: translate(-50%, -50%) !important;
+	max-height: calc(100vh - 2rem);
+	overflow-y: auto;
+}
