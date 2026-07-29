@@ -221,7 +221,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   const [pendingDeletes, setPendingDeletes] = useState<StashedDelete[]>([])
   const units = useMemo(() => [...STANDARD_UNITS, ...customUnits], [customUnits])
   const isReadOnly = boq.status === "approved"
-  const mutationBusy = saving || approving || matching || deleting || addingItem
+  const mutationBusy = saving || approving || matching || deleting || addingItem || pendingDeletes.length > 0
   const canonicalRevisionKey = useMemo(() => buildCanonicalRevisionKey(boq), [boq])
 
   const replaceEdits = useCallback((next: EditsMap) => {
@@ -243,20 +243,11 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   const commitDeleteRef = useRef<(stash: StashedDelete) => Promise<void>>(async () => {})
   useEffect(() => {
     commitDeleteRef.current = async (stash) => {
-      // A later row in the same section may have gained unsaved edits during
-      // the undo window. If so, cancel the delete (restore) to avoid applying
-      // those edits to the wrong item after the index shift.
-      const hasShiftableEdit = Object.keys(editsRef.current).some((key) => {
-        const dash = key.indexOf("-")
-        const sectionIndex = Number(key.slice(0, dash))
-        const itemIndex = Number(key.slice(dash + 1))
-        return sectionIndex === stash.sectionIndex && itemIndex > stash.itemIndex
-      })
-      if (hasShiftableEdit) {
+      if (Object.keys(editsRef.current).length > 0) {
         setPendingDeletes((prev) => prev.filter(
           (pending) => !(pending.sectionIndex === stash.sectionIndex && pending.itemIndex === stash.itemIndex),
         ))
-        toast.error("Save changes to rows below this one before deleting")
+        toast.error("Save pending changes before deleting an item")
         return
       }
       setDeleting(true)
@@ -411,16 +402,8 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
 
   const handleDelete = useCallback((row: UnifiedBoqPricedRow) => {
     if (isReadOnly || mutationBusy) return
-    // Deletion shifts item indices within the section; block if a later row in
-    // the same section has unsaved edits (those would misapply after the shift).
-    const hasShiftableEdit = Object.keys(editsRef.current).some((key) => {
-      const dash = key.indexOf("-")
-      const sectionIndex = Number(key.slice(0, dash))
-      const itemIndex = Number(key.slice(dash + 1))
-      return sectionIndex === row.sectionIndex && itemIndex > row.itemIndex
-    })
-    if (hasShiftableEdit) {
-      return void toast.error("Save changes to rows below this one before deleting")
+    if (Object.keys(editsRef.current).length > 0) {
+      return void toast.error("Save pending changes before deleting an item")
     }
     const stash: StashedDelete = { sectionIndex: row.sectionIndex, itemIndex: row.itemIndex, item: row.item }
     setPendingDeletes((prev) => [...prev, stash])
@@ -439,7 +422,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
           toast.dismiss(toastId)
         },
       },
-      onAutoClose: () => { if (!undone) void commitDeleteRef.current(stash) },
+      onDismiss: () => { if (!undone) void commitDeleteRef.current(stash) },
     })
   }, [isReadOnly, mutationBusy])
 
@@ -740,7 +723,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
               onDelete={handleDelete}
             />
           ) : (
-            <div className="proto-empty-state boq-filter-empty"><p>No items match your filter</p></div>
+            <div className="proto-empty-state boq-filter-empty"><p>No items match your search</p></div>
           )}
 
           {requireCatalogReadiness ? (
