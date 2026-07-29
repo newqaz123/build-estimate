@@ -243,6 +243,22 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   const commitDeleteRef = useRef<(stash: StashedDelete) => Promise<void>>(async () => {})
   useEffect(() => {
     commitDeleteRef.current = async (stash) => {
+      // A later row in the same section may have gained unsaved edits during
+      // the undo window. If so, cancel the delete (restore) to avoid applying
+      // those edits to the wrong item after the index shift.
+      const hasShiftableEdit = Object.keys(editsRef.current).some((key) => {
+        const dash = key.indexOf("-")
+        const sectionIndex = Number(key.slice(0, dash))
+        const itemIndex = Number(key.slice(dash + 1))
+        return sectionIndex === stash.sectionIndex && itemIndex > stash.itemIndex
+      })
+      if (hasShiftableEdit) {
+        setPendingDeletes((prev) => prev.filter(
+          (pending) => !(pending.sectionIndex === stash.sectionIndex && pending.itemIndex === stash.itemIndex),
+        ))
+        toast.error("Save changes to rows below this one before deleting")
+        return
+      }
       setDeleting(true)
       try {
         const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/items`, {
