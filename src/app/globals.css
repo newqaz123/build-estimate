@@ -1276,6 +1276,9 @@
 .unified-boq-items-table th:last-child { width: 30%; }
 .unified-boq-items-table input { height: 28px; min-width: 0; padding-inline: 7px; font-size: 12px; }
 .unified-boq-items-table input[type="number"] { text-align: right; font-variant-numeric: tabular-nums; }
+.unified-boq-items-table input[type="number"]::-webkit-inner-spin-button,
+.unified-boq-items-table input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.unified-boq-items-table input[type="number"] { -moz-appearance: textfield; }
 .unified-boq-items-table td.unified-boq-rate { background: color-mix(in oklab, var(--accent) 6%, transparent); }
 .unified-boq-rate-value { display: block; text-align: right; padding: 6px 8px; border-radius: var(--radius-sm); font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--fg); }
 .unified-boq-section-row td { padding: 7px var(--space-2); background: color-mix(in oklab, var(--sidebar) 5%, var(--surface)); color: var(--fg-2); font-size: 11px; font-weight: 700; letter-spacing: 0.015em; }

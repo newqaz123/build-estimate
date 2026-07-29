@@ -353,8 +353,8 @@ function FragmentSection({
             <td className="num-col" data-label="Quantity">
               <Input
                 aria-label={`Quantity for ${row.item.desc}, row ${rowNumber}`}
-                type="number"
-                min="0"
+                type="text"
+                inputMode="decimal"
                 value={row.item.qty}
                 disabled={locked}
                 onChange={(event) => onFieldChange(row, "qty", Number(event.target.value))}

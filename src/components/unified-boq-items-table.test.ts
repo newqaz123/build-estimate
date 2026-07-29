@@ -81,6 +81,10 @@ test('keeps rate visible in the canonical BOQ columns and removes legacy row det
   assert.match(html, /unified-boq-rate-value/)
   assert.match(html, />100</)
   assert.doesNotMatch(html, /Row details|Aggregate rate|aria-label="Code|aria-label="Type/)
+  const qtyInput = html.match(/<input[^>]*aria-label="Quantity for Valve installation, row 1"[^>]*>/)?.[0] ?? ""
+  assert.match(qtyInput, /type="text"/)
+  assert.match(qtyInput, /inputmode="decimal"/i)
+  assert.doesNotMatch(qtyInput, /type="number"/)
 })
 
 test('excluded optional rows expose an explicit include-in-total action while read-only rows do not', () => {
