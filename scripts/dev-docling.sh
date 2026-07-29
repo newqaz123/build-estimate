@@ -8,20 +8,19 @@ PORT="5001"
 HEALTH_URL="http://${HOST}:${PORT}/health"
 UVICORN="${ROOT}/.venv-docling/bin/uvicorn"
 
-if [[ ! -x "$UVICORN" ]]; then
-	echo "error: missing Docling venv uvicorn at ${UVICORN}" >&2
-	echo "Create it with the project py-sidecar/.venv-docling setup before running dev:docling." >&2
-	exit 1
-fi
-
 port_in_use() {
 	lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1
 }
 
+# Validate that the response body identifies Docling — not just HTTP 2xx.
+# An unrelated service on 5001 must not be silently reused.
 health_ok() {
-	curl -fsS --max-time 2 "$HEALTH_URL" >/dev/null 2>&1
+	local body
+	body="$(curl -fsS --max-time 2 "$HEALTH_URL" 2>/dev/null)" || return 1
+	[[ "$body" == *'"status":"ok"'* && "$body" == *'"parser":"docling"'* ]]
 }
 
+# Reuse a valid already-running sidecar before requiring a local venv.
 if port_in_use; then
 	if health_ok; then
 		echo "Docling sidecar already running on ${HOST}:${PORT} (healthy)."
@@ -29,10 +28,17 @@ if port_in_use; then
 		echo
 		exit 0
 	fi
-	echo "error: port ${PORT} is already in use, but ${HEALTH_URL} is not healthy." >&2
+	echo "error: port ${PORT} is already in use, but ${HEALTH_URL} is not healthy Docling." >&2
 	echo "Inspect with: lsof -nP -iTCP:${PORT} -sTCP:LISTEN" >&2
 	echo "Stop the stale process, then re-run: npm run dev:docling" >&2
 	exit 48
+fi
+
+# Only check the venv after confirming we actually need to start a new process.
+if [[ ! -x "$UVICORN" ]]; then
+	echo "error: missing Docling venv uvicorn at ${UVICORN}" >&2
+	echo "Create it with the project py-sidecar/.venv-docling setup before running dev:docling." >&2
+	exit 1
 fi
 
 cd "$ROOT"
