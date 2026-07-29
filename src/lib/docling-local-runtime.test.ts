@@ -1,6 +1,76 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import test from "node:test";
+
+const REPO_ROOT = new URL("../..", import.meta.url);
+
+/**
+ * Launch a real temporary HTTP server as a separate Node child process on a
+ * random localhost port. Returns helpers to run the script against it and to
+ * tear it down. No new dependency — uses node:child_process and node:events.
+ */
+async function withFakeServer(
+	payload: Record<string, string>,
+	action: (port: number) => Promise<void>,
+): Promise<void> {
+	// The child prints its chosen port to stdout, then serves the payload.
+	const child = spawn("node", ["-e", `
+		const http = require("http");
+		const server = http.createServer((req, res) => {
+			if (req.url === "/health") {
+				res.writeHead(200, { "Content-Type": "application/json" });
+				res.end(${JSON.stringify(JSON.stringify(payload))});
+			} else {
+				res.writeHead(404);
+				res.end();
+			}
+		});
+		server.listen(0, "127.0.0.1", () => {
+			process.stdout.write(String(server.address().port));
+		});
+		process.on("SIGTERM", () => { server.close(); process.exit(0); });
+	`]);
+
+	let portBuf = "";
+	child.stdout.on("data", (chunk: Buffer) => { portBuf += chunk.toString(); });
+
+	try {
+		// Wait for the child to print its port.
+		await once(child.stdout, "readable");
+		const port = Number.parseInt(portBuf, 10);
+		assert.ok(Number.isInteger(port) && port > 0, "child must print a valid port");
+
+		await action(port);
+	} finally {
+		child.kill("SIGTERM");
+	}
+}
+
+/**
+ * Run scripts/dev-docling.sh against the given port with a definitely-missing
+ * uvicorn, proving healthy reuse happens before the executable check.
+ * Resolves with { code, stdout, stderr }.
+ */
+function runScript(port: number): Promise<{ code: number; stdout: string; stderr: string }> {
+	return new Promise((resolve) => {
+		const child = spawn("bash", ["scripts/dev-docling.sh"], {
+			env: {
+				...process.env,
+				DOCLING_PORT: String(port),
+				DOCLING_UVICORN: "/definitely/missing/uvicorn",
+			},
+		});
+		let stdout = "";
+		let stderr = "";
+		child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+		child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+		child.on("close", (code: number | null) => {
+			resolve({ code: code ?? -1, stdout, stderr });
+		});
+	});
+}
 
 test("local Docling command and example endpoint use the application default port", () => {
 	const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
@@ -13,8 +83,8 @@ test("local Docling command and example endpoint use the application default por
 		packageJson.scripts?.["dev:docling"],
 		"bash scripts/dev-docling.sh",
 	);
-	assert.match(devDoclingScript, /HOST="127\.0\.0\.1"/);
-	assert.match(devDoclingScript, /PORT="5001"/);
+	assert.match(devDoclingScript, /DOCLING_HOST:-127\.0\.0\.1/);
+	assert.match(devDoclingScript, /DOCLING_PORT:-5001/);
 	assert.match(devDoclingScript, /\/health/);
 	assert.match(
 		devDoclingScript,
@@ -34,4 +104,28 @@ test("local Docling command and example endpoint use the application default por
 		reuseIdx > -1 && venvCheckIdx > -1 && reuseIdx < venvCheckIdx,
 		"healthy reuse must precede the uvicorn executable check",
 	);
+});
+
+test("identity-checked reuse: both markers present exits 0", async () => {
+	await withFakeServer({ status: "ok", parser: "docling" }, async (port) => {
+		const result = await runScript(port);
+		assert.equal(result.code, 0, `expected exit 0; stderr: ${result.stderr}`);
+		assert.match(result.stdout, /already running/);
+	});
+});
+
+test("identity-checked reuse: status-only marker is rejected (exit 48)", async () => {
+	await withFakeServer({ status: "ok", parser: "other" }, async (port) => {
+		const result = await runScript(port);
+		assert.equal(result.code, 48, `expected exit 48; stdout: ${result.stdout}`);
+		assert.match(result.stderr, /not healthy Docling/);
+	});
+});
+
+test("identity-checked reuse: parser-only marker is rejected (exit 48)", async () => {
+	await withFakeServer({ status: "bad", parser: "docling" }, async (port) => {
+		const result = await runScript(port);
+		assert.equal(result.code, 48, `expected exit 48; stdout: ${result.stdout}`);
+		assert.match(result.stderr, /not healthy Docling/);
+	});
 });

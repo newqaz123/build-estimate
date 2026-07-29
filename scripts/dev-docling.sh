@@ -3,10 +3,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-HOST="127.0.0.1"
-PORT="5001"
+HOST="${DOCLING_HOST:-127.0.0.1}"
+PORT="${DOCLING_PORT:-5001}"
 HEALTH_URL="http://${HOST}:${PORT}/health"
-UVICORN="${ROOT}/.venv-docling/bin/uvicorn"
+UVICORN="${DOCLING_UVICORN:-${ROOT}/.venv-docling/bin/uvicorn}"
 
 port_in_use() {
 	lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1
