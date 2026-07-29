@@ -93,10 +93,10 @@ export default function BoqsPage() {
   }
 
   const handleDeleteBoq = async (boq: Boq) => {
-    const confirmation = window.prompt(
-      `Delete the entire BOQ “${boq.project}” and its source PDF?\n\nType the project name to confirm.`,
+    const confirmed = window.confirm(
+      `Delete the entire BOQ “${boq.project}” and its source PDF? This cannot be undone.`,
     )
-    if (confirmation !== boq.project) return
+    if (!confirmed) return
     const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}`, { method: "DELETE" })
     if (!response.ok) {
       toast.error("The BOQ could not be deleted")
