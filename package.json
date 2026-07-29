@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "dev:docling": ".venv-docling/bin/uvicorn --app-dir py-sidecar main:app --host 127.0.0.1 --port 5001",
+    "dev:docling": "bash scripts/dev-docling.sh",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

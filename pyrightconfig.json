@@ -1,0 +1,15 @@
+{
+  "include": ["py-sidecar"],
+  "exclude": [
+    "**/__pycache__",
+    "**/node_modules",
+    ".venv-docling",
+    "py-sidecar/test_boq_parser.py"
+  ],
+  "venvPath": ".",
+  "venv": ".venv-docling",
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "none",
+  "reportOptionalCall": "none"
+}

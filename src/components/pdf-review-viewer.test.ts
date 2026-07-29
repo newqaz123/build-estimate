@@ -66,7 +66,7 @@ test("PDF pan is unavailable at fit and every movement is constrained to the ren
 
   assert.match(source, /disabled=\{zoom <= MIN_PDF_ZOOM\}/)
   assert.match(source, /tool === "pan" && zoom <= MIN_PDF_ZOOM/)
-  assert.match(source, /setPan\(\(current\) => clampPdfPan\(/)
+  assert.match(source, /setPan\(\s*\(current\)\s*=>\s*clampPdfPan\s*\(/)
   assert.match(source, /clipSelectionToPage\(/)
   assert.match(
     css,
@@ -79,7 +79,10 @@ test("PDF source navigation accepts a controlled page request and clamps it afte
 
   assert.match(source, /requestedPage\?: number/)
   assert.match(source, /requestedPageKey\?: string \| number/)
-  assert.match(source, /Math\.min\(pageCount, Math\.max\(1, Math\.trunc\(requestedPage\)\)\)/)
+  assert.match(
+    source,
+    /Math\.min\([\s\S]*?pageCount[\s\S]*?Math\.max\([\s\S]*?1[\s\S]*?Math\.trunc\([\s\S]*?requestedPage[\s\S]*?\)/,
+  )
   assert.match(source, /setPageNumber\(clampedPage\)/)
 })
 

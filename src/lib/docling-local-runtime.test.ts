@@ -7,10 +7,15 @@ test('local Docling command and example endpoint use the application default por
     scripts?: Record<string, string>
   }
   const envExample = readFileSync('.env.example', 'utf8')
+  const devDoclingScript = readFileSync('scripts/dev-docling.sh', 'utf8')
 
-  assert.equal(
-    packageJson.scripts?.['dev:docling'],
-    '.venv-docling/bin/uvicorn --app-dir py-sidecar main:app --host 127.0.0.1 --port 5001',
+  assert.equal(packageJson.scripts?.['dev:docling'], 'bash scripts/dev-docling.sh')
+  assert.match(devDoclingScript, /HOST="127\.0\.0\.1"/)
+  assert.match(devDoclingScript, /PORT="5001"/)
+  assert.match(devDoclingScript, /\/health/)
+  assert.match(
+    devDoclingScript,
+    /--app-dir py-sidecar main:app --host "\$HOST" --port "\$PORT"/,
   )
   assert.match(envExample, /^DOCLING_ENDPOINT=http:\/\/localhost:5001$/m)
 })

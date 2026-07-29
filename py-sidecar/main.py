@@ -6,7 +6,7 @@ from io import BytesIO
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
-from typing import Annotated, Any, List, Literal, Optional
+from typing import Any, List, Literal, Optional, cast
 from pydantic import BaseModel, Field, FiniteFloat, PositiveInt
 
 from boq_contract import ParseResponseV3, build_reconciliation
@@ -17,11 +17,16 @@ from boq_source_rows import build_source_rows, remap_legacy_warnings
 app = FastAPI(title="Docling Sidecar", version="0.1.0")
 logger = logging.getLogger("docling_sidecar")
 
-Confidence = Annotated[FiniteFloat, Field(ge=0.0, le=1.0)]
+# FiniteFloat + Field keeps Pydantic runtime bounds; avoid Annotated alias for pyright.
+Confidence = FiniteFloat
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    # Local Next.js app only — never wildcard with credentials.
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -66,12 +71,15 @@ class Section(BaseModel):
 
 class MetadataField(BaseModel):
     value: str
-    confidence: Confidence
+    confidence: Confidence = Field(ge=0.0, le=1.0)
     source: str
 
 
-class WorkTypeMetadataField(MetadataField):
+class WorkTypeMetadataField(BaseModel):
+    # Own model (not a narrowing subclass) so pyright accepts the Literal value type.
     value: Literal["MEP", "Structural", "Finishing", "Unclassified"]
+    confidence: Confidence = Field(ge=0.0, le=1.0)
+    source: str
 
 
 class Metadata(BaseModel):
@@ -115,16 +123,27 @@ async def health():
         raise HTTPException(status_code=503, detail="Docling is not installed")
 
 
-@lru_cache(maxsize=1)
-def get_converter():
+def _is_ocr_dependency_error(error: BaseException) -> bool:
+    message = str(error).lower()
+    return any(token in message for token in ('tesserocr', 'tesseract', 'ocr engine', 'ocr'))
+
+
+@lru_cache(maxsize=2)
+def get_converter(do_ocr: bool = True):
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import PdfPipelineOptions, TesseractOcrOptions
     from docling.document_converter import DocumentConverter, PdfFormatOption
 
-    pipeline_options = PdfPipelineOptions(
-        do_ocr=True,
-        ocr_options=TesseractOcrOptions(lang=['eng', 'tha']),
-    )
+    if do_ocr:
+        pipeline_options = PdfPipelineOptions(
+            do_ocr=True,
+            ocr_options=TesseractOcrOptions(lang=['eng', 'tha']),
+        )
+    else:
+        # Local dev often has Docling without system Tesseract/tesserocr. Embedded PDF
+        # text + table extraction still works for digital BOQs.
+        pipeline_options = PdfPipelineOptions(do_ocr=False)
+
     return DocumentConverter(
         format_options={
             InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
@@ -268,9 +287,10 @@ def build_parse_response(
         sourceRows=deterministic["sourceRows"],
         sections=sections,
         metadata=normalized["metadata"],
-        warnings=[*extraction_warnings, *deterministic_warnings],
+        # Helpers return dict-shaped payloads; cast keeps pyright aligned without runtime change.
+        warnings=cast(Any, [*extraction_warnings, *deterministic_warnings]),
         sourceTotal=source_total,
-        reconciliation=reconciliation,
+        reconciliation=cast(Any, reconciliation),
         totalItems=total_items,
     )
 
@@ -284,7 +304,21 @@ def convert_pdf(filename: str, content: bytes, pages: list[int] | None = None):
     if pages is not None:
         source_content, original_page_map, original_page_count = _selected_pdf(content, pages)
     source = DocumentStream(name=filename, stream=BytesIO(source_content))
-    result = get_converter().convert(source, max_num_pages=500, max_file_size=20 * 1024 * 1024)
+
+    try:
+        result = get_converter(True).convert(source, max_num_pages=500, max_file_size=20 * 1024 * 1024)
+    except ImportError as error:
+        # Docling raises ImportError during pipeline init when OCR engines are missing.
+        # That used to surface as a misleading HTTP 503 "Docling is not installed".
+        if not _is_ocr_dependency_error(error):
+            raise
+        logger.warning(
+            "OCR unavailable (%s); converting with embedded-text pipeline",
+            error,
+        )
+        source = DocumentStream(name=filename, stream=BytesIO(source_content))
+        result = get_converter(False).convert(source, max_num_pages=500, max_file_size=20 * 1024 * 1024)
+
     return build_parse_response(
         filename,
         result.document,

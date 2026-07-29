@@ -17,6 +17,9 @@ class FakePage:
 
 
 class FakeTable:
+    table_no: int | None
+    self_ref: str | None
+
     def __init__(self, page_no):
         self.prov = [FakePage(page_no)]
         self.data = SimpleNamespace(
@@ -24,6 +27,9 @@ class FakeTable:
             num_rows=0,
             num_cols=0,
         )
+        # Optional Docling identity fields assigned by tests.
+        self.table_no = None
+        self.self_ref = None
 
     def export_to_dataframe(self, doc):
         import pandas as pd
@@ -119,6 +125,48 @@ class SelectedPageTests(unittest.TestCase):
              }):
             response = main.build_parse_response('source.pdf', document, original_page_map=[2, 4], original_page_count=4)
         self.assertEqual([(row.page, row.table) for row in response.sourceRows], [(2, 9), (4, 11)])
+
+
+class ConverterFallbackTests(unittest.TestCase):
+    def test_ocr_dependency_errors_are_detected(self):
+        self.assertTrue(main._is_ocr_dependency_error(ImportError('tesserocr is not correctly installed')))
+        self.assertTrue(main._is_ocr_dependency_error(ImportError('Please install Tesseract OCR engine')))
+        self.assertFalse(main._is_ocr_dependency_error(ImportError('docling is missing')))
+
+    def test_convert_pdf_falls_back_to_no_ocr_when_tesseract_missing(self):
+        from pypdf import PdfWriter
+
+        pdf = io.BytesIO()
+        writer = PdfWriter()
+        writer.add_blank_page(width=100, height=100)
+        writer.write(pdf)
+        content = pdf.getvalue()
+
+        class FakeConverter:
+            def __init__(self, do_ocr):
+                self.do_ocr = do_ocr
+                self.calls = 0
+
+            def convert(self, source, max_num_pages=500, max_file_size=20 * 1024 * 1024):
+                self.calls += 1
+                if self.do_ocr:
+                    raise ImportError('tesserocr is not correctly installed. Please install it via `pip install tesserocr`')
+                return SimpleNamespace(document=FakeDocument([1]))
+
+        ocr_converter = FakeConverter(True)
+        plain_converter = FakeConverter(False)
+
+        def fake_get_converter(do_ocr=True):
+            return ocr_converter if do_ocr else plain_converter
+
+        with patch.object(main, 'get_converter', side_effect=fake_get_converter), \
+             patch.object(main, 'build_parse_response', return_value={'ok': True}) as build:
+            result = main.convert_pdf('blank.pdf', content, None)
+
+        self.assertEqual(result, {'ok': True})
+        self.assertEqual(ocr_converter.calls, 1)
+        self.assertEqual(plain_converter.calls, 1)
+        build.assert_called_once()
 
 
 if __name__ == '__main__':

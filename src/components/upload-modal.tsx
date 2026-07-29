@@ -94,7 +94,7 @@ export function UploadModal({
 				);
 			}
 
-			const preflightData = await response.json() as PreflightUpload;
+			const preflightData = (await response.json()) as PreflightUpload;
 			setPreflight(preflightData);
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : "Preflight failed");
@@ -128,7 +128,7 @@ export function UploadModal({
 				);
 			}
 
-			const boq = await response.json() as Boq;
+			const boq = (await response.json()) as Boq;
 			toast.success("BOQ imported successfully");
 			onUploadComplete(boq);
 			onOpenChange(false);
