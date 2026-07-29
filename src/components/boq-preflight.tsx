@@ -15,6 +15,37 @@ interface BoqPreflightProps {
 
 type PageImageMap = Record<number, string>;
 
+const MAGNIFIER_WIDTH = 320;
+const MAGNIFIER_GAP = 16;
+const MAGNIFIER_MARGIN = 8;
+
+/**
+ * Viewport-aware magnifier placement. Prefers the right of the cursor and
+ * flips left when there is not enough room; anchors below the cursor in the
+ * top half of the viewport and above it in the bottom half. Both axes are
+ * clamped so the 320px popup never overflows the window edge.
+ */
+function computeMagnifierStyle(x: number, y: number): {
+	top: number;
+	left: number;
+	transform: string;
+} {
+	const vw = window.innerWidth;
+	const vh = window.innerHeight;
+	const preferRight = x + MAGNIFIER_GAP + MAGNIFIER_WIDTH <= vw - MAGNIFIER_MARGIN;
+	let left = preferRight
+		? x + MAGNIFIER_GAP
+		: x - MAGNIFIER_GAP - MAGNIFIER_WIDTH;
+	left = Math.max(
+		MAGNIFIER_MARGIN,
+		Math.min(left, vw - MAGNIFIER_WIDTH - MAGNIFIER_MARGIN),
+	);
+	const inTopHalf = y < vh / 2;
+	const top = inTopHalf ? y + MAGNIFIER_GAP : y - MAGNIFIER_GAP;
+	const transform = inTopHalf ? "translate(0, 0)" : "translate(0, -100%)";
+	return { top, left, transform };
+}
+
 async function renderPagePreviews(
 	sourceUrl: string,
 	pageNumbers: readonly number[],
@@ -59,7 +90,10 @@ export function BoqPreflight({
 		preflight.pages.filter((p: { suggested: boolean }) => p.suggested).map((p: { page: number }) => p.page),
 	);
 	const [magnifiedPage, setMagnifiedPage] = useState<number | null>(null);
-	const [magnifierPos, setMagnifierPos] = useState<{ x: number; y: number } | null>(null);
+	const [magnifierPos, setMagnifierPos] = useState<{
+		x: number;
+		y: number;
+	} | null>(null);
 	const [pageImages, setPageImages] = useState<PageImageMap>({});
 	const [previewsFailed, setPreviewsFailed] = useState(false);
 
@@ -154,9 +188,18 @@ export function BoqPreflight({
 								onClick={() => toggleSelection(pageInfo.page)}
 								onMouseEnter={() => setMagnifiedPage(pageInfo.page)}
 								onMouseLeave={() => setMagnifiedPage(null)}
-								onMouseMove={(e) => setMagnifierPos({ x: e.clientX, y: e.clientY })}
-								onFocus={() => setMagnifiedPage(pageInfo.page)}
-								onBlur={() => setMagnifiedPage(null)}
+								onMouseMove={(e) =>
+									setMagnifierPos({ x: e.clientX, y: e.clientY })
+								}
+							onFocus={(e) => {
+								setMagnifiedPage(pageInfo.page);
+								const rect = e.currentTarget.getBoundingClientRect();
+								setMagnifierPos({
+									x: rect.right + MAGNIFIER_GAP,
+									y: rect.top + rect.height / 2,
+								});
+							}}
+							onBlur={() => setMagnifiedPage(null)}
 								className={`preflight-thumbnail ${isSelected ? "is-selected" : ""} ${
 									isMagnified ? "is-magnified" : ""
 								}`}
@@ -192,19 +235,13 @@ export function BoqPreflight({
 								)}
 							</button>
 
-						{isMagnified && magnifierPos && (
-							<div
-								role="img"
-								aria-label={`Magnified Page ${pageInfo.page}`}
-								className="preflight-magnifier"
-								style={{
-									top: magnifierPos.y,
-									left:
-										magnifierPos.x > window.innerWidth - 360
-											? magnifierPos.x - 340
-											: magnifierPos.x + 20,
-								}}
-							>
+							{isMagnified && magnifierPos && (
+								<div
+									role="img"
+									aria-label={`Magnified Page ${pageInfo.page}`}
+									className="preflight-magnifier"
+								style={computeMagnifierStyle(magnifierPos.x, magnifierPos.y)}
+								>
 									{previewSrc ? (
 										// eslint-disable-next-line @next/next/no-img-element
 										<img

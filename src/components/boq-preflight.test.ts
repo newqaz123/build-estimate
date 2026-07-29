@@ -51,18 +51,23 @@ test.describe("BoqPreflight component", () => {
 	test("BoqPreflight magnifier follows the pointer and avoids center/clip", () => {
 		// Tracks pointer coordinates from the thumbnail, not centered.
 		assert.match(preflightSource, /onMouseMove=/);
-		assert.match(preflightSource, /setMagnifierPos|magnifierPos|pointer/);
-		// Popup must be viewport-anchored (fixed) so it never clips inside the modal.
-		assert.match(preflightSource, /preflight-magnifier/);
+		assert.match(preflightSource, /setMagnifierPos|magnifierPos/);
+		// Viewport-aware clamping: both viewport dimensions are read.
+		assert.match(preflightSource, /window\.innerWidth/);
+		assert.match(preflightSource, /window\.innerHeight/);
+		// Focus without a prior mouse move still shows the magnifier.
+		assert.match(preflightSource, /getBoundingClientRect/);
 		// Magnifier content still present.
+		assert.match(preflightSource, /preflight-magnifier/);
 		assert.match(preflightSource, /Magnified Page/);
 		assert.match(preflightSource, /role="img"/);
 		assert.match(preflightSource, /preflight-magnifier-image/);
-		// CSS assertion: the class is no longer hard-centered over the thumbnail.
+		// CSS: viewport-anchored (fixed), not centered.
 		const css = readFileSync(globalCssPath, "utf8");
+		assert.match(css, /\.preflight-magnifier\s*\{[^}]*position:\s*fixed/);
 		assert.doesNotMatch(
 			css,
-			/\.preflight-magnifier\s*\{[^}]*top:\s*50%[^}]*left:\s*50%[^}]*transform:\s*translate\(-50%,\s*-50%\)/,
+			/\.preflight-magnifier\s*\{[^}]*transform:\s*translate/,
 		);
 	});
 
