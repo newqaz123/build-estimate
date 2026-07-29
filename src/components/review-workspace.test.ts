@@ -88,7 +88,6 @@ test("canonical detail header keeps primary and overflow actions without a close
 test("canonical detail data pane preserves review context and controls", () => {
   const source = readFileSync(detailUrl, "utf8")
   assert.match(source, /placeholder="Search items…"/)
-  assert.match(source, /aria-label="Filter BOQ items"/)
   assert.match(source, /metadataConfidence/)
   assert.match(source, /Extraction notes/)
   assert.match(source, /Catalog readiness/)

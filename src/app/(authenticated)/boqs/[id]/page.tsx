@@ -66,7 +66,6 @@ type MetadataField = "vendor" | "project" | "workType" | "date"
 type MetadataEdits = Partial<Pick<Boq, MetadataField>>
 type RightPaneMode = "items" | "extraction"
 
-const FILTERS = ["All", "Unit", "Lump Sum", "Job"] as const
 const requireCatalogReadiness = true
 
 function rowEditKey(row: Pick<UnifiedBoqPricedRow, "sectionIndex" | "itemIndex">): string {
@@ -202,7 +201,6 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   const editsRef = useRef<EditsMap>({})
   const [metadataEdits, setMetadataEdits] = useState<MetadataEdits>({})
   const metadataEditsRef = useRef<MetadataEdits>({})
-  const [activeFilter, setActiveFilter] = useState<string>("All")
   const [search, setSearch] = useState("")
   const [catalogMatchTarget, setCatalogMatchTarget] = useState<UnifiedBoqPricedRow | null>(null)
   const [excludeTarget, setExcludeTarget] = useState<UnifiedBoqPricedRow | null>(null)
@@ -249,20 +247,18 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
     () => buildUnifiedBoqSections(displayBoq.sections),
     [displayBoq.sections],
   )
-  const unifiedSections = useMemo(() => allUnifiedSections
-    .map((section) => ({
-      ...section,
-      rows: section.rows.filter((row) => {
-        if (activeFilter !== "All") {
-          const filterType: Record<string, BoqPricedItem["type"]> = { Unit: "unit", "Lump Sum": "lump_sum", Job: "job" }
-          if (!isPricedBoqItem(row.item) || row.item.type !== filterType[activeFilter]) return false
-        }
-        const query = search.trim().toLowerCase()
-        if (!query) return true
-        return row.item.desc.toLowerCase().includes(query) || (row.item.code ?? "").toLowerCase().includes(query)
-      }),
-    }))
-    .filter((section) => section.rows.length > 0), [activeFilter, allUnifiedSections, search])
+  const unifiedSections = useMemo(() => {
+    const query = search.trim().toLowerCase()
+    return allUnifiedSections
+      .map((section) => ({
+        ...section,
+        rows: section.rows.filter((row) => {
+          if (!query) return true
+          return row.item.desc.toLowerCase().includes(query) || (row.item.code ?? "").toLowerCase().includes(query)
+        }),
+      }))
+      .filter((section) => section.rows.length > 0)
+  }, [allUnifiedSections, search])
 
   const items = useMemo(() => displayBoq.sections.flatMap((section) => section.items), [displayBoq.sections])
   const grandTotal = useMemo(() => calculateBoqTotals(displayBoq.sections).grandTotal, [displayBoq.sections])
@@ -623,11 +619,6 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
             <div className="search-wrap">
               <Search aria-hidden="true" />
               <Input placeholder="Search items…" value={search} onChange={(event) => setSearch(event.target.value)} className="proto-input" />
-            </div>
-            <div className="boq-detail-filters" aria-label="Filter BOQ items">
-              {FILTERS.map((filter) => (
-                <button type="button" key={filter} onClick={() => setActiveFilter(filter)} aria-pressed={activeFilter === filter} className={`filter-chip ${activeFilter === filter ? "active" : ""}`}>{filter}</button>
-              ))}
             </div>
           </div>
 
