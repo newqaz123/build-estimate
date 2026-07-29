@@ -409,6 +409,12 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
     setPendingDeletes((prev) => [...prev, stash])
     const toastId = `delete-${row.sectionIndex}-${row.itemIndex}`
     let undone = false
+    let committed = false
+    const finalize = () => {
+      if (undone || committed) return
+      committed = true
+      void commitDeleteRef.current(stash)
+    }
     toast("Line item deleted", {
       id: toastId,
       duration: 6000,
@@ -422,7 +428,8 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
           toast.dismiss(toastId)
         },
       },
-      onDismiss: () => { if (!undone) void commitDeleteRef.current(stash) },
+      onAutoClose: finalize,
+      onDismiss: finalize,
     })
   }, [isReadOnly, mutationBusy])
 

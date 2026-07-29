@@ -14,8 +14,8 @@ test('wires row delete with an optimistic hide and an undoable DELETE commit', (
   assert.match(source, /pendingDeletes/)
   assert.match(source, /method:\s*"DELETE"/)
   assert.match(source, /label:\s*"Undo"/)
-  assert.match(source, /onDismiss:\s*\(\)\s*=>\s*\{\s*if \(!undone\)/)
-  assert.doesNotMatch(source, /onAutoClose:/)
+  assert.match(source, /onAutoClose:\s*finalize,/)
+  assert.match(source, /onDismiss:\s*finalize,/)
   assert.match(source, /unit-combobox|UnitCombobox|units=\{units\}|onAddUnit=/)
 })
 
