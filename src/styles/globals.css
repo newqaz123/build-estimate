@@ -284,6 +284,7 @@
 	gap: var(--space-4);
 	padding-top: var(--space-4);
 	border-top: 1px solid var(--border);
+	flex-wrap: wrap;
 }
 
 .preflight-status {
@@ -306,6 +307,25 @@
 .preflight-buttons {
 	display: flex;
 	gap: var(--space-3);
+	flex-wrap: wrap;
+	justify-content: flex-end;
+}
+
+@media (max-width: 480px) {
+	.upload-modal .modal-footer,
+	.preflight-actions {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.upload-modal .modal-footer > *,
+	.preflight-buttons {
+		width: 100%;
+	}
+
+	.preflight-buttons > * {
+		flex: 1 1 0;
+	}
 }
 
 .upload-error {

@@ -606,6 +606,7 @@
 }
 
 /* ─── Modal ─── */
+.dialog-content { translate: -50% -50%; }
 .modal-overlay {
   position: fixed; inset: 0;
   background: rgba(4, 14, 32, 0.4);
@@ -983,14 +984,45 @@
   border-radius: var(--radius-lg);
   box-shadow: var(--elev-raised), 0 8px 32px rgba(4, 14, 32, 0.12);
   width: min(520px, calc(100vw - 32px));
-  max-height: min(80vh, 720px);
+  max-height: calc(100dvh - 32px);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   padding: 0;
   gap: 0;
 }
 .upload-modal .modal-header { display: block; }
-.upload-modal-body { display: grid; gap: var(--space-4); }
+.upload-modal:has(.preflight-container) {
+  height: min(720px, calc(100dvh - 32px));
+}
+.upload-modal-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  gap: var(--space-4);
+}
+.upload-modal-body:has(> .preflight-container) {
+  overflow: hidden;
+}
+.upload-modal-body > .preflight-container {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.upload-modal-body > .preflight-container .preflight-pages {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+}
+.upload-modal .modal-footer {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: var(--space-4) var(--space-5);
+}
 .drop-zone.dragover { border-color: var(--accent); background: color-mix(in oklab, var(--accent) 5%, var(--bg)); }
 .drop-zone.is-disabled { cursor: wait; opacity: 0.65; }
 .drop-zone-title { font-weight: 500; overflow-wrap: anywhere; }

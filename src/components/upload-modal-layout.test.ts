@@ -34,9 +34,16 @@ test("Upload BOQ delegates viewport centering only to shared DialogContent", () 
 		"Upload BOQ must not inherit the legacy .modal transform contract",
 	);
 
+	assert.match(dialogSource, /dialog-content fixed top-1\/2 left-1\/2/);
 	assert.match(
+		appCss,
+		/\.dialog-content\s*\{\s*translate:\s*-50%\s*-50%;\s*\}/,
+		"shared DialogContent must own viewport centering explicitly",
+	);
+	assert.doesNotMatch(
 		dialogSource,
-		/fixed top-1\/2 left-1\/2[\s\S]*-translate-x-1\/2 -translate-y-1\/2/,
+		/-translate-x-1\/2|-translate-y-1\/2/,
+		"shared DialogContent must not compose a second centering transform",
 	);
 
 	const uploadRule = appCss.match(/\.upload-modal\s*\{([^}]*)\}/)?.[1];
@@ -102,7 +109,12 @@ test("Upload BOQ keeps its existing visual and inner-scroll layout", () => {
 	assert.match(uploadRule, /border-radius:\s*var\(--radius-lg\)/);
 	assert.match(uploadRule, /box-shadow:\s*var\(--elev-raised\)/);
 	assert.match(uploadRule, /width:\s*min\(520px,\s*calc\(100vw - 32px\)\)/);
-	assert.match(uploadRule, /max-height:\s*min\(80vh,\s*720px\)/);
+	assert.match(uploadRule, /max-height:\s*calc\(100dvh - 32px\)/);
+	assert.match(uploadRule, /overflow:\s*hidden/);
+	assert.match(
+		appCss,
+		/\.upload-modal:has\(\.preflight-container\)\s*\{[^}]*height:\s*min\(720px,\s*calc\(100dvh - 32px\)\)/,
+	);
 	assert.match(uploadRule, /display:\s*flex/);
 	assert.match(uploadRule, /flex-direction:\s*column/);
 	assert.match(uploadRule, /padding:\s*0/);
@@ -112,4 +124,22 @@ test("Upload BOQ keeps its existing visual and inner-scroll layout", () => {
 	assert.match(uploadSource, /className="modal-body upload-modal-body"/);
 	assert.match(uploadSource, /className="modal-footer"/);
 	assert.match(appCss, /\.modal-body\s*\{[^}]*overflow-y:\s*auto/);
+	const uploadBodyRule =
+		appCss.match(/\.upload-modal-body\s*\{([^}]*)\}/)?.[1] ?? "";
+	assert.match(uploadBodyRule, /flex:\s*1 1 auto/);
+	assert.match(uploadBodyRule, /min-height:\s*0/);
+	assert.match(uploadBodyRule, /overflow-y:\s*auto/);
+	assert.match(
+		appCss,
+		/\.upload-modal-body:has\(> \.preflight-container\)\s*\{[^}]*overflow:\s*hidden/,
+	);
+	const uploadFooterRule =
+		appCss.match(/\.upload-modal \.modal-footer\s*\{([^}]*)\}/)?.[1] ?? "";
+	assert.match(uploadFooterRule, /margin:\s*0/);
+	assert.match(
+		uploadFooterRule,
+		/padding:\s*var\(--space-4\) var\(--space-5\)/,
+	);
+	assert.match(sharedCss, /\.preflight-actions\s*\{[^}]*flex-wrap:\s*wrap/);
+	assert.match(sharedCss, /\.preflight-buttons\s*\{[^}]*flex-wrap:\s*wrap/);
 });
