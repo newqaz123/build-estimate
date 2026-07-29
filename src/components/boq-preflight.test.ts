@@ -1,45 +1,79 @@
-import assert from 'node:assert/strict'
-import test from 'node:test'
-import { readFileSync } from 'node:fs'
+import assert from "node:assert/strict";
+import test from "node:test";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-test.describe('BoqPreflight component', () => {
-  const preflightSource = readFileSync(new URL('./boq-preflight.tsx', import.meta.url), 'utf8')
+test.describe("BoqPreflight component", () => {
+	const preflightSource = readFileSync(
+		new URL("./boq-preflight.tsx", import.meta.url),
+		"utf8",
+	);
 
-  test('BoqPreflight component exists and exports correctly', () => {
-    assert.match(preflightSource, /export function BoqPreflight/)
-    assert.match(preflightSource, /preflight:\s*PreflightUpload/)
-    assert.match(preflightSource, /onExtract:\s*\([^)]*\)\s*=>/)
-    assert.match(preflightSource, /onCancel:\s*\([^)]*\)\s*=>/)
-  })
+	const globalCssPath = join(
+		dirname(fileURLToPath(import.meta.url)),
+		"..",
+		"styles",
+		"globals.css",
+	);
 
-  test('BoqPreflight renders page thumbnails with accessible labels', () => {
-    assert.match(preflightSource, /buildAccessibleLabel/)
-    assert.match(preflightSource, /Page \$\{pageInfo\.page\}/)
-    assert.match(preflightSource, /role="button"/)
-    assert.match(preflightSource, /aria-label=/)
-  })
+	test("BoqPreflight component exists and exports correctly", () => {
+		assert.match(preflightSource, /export function BoqPreflight/);
+		assert.match(preflightSource, /preflight:\s*PreflightUpload/);
+		assert.match(preflightSource, /onExtract:\s*\([^)]*\)\s*=>/);
+		assert.match(preflightSource, /onCancel:\s*\([^)]*\)\s*=>/);
+	});
 
-  test('BoqPreflight pre-selects suggested pages and allows toggle', () => {
-    assert.match(preflightSource, /useState/)
-    assert.match(preflightSource, /preflight\.pages\.filter/)
-    assert.match(preflightSource, /toggleSelection/)
-  })
+	test("BoqPreflight renders page thumbnails with accessible labels", () => {
+		assert.match(preflightSource, /buildAccessibleLabel/);
+		assert.match(preflightSource, /Page \$\{pageInfo\.page\}/);
+		assert.match(preflightSource, /role="button"/);
+		assert.match(preflightSource, /aria-label=/);
+	});
 
-  test('BoqPreflight shows magnified image on hover', () => {
-    assert.match(preflightSource, /Magnified Page/)
-    assert.match(preflightSource, /role="img"/)
-    assert.match(preflightSource, /onMouseEnter|onFocus/)
-    assert.match(preflightSource, /\/api\/boqs\/preflight\/.*?preview/)
-  })
+	test("BoqPreflight pre-selects suggested pages and allows toggle", () => {
+		assert.match(preflightSource, /useState/);
+		assert.match(preflightSource, /preflight\.pages\.filter/);
+		assert.match(preflightSource, /toggleSelection/);
+	});
 
-  test('BoqPreflight disables extract button when no pages selected', () => {
-    assert.match(preflightSource, /selectedPages\.length === 0/)
-    assert.match(preflightSource, /Select at least one page to continue/)
-    assert.match(preflightSource, /disabled.*?selectedPages\.length === 0/)
-  })
+	test("BoqPreflight renders client-side page previews from the local PDF file", () => {
+		// Server never generates preview PNGs; thumbnails/magnifier come from the
+		// browser File still held by UploadModal (pdfjs webpack entry, same as review viewer).
+		assert.match(preflightSource, /sourceFile:\s*File/);
+		assert.match(preflightSource, /pdfjs-dist\/webpack\.mjs/);
+		assert.match(preflightSource, /createObjectURL\(sourceFile\)/);
+		assert.match(preflightSource, /toDataURL/);
+		assert.match(preflightSource, /preflight-thumbnail-image/);
+		assert.doesNotMatch(preflightSource, /\/api\/boqs\/preflight\/.*?preview/);
+	});
 
-  test('BoqPreflight shows correct count in extract button', () => {
-    assert.match(preflightSource, /Extract.*?selected page/)
-    assert.match(preflightSource, /selectedPages\.length/)
-  })
-})
+	test("BoqPreflight magnifier follows the pointer and avoids center/clip", () => {
+		// Tracks pointer coordinates from the thumbnail, not centered.
+		assert.match(preflightSource, /onMouseMove=/);
+		assert.match(preflightSource, /setMagnifierPos|magnifierPos|pointer/);
+		// Popup must be viewport-anchored (fixed) so it never clips inside the modal.
+		assert.match(preflightSource, /preflight-magnifier/);
+		// Magnifier content still present.
+		assert.match(preflightSource, /Magnified Page/);
+		assert.match(preflightSource, /role="img"/);
+		assert.match(preflightSource, /preflight-magnifier-image/);
+		// CSS assertion: the class is no longer hard-centered over the thumbnail.
+		const css = readFileSync(globalCssPath, "utf8");
+		assert.doesNotMatch(
+			css,
+			/\.preflight-magnifier\s*\{[^}]*top:\s*50%[^}]*left:\s*50%[^}]*transform:\s*translate\(-50%,\s*-50%\)/,
+		);
+	});
+
+	test("BoqPreflight disables extract button when no pages selected", () => {
+		assert.match(preflightSource, /selectedPages\.length === 0/);
+		assert.match(preflightSource, /Select at least one page to continue/);
+		assert.match(preflightSource, /disabled.*?selectedPages\.length === 0/);
+	});
+
+	test("BoqPreflight shows correct count in extract button", () => {
+		assert.match(preflightSource, /Extract.*?selected page/);
+		assert.match(preflightSource, /selectedPages\.length/);
+	});
+});
