@@ -225,18 +225,23 @@
 .preflight-magnifier {
 	position: fixed;
 	z-index: 1000;
-	width: 320px;
+	width: min(320px, calc(100vw - 16px));
+	max-width: calc(100vw - 16px);
+	max-height: calc(100vh - 16px);
 	background: var(--surface);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	box-shadow: var(--elev-raised);
 	overflow: hidden;
 	pointer-events: none;
+	display: flex;
+	flex-direction: column;
 }
 
 .preflight-magnifier-image {
 	width: 100%;
-	height: auto;
+	flex: 1 1 auto;
+	min-height: 0;
 	display: block;
 	object-fit: contain;
 }

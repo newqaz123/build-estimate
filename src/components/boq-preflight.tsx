@@ -1,9 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ZoomIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { PreflightUpload } from "@/lib/boq-preflight-schema";
+import {
+	computeMagnifierPlacement,
+	MAGNIFIER_GAP,
+	MAGNIFIER_PADDING,
+	type Point,
+} from "@/lib/preflight-magnifier-position";
 
 interface BoqPreflightProps {
 	preflight: PreflightUpload;
@@ -15,40 +21,8 @@ interface BoqPreflightProps {
 
 type PageImageMap = Record<number, string>;
 
-const MAGNIFIER_WIDTH = 320;
-const MAGNIFIER_GAP = 16;
-const MAGNIFIER_MARGIN = 8;
-
-/**
- * Viewport-aware magnifier placement. Prefers the right of the cursor and
- * flips left when there is not enough room; anchors below the cursor in the
- * top half of the viewport and above it in the bottom half. Both axes are
- * clamped so the 320px popup never overflows the window edge.
- */
-function computeMagnifierStyle(
-	x: number,
-	y: number,
-): {
-	top: number;
-	left: number;
-	transform: string;
-} {
-	const vw = window.innerWidth;
-	const vh = window.innerHeight;
-	const preferRight =
-		x + MAGNIFIER_GAP + MAGNIFIER_WIDTH <= vw - MAGNIFIER_MARGIN;
-	let left = preferRight
-		? x + MAGNIFIER_GAP
-		: x - MAGNIFIER_GAP - MAGNIFIER_WIDTH;
-	left = Math.max(
-		MAGNIFIER_MARGIN,
-		Math.min(left, vw - MAGNIFIER_WIDTH - MAGNIFIER_MARGIN),
-	);
-	const inTopHalf = y < vh / 2;
-	const top = inTopHalf ? y + MAGNIFIER_GAP : y - MAGNIFIER_GAP;
-	const transform = inTopHalf ? "translate(0, 0)" : "translate(0, -100%)";
-	return { top, left, transform };
-}
+// Safe fallback used before the real popup dimensions are measured.
+const FALLBACK_POPUP_SIZE = { width: 320, height: 400 };
 
 async function renderPagePreviews(
 	sourceUrl: string,
@@ -93,12 +67,12 @@ export function BoqPreflight({
 	const initialSuggested = preflight.pages.filter((p) => p.suggested).map((p) => p.page);
 	const [selectedPages, setSelectedPages] = useState<number[]>(initialSuggested);
 	const [magnifiedPage, setMagnifiedPage] = useState<number | null>(null);
-	const [magnifierPos, setMagnifierPos] = useState<{
-		x: number;
-		y: number;
-	} | null>(null);
+	const [magnifierPos, setMagnifierPos] = useState<Point | null>(null);
+	const [popupSize, setPopupSize] = useState(FALLBACK_POPUP_SIZE);
 	const [pageImages, setPageImages] = useState<PageImageMap>({});
 	const [previewsFailed, setPreviewsFailed] = useState(false);
+
+	const magnifierRef = useRef<HTMLDivElement | null>(null);
 
 	const pageNumbers = useMemo(
 		() => preflight.pages.map((page) => page.page),
@@ -109,8 +83,6 @@ export function BoqPreflight({
 		let cancelled = false;
 		const objectUrl = URL.createObjectURL(sourceFile);
 
-		// Async boundary only — do not reset state synchronously here (cascading render lint).
-		// Parent remounts this component when the source File identity changes.
 		void renderPagePreviews(objectUrl, pageNumbers)
 			.then((images) => {
 				if (cancelled) return;
@@ -135,6 +107,18 @@ export function BoqPreflight({
 		};
 	}, [sourceFile, pageNumbers]);
 
+	// Measure the actual magnifier popup whenever it becomes visible or its
+	// content changes, so placement uses real dimensions instead of guesses.
+	useEffect(() => {
+		if (magnifiedPage === null || !magnifierPos) return;
+		const el = magnifierRef.current;
+		if (!el) return;
+		const rect = el.getBoundingClientRect();
+		if (rect.width > 0 && rect.height > 0) {
+			setPopupSize({ width: rect.width, height: rect.height });
+		}
+	}, [magnifiedPage, magnifierPos, pageImages]);
+
 	const toggleSelection = useCallback((page: number) => {
 		setSelectedPages((prev) =>
 			prev.includes(page)
@@ -158,6 +142,20 @@ export function BoqPreflight({
 		states.push(isSelected ? "selected" : "not selected");
 		return `${baseLabel}, ${states.join(", ")}`;
 	};
+
+	const magnifierStyle = useMemo(() => {
+		if (!magnifierPos) return null;
+		return computeMagnifierPlacement({
+			anchor: magnifierPos,
+			viewport: {
+				width: window.innerWidth,
+				height: window.innerHeight,
+			},
+			popup: popupSize,
+			gap: MAGNIFIER_GAP,
+			padding: MAGNIFIER_PADDING,
+		});
+	}, [magnifierPos, popupSize]);
 
 	return (
 		<div className="preflight-container">
@@ -238,12 +236,13 @@ export function BoqPreflight({
 								)}
 							</button>
 
-							{isMagnified && magnifierPos && (
+							{isMagnified && magnifierStyle && (
 								<div
+									ref={magnifierRef}
 									role="img"
 									aria-label={`Magnified Page ${pageInfo.page}`}
 									className="preflight-magnifier"
-									style={computeMagnifierStyle(magnifierPos.x, magnifierPos.y)}
+									style={{ left: magnifierStyle.left, top: magnifierStyle.top }}
 								>
 									{previewSrc ? (
 										// eslint-disable-next-line @next/next/no-img-element
