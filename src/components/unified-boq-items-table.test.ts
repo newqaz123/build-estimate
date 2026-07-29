@@ -266,7 +266,7 @@ test('manual allocations show the manual indicator while preserving immutable so
 test('renders each section as one full-width row and catalog controls inline with every item', () => {
   const html = renderTable([{ header: 'ON-OFF VALVE INSTALLATION', items: [item({ desc: 'Loose flange' })] }])
 
-  assert.match(html, /class="unified-boq-section-row"[\s\S]*?<td colSpan="8">ON-OFF VALVE INSTALLATION<\/td>/)
+  assert.match(html, /class="unified-boq-section-row"[\s\S]*?<td colSpan="9">ON-OFF VALVE INSTALLATION<\/td>/)
   assert.match(html, /data-od-id="inline-catalog-section:0:id:item-1"/)
   assert.match(html, />Unmatched</)
 })

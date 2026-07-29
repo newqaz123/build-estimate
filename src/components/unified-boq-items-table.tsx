@@ -301,7 +301,7 @@ function FragmentSection({
   return (
     <>
       <tr className="unified-boq-section-row">
-        <td colSpan={8}>{section.header || "Parsed Items"}</td>
+        <td colSpan={9}>{section.header || "Parsed Items"}</td>
       </tr>
       {section.rows.map((row, index) => {
         const rowNumber = rowStart + index + 1
