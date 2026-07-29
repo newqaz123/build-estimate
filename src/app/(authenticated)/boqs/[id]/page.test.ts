@@ -17,3 +17,7 @@ test('wires row delete with an optimistic hide and an undoable DELETE commit', (
   assert.match(source, /onAutoClose:/)
   assert.match(source, /unit-combobox|UnitCombobox|units=\{units\}|onAddUnit=/)
 })
+
+test('blocks delete when a later row in the same section has unsaved edits', () => {
+  assert.match(source, /Save changes to rows below this one before deleting/)
+})

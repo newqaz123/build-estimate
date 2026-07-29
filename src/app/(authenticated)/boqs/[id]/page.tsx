@@ -395,6 +395,17 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
 
   const handleDelete = useCallback((row: UnifiedBoqPricedRow) => {
     if (isReadOnly || mutationBusy) return
+    // Deletion shifts item indices within the section; block if a later row in
+    // the same section has unsaved edits (those would misapply after the shift).
+    const hasShiftableEdit = Object.keys(editsRef.current).some((key) => {
+      const dash = key.indexOf("-")
+      const sectionIndex = Number(key.slice(0, dash))
+      const itemIndex = Number(key.slice(dash + 1))
+      return sectionIndex === row.sectionIndex && itemIndex > row.itemIndex
+    })
+    if (hasShiftableEdit) {
+      return void toast.error("Save changes to rows below this one before deleting")
+    }
     const stash: StashedDelete = { sectionIndex: row.sectionIndex, itemIndex: row.itemIndex, item: row.item }
     setPendingDeletes((prev) => [...prev, stash])
     const toastId = `delete-${row.sectionIndex}-${row.itemIndex}`
