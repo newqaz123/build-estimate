@@ -13,7 +13,7 @@ function normalizeText(value: string | undefined): string {
 
 export function computeBoqStdStatus(sections: Boq['sections']): Boq['stdStatus'] {
   const items = sections.flatMap((section) => section.items).filter(isPricedBoqItem).filter((item) => item.rate > 0)
-  const matchedCount = items.filter((item) => item.stdStatus === 'matched' || (item.stdStatus === 'excluded' && item.stdExclusionReason?.trim())).length
+  const matchedCount = items.filter((item) => item.stdStatus === 'matched' || item.stdStatus === 'excluded').length
 
   if (matchedCount === 0) return 'none'
   if (matchedCount === items.length && items.length > 0) return 'complete'

@@ -22,13 +22,13 @@ export function isCatalogPricedItem(item: BoqItem): boolean {
 
 function issueFor(item: BoqItem, sectionIndex: number): CatalogReadinessIssue | null {
   if (item.stdStatus === 'matched' && item.stdId?.trim()) return null
-  if (item.stdStatus === 'excluded' && item.stdExclusionReason?.trim()) return null
+  if (item.stdStatus === 'excluded') return null
   return {
     sectionIndex,
     ...(item.id ? { itemId: item.id } : {}),
     ...(item.code ? { itemCode: item.code } : {}),
     description: item.desc,
-    reason: item.stdStatus === 'excluded' ? 'Exclusion reason is required' : 'Catalog match is required',
+    reason: 'Catalog match is required',
   }
 }
 

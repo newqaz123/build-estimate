@@ -241,11 +241,19 @@ test('lump-sum component allocation uses totals and derives rate from quantity',
   assert.equal(updated?.total, 5000)
 })
 
-test('excluding an item requires a reason and clears its catalog link', () => {
-  assert.throws(
-    () => parseUpdateGroups({ sectionIndex: 0, items: [{ itemCode: 'A-1', stdStatus: 'excluded' }] }),
-    /exclusion reason/i,
+test('excluding an item clears its catalog link (reason optional)', () => {
+  const withoutReason = applyBoqItemUpdates(
+    [boq('boq-1', [item({ stdId: 'std-1', stdMatch: 'Source concrete', stdConfidence: 'manual' })])],
+    [standard()],
+    'boq-1',
+    [{ sectionIndex: 0, items: [{ itemCode: 'A-1', stdStatus: 'excluded' }] }],
   )
+  const excludedWithoutReason = withoutReason.boqs[0]?.sections[0]?.items[0]
+  assert.equal(excludedWithoutReason?.stdStatus, 'excluded')
+  assert.equal(excludedWithoutReason?.stdId, undefined)
+  assert.equal(excludedWithoutReason?.stdMatch, undefined)
+  assert.equal(excludedWithoutReason?.stdConfidence, undefined)
+  assert.equal(withoutReason.boqs[0]?.stdStatus, 'complete')
 
   const result = applyBoqItemUpdates(
     [boq('boq-1', [item({ stdId: 'std-1', stdMatch: 'Source concrete', stdConfidence: 'manual' })])],

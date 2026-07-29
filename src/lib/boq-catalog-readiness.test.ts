@@ -41,15 +41,17 @@ test('catalog readiness resolves matched items only when they have a catalog id'
   assert.equal(result.items[0]?.itemId, 'broken-link')
 })
 
-test('catalog readiness requires a reason before an excluded item is resolved', () => {
+test('catalog readiness resolves excluded items regardless of reason', () => {
   const result = getBoqCatalogReadiness(boq([
     item({ id: 'excluded', stdStatus: 'excluded', stdExclusionReason: 'One-off provisional allowance' }),
     item({ id: 'missing-reason', stdStatus: 'excluded', stdExclusionReason: '   ' }),
+    item({ id: 'no-reason', stdStatus: 'excluded' }),
   ]))
 
-  assert.equal(result.resolved, 1)
-  assert.equal(result.blocking, 1)
-  assert.equal(result.items[0]?.reason, 'Exclusion reason is required')
+  assert.equal(result.total, 3)
+  assert.equal(result.resolved, 3)
+  assert.equal(result.blocking, 0)
+  assert.deepEqual(result.items, [])
 })
 
 test('catalog readiness ignores non-priced structural rows', () => {

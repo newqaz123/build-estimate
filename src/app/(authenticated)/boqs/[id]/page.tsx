@@ -492,7 +492,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   }
 
   const handleExclude = async () => {
-    if (!excludeTarget || !excludeReason.trim() || isReadOnly || mutationBusy) return
+    if (!excludeTarget || isReadOnly || mutationBusy) return
     setMatching(true)
     try {
       const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/items`, {
@@ -504,7 +504,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
             items: [{
               ...getBoqItemRequestIdentity(excludeTarget.item),
               stdStatus: "excluded",
-              stdExclusionReason: excludeReason.trim(),
+              ...(excludeReason.trim() ? { stdExclusionReason: excludeReason.trim() } : {}),
             }],
           }],
         }),
@@ -702,12 +702,12 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
         <DialogContent showCloseButton={!matching}>
           <DialogHeader>
             <DialogTitle>Exclude from catalog matching</DialogTitle>
-            <DialogDescription>Add a reason so reviewers understand why {excludeTarget?.item.desc ?? "this item"} should not use catalog pricing.</DialogDescription>
+            <DialogDescription>Add a reason so reviewers understand why {excludeTarget?.item.desc ?? "this item"} should not use catalog pricing. (optional)</DialogDescription>
           </DialogHeader>
-          <Input value={excludeReason} onChange={(event) => setExcludeReason(event.target.value)} placeholder="Reason this line should not use catalog pricing" aria-label={`Exclusion reason for ${excludeTarget?.item.desc ?? "item"}`} disabled={matching} autoFocus />
+          <Input value={excludeReason} onChange={(event) => setExcludeReason(event.target.value)} placeholder="Optional — reason this line should not use catalog pricing" aria-label={`Exclusion reason for ${excludeTarget?.item.desc ?? "item"}`} disabled={matching} autoFocus />
           <DialogFooter>
             <Button type="button" variant="outline" disabled={matching} onClick={() => { setExcludeTarget(null); setExcludeReason("") }}>Cancel</Button>
-            <Button type="button" disabled={!excludeReason.trim() || matching} onClick={() => void handleExclude()}>{matching ? <Loader2 className="animate-spin" /> : null}Exclude item</Button>
+            <Button type="button" disabled={matching} onClick={() => void handleExclude()}>{matching ? <Loader2 className="animate-spin" /> : null}Exclude item</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

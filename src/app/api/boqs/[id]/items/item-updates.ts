@@ -51,7 +51,7 @@ function computeTotals(sections: Boq['sections']) {
 
 function computeStdStatus(sections: Boq['sections']): Boq['stdStatus'] {
   const items = sections.flatMap((section) => section.items).filter(isPricedBoqItem).filter((item) => item.rate > 0)
-  const resolved = items.filter((item) => item.stdStatus === 'matched' || (item.stdStatus === 'excluded' && item.stdExclusionReason?.trim())).length
+  const resolved = items.filter((item) => item.stdStatus === 'matched' || item.stdStatus === 'excluded').length
   if (items.length === 0 || resolved === 0) return 'none'
   return resolved === items.length ? 'complete' : 'partial'
 }
@@ -126,9 +126,6 @@ function validateUpdate(value: unknown): BoqItemRequestIdentity {
   if ('stdMatch' in value && typeof value.stdMatch !== 'string') throw new BoqItemsValidationError('stdMatch must be a string.')
   if ('stdExclusionReason' in value && typeof value.stdExclusionReason !== 'string') throw new BoqItemsValidationError('stdExclusionReason must be a string.')
   if ('excludedFromTotal' in value && typeof value.excludedFromTotal !== 'boolean') throw new BoqItemsValidationError('excludedFromTotal must be a boolean.')
-  if (update.stdStatus === 'excluded' && !update.stdExclusionReason?.trim()) {
-    throw new BoqItemsValidationError('An exclusion reason is required.')
-  }
 
   const itemId = update.itemId?.trim()
   const itemCode = (update.itemCode ?? update.code)?.trim()
