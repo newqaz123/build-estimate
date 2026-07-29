@@ -247,7 +247,10 @@ Optimistic remove + Undo window + commit-on-expire, reusing the existing endpoin
 
 ```ts
 async function handleDelete(row: UnifiedBoqPricedRow) {
-  const stash = { sectionIndex: row.sectionIndex, item: row.item, index: /*position*/ }
+  // Stash the row plus the index of its item within its section, so Undo can
+  // re-insert it in the same position. (sectionItemsIndex is read from the
+  // section the row belongs to, before removal.)
+  const stash = { sectionIndex: row.sectionIndex, sectionItemsIndex: row.sectionItemsIndex, item: row.item }
   // 1) optimistically remove from local sections state
   removeRowLocally(stash)
   let undone = false
@@ -321,9 +324,10 @@ async function handleDelete(row: UnifiedBoqPricedRow) {
 
 ## Assumptions & open items
 
-- **Row identity for delete:** `UnifiedBoqPricedRow` is assumed to expose `sectionIndex` and
-  `item.id` (or `item.code`). To be verified at the start of implementation; if `sectionIndex`
-  isn't on the row, derive it from the containing section in the page handler.
+- **Row identity for delete:** `UnifiedBoqPricedRow` is assumed to expose `sectionIndex`,
+  `sectionItemsIndex` (the item's position within its section, for Undo re-insertion), and
+  `item.id` (or `item.code`). To be verified at the start of implementation; if any of these
+  aren't on the row, derive them from the containing section in the page handler.
 - **Rate value source:** `row.item.rate`. No live recompute from Material/Labour edits.
 - **New units** are session-scoped; persistence to a master list is a follow-up.
 - **Combobox** uses existing primitives (no new deps). Canonical shadcn `popover`+`command` is
