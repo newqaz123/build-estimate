@@ -16,6 +16,15 @@
 
 Measurement method: at each viewport the dialog was opened, ≥200 ms settled, then the relevant thumbnail was hovered/focused-managed and `captureLayoutGeometry()` ran an `IntersectionObserver` at `threshold:[1]` against the magnifier (no value inferred from a rectangle alone). Every figure below is a real measured value.
 
+## Automated TDD and diff evidence
+
+The following command outcomes are quoted from the existing Task 1 and Task 2 handoff reports:
+
+- Task 1 RED — `npx tsx --test src/components/upload-modal-layout.test.ts`: **expected failure (exit 1)**; both tests failed because Upload BOQ still inherited `modal`, and `.upload-modal` lacked the explicit visual declarations while retaining a transform.
+- Task 1 GREEN — `npx tsx --test src/components/upload-modal-layout.test.ts src/components/boq-ingestion-flow.test.ts`: **passed (exit 0), 18/18 tests**. Full `npm run check`: **passed (exit 0), 920 tests passed, 0 failed**. `git diff --check`: **passed (exit 0), no whitespace errors**.
+- Task 2 RED — `npx tsx --test src/components/boq-preflight.test.ts`: **expected failure; 7 passed, 1 failed**. The new regression failed on the missing `createPortal` import while the magnifier was still a normal `.preflight-page-item` descendant.
+- Task 2 GREEN — `npx tsx --test src/components/boq-preflight.test.ts src/lib/preflight-magnifier-position.test.ts src/components/boq-ingestion-flow.test.ts`: **passed; 31 tests passed, 0 failed**. Full `npm run check`: **passed; 921 tests passed, 0 failed**. `git diff --check`: **passed**.
+
 ## Acceptance summary table
 
 | Viewport | Dialog center error X/Y | Computed translate | Computed transform | Portal outside dialog | Minimum safe inset | Intersection ratio | Hover/focus selection stable | Activation toggles | Inner scroll | Focus trap/Escape/close |

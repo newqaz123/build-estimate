@@ -18,6 +18,10 @@ const sharedCss = readFileSync(
 	new URL("../styles/globals.css", import.meta.url),
 	"utf8",
 );
+const estimatorSource = readFileSync(
+	new URL("../app/(authenticated)/estimator/page.tsx", import.meta.url),
+	"utf8",
+);
 
 test("Upload BOQ delegates viewport centering only to shared DialogContent", () => {
 	const uploadClasses = uploadSource.match(
@@ -45,6 +49,49 @@ test("Upload BOQ delegates viewport centering only to shared DialogContent", () 
 	assert.doesNotMatch(
 		sharedCss,
 		/\[data-slot="dialog-content"\]\.upload-modal/,
+	);
+});
+
+test("shared dialogs remain separate from the legacy modal contract", () => {
+	const sharedDialogClasses = dialogSource.match(
+		/<DialogPrimitive\.Popup[\s\S]*?className=\{cn\(\s*"([^"]*)"/,
+	)?.[1];
+	assert.ok(
+		sharedDialogClasses,
+		"shared DialogContent classes must be present",
+	);
+	assert.equal(
+		sharedDialogClasses.split(/\s+/).includes("modal"),
+		false,
+		"shared DialogContent must not inherit the legacy .modal contract",
+	);
+
+	const uploadClasses = uploadSource.match(
+		/<DialogContent[\s\S]*?className="([^"]*\bupload-modal\b[^"]*)"/,
+	)?.[1];
+	assert.ok(uploadClasses, "Upload BOQ DialogContent classes must be present");
+	assert.equal(uploadClasses.split(/\s+/).includes("modal"), false);
+
+	assert.doesNotMatch(
+		`${appCss}\n${sharedCss}`,
+		/\[data-slot=["']dialog-content["']\]\.modal/,
+		"the removed generic DialogContent legacy-modal override must stay absent",
+	);
+
+	const legacyModalRule = appCss.match(/\.modal\s*\{([^}]*)\}/)?.[1];
+	assert.ok(legacyModalRule, "legacy .modal rule must remain present");
+	assert.match(legacyModalRule, /background:\s*var\(--surface\)/);
+	assert.match(legacyModalRule, /display:\s*flex/);
+	assert.match(legacyModalRule, /flex-direction:\s*column/);
+	assert.match(legacyModalRule, /transform:\s*translateY\(8px\)/);
+	assert.match(
+		appCss,
+		/\.modal-overlay\.open \.modal\s*\{\s*transform:\s*translateY\(0\);?\s*\}/,
+	);
+	assert.match(
+		estimatorSource,
+		/className="modal estimator-item-modal"/,
+		"estimator must retain its plain legacy modal",
 	);
 });
 
