@@ -58,6 +58,7 @@ import {
   buildUnifiedBoqSections,
   type UnifiedBoqPricedRow,
 } from "@/lib/boq-unified-rows"
+import { STANDARD_UNITS } from "@/lib/units"
 
 type ItemEdit = Record<string, string | number | undefined>
 type EditsMap = BoqDetailEdits
@@ -196,6 +197,8 @@ function BoqDetailContent() {
   return <CanonicalBoqWorkspace key={boq.id} boq={boq} onBoqChange={setBoq} />
 }
 
+type StashedDelete = { sectionIndex: number; itemIndex: number; item: BoqPricedItem }
+
 function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (next: Boq) => void }) {
   const [edits, setEdits] = useState<EditsMap>({})
   const editsRef = useRef<EditsMap>({})
@@ -214,6 +217,9 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   const [pdfEvidenceFocus, setPdfEvidenceFocus] = useState<{ page: number; key: number }>({ page: 1, key: 0 })
   const [invalidDraftKeys, setInvalidDraftKeys] = useState<Set<string>>(new Set())
   const invalidDraftRef = useRef<Set<string>>(new Set())
+  const [customUnits, setCustomUnits] = useState<string[]>([])
+  const [pendingDeletes, setPendingDeletes] = useState<StashedDelete[]>([])
+  const units = useMemo(() => [...STANDARD_UNITS, ...customUnits], [customUnits])
   const isReadOnly = boq.status === "approved"
   const mutationBusy = saving || approving || matching || deleting || addingItem
   const canonicalRevisionKey = useMemo(() => buildCanonicalRevisionKey(boq), [boq])
@@ -234,6 +240,35 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
     onBoqChange(reconciled.boq)
   }, [boq, onBoqChange, replaceEdits])
 
+  const commitDeleteRef = useRef<(stash: StashedDelete) => Promise<void>>(async () => {})
+  useEffect(() => {
+    commitDeleteRef.current = async (stash) => {
+      setDeleting(true)
+      try {
+        const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/items`, {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sectionIndex: stash.sectionIndex, ...getBoqItemRequestIdentity(stash.item) }),
+        })
+        if (!response.ok) throw new Error(await readError(response, "The item could not be deleted."))
+        applyMutationBoq(await response.json() as Boq)
+        const editKey = `${stash.sectionIndex}-${stash.itemIndex}`
+        if (editsRef.current[editKey]) {
+          const nextEdits = { ...editsRef.current }
+          delete nextEdits[editKey]
+          replaceEdits(nextEdits)
+        }
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "The item could not be deleted.")
+      } finally {
+        setPendingDeletes((prev) => prev.filter(
+          (pending) => !(pending.sectionIndex === stash.sectionIndex && pending.itemIndex === stash.itemIndex),
+        ))
+        setDeleting(false)
+      }
+    }
+  }, [boq, applyMutationBoq, replaceEdits])
+
   const displayBoq = useMemo<Boq>(() => ({
     ...boq,
     ...metadataEdits,
@@ -243,10 +278,16 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
     })),
   }), [boq, edits, metadataEdits])
 
-  const allUnifiedSections = useMemo(
-    () => buildUnifiedBoqSections(displayBoq.sections),
-    [displayBoq.sections],
-  )
+  const allUnifiedSections = useMemo(() => {
+    const built = buildUnifiedBoqSections(displayBoq.sections)
+    if (pendingDeletes.length === 0) return built
+    return built.map((section) => ({
+      ...section,
+      rows: section.rows.filter((row) => !pendingDeletes.some(
+        (pending) => pending.sectionIndex === row.sectionIndex && pending.itemIndex === row.itemIndex,
+      )),
+    }))
+  }, [displayBoq.sections, pendingDeletes])
   const unifiedSections = useMemo(() => {
     const query = search.trim().toLowerCase()
     return allUnifiedSections
@@ -351,6 +392,29 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
       setMatching(false)
     }
   }
+
+  const handleDelete = useCallback((row: UnifiedBoqPricedRow) => {
+    if (isReadOnly || mutationBusy) return
+    const stash: StashedDelete = { sectionIndex: row.sectionIndex, itemIndex: row.itemIndex, item: row.item }
+    setPendingDeletes((prev) => [...prev, stash])
+    const toastId = `delete-${row.sectionIndex}-${row.itemIndex}`
+    let undone = false
+    toast("Line item deleted", {
+      id: toastId,
+      duration: 6000,
+      action: {
+        label: "Undo",
+        onClick: () => {
+          undone = true
+          setPendingDeletes((prev) => prev.filter(
+            (pending) => !(pending.sectionIndex === stash.sectionIndex && pending.itemIndex === stash.itemIndex),
+          ))
+          toast.dismiss(toastId)
+        },
+      },
+      onAutoClose: () => { if (!undone) void commitDeleteRef.current(stash) },
+    })
+  }, [isReadOnly, mutationBusy])
 
   const handleMetadataChange = useCallback((field: MetadataField, value: string) => {
     if (isReadOnly || mutationBusy) return
@@ -644,6 +708,9 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
               onIncludeOptional={(row) => { void handleIncludeOptional(row) }}
               onClearCatalogError={catalogMatching.clearRowError}
               onComponentDraftValidityChange={handleComponentDraftValidityChange}
+              units={units}
+              onAddUnit={(unit) => setCustomUnits((prev) => (prev.includes(unit) ? prev : [...prev, unit]))}
+              onDelete={handleDelete}
             />
           ) : (
             <div className="proto-empty-state boq-filter-empty"><p>No items match your filter</p></div>
