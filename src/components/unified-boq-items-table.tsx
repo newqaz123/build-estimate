@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { Input } from "@/components/ui/input"
 import { InlineCatalogCell } from "@/components/inline-catalog-cell"
+import { UnitCombobox } from "@/components/unit-combobox"
 import { deriveSourceCostAllocation } from "@/lib/boq-cost-allocation"
+import { STANDARD_UNITS } from "@/lib/units"
 import type { BoqSourceCost } from "@/lib/boq-schema"
 import {
   isPricedUnifiedBoqRow,
@@ -28,6 +30,8 @@ export interface UnifiedBoqItemsTableProps {
   onIncludeOptional?: (row: UnifiedBoqPricedRow) => void
   onClearCatalogError?: (key: string) => void
   onComponentDraftValidityChange?: (key: string, isInvalid: boolean) => void
+  units?: string[]
+  onAddUnit?: (unit: string) => void
 }
 
 function currency(value: number): string {
@@ -212,6 +216,8 @@ export function UnifiedBoqItemsTable({
   onIncludeOptional = () => undefined,
   onClearCatalogError = () => undefined,
   onComponentDraftValidityChange,
+  units = [...STANDARD_UNITS],
+  onAddUnit = () => undefined,
 }: UnifiedBoqItemsTableProps) {
   const rowStarts: number[] = []
   sections.reduce((rowStart, section) => {
@@ -252,6 +258,8 @@ export function UnifiedBoqItemsTable({
               onIncludeOptional={onIncludeOptional}
               onClearCatalogError={onClearCatalogError}
               onComponentDraftValidityChange={onComponentDraftValidityChange}
+              units={units}
+              onAddUnit={onAddUnit}
             />
           ))}
         </tbody>
@@ -280,6 +288,8 @@ function FragmentSection({
   onIncludeOptional = () => undefined,
   onClearCatalogError = () => undefined,
   onComponentDraftValidityChange,
+  units = [...STANDARD_UNITS],
+  onAddUnit = () => undefined,
 }: FragmentSectionProps) {
   return (
     <>
@@ -343,11 +353,14 @@ function FragmentSection({
               {row.item.optional && row.item.excludedFromTotal && !readOnly ? <button type="button" className="unified-boq-include-option" disabled={disabled} onClick={() => onIncludeOptional(row)}>Include in total</button> : null}
             </td>
             <td data-label="Unit">
-              <Input
-                aria-label={`Unit for ${row.item.desc}, row ${rowNumber}`}
+              <UnitCombobox
                 value={row.item.unit}
+                units={units}
+                onAddUnit={onAddUnit}
+                onChange={(unit) => onFieldChange(row, "unit", unit)}
                 disabled={locked}
-                onChange={(event) => onFieldChange(row, "unit", event.target.value)}
+                readOnly={readOnly}
+                ariaLabel={`Unit for ${row.item.desc}, row ${rowNumber}`}
               />
             </td>
             <td className="num-col" data-label="Quantity">

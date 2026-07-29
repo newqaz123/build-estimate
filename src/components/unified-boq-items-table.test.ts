@@ -45,12 +45,16 @@ function renderTable(
     readOnly = false,
     disabled = false,
     onComponentDraftValidityChange = () => undefined,
+    units = ['m³', 'm²', 'Pcs'],
+    onAddUnit = () => undefined,
   }: {
     catalogState?: (row: { item: BoqPricedItem }) => InlineCatalogRowState
     onIncludeOptional?: (row: unknown) => void
     readOnly?: boolean
     disabled?: boolean
     onComponentDraftValidityChange?: (key: string, isInvalid: boolean) => void
+    units?: string[]
+    onAddUnit?: (unit: string) => void
   } = {},
 ): string {
   const noopRow = () => undefined
@@ -67,6 +71,8 @@ function renderTable(
     onExclude: noopRow,
     onIncludeOptional,
     onComponentDraftValidityChange,
+    units,
+    onAddUnit,
   }))
 }
 
@@ -85,6 +91,13 @@ test('keeps rate visible in the canonical BOQ columns and removes legacy row det
   assert.match(qtyInput, /type="text"/)
   assert.match(qtyInput, /inputmode="decimal"/i)
   assert.doesNotMatch(qtyInput, /type="number"/)
+})
+
+test('renders the unit combobox trigger instead of a bare unit input', () => {
+  const html = renderTable([{ header: 'Valves', items: [item({ unit: 'Pcs' })] }])
+  assert.match(html, /unit-combobox-trigger/)
+  assert.match(html, /aria-label="Unit for Valve installation, row 1"/)
+  assert.doesNotMatch(html, /<input[^>]*aria-label="Unit for Valve installation, row 1"/)
 })
 
 test('excluded optional rows expose an explicit include-in-total action while read-only rows do not', () => {
@@ -125,9 +138,9 @@ test('keeps separate material and labour rows with independent quantity and unit
   }])
 
   assert.match(html, /aria-label="Quantity for Stub-end 6B, row 1"[^>]*value="8"/)
-  assert.match(html, /aria-label="Unit for Stub-end 6B, row 1"[^>]*value="Pcs"/)
+  assert.match(html, /aria-label="Unit for Stub-end 6B, row 1"[\s\S]*?unit-combobox-value">Pcs</)
   assert.match(html, /aria-label="Quantity for Stub-end 6B, row 2"[^>]*value="48"/)
-  assert.match(html, /aria-label="Unit for Stub-end 6B, row 2"[^>]*value="Db"/)
+  assert.match(html, /aria-label="Unit for Stub-end 6B, row 2"[\s\S]*?unit-combobox-value">Db</)
 })
 
 test('separate component rows render only the applicable component input and lock the rate', () => {
