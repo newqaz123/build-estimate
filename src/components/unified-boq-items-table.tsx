@@ -38,6 +38,10 @@ function formatNumber2(value: number): string {
   return value.toFixed(2)
 }
 
+function formatRateValue(value: number): string {
+  return value.toLocaleString(undefined, { maximumFractionDigits: 2 })
+}
+
 function parseCentDraft(raw: string): { valid: true; value: number } | { valid: false; error: string } {
   const trimmed = raw.trim()
   if (trimmed === "") return { valid: false, error: "Required" }
@@ -313,7 +317,6 @@ function FragmentSection({
         const origin = allocation?.origin
         const materialEvidence = row.item.sourceCosts?.material
         const labourEvidence = row.item.sourceCosts?.labour
-        const rateLocked = locked || isSeparateComponentRow || allocation !== undefined
 
         const handleComponentChange = (targetRow: UnifiedBoqPricedRow, field: EditableBoqField, value: number | undefined) => {
           onFieldChange(targetRow, field, value)
@@ -357,15 +360,10 @@ function FragmentSection({
                 onChange={(event) => onFieldChange(row, "qty", Number(event.target.value))}
               />
             </td>
-            <td className="num-col" data-label="Rate">
-              <Input
-                aria-label={`Rate for ${row.item.desc}, row ${rowNumber}`}
-                type="number"
-                min="0"
-                value={row.item.rate}
-                disabled={rateLocked}
-                onChange={(event) => onFieldChange(row, "rate", Number(event.target.value))}
-              />
+            <td className="num-col unified-boq-rate" data-label="Rate">
+              <span className="unified-boq-rate-value" aria-label={`Rate for ${row.item.desc}, row ${rowNumber}`}>
+                {Number.isFinite(row.item.rate) ? formatRateValue(row.item.rate) : "—"}
+              </span>
             </td>
             <td className="num-col unified-boq-component-cell" data-component="material" data-label="Material">
               {isLabourRow ? (

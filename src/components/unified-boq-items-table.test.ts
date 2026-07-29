@@ -77,7 +77,9 @@ test('keeps rate visible in the canonical BOQ columns and removes legacy row det
   assert.deepEqual(headers, ['Description', 'Unit', 'Qty', 'Rate', 'Material', 'Labour', 'Total', 'Catalog'])
   assert.equal(headers.includes('Type'), false)
   assert.equal(headers.includes('Code'), false)
-  assert.match(html, /aria-label="Rate for Valve installation, row 1"[^>]*min="0"[^>]*value="100"/)
+  assert.match(html, /aria-label="Rate for Valve installation, row 1"/)
+  assert.match(html, /unified-boq-rate-value/)
+  assert.match(html, />100</)
   assert.doesNotMatch(html, /Row details|Aggregate rate|aria-label="Code|aria-label="Type/)
 })
 
@@ -137,12 +139,8 @@ test('separate component rows render only the applicable component input and loc
   assert.match(html, /aria-label="Labour for Valve component, row 2"[^>]*value="300.00"/)
   const materialRow = html.match(/<tr[^>]*data-row-key="[^"]*id:material"[\s\S]*?<\/tr>/)?.[0] ?? ''
   const labourRow = html.match(/<tr[^>]*data-row-key="[^"]*id:labour"[\s\S]*?<\/tr>/)?.[0] ?? ''
-  const materialRate = materialRow.match(/<input[^>]*aria-label="Rate for Valve component, row 1"[^>]*>/)?.[0] ?? ''
-  const labourRate = labourRow.match(/<input[^>]*aria-label="Rate for Valve component, row 2"[^>]*>/)?.[0] ?? ''
-  assert.match(materialRate, /\sdisabled=""/)
-  assert.match(materialRate, /value="999"/)
-  assert.match(labourRate, /\sdisabled=""/)
-  assert.match(labourRate, /value="777"/)
+  assert.match(materialRow, /unified-boq-rate-value[^>]*>999</)
+  assert.match(labourRow, /unified-boq-rate-value[^>]*>777</)
   assert.match(materialRow, /Material component/)
   assert.match(labourRow, /Labour component/)
   assert.match(materialRow, /Labour not applicable/)
@@ -159,9 +157,7 @@ test('does not relabel an editable separate-component rate as source evidence', 
     items: [item({ desc: 'Editable material row', rate: 999, total: 7992, costComponent: 'material', costAllocation: undefined })],
   }])
 
-  const editableRate = html.match(/<input[^>]*aria-label="Rate for Editable material row, row 1"[^>]*>/)?.[0] ?? ''
-  assert.match(editableRate, /\sdisabled=""/)
-  assert.match(editableRate, /value="999"/)
+  assert.match(html, /unified-boq-rate-value[^>]*>999</)
   assert.match(html, /Material component/)
   assert.match(html, /aria-label="Material for Editable material row, row 1"[^>]*value="999.00"/)
   assert.match(html, /Labour not applicable/)
@@ -187,9 +183,7 @@ test('combined source-derived rows expose editable material and labour inputs wi
   assert.match(html, /Material source rate:[^<]*2,808\.00/)
   assert.match(html, /Labour source rate:[^<]*300\.00/)
   assert.match(html, /class="unified-boq-component-origin source"[^>]*>Source</)
-  const combinedRate = html.match(/<input[^>]*aria-label="Rate for Combined valve, row 1"[^>]*>/)?.[0] ?? ''
-  assert.match(combinedRate, /\sdisabled=""/)
-  assert.match(combinedRate, /value="3108"/)
+  assert.match(html, /unified-boq-rate-value[^>]*>3,108</)
 })
 
 test('lump-sum rows expose editable total-basis material and labour inputs', () => {
@@ -220,7 +214,7 @@ test('an unsplit combined row renders editable zeroed component controls until t
 
   assert.match(html, /aria-label="Material for Allowance, row 1"[^>]*value="0.00"/)
   assert.match(html, /aria-label="Labour for Allowance, row 1"[^>]*value="0.00"/)
-  assert.match(html, /aria-label="Rate for Allowance, row 1"[^>]*value="100"/)
+  assert.match(html, /unified-boq-rate-value[^>]*>100</)
   assert.doesNotMatch(html, /aria-label="Rate for Allowance, row 1"[^>]*disabled=""/)
   assert.doesNotMatch(html, />Allocate<|allocation editor|onAllocate\(/i)
   assert.doesNotMatch(tableSource, /onComponentChange|onAllocate|materialAllocation|labourAllocation/)
