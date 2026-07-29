@@ -13,6 +13,8 @@ export interface ExtractionProposalActionDependencies {
   accept(boqId: string, runId: string, proposalId: string, actorId: string): Promise<ProposalActionResult>
   acceptBatch(boqId: string, runId: string, proposalIds: string[], actorId: string): Promise<ProposalActionResult>
   reject(boqId: string, runId: string, proposalId: string, actorId: string): Promise<ProposalActionResult>
+  skip(boqId: string, runId: string, proposalId: string, actorId: string): Promise<ProposalActionResult>
+  reopen(boqId: string, runId: string, proposalId: string, actorId: string): Promise<ProposalActionResult>
   undo(boqId: string, runId: string, proposalId: string, actorId: string): Promise<ProposalActionResult>
   addSourceItem(boqId: string, runId: string, proposalId: string, request: SourceBackedItemRequest, actorId: string): Promise<ProposalActionResult>
 }
@@ -64,6 +66,24 @@ export function createExtractionProposalActionHandlers(dependencies: ExtractionP
     return Response.json(result.body, { status: result.status })
   }
 
+  async function skip(_request: Request, context: ExtractionProposalActionContext): Promise<Response> {
+    const user = actorId(await dependencies.authenticate())
+    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
+    const { id, runId, proposalId } = await context.params
+    if (![id, runId, proposalId].every(validPathId)) return Response.json({ error: 'Invalid extraction proposal path' }, { status: 400 })
+    const result = await dependencies.skip(id, runId, proposalId, user)
+    return Response.json(result.body, { status: result.status })
+  }
+
+  async function reopen(_request: Request, context: ExtractionProposalActionContext): Promise<Response> {
+    const user = actorId(await dependencies.authenticate())
+    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
+    const { id, runId, proposalId } = await context.params
+    if (![id, runId, proposalId].every(validPathId)) return Response.json({ error: 'Invalid extraction proposal path' }, { status: 400 })
+    const result = await dependencies.reopen(id, runId, proposalId, user)
+    return Response.json(result.body, { status: result.status })
+  }
+
   async function undo(_request: Request, context: ExtractionProposalActionContext): Promise<Response> {
     const user = actorId(await dependencies.authenticate())
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
@@ -106,7 +126,7 @@ export function createExtractionProposalActionHandlers(dependencies: ExtractionP
     return Response.json(result.body, { status: result.status })
   }
 
-  return { accept, acceptBatch, reject, undo, addSourceItem }
+  return { accept, acceptBatch, reject, skip, reopen, undo, addSourceItem }
 }
 
 export type { ExtractionProposalAudit }

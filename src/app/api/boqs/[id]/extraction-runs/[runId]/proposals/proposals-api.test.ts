@@ -14,6 +14,8 @@ function handlers(overrides: Partial<ExtractionProposalActionDependencies> = {})
     accept: async () => ({ status: 200, body: { status: 'accepted' } }),
     acceptBatch: async () => ({ status: 200, body: { status: 'accepted', acceptedProposalIds: [] } }),
     reject: async () => ({ status: 200, body: { status: 'rejected' } }),
+    skip: async () => ({ status: 200, body: { status: 'skipped' } }),
+    reopen: async () => ({ status: 200, body: { status: 'pending' } }),
     undo: async () => ({ status: 200, body: { status: 'undone' } }),
     addSourceItem: async () => ({ status: 200, body: { status: 'accepted' } }),
     ...overrides,
@@ -46,6 +48,17 @@ test('accept, reject, and undo dispatch only opaque path identifiers to server a
   await action.reject(request(), context)
   await action.undo(new Request('https://example.test', { method: 'POST' }), context)
   assert.deepEqual(calls, ['accept:boq-1:run-1:proposal-1', 'reject:boq-1:run-1:proposal-1', 'undo:boq-1:run-1:proposal-1'])
+})
+
+test('skip and reopen dispatch opaque path identifiers and actor identity', async () => {
+  const calls: string[] = []
+  const action = handlers({
+    skip: async (boqId, runId, proposalId, actorId) => { calls.push(`skip:${boqId}:${runId}:${proposalId}:${actorId}`); return { status: 200, body: { status: 'skipped' } } },
+    reopen: async (boqId, runId, proposalId, actorId) => { calls.push(`reopen:${boqId}:${runId}:${proposalId}:${actorId}`); return { status: 200, body: { status: 'pending' } } },
+  })
+  await action.skip(request(), context)
+  await action.reopen(request(), context)
+  assert.deepEqual(calls, ['skip:boq-1:run-1:proposal-1:user-1', 'reopen:boq-1:run-1:proposal-1:user-1'])
 })
 
 test('batch acceptance authenticates and forwards only unique bounded opaque ids', async () => {

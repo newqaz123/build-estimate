@@ -231,8 +231,8 @@ test('incomplete source-cell mapping becomes needs_human_review with a source-ba
   }))
   assert.equal(result.status, 200)
   if (result.status !== 200) return
-  assert.equal(result.body.proposals[0].operation, 'needs_human_review')
-  assert.deepEqual((result.body.proposals[0] as typeof result.body.proposals[0] & { reviewDraft?: { missingFields: string[] } }).reviewDraft?.missingFields, ['rate', 'total'])
+  assert.equal(result.body.aiStatus, 'human_review_required')
+  assert.match(result.body.message, /retained cells do not prove/i)
 })
 
 test('provider-authored values and invalid mappings are sanitized as invalid_shape', async () => {
@@ -392,4 +392,218 @@ test('normalizes source row IDs before checking uniqueness', () => {
 test('accepts an explicit forced recheck and rejects malformed force values', () => {
   assert.deepEqual(parseExtractionReviewRequest({ force: true }), { manual: false, force: true })
   assert.throws(() => parseExtractionReviewRequest({ force: 'yes' }), /force must be a boolean/i)
+})
+
+test('retries only server-reported missing fields with bounded local evidence', async () => {
+  const calls: Array<{ content: string; signal: AbortSignal }> = []
+  const incomplete = {
+    ...completeMappedDecision,
+    id: 'retry-valve',
+    cellMapping: {
+      sourceRowIds: ['row-missing'],
+      description: [{ sourceRowId: 'row-missing', column: 0 }],
+      unit: { sourceRowId: 'row-missing', column: 1 },
+      quantity: { sourceRowId: 'row-missing', column: 2 },
+    },
+  }
+  const complete = {
+    ...completeMappedDecision,
+    id: 'retry-valve',
+    cellMapping: {
+      sourceRowIds: ['row-missing'],
+      rate: { sourceRowId: 'row-missing', column: 3 },
+      total: { sourceRowId: 'row-missing', column: 4 },
+    },
+  }
+  const result = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+    callProvider: async (messages, provider, model, signal) => {
+      calls.push({ content: messages[1]!.content, signal })
+      if (calls.length === 1) return { content: JSON.stringify({ proposals: [incomplete] }), provider, model }
+      assert.match(messages[0]!.content, /targeted retry/i)
+      assert.match(messages[0]!.content, /rate.*total/i)
+      assert.match(messages[1]!.content, /row-missing/)
+      assert.doesNotMatch(messages[1]!.content, /row-clear/)
+      return { content: JSON.stringify({ proposals: [complete] }), provider, model }
+    },
+  }))
+
+  assert.equal(calls.length, 2)
+  assert.equal(result.status, 200)
+  if (result.status !== 200) return
+  assert.equal(result.body.proposals.length, 1)
+  assert.equal(result.body.proposals[0]!.operation, 'insert_missing_item')
+})
+
+test('exhausted targeted retry becomes a concise human-review exception without a third call', async () => {
+  let calls = 0
+  const incomplete = {
+    ...completeMappedDecision,
+    id: 'exhausted-valve',
+    cellMapping: {
+      sourceRowIds: ['row-missing'],
+      description: [{ sourceRowId: 'row-missing', column: 0 }],
+      unit: { sourceRowId: 'row-missing', column: 1 },
+      quantity: { sourceRowId: 'row-missing', column: 2 },
+    },
+  }
+  const result = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+    callProvider: async (_messages, provider, model) => {
+      calls += 1
+      return { content: JSON.stringify({ proposals: [incomplete] }), provider, model }
+    },
+  }))
+
+  assert.equal(calls, 2)
+  assert.equal(result.status, 200)
+  if (result.status !== 200) return
+  assert.equal(result.body.aiStatus, 'human_review_required')
+  assert.match(result.body.message, /retained cells do not prove/i)
+  assert.ok(result.body.proposals.some((proposal) => proposal.id === 'exhausted-valve'))
+})
+
+type RetryDecision = Record<string, unknown>
+
+function missingFieldDecision(id: string): RetryDecision {
+  return {
+    ...completeMappedDecision,
+    id,
+    cellMapping: {
+      sourceRowIds: ['row-missing'],
+      description: [{ sourceRowId: 'row-missing', column: 0 }],
+      unit: { sourceRowId: 'row-missing', column: 1 },
+      quantity: { sourceRowId: 'row-missing', column: 2 },
+    },
+  }
+}
+
+async function runRetryScenario(first: RetryDecision[], retry: RetryDecision[] | (() => never)) {
+  let calls = 0
+  const result = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+    callProvider: async (_messages, provider, model) => {
+      calls += 1
+      if (calls === 1) return { content: JSON.stringify({ proposals: first }), provider, model }
+      if (typeof retry === 'function') retry()
+      return { content: JSON.stringify({ proposals: retry }), provider, model }
+    },
+  }))
+  return { calls, result }
+}
+
+test('partial and empty retry mappings exhaust instead of accepting incomplete reconstruction', async () => {
+  for (const [label, cellMapping] of [
+    ['partial', { sourceRowIds: ['row-missing'], rate: { sourceRowId: 'row-missing', column: 3 } }],
+    ['empty', { sourceRowIds: ['row-missing'] }],
+  ] as const) {
+    const { calls, result } = await runRetryScenario(
+      [missingFieldDecision(`${label}-first`)],
+      [{ ...missingFieldDecision(`${label}-first`), cellMapping }],
+    )
+    assert.equal(calls, 2, label)
+    assert.equal(result.status, 200, label)
+    if (result.status !== 200) continue
+    assert.equal(result.body.aiStatus, 'human_review_required', label)
+    assert.match(result.body.message, /retained cells do not prove/i, label)
+  }
+})
+
+test('retry rejects injected values, unknown keys, and tampered coordinates', async () => {
+  const retries: RetryDecision[] = [
+    { ...missingFieldDecision('injected'), qty: 999 },
+    { ...missingFieldDecision('unknown-key'), cellMapping: { sourceRowIds: ['row-missing'], suspicious: { sourceRowId: 'row-missing', column: 3 }, rate: { sourceRowId: 'row-missing', column: 3 }, total: { sourceRowId: 'row-missing', column: 4 } } },
+    { ...missingFieldDecision('tampered'), cellMapping: { sourceRowIds: ['row-missing'], rate: { sourceRowId: 'row-missing', column: 99 }, total: { sourceRowId: 'row-missing', column: 4 } } },
+  ]
+  for (const retry of retries) {
+    const { result } = await runRetryScenario([missingFieldDecision(String(retry.id))], [retry])
+    assert.equal(result.status, 200)
+    if (result.status !== 200) continue
+    assert.equal(result.body.aiStatus, 'human_review_required')
+  }
+})
+
+test('multi-target retry preserves a successful proposal while reporting unresolved rows', async () => {
+  const { calls, result } = await runRetryScenario(
+    [missingFieldDecision('success'), missingFieldDecision('partial')],
+    [
+      { ...missingFieldDecision('success'), cellMapping: { sourceRowIds: ['row-missing'], rate: { sourceRowId: 'row-missing', column: 3 }, total: { sourceRowId: 'row-missing', column: 4 } } },
+      { ...missingFieldDecision('partial'), cellMapping: { sourceRowIds: ['row-missing'], rate: { sourceRowId: 'row-missing', column: 3 } } },
+    ],
+  )
+  assert.equal(calls, 2)
+  assert.equal(result.status, 200)
+  if (result.status !== 200) return
+  assert.equal(result.body.aiStatus, 'human_review_required')
+  assert.ok(result.body.proposals.some((proposal) => proposal.id === 'success'))
+})
+
+test('second-call timeout preserves first-call valid proposals and its timeout category', async () => {
+  const { calls, result } = await runRetryScenario(
+    [{ ...completeMappedDecision, id: 'valid-first' }, missingFieldDecision('needs-retry')],
+    () => { throw new DOMException('Timed out', 'AbortError') },
+  )
+  assert.equal(calls, 2)
+  assert.equal(result.status, 200)
+  if (result.status !== 200) return
+  assert.equal(result.body.aiStatus, 'timeout')
+  assert.ok(result.body.proposals.some((proposal) => proposal.id === 'valid-first'))
+})
+
+test('prepared human-review drafts remain human_review_required without coordinate retry', async () => {
+  const explicit = {
+    id: 'explicit-human', operation: 'needs_human_review', sourceRowIds: ['row-compound'], targetItemIds: ['combined'],
+    candidateItemIds: [], confidence: 0.8, explanation: 'The source is ambiguous.',
+  }
+  const result = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+    callProvider: async (_messages, provider, model) => ({ content: JSON.stringify({ proposals: [explicit] }), provider, model }),
+  }))
+  assert.equal(result.status, 200)
+  if (result.status !== 200) return
+  assert.equal(result.body.aiStatus, 'human_review_required')
+  assert.equal(result.body.proposals[0]?.operation, 'needs_human_review')
+})
+
+test('destination-section-only source drafts remain human_review_required', async () => {
+  const ambiguousBoq = {
+    ...boq,
+    sections: [{ header: 'Other', items: [] }, { header: 'Another', items: [] }],
+  }
+  const ambiguousRun = {
+    ...run,
+    sections: [{ header: 'Pump Works', items: run.sections[0]!.items.slice(-1) }],
+    reviewTargeting: { candidateRowIds: ['row-missing'], candidateCount: 1, unreconciled: false },
+  }
+  const result = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+    getContext: async () => ({ boq: ambiguousBoq, run: ambiguousRun, sourceRows: rows }),
+    callProvider: async (_messages, provider, model) => ({ content: JSON.stringify({ proposals: [{
+      ...completeMappedDecision,
+      id: 'destination-human',
+    }] }), provider, model }),
+  }))
+  assert.equal(result.status, 200)
+  if (result.status !== 200) return
+  assert.equal(result.body.aiStatus, 'human_review_required')
+})
+
+test('target-item-state-only source drafts remain human_review_required', async () => {
+  const baseTarget = { ...sections[0]!.items[1]!, sourceRowIds: ['row-missing'] }
+  const conflictingTarget = { ...baseTarget, id: 'conflict-target', optional: true }
+  const conflictingBoq = {
+    ...boq,
+    sections: [{ ...sections[0]!, items: [baseTarget, conflictingTarget] }],
+  }
+  const conflictingRun = {
+    ...run,
+    sections: [{ ...run.sections[0]!, items: run.sections[0]!.items.slice(-1) }],
+    reviewTargeting: { candidateRowIds: ['row-missing'], candidateCount: 1, unreconciled: false },
+  }
+  const result = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+    getContext: async () => ({ boq: conflictingBoq, run: conflictingRun, sourceRows: rows }),
+    callProvider: async (_messages, provider, model) => ({ content: JSON.stringify({ proposals: [{
+      ...completeMappedDecision,
+      id: 'target-state-human',
+      targetItemIds: ['clear', 'conflict-target'],
+    }] }), provider, model }),
+  }))
+  assert.equal(result.status, 200)
+  if (result.status !== 200) return
+  assert.equal(result.body.aiStatus, 'human_review_required')
 })

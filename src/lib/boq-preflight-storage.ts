@@ -27,12 +27,28 @@ export interface PreflightRecord extends PreflightUpload {
   cleanupState?: 'deleting'
   cleanupToken?: string
   cleanupLeaseExpiresAt?: string
+  importReservationToken?: string | null
+  importReservationLeaseExpiresAt?: string | null
+}
+
+export type PreflightConsumeOutcome = 'consumed' | 'missing' | 'conflict'
+
+export interface PreflightUpdateConditions {
+  expectedStatus?: PreflightStatus
+  expectedReservationToken?: string | null
+  expectedReservationLeaseExpiresAt?: string | null
 }
 
 export interface PreflightStore {
   create(input: PreflightCreateInput): Promise<PreflightRecord>
   getOwned(id: string, ownerId: string): Promise<PreflightRecord | null>
-  update(id: string, ownerId: string, patch: Partial<PreflightUpload> & { preserveForRetry?: boolean }): Promise<PreflightRecord | null>
+  update(
+    id: string,
+    ownerId: string,
+    patch: Partial<PreflightUpload> & { preserveForRetry?: boolean; importReservationToken?: string | null; importReservationLeaseExpiresAt?: string | null },
+    conditions?: PreflightUpdateConditions,
+  ): Promise<PreflightRecord | null>
+  consume?(id: string, ownerId: string, confirmedPages: number[]): Promise<PreflightConsumeOutcome>
   deleteArtifacts(id: string, ownerId: string): Promise<boolean>
   claimExpired(now: Date, limit: number): Promise<Array<{ id: string; ownerId: string }>>
 }
@@ -47,6 +63,10 @@ export function preflightArtifactPrefix(ownerId: string, id: string): string {
   validatePart(ownerId, 'ownerId')
   validatePart(id, 'preflightId')
   return `preflight/${ownerId}/${id}/`
+}
+
+function validateSourceDigest(value: string): void {
+  if (!/^sha256:[0-9a-f]{64}$/.test(value)) throw new TypeError('sourceDigest must be a full SHA-256 digest')
 }
 
 function validatePart(value: string, name: string): void {
@@ -85,8 +105,8 @@ export function createFirestorePreflightStore(db: Firestore, bucket: Bucket, now
   const refFor = (ownerId: string, id: string) => db.doc(preflightDocumentPath(ownerId, id))
   return {
     async create(input) {
-      validatePart(input.ownerId, 'ownerId'); validatePart(input.id, 'preflightId')
-      if (!Number.isInteger(input.pageCount) || input.pageCount < 1) throw new TypeError('pageCount must be positive')
+      validatePart(input.ownerId, 'ownerId'); validatePart(input.id, 'preflightId'); validateSourceDigest(input.sourceDigest)
+      if (!Number.isInteger(input.pageCount) || input.pageCount < 0) throw new TypeError('pageCount must be a non-negative integer')
       const timestamp = now()
       const record: PreflightRecord = {
         ...input,
@@ -111,7 +131,7 @@ export function createFirestorePreflightStore(db: Firestore, bucket: Bucket, now
       return { id: snapshot.id, ...snapshot.data() } as PreflightRecord
     },
 
-    async update(id, ownerId, patch) {
+    async update(id, ownerId, patch, conditions) {
       const ref = refFor(ownerId, id)
       const preserve = patch.preserveForRetry === true
       const changes = { ...patch }
@@ -120,6 +140,17 @@ export function createFirestorePreflightStore(db: Firestore, bucket: Bucket, now
         const snapshot = await transaction.get(ref)
         if (!snapshot.exists) return null
         const current = snapshot.data() as PreflightRecord
+        if (conditions?.expectedStatus !== undefined && current.status !== conditions.expectedStatus) {
+          throw new Error(`Preflight status compare-and-set failed: expected ${conditions.expectedStatus}, got ${current.status}`)
+        }
+        if (conditions && 'expectedReservationToken' in conditions
+          && (current.importReservationToken ?? null) !== conditions.expectedReservationToken) {
+          throw new Error('Preflight reservation compare-and-set failed')
+        }
+        if (conditions && 'expectedReservationLeaseExpiresAt' in conditions
+          && (current.importReservationLeaseExpiresAt ?? null) !== conditions.expectedReservationLeaseExpiresAt) {
+          throw new Error('Preflight reservation lease compare-and-set failed')
+        }
         if (changes.status && !transitionAllowed(current.status, changes.status)) throw new Error(`Invalid preflight transition: ${current.status} -> ${changes.status}`)
         const value = { ...changes, updatedAt: iso(now()) }
         transaction.update(ref, value)
@@ -131,6 +162,24 @@ export function createFirestorePreflightStore(db: Firestore, bucket: Bucket, now
         return null
       }
       return updated
+    },
+
+    async consume(id, ownerId, confirmedPages) {
+      const ref = refFor(ownerId, id)
+      const outcome = await db.runTransaction(async (transaction): Promise<PreflightConsumeOutcome> => {
+        const snapshot = await transaction.get(ref)
+        if (!snapshot.exists) return 'missing'
+        const current = snapshot.data() as PreflightRecord
+        if (current.status !== 'ready' || current.importReservationToken) return 'conflict'
+        transaction.update(ref, {
+          status: 'consumed',
+          confirmedPages,
+          updatedAt: iso(now()),
+        })
+        return 'consumed'
+      })
+      if (outcome === 'consumed') await this.deleteArtifacts(id, ownerId)
+      return outcome
     },
 
     async deleteArtifacts(id, ownerId) {
@@ -161,17 +210,25 @@ export function createFirestorePreflightStore(db: Firestore, bucket: Bucket, now
 
     async claimExpired(expiry, limit) {
       validateLimit(limit)
-      const result = await db.collectionGroup('uploads').where('expiresAt', '<=', iso(expiry)).limit(limit).get()
+      const [expiryResult, reservationResult] = await Promise.all([
+        db.collectionGroup('uploads').where('expiresAt', '<=', iso(expiry)).limit(limit).get(),
+        db.collectionGroup('uploads').where('importReservationLeaseExpiresAt', '<=', iso(expiry)).limit(limit).get(),
+      ])
+      const candidates = new Map<string, typeof expiryResult.docs[number]>()
+      for (const snapshot of [...expiryResult.docs, ...reservationResult.docs]) candidates.set(snapshot.ref.path, snapshot)
       const claimed: Array<{ id: string; ownerId: string }> = []
-      for (const snapshot of result.docs) {
+      for (const snapshot of [...candidates.values()].slice(0, limit)) {
         const owner = snapshot.ref.parent.parent?.id
         if (!owner) continue
         const ok = await db.runTransaction(async (transaction) => {
           const current = await transaction.get(snapshot.ref)
           if (!current.exists) return false
           const data = current.data() as PreflightRecord
-          if (['consumed', 'cancelled', 'expired'].includes(data.status)) return false
           const cleanupTime = now()
+          const reservationLease = Date.parse(data.importReservationLeaseExpiresAt ?? '')
+          if (data.importReservationToken
+            && (!Number.isFinite(reservationLease) || reservationLease > cleanupTime.getTime())) return false
+          if (['consumed', 'cancelled', 'expired'].includes(data.status)) return false
           const lease = Date.parse(data.cleanupLeaseExpiresAt ?? '')
           if (data.cleanupState === 'deleting' && Number.isFinite(lease) && lease > cleanupTime.getTime()) return false
           transaction.update(snapshot.ref, { status: 'expired', cleanupState: 'deleting', cleanupToken: randomUUID(), cleanupLeaseExpiresAt: iso(new Date(cleanupTime.getTime() + CLEANUP_LEASE_MS)), updatedAt: iso(cleanupTime) })

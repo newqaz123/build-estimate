@@ -21,7 +21,13 @@ export interface BoqExtractionRun {
   readyAt?: string
   stagingExpiresAt: string | null
   sourceFile: { path: string; name: string; digest: string }
-  parser: { name: 'docling'; contractVersion: 3; configFingerprint: string }
+  parser: {
+    name: 'docling'
+    contractVersion: 3
+    configFingerprint: string
+    selectedPages?: number[]
+    pageSelectionContract?: 1
+  }
   metadataCandidates: DoclingMetadata
   metadataConfidence: Record<keyof DoclingMetadata, number>
   sourceRowCount: number
@@ -163,14 +169,24 @@ function reviewTargeting(seed: BoqExtractionRunSeed): BoqExtractionRun['reviewTa
   }
 }
 
+function normalizeSelectedPages(pages: readonly number[] | undefined): number[] | undefined {
+  if (pages === undefined) return undefined
+  if (pages.length === 0 || pages.some((page) => !Number.isInteger(page) || page < 1)) {
+    throw new TypeError('selectedPages must contain positive integer page numbers')
+  }
+  return [...new Set(pages)].sort((left, right) => left - right)
+}
+
 export function buildExtractionRun(input: {
   seed: BoqExtractionRunSeed
   sourceDigest: string
   parserConfigFingerprint: string
+  selectedPages?: readonly number[]
   now: Date
   stagingTtlMs?: number
 }): BoqExtractionRun {
   const createdAt = input.now.toISOString()
+  const selectedPages = normalizeSelectedPages(input.selectedPages)
   const targeting = reviewTargeting(input.seed)
   const run: BoqExtractionRun = {
     id: input.seed.id,
@@ -185,7 +201,12 @@ export function buildExtractionRun(input: {
       name: input.seed.sourceFileName,
       digest: input.sourceDigest,
     },
-    parser: { name: 'docling', contractVersion: 3, configFingerprint: input.parserConfigFingerprint },
+    parser: {
+      name: 'docling',
+      contractVersion: 3,
+      configFingerprint: input.parserConfigFingerprint,
+      ...(selectedPages ? { selectedPages, pageSelectionContract: 1 as const } : {}),
+    },
     metadataCandidates: structuredClone(input.seed.metadata),
     metadataConfidence: {
       vendor: input.seed.metadata.vendor.confidence,

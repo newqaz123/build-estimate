@@ -14,6 +14,7 @@ import {
   isLatestReviewSnapshotRequest,
   selectEffectiveFilter,
   selectReviewVisibility,
+  selectReviewTab,
 } from "./boq-extraction-review-state"
 import type { ExtractionReviewResponse } from "./boq-extraction-ai-review"
 import type { ProposalOperation, ValidatedProposal } from "./boq-extraction-proposals"
@@ -127,6 +128,27 @@ test("review filters expose pending, accepted, rejected, and needs-attention pro
   assert.deepEqual(filterReviewProposals(proposals, statuses, "accepted").map((entry) => entry.id), ["accepted"])
   assert.deepEqual(filterReviewProposals(proposals, statuses, "rejected").map((entry) => entry.id), ["rejected"])
   assert.deepEqual(filterReviewProposals(proposals, statuses, "needs-attention").map((entry) => entry.id), ["human"])
+})
+
+test("review tabs include incomplete pending work and keep durable history separate", () => {
+  const review = response([
+    proposal("pending-complete", "row-1"),
+    proposal("needs-human-review", "row-2", "needs_human_review"),
+    proposal("accepted", "row-3"),
+    proposal("rejected", "row-4"),
+    proposal("skipped", "row-5"),
+    proposal("undone", "row-6"),
+    proposal("superseded", "row-7"),
+  ])
+  const state = { review, proposalStatuses: {
+    accepted: "accepted" as const,
+    rejected: "rejected" as const,
+    skipped: "skipped" as const,
+    undone: "undone" as const,
+    superseded: "superseded" as const,
+  } }
+  assert.deepEqual(selectReviewTab(state, "needs-review").proposalIds, ["pending-complete", "needs-human-review"])
+  assert.deepEqual(selectReviewTab(state, "history").proposalIds, ["accepted", "rejected", "skipped", "undone", "superseded"])
 })
 
 test("source-row filters keep compound candidates, ambiguous evidence, reconciliation failures, and AI pending distinct", () => {

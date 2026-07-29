@@ -256,6 +256,37 @@ test('PATCH /api/boqs/preflight/[id] returns 404 for other users preflight', asy
   assert.equal(response.status, 404)
 })
 
+
+test('PATCH /api/boqs/preflight/[id] returns one winner for concurrent consume attempts', async () => {
+  let active = false
+  const handlers = createPreflightHandlers({
+    authenticate: async () => ({ user: { id: 'user-1' } }),
+    getPreflight: async () => mockPreflightUpload({ pageCount: 2 }),
+    consumePreflight: async () => {
+      if (active) throw new Error('Preflight consumption conflict')
+      active = true
+      await new Promise((resolve) => setImmediate(resolve))
+      active = false
+      return {
+        file: new File([Buffer.from('%PDF')], 'source.pdf', { type: 'application/pdf' }),
+        pages: [1],
+        preflightId: 'preflight-1',
+      }
+    },
+    createPreflight: async () => ({ id: '', fileName: '', pageCount: 0, status: 'uploaded' as const, pages: [], confirmedPages: null }),
+    cancelPreflight: async () => {},
+  })
+  const request = () => new Request('http://localhost/api/boqs/preflight/preflight-1', {
+    method: 'PATCH',
+    body: JSON.stringify({ pages: [1] }),
+  })
+  const responses = await Promise.all([
+    handlers.PATCH(request(), context),
+    handlers.PATCH(request(), context),
+  ])
+  assert.deepEqual(responses.map((response) => response.status).sort(), [200, 409])
+})
+
 test('DELETE /api/boqs/preflight/[id] requires authentication', async () => {
   const handlers = createPreflightHandlers({
     authenticate: async () => null,

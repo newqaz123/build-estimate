@@ -9,6 +9,7 @@ import {
   parseExtractionReviewRequest,
   type ExtractionReviewDependencies,
   type ExtractionReviewRejectedProposal,
+  type ExtractionReviewApiResult,
 } from '@/lib/boq-extraction-ai-review'
 import type { ExtractionProposalReviewState, ExtractionReviewRunSummary } from '@/lib/boq-extraction-proposal-store'
 import type { ProposalValidationFailureCode, ProposalValidationSummary, ValidatedProposal } from '@/lib/boq-extraction-proposals'
@@ -23,8 +24,9 @@ export interface ExtractionReviewHandlerDependencies extends Omit<ExtractionRevi
   getReviewState(boqId: string, runId: string): Promise<ExtractionProposalReviewState | null>
   acquireReviewLease(boqId: string, runId: string, requestKey: string, leaseId: string, leaseTtlMs: number, force: boolean): Promise<{ kind: 'acquired' | 'busy' | 'complete' | 'failed'; reviewRun: ExtractionReviewRunSummary }>
   completeReviewLease(boqId: string, runId: string, leaseId: string, status: 'completed' | 'partial', proposals: readonly ValidatedProposal[], refreshedSourceRowIds: readonly string[], validationSummary: ProposalValidationSummary | null): Promise<ExtractionReviewRunSummary>
-  failReviewLease(boqId: string, runId: string, leaseId: string, failureCode: string, retryDelayMs: number): Promise<ExtractionReviewRunSummary>
+  failReviewLease(boqId: string, runId: string, leaseId: string, failureCode: string, retryDelayMs: number, preservedProposals?: readonly ValidatedProposal[], refreshedSourceRowIds?: readonly string[], validationSummary?: ProposalValidationSummary | null): Promise<ExtractionReviewRunSummary>
   createLeaseId(): string
+  executeReview?: (body: unknown, boqId: string, extractionRunId: string, dependencies: ExtractionReviewDependencies) => Promise<ExtractionReviewApiResult>
 }
 
 const REVIEW_LEASE_MS = 30_000
@@ -69,7 +71,7 @@ export function buildDurableExtractionReviewResponse(input: {
   const proposalCount = input.stored.proposals.length
   const validationSummary = reviewRun.validationSummary ?? null
   const failure = reviewRun.failureCode
-  const knownFailure = ['provider_not_configured', 'unsupported_provider', 'unauthorized', 'rate_limited', 'timeout', 'malformed_response', 'provider_failure'].includes(failure ?? '')
+  const knownFailure = ['provider_not_configured', 'unsupported_provider', 'unauthorized', 'rate_limited', 'timeout', 'malformed_response', 'provider_failure', 'human_review_required'].includes(failure ?? '')
     ? failure
     : 'provider_failure'
   const hasCandidates = candidateCount > 0
@@ -78,9 +80,12 @@ export function buildDurableExtractionReviewResponse(input: {
     : !hasCandidates
       ? 'not_required'
       : 'ai'
+  const hasHumanReviewProposals = input.stored.proposals.some((proposal) => proposal.operation === 'needs_human_review')
   const aiStatus = reviewRun.status === 'failed'
     ? knownFailure
-    : reviewRun.status === 'completed' || reviewRun.status === 'partial'
+    : reviewRun.status === 'partial' && hasHumanReviewProposals
+      ? 'human_review_required'
+      : reviewRun.status === 'completed' || reviewRun.status === 'partial'
       ? 'completed'
       : hasCandidates
         ? 'not_required'
@@ -96,7 +101,9 @@ export function buildDurableExtractionReviewResponse(input: {
         ? 'AI review is temporarily unavailable. The deterministic extraction remains unchanged.'
         : !hasCandidates
           ? 'No ambiguous, unreconciled, or compound rows require review.'
-          : proposalCount > 0 && validationSummary && validationSummary.rejectedProposalCount > 0
+          : reviewRun.status === 'partial' && hasHumanReviewProposals
+            ? 'Some source rows still need manual review because retained cells do not prove every required field.'
+            : proposalCount > 0 && validationSummary && validationSummary.rejectedProposalCount > 0
             ? `${proposalCount} suggestion${proposalCount === 1 ? '' : 's'} ready; ${validationSummary.rejectedProposalCount} blocked by validation. ${progress}`
             : proposalCount > 0
               ? `Saved extraction suggestions loaded for review. ${progress}`
@@ -161,7 +168,8 @@ export function createExtractionReviewHandler(dependencies: ExtractionReviewHand
         return Response.json({ error: 'Extraction review could not be loaded' }, { status: 500 })
       }
     }
-    const result = await executeExtractionReview(body, id, runId, {
+    const executeReview = dependencies.executeReview ?? executeExtractionReview
+    const result = await executeReview(body, id, runId, {
       getContext: async (boqId, extractionRunId) => {
         const imported = await dependencies.getReadyImport(boqId, extractionRunId)
         if (!imported) return null
@@ -181,9 +189,21 @@ export function createExtractionReviewHandler(dependencies: ExtractionReviewHand
     try {
       let finalRun: ExtractionReviewRunSummary
       if (result.body.mode === 'fallback') {
-        finalRun = await dependencies.failReviewLease(id, runId, leaseId, result.body.aiStatus, REVIEW_FAILURE_BACKOFF_MS)
+        const summary = buildValidationSummary(result.body.proposals.length, result.body.rejectedProposals)
+        finalRun = await dependencies.failReviewLease(
+          id,
+          runId,
+          leaseId,
+          result.body.aiStatus,
+          REVIEW_FAILURE_BACKOFF_MS,
+          result.body.proposals,
+          result.body.sourceRowIds,
+          summary,
+        )
       } else {
-        const status = result.body.rejectedProposals.length > 0 ? 'partial' : 'completed'
+        const status = result.body.aiStatus === 'human_review_required'
+          ? 'partial'
+          : result.body.rejectedProposals.length > 0 ? 'partial' : 'completed'
         const summary = buildValidationSummary(result.body.proposals.length, result.body.rejectedProposals)
         finalRun = await dependencies.completeReviewLease(id, runId, leaseId, status, result.body.proposals, result.body.sourceRowIds, summary)
       }

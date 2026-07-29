@@ -1,5 +1,6 @@
 import type { PreflightUpload } from '@/lib/boq-preflight-schema'
 import { parseConfirmedPageSelection } from '@/lib/boq-preflight-schema'
+import type { PreflightImportContext, PreflightImportOperation } from '@/lib/boq-preflight-service'
 
 interface AuthUser {
   id?: string
@@ -9,11 +10,12 @@ export interface PreflightApiDependencies {
   authenticate: () => Promise<{ user?: AuthUser } | null>
   createPreflight: (file: File, actorId: string) => Promise<PreflightUpload>
   getPreflight: (id: string, ownerId: string) => Promise<PreflightUpload | null>
-  consumePreflight: (id: string, actorId: string, selection: { pages: number[] }) => Promise<{
-    file: File
-    pages: number[]
-    preflightId: string
-  }>
+  consumePreflight: (
+    id: string,
+    actorId: string,
+    selection: { pages: number[] },
+    operation?: PreflightImportOperation,
+  ) => Promise<PreflightImportContext & { operationResult?: unknown }>
   cancelPreflight: (id: string, actorId: string) => Promise<void>
   requireSinglePdf?: (formData: File) => File
   parseConfirmedPageSelection?: (value: unknown, pageCount: number) => { pages: number[] }
@@ -141,6 +143,9 @@ export function createPreflightHandlers(dependencies: PreflightApiDependencies) 
     } catch (error) {
       console.error('Preflight consumption failed:', error)
       const message = error instanceof Error ? error.message : 'Preflight consumption failed'
+      if (message.includes('consumption conflict')) {
+        return Response.json({ error: message }, { status: 409 })
+      }
       if (message.includes('not found') || message.includes('not ready')) {
         return Response.json({ error: message }, { status: 404 })
       }

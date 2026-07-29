@@ -15,6 +15,8 @@ import { Button } from "@/components/ui/button"
 import { Upload, FileText } from "lucide-react"
 import type { Boq } from "@/lib/boq-schema"
 import { uploadRejectionMessage } from "@/lib/boq-upload"
+import { BoqPreflight } from "@/components/boq-preflight"
+import type { PreflightUpload } from "@/lib/boq-preflight-schema"
 
 interface UploadModalProps {
   open: boolean
@@ -36,10 +38,14 @@ async function readError(response: Response, fallback: string): Promise<string> 
 export function UploadModal({ open, onOpenChange, onUploadComplete }: UploadModalProps) {
   const [file, setFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [preflight, setPreflight] = useState<PreflightUpload | null>(null)
+  const [importError, setImportError] = useState<string | null>(null)
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length > 0) {
       setFile(acceptedFiles[0])
+      setPreflight(null)
+      setImportError(null)
     }
   }, [])
 
@@ -56,15 +62,45 @@ export function UploadModal({ open, onOpenChange, onUploadComplete }: UploadModa
     multiple: false,
   })
 
-  const handleUpload = async () => {
+  const handlePreflight = async () => {
     if (!file) {
       toast.error("Please select a PDF file")
       return
     }
     setUploading(true)
+    setImportError(null)
     try {
       const formData = new FormData()
       formData.append("file", file)
+      const response = await fetch("/api/boqs/preflight", {
+        method: "POST",
+        body: formData,
+      })
+      if (!response.ok) {
+        throw new Error(await readError(response, "Preflight check failed. Try again."))
+      }
+
+      const preflightData = await response.json() as PreflightUpload
+      setPreflight(preflightData)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Preflight failed")
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const handleExtract = async (pages: number[]) => {
+    if (!preflight || !file) {
+      toast.error("Missing preflight data")
+      return
+    }
+    setUploading(true)
+    setImportError(null)
+    try {
+      const formData = new FormData()
+      formData.append("preflightId", preflight.id)
+      formData.append("pages", JSON.stringify(pages))
+
       const response = await fetch("/api/boqs/import", {
         method: "POST",
         body: formData,
@@ -78,11 +114,19 @@ export function UploadModal({ open, onOpenChange, onUploadComplete }: UploadModa
       onUploadComplete(boq)
       onOpenChange(false)
       setFile(null)
+      setPreflight(null)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Upload failed")
+      const errorMessage = error instanceof Error ? error.message : "Import failed"
+      setImportError(errorMessage)
+      toast.error(errorMessage)
     } finally {
       setUploading(false)
     }
+  }
+
+  const handleCancelPreflight = () => {
+    setPreflight(null)
+    setImportError(null)
   }
 
   const handleOpenChange = (nextOpen: boolean) => {
@@ -93,60 +137,82 @@ export function UploadModal({ open, onOpenChange, onUploadComplete }: UploadModa
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="modal upload-modal max-w-[520px]"
+        className="modal upload-modal max-w-[720px]"
         data-od-id="upload-modal"
         showCloseButton={!uploading}
       >
         <DialogHeader className="modal-header">
           <DialogTitle>Upload BOQ</DialogTitle>
           <DialogDescription>
-            Drop a BOQ PDF. Docling extracts all line items — you fill in the metadata (vendor, project, work type) during review.
+            {preflight
+              ? "Confirm which pages contain BOQ line items for extraction."
+              : "Drop a BOQ PDF. Docling extracts all line items — you fill in the metadata (vendor, project, work type) during review."
+            }
           </DialogDescription>
         </DialogHeader>
 
         <div className="modal-body upload-modal-body">
-          <div
-            {...getRootProps({
-              role: "button",
-              "aria-label": file ? `Selected PDF: ${file.name}` : "Choose a BOQ PDF to upload",
-              "aria-disabled": uploading,
-            })}
-            data-od-id="drop-zone"
-            className={`drop-zone ${isDragActive ? "dragover" : ""} ${uploading ? "is-disabled" : ""}`}
-          >
-            <input {...getInputProps()} disabled={uploading} />
-            {file ? (
-              <>
-                <FileText />
-                <p className="drop-zone-title">{file.name}</p>
-                <p className="drop-zone-meta">{(file.size / 1024).toFixed(0)} KB</p>
-              </>
-            ) : (
-              <>
-                <Upload />
-                <p className="drop-zone-title">Drop your BOQ PDF here, or click to browse</p>
-                <p className="drop-zone-meta">PDF files only · Max 20 MB</p>
-              </>
-            )}
-          </div>
+          {preflight ? (
+            <BoqPreflight
+              preflight={preflight}
+              onExtract={handleExtract}
+              onCancel={handleCancelPreflight}
+            />
+          ) : (
+            <>
+              <div
+                {...getRootProps({
+                  role: "button",
+                  "aria-label": file ? `Selected PDF: ${file.name}` : "Choose a BOQ PDF to upload",
+                  "aria-disabled": uploading,
+                })}
+                data-od-id="drop-zone"
+                className={`drop-zone ${isDragActive ? "dragover" : ""} ${uploading ? "is-disabled" : ""}`}
+              >
+                <input {...getInputProps()} disabled={uploading} />
+                {file ? (
+                  <>
+                    <FileText />
+                    <p className="drop-zone-title">{file.name}</p>
+                    <p className="drop-zone-meta">{(file.size / 1024).toFixed(0)} KB</p>
+                  </>
+                ) : (
+                  <>
+                    <Upload />
+                    <p className="drop-zone-title">Drop your BOQ PDF here, or click to browse</p>
+                    <p className="drop-zone-meta">PDF files only · Max 20 MB</p>
+                  </>
+                )}
+              </div>
 
-          {uploading && (
-            <div className="upload-progress" role="status" aria-live="polite">
-              <div className="proto-spinner" aria-hidden="true" />
-              <div><strong>Parsing BOQ…</strong><span>Uploading the PDF and extracting line items with Docling.</span></div>
-            </div>
+              {uploading && (
+                <div className="upload-progress" role="status" aria-live="polite">
+                  <div className="proto-spinner" aria-hidden="true" />
+                  <div><strong>Analyzing PDF…</strong><span>Checking page structure and content.</span></div>
+                </div>
+              )}
+
+              {importError && (
+                <div className="upload-error" role="alert">
+                  <p className="upload-error-message">{importError}</p>
+                  <p className="upload-error-hint">Your page selection is preserved. Try again or adjust your selection.</p>
+                </div>
+              )}
+            </>
           )}
         </div>
 
-        <DialogFooter className="modal-footer">
-          <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={uploading}>
-            Cancel
-          </Button>
-          <Button onClick={handleUpload} disabled={!file || uploading}>
-            {uploading && <span className="proto-spinner upload-button-spinner" aria-hidden="true" />}
-            {uploading ? "Parsing…" : "Upload & Parse"}
-          </Button>
-        </DialogFooter>
+        {!preflight && (
+          <DialogFooter className="modal-footer">
+            <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={uploading}>
+              Cancel
+            </Button>
+            <Button onClick={handlePreflight} disabled={!file || uploading}>
+              {uploading && <span className="proto-spinner upload-button-spinner" aria-hidden="true" />}
+              {uploading ? "Analyzing…" : "Continue"}
+            </Button>
+          </DialogFooter>
+        )}
       </DialogContent>
     </Dialog>
   )

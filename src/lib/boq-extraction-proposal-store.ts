@@ -11,9 +11,12 @@ import {
   acceptExtractionProposal,
   proposalMatchesAudit,
   rejectExtractionProposal,
+  reopenExtractionProposal,
+  skipExtractionProposal,
   undoExtractionProposal,
   validateExtractionProposal,
   type ExtractionProposalAudit,
+  type ExtractionProposalReopenEvent,
   type ExtractionProposalUndoEvent,
 } from './boq-extraction-acceptance'
 import { addSourceBackedBoqItem, MissingBoqItemError, type SourceBackedItemRequest, type ValidatedSourceMapping } from './boq-user-entry'
@@ -22,7 +25,7 @@ export type ProposalStoreResponse =
   | { status: 200; body: Record<string, unknown> }
   | { status: 400 | 404 | 409 | 500; body: { error: string } }
 
-export type ExtractionProposalStatus = 'pending' | 'accepted' | 'rejected' | 'superseded' | 'undone'
+export type ExtractionProposalStatus = 'pending' | 'accepted' | 'rejected' | 'skipped' | 'superseded' | 'undone'
 export interface ExtractionProposalStatusSummary {
   status: ExtractionProposalStatus
   canUndo: boolean
@@ -50,7 +53,7 @@ export interface ExtractionReviewRunSummary {
 export interface ExtractionProposalReviewState {
   proposals: ValidatedProposal[]
   proposalStatuses: Record<string, ExtractionProposalStatusSummary>
-  auditEvents: Array<ExtractionProposalAudit | ExtractionProposalUndoEvent>
+  auditEvents: Array<ExtractionProposalAudit | ExtractionProposalUndoEvent | ExtractionProposalReopenEvent>
   reviewRun: ExtractionReviewRunSummary
 }
 
@@ -75,7 +78,7 @@ function storedProposal(value: unknown, expectedId?: string): ValidatedProposal 
 function proposalRecordStatus(value: unknown): ExtractionProposalStatus {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return 'pending'
   const status = (value as { lifecycleStatus?: unknown }).lifecycleStatus
-  return status === 'accepted' || status === 'rejected' || status === 'superseded' || status === 'undone' ? status : 'pending'
+  return status === 'accepted' || status === 'rejected' || status === 'skipped' || status === 'superseded' || status === 'undone' ? status : 'pending'
 }
 
 function canonicalProposalId(proposal: ValidatedProposal): string {
@@ -135,9 +138,16 @@ function reviewRunSummary(value: unknown, fallback: unknown): ExtractionReviewRu
 function isAudit(value: unknown): value is ExtractionProposalAudit {
   return !!value && typeof value === 'object' && !Array.isArray(value)
     && typeof (value as ExtractionProposalAudit).proposalId === 'string'
-    && ((value as ExtractionProposalAudit).status === 'accepted' || (value as ExtractionProposalAudit).status === 'rejected')
+    && ((value as ExtractionProposalAudit).status === 'accepted' || (value as ExtractionProposalAudit).status === 'rejected' || (value as ExtractionProposalAudit).status === 'skipped')
     && Array.isArray((value as ExtractionProposalAudit).targetItemIds)
-    && ((value as ExtractionProposalAudit).status === 'rejected' || isBoqSnapshot((value as ExtractionProposalAudit).resultBoq))
+    && ((value as ExtractionProposalAudit).status !== 'accepted' || isBoqSnapshot((value as ExtractionProposalAudit).resultBoq))
+}
+
+function isReopenEvent(value: unknown): value is ExtractionProposalReopenEvent {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+    && typeof (value as ExtractionProposalReopenEvent).eventId === 'string'
+    && (value as ExtractionProposalReopenEvent).status === 'reopened'
+    && ((value as ExtractionProposalReopenEvent).previousStatus === 'rejected' || (value as ExtractionProposalReopenEvent).previousStatus === 'skipped')
 }
 
 function isUndoEvent(value: unknown): value is ExtractionProposalUndoEvent {
@@ -155,10 +165,174 @@ function isBoqSnapshot(value: unknown): value is Boq {
     && typeof (value as Boq).grandTotal === 'number'
 }
 
+type ProposalLifecycle = {
+  status: ExtractionProposalStatus
+  sequence: number
+  currentAudit: ExtractionProposalAudit | null
+  events: Array<ExtractionProposalAudit | ExtractionProposalUndoEvent | ExtractionProposalReopenEvent>
+}
+
+function lifecycleVersionMatches(snapshot: FirebaseFirestore.DocumentSnapshot, lifecycle: ProposalLifecycle): boolean {
+  const version = snapshot.data()?.lifecycleRevision
+  return version === undefined || version === lifecycle.sequence
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function nonBlank(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== ''
+}
+
+function lifecycleEventKind(event: ExtractionProposalAudit | ExtractionProposalUndoEvent | ExtractionProposalReopenEvent): string {
+  return isAudit(event) ? event.status : event.status === 'reopened' ? 'reopened' : 'undone'
+}
+
+function auditComplete(value: unknown): value is ExtractionProposalAudit {
+  if (!isRecord(value) || !isAudit(value)) return false
+  const audit = value as ExtractionProposalAudit
+  return nonBlank(audit.auditId) && nonBlank(audit.proposalId) && nonBlank(audit.extractionRunId)
+    && nonBlank(audit.actorId) && nonBlank(audit.timestamp) && nonBlank(audit.operation)
+    && typeof audit.confidence === 'number' && Number.isFinite(audit.confidence)
+    && typeof audit.explanation === 'string'
+    && Array.isArray(audit.targetItemIds) && Array.isArray(audit.sourceRowIds)
+    && Array.isArray(audit.sourceRefs) && Array.isArray(audit.proposedItems)
+    && isRecord(audit.affectedItemFingerprints)
+    && Array.isArray(audit.beforeSections) && Array.isArray(audit.afterSections)
+    && nonBlank(audit.beforeSectionsFingerprint) && nonBlank(audit.afterSectionsFingerprint)
+    && (audit.status !== 'accepted' || isBoqSnapshot(audit.resultBoq))
+}
+
+function eventComplete(value: unknown): value is ExtractionProposalAudit | ExtractionProposalUndoEvent | ExtractionProposalReopenEvent {
+  if (isAudit(value)) return auditComplete(value)
+  if (isReopenEvent(value)) {
+    return nonBlank(value.eventId) && nonBlank(value.proposalId) && nonBlank(value.extractionRunId)
+      && nonBlank(value.actorId) && nonBlank(value.timestamp)
+      && (value.previousStatus === 'rejected' || value.previousStatus === 'skipped')
+  }
+  if (isUndoEvent(value)) {
+    return nonBlank(value.eventId) && nonBlank(value.proposalId) && nonBlank(value.extractionRunId)
+      && nonBlank(value.actorId) && nonBlank(value.timestamp)
+      && Array.isArray(value.sourceRowIds) && Array.isArray(value.sourceRefs)
+      && Array.isArray(value.beforeSections) && Array.isArray(value.afterSections)
+      && nonBlank(value.beforeSectionsFingerprint) && nonBlank(value.afterSectionsFingerprint)
+      && typeof value.resultTotalItems === 'number' && typeof value.resultGrandTotal === 'number'
+      && isBoqSnapshot(value.resultBoq)
+  }
+  return false
+}
+
+function reduceProposalLifecycle(
+  auditSnap: FirebaseFirestore.DocumentSnapshot,
+  eventPage: FirebaseFirestore.QuerySnapshot,
+  fallbackStatus: ExtractionProposalStatus,
+  expectedProposalId?: string,
+  expectedRunId?: string,
+): ProposalLifecycle {
+  if (eventPage.docs.length > 0 && !auditSnap.exists) throw new Error('Proposal lifecycle root audit is missing')
+  const entries: Array<ExtractionProposalAudit | ExtractionProposalUndoEvent | ExtractionProposalReopenEvent> = []
+  const keys: Array<string | null> = []
+  const add = (value: unknown, key: string | null) => {
+    if (!eventComplete(value)) throw new Error('Proposal lifecycle event is malformed')
+    const event = value as { proposalId: string; extractionRunId: string }
+    if (expectedProposalId !== undefined && event.proposalId !== expectedProposalId) throw new Error('Proposal lifecycle event is bound to another proposal')
+    if (expectedRunId !== undefined && event.extractionRunId !== expectedRunId) throw new Error('Proposal lifecycle event is bound to another extraction run')
+    entries.push(value)
+    keys.push(key)
+  }
+  if (auditSnap.exists) add(auditSnap.data(), null)
+  for (const snapshot of eventPage.docs) add(snapshot.data(), snapshot.id)
+  const root = auditSnap.exists ? entries[0] : null
+  const childEntries = entries.slice(auditSnap.exists ? 1 : 0).map((event, index) => ({ event, key: keys[(auditSnap.exists ? 1 : 0) + index]! }))
+  const seenSequences = new Set<number>()
+  for (const { event } of entries.map((event) => ({ event }))) {
+    const value = (event as { sequence?: unknown }).sequence
+    if (value !== undefined) {
+      if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0 || seenSequences.has(value)) throw new Error('Proposal lifecycle sequence is invalid')
+      seenSequences.add(value)
+    }
+  }
+  const legacyChildren = childEntries.filter(({ event }) => (event as { sequence?: number }).sequence === undefined)
+  const modernChildren = childEntries.filter(({ event }) => (event as { sequence?: number }).sequence !== undefined)
+    .sort((left, right) => (left.event as { sequence: number }).sequence - (right.event as { sequence: number }).sequence)
+  const ordered: Array<{ event: Array<ExtractionProposalAudit | ExtractionProposalUndoEvent | ExtractionProposalReopenEvent>[number]; key: string | null }> = [
+    ...(root ? [{ event: root, key: null as string | null }] : []),
+    ...legacyChildren,
+    ...modernChildren,
+  ]
+  for (let index = 0; index < ordered.length; index += 1) {
+    const { event, key } = ordered[index]!
+    const explicit = (event as { sequence?: number }).sequence
+    const expectedSequence = index + 1
+    if (explicit !== undefined && explicit !== expectedSequence) throw new Error('Proposal lifecycle sequence has a gap')
+    const kind = lifecycleEventKind(event)
+    if (key !== null) {
+      const legacyKey = explicit === undefined && (key === 'undo' || key === 'reopen' || key === 'accepted')
+      if (!legacyKey && (explicit === undefined || key !== `${explicit}-${kind}`)) throw new Error('Proposal lifecycle event key is invalid')
+      if (legacyKey && ((key === 'undo' && kind !== 'undone') || (key === 'reopen' && kind !== 'reopened') || (key === 'accepted' && kind !== 'accepted'))) throw new Error('Proposal lifecycle event key is invalid')
+    }
+  }
+
+  let status = fallbackStatus
+  let currentAudit: ExtractionProposalAudit | null = null
+  let sequence = 0
+  ordered.forEach(({ event }, index) => {
+    sequence = Math.max(sequence, (event as { sequence?: number }).sequence ?? sequence + 1)
+    if (isAudit(event)) {
+      if (index > 0 && ((event.status === 'accepted' && status !== 'pending' && status !== 'undone')
+        || ((event.status === 'rejected' || event.status === 'skipped') && status !== 'pending'))) throw new Error('Proposal lifecycle transition is illegal')
+      status = event.status
+      currentAudit = event
+    } else if (isReopenEvent(event)) {
+      if ((status !== 'rejected' && status !== 'skipped') || event.previousStatus !== status) throw new Error('Proposal reopen transition is illegal')
+      status = 'pending'
+    } else {
+      if (status !== 'accepted') throw new Error('Proposal undo transition is illegal')
+      status = 'undone'
+    }
+  })
+  return { status, sequence, currentAudit, events: ordered.map(({ event }) => event) }
+}
+
+
 function invalidResponse(code: string): ProposalStoreResponse {
   const status = code === 'stale_item' ? 409 : 400
   return { status, body: { error: code } }
 }
+
+async function readProposalLifecycle(
+  db: Firestore,
+  auditDocumentPath: string,
+  fallbackStatus: ExtractionProposalStatus = 'pending',
+  expectedProposalId?: string,
+  expectedRunId?: string,
+): Promise<ProposalLifecycle> {
+  const auditRef = db.doc(auditDocumentPath)
+  const [auditSnap, eventPage] = await Promise.all([auditRef.get(), auditRef.collection('events').get()])
+  return reduceProposalLifecycle(auditSnap, eventPage, fallbackStatus, expectedProposalId, expectedRunId)
+}
+
+async function readProposalLifecycleInTransaction(
+  transaction: FirebaseFirestore.Transaction,
+  db: Firestore,
+  auditDocumentPath: string,
+  fallbackStatus: ExtractionProposalStatus,
+  expectedProposalId: string,
+  expectedRunId: string,
+): Promise<ProposalLifecycle | null> {
+  const auditRef = db.doc(auditDocumentPath)
+  try {
+    const [auditSnap, eventPage] = await Promise.all([
+      transaction.get(auditRef),
+      transaction.get(auditRef.collection('events')),
+    ])
+    return reduceProposalLifecycle(auditSnap, eventPage, fallbackStatus, expectedProposalId, expectedRunId)
+  } catch {
+    return null
+  }
+}
+
 
 function rowWithoutFingerprint(snapshot: FirebaseFirestore.DocumentSnapshot): BoqSourceRowV3 {
   const data = { ...snapshot.data() }
@@ -367,50 +541,56 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
       if (records.some((record) => !record.proposal)) throw new Error('Stored proposal record is invalid')
       const audits = auditPage.docs.map((snapshot) => isAudit(snapshot.data()) ? snapshot.data() as ExtractionProposalAudit : null)
       if (audits.some((audit) => !audit)) throw new Error('Proposal audit record is invalid')
-      const activeRecords = records.filter((record) => record.status !== 'superseded')
+      const activeRecords = records
       const proposals = activeRecords.map((record) => record.proposal!)
-      const undoSnaps = await Promise.all(proposals.map((proposal) => db.doc(auditPath(boqId, runId, proposal.id)).collection('events').doc('undo').get()))
+      const lifecycles = await Promise.all(activeRecords.map((record) => readProposalLifecycle(
+        db, auditPath(boqId, runId, record.proposal!.id), record.status, record.proposal!.id, runId,
+      )))
+      if (lifecycles.some((lifecycle, index) => !lifecycleVersionMatches(activeRecords[index]!.snapshot, lifecycle))) {
+        throw new Error('Proposal lifecycle revision does not match the event sequence')
+      }
       const proposalStatuses: Record<string, ExtractionProposalStatusSummary> = {}
-      const auditByProposal = new Map(audits.map((audit) => [audit!.proposalId, audit!]))
-      const auditEvents: Array<ExtractionProposalAudit | ExtractionProposalUndoEvent> = audits as ExtractionProposalAudit[]
-      const undoneProposalIds = new Set(undoSnaps.flatMap((snapshot, index) => snapshot.exists ? [proposals[index]!.id] : []))
+      const auditEvents: Array<ExtractionProposalAudit | ExtractionProposalUndoEvent | ExtractionProposalReopenEvent> = lifecycles
+        .flatMap((lifecycle) => lifecycle.events)
+        .sort((left, right) => ((left as { sequence?: number }).sequence ?? 0) - ((right as { sequence?: number }).sequence ?? 0))
       const currentSectionsFingerprint = fingerprintCanonicalSections(immutable.boq.sections)
-      const undoableProposalId = (audits as ExtractionProposalAudit[])
-        .filter((audit) => audit.status === 'accepted' && !undoneProposalIds.has(audit.proposalId)
-          && audit.afterSectionsFingerprint === currentSectionsFingerprint)
+      const undoableProposalId = lifecycles
+        .map((lifecycle, index) => ({ lifecycle, proposal: proposals[index]! }))
+        .filter(({ lifecycle }) => lifecycle.status === 'accepted' && lifecycle.currentAudit
+          && lifecycle.currentAudit.afterSectionsFingerprint === currentSectionsFingerprint)
         .sort((left, right) => {
-          const byTime = left.timestamp.localeCompare(right.timestamp)
+          const leftAudit = left.lifecycle.currentAudit!
+          const rightAudit = right.lifecycle.currentAudit!
+          const byTime = leftAudit.timestamp.localeCompare(rightAudit.timestamp)
           if (byTime !== 0) return byTime
-          const leftBatch = (left as ExtractionProposalAudit & { batchProposalIds?: string[] }).batchProposalIds
-          const rightBatch = (right as ExtractionProposalAudit & { batchProposalIds?: string[] }).batchProposalIds
+          const leftBatch = (leftAudit as ExtractionProposalAudit & { batchProposalIds?: string[] }).batchProposalIds
+          const rightBatch = (rightAudit as ExtractionProposalAudit & { batchProposalIds?: string[] }).batchProposalIds
           if (leftBatch && rightBatch && stableCanonicalJson(leftBatch) === stableCanonicalJson(rightBatch)) {
-            return leftBatch.indexOf(left.proposalId) - rightBatch.indexOf(right.proposalId)
+            return leftBatch.indexOf(left.proposal.id) - rightBatch.indexOf(right.proposal.id)
           }
-          return left.auditId.localeCompare(right.auditId)
-        }).at(-1)?.proposalId
+          return ((leftAudit as ExtractionProposalAudit & { sequence?: number }).sequence ?? 0)
+            - ((rightAudit as ExtractionProposalAudit & { sequence?: number }).sequence ?? 0)
+        }).at(-1)?.proposal.id
       proposals.forEach((proposal, index) => {
-        const undo = undoSnaps[index].exists ? undoSnaps[index].data() : null
-        if (undo && !isUndoEvent(undo)) throw new Error('Proposal undo record is invalid')
-        if (undo) {
-          proposalStatuses[proposal!.id] = { status: 'undone', canUndo: false }
-          auditEvents.push(undo as ExtractionProposalUndoEvent)
+        const record = activeRecords[index]!
+        const lifecycle = lifecycles[index]!
+        if (lifecycle.status === 'superseded' || record.status === 'superseded') {
+          proposalStatuses[proposal.id] = { status: 'superseded', canUndo: false }
           return
         }
-        const audit = auditByProposal.get(proposal!.id)
-        if (!audit) {
-          const stale = (proposal!.baseSectionsFingerprint !== undefined
-            && proposal!.baseSectionsFingerprint !== currentSectionsFingerprint)
-            || proposal!.targetItemIds.some((itemId) => {
-              const item = immutable.boq.sections.flatMap((section) => section.items).find((candidate) => candidate.id === itemId)
-              return !item || proposal!.affectedItemFingerprints[itemId] !== fingerprintCanonicalItem(item)
-            })
-          proposal!.stale = stale
-          proposalStatuses[proposal!.id] = { status: 'pending', canUndo: false, stale, eligible: !stale && isHighConfidenceProposal(proposal!) }
+        if (lifecycle.status === 'pending') {
+          const stale = proposal.targetItemIds.some((itemId) => {
+            const item = immutable.boq.sections.flatMap((section) => section.items).find((candidate) => candidate.id === itemId)
+            return !item || proposal.affectedItemFingerprints[itemId] !== fingerprintCanonicalItem(item)
+          })
+          proposal.stale = stale
+          proposalStatuses[proposal.id] = { status: 'pending', canUndo: false, stale, eligible: !stale && isHighConfidenceProposal(proposal) }
           return
         }
-        proposalStatuses[proposal!.id] = audit
-          ? { status: audit.status, canUndo: audit.status === 'accepted' && audit.proposalId === undoableProposalId }
-          : { status: 'pending', canUndo: false }
+        proposalStatuses[proposal.id] = {
+          status: lifecycle.status,
+          canUndo: lifecycle.status === 'accepted' && proposal.id === undoableProposalId,
+        }
       })
       const runData = immutable.run as BoqExtractionRun & { reviewRun?: unknown }
       return {
@@ -519,19 +699,37 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
       leaseId: string,
       failureCode: string,
       retryDelayMs: number,
+      preservedProposals: readonly ValidatedProposal[] = [],
+      refreshedSourceRowIds: readonly string[] = preservedProposals.flatMap((proposal) => proposal.sourceRowIds),
+      validationSummary: ProposalValidationSummary | null = null,
     ): Promise<ExtractionReviewRunSummary> {
+      const immutable = preservedProposals.length > 0 ? await loadImmutable(boqId, runId) : null
       return db.runTransaction(async (transaction) => {
+        const boqRef = db.collection('boqs').doc(boqId)
         const runRef = db.doc(extractionRunPath(boqId, runId))
-        const runSnap = await transaction.get(runRef)
+        const [boqSnap, runSnap, proposalPage, auditPage] = await Promise.all([
+          transaction.get(boqRef),
+          transaction.get(runRef),
+          transaction.get(runRef.collection('proposals')),
+          transaction.get(runRef.collection('proposalAudits')),
+        ])
         const current = reviewRunSummary(runSnap.data()?.reviewRun, runSnap.data()?.aiReviewStatus)
+        const time = now()
         if (!runSnap.exists || runSnap.data()?.status !== 'ready' || current.status !== 'running' || current.leaseId !== leaseId) {
           throw new Error('Extraction review lease was lost')
         }
-        const time = now()
+        if (preservedProposals.length > 0) {
+          if (!immutable) throw new Error('Extraction run not found')
+          await persistValidatedProposals(
+            transaction, boqId, runId, immutable, boqSnap, runSnap, proposalPage, auditPage, preservedProposals, refreshedSourceRowIds,
+          )
+        }
+        const reviewedSourceRowIds = [...new Set([...(current.reviewedSourceRowIds ?? []), ...refreshedSourceRowIds])]
         const reviewRun: ExtractionReviewRunSummary = {
           status: 'failed', requestKey: current.requestKey, failureCode,
           retryAfter: new Date(time.getTime() + retryDelayMs).toISOString(), updatedAt: time.toISOString(), reviewTargeting: current.reviewTargeting,
-          ...(current.reviewedSourceRowIds?.length ? { reviewedSourceRowIds: [...current.reviewedSourceRowIds] } : {}),
+          ...(reviewedSourceRowIds.length ? { reviewedSourceRowIds } : {}),
+          ...(validationSummary ? { validationSummary } : {}),
         }
         transaction.update(runRef, { reviewRun, aiReviewStatus: 'failed', updatedAt: time.toISOString() })
         return reviewRun
@@ -548,21 +746,26 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
           const runRef = db.doc(extractionRunPath(boqId, runId))
           const auditRef = db.doc(auditPath(boqId, runId, proposalId))
           const proposalRef = db.doc(proposalPath(boqId, runId, proposalId))
-          const undoRef = auditRef.collection('events').doc('undo')
-          const [boqSnap, runSnap, proposalSnap, auditSnap, undoSnap] = await Promise.all([
-            transaction.get(boqRef), transaction.get(runRef), transaction.get(proposalRef), transaction.get(auditRef), transaction.get(undoRef),
+          const [boqSnap, runSnap, proposalSnap, auditSnap] = await Promise.all([
+            transaction.get(boqRef), transaction.get(runRef), transaction.get(proposalRef), transaction.get(auditRef),
           ])
           if (!boqSnap.exists || !runSnap.exists || runSnap.data()?.status !== 'ready') return { status: 404, body: { error: 'Extraction run not found' } }
           const proposal = proposalSnap.exists ? storedProposal(proposalSnap.data(), proposalId) : null
           if (!proposal) return { status: 404, body: { error: 'Stored proposal not found' } }
+          const lifecycle = await readProposalLifecycleInTransaction(
+            transaction, db, auditPath(boqId, runId, proposalId), proposalRecordStatus(proposalSnap.data()), proposalId, runId,
+          )
+          if (!lifecycle || !lifecycleVersionMatches(proposalSnap, lifecycle)) return { status: 409, body: { error: 'Proposal lifecycle record is invalid' } }
           if (!await verifyImmutableContext(transaction, db, boqId, runId, runSnap, immutable)) {
             return { status: 409, body: { error: 'Extraction evidence changed; recheck the proposal' } }
           }
           if (auditSnap.exists && !isAudit(auditSnap.data())) return { status: 409, body: { error: 'Proposal audit record is invalid' } }
           const boq = { id: boqSnap.id, ...boqSnap.data() } as Boq
           if (boq.status === 'approved') return { status: 409, body: { error: 'Approved BOQs cannot be changed by extraction proposals' } }
-          const existingAudit = auditSnap.exists && isAudit(auditSnap.data()) ? auditSnap.data() as ExtractionProposalAudit : null
-          if (undoSnap.exists && isUndoEvent(undoSnap.data())) return { status: 409, body: { error: 'Proposal was already undone' } }
+          const existingAudit = lifecycle.status === 'accepted' ? lifecycle.currentAudit : null
+          if (lifecycle.status !== 'pending' && lifecycle.status !== 'undone' && lifecycle.status !== 'accepted') {
+            return { status: 409, body: { error: 'Proposal is not pending' } }
+          }
           if (existingAudit && !auditIdentityValid(proposal, existingAudit)) return invalidResponse('run_identity_mismatch')
           const actionTimestamp = now().toISOString()
           const result = acceptExtractionProposal({ boq, run: immutable.run, sourceRows: immutable.sourceRows, proposal, actorId, now: actionTimestamp, existingAudit })
@@ -570,15 +773,16 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
           if (result.kind === 'rejected') return { status: 409, body: { error: 'proposal_rejected', audit: result.audit } }
           if (result.kind === 'already_accepted') return { status: 200, body: { status: 'accepted', boq: result.boq, audit: result.audit, idempotent: true } }
           const acceptedBoq = { ...result.boq, updatedAt: actionTimestamp }
-          const acceptedAudit = { ...result.audit, resultBoq: structuredClone(acceptedBoq) }
+          const acceptedAudit = { ...result.audit, resultBoq: structuredClone(acceptedBoq), sequence: lifecycle.sequence + 1 }
           transaction.update(boqRef, {
             sections: acceptedBoq.sections,
             totalItems: acceptedBoq.totalItems,
             grandTotal: acceptedBoq.grandTotal,
             updatedAt: actionTimestamp,
           })
-          transaction.update(proposalRef, { lifecycleStatus: 'accepted', updatedAt: actionTimestamp })
-          transaction.create(auditRef, acceptedAudit)
+          transaction.update(proposalRef, { lifecycleStatus: 'accepted', lifecycleRevision: lifecycle.sequence + 1, updatedAt: actionTimestamp })
+          const actionRef = lifecycle.events.length === 0 ? auditRef : auditRef.collection('events').doc(`${lifecycle.sequence + 1}-accepted`)
+          transaction.create(actionRef, acceptedAudit)
           return { status: 200, body: { status: 'accepted', boq: acceptedBoq, audit: acceptedAudit } }
         })
       } catch {
@@ -600,29 +804,132 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
           if (!boqSnap.exists || !runSnap.exists || runSnap.data()?.status !== 'ready') return { status: 404, body: { error: 'Extraction run not found' } }
           const proposal = proposalSnap.exists ? storedProposal(proposalSnap.data(), proposalId) : null
           if (!proposal) return { status: 404, body: { error: 'Stored proposal not found' } }
+          const lifecycle = await readProposalLifecycleInTransaction(
+            transaction, db, auditPath(boqId, runId, proposalId), proposalRecordStatus(proposalSnap.data()), proposalId, runId,
+          )
+          if (!lifecycle || !lifecycleVersionMatches(proposalSnap, lifecycle)) return { status: 409, body: { error: 'Proposal lifecycle record is invalid' } }
           if (!await verifyImmutableContext(transaction, db, boqId, runId, runSnap, immutable)) {
             return { status: 409, body: { error: 'Extraction evidence changed; recheck the proposal' } }
           }
           if (auditSnap.exists && !isAudit(auditSnap.data())) return { status: 409, body: { error: 'Proposal audit record is invalid' } }
           const boq = { id: boqSnap.id, ...boqSnap.data() } as Boq
           if (boq.status === 'approved') return { status: 409, body: { error: 'Approved BOQs cannot change extraction review state' } }
-          const existingAudit = auditSnap.exists && isAudit(auditSnap.data()) ? auditSnap.data() as ExtractionProposalAudit : null
+          const existingAudit = lifecycle.status === 'rejected' ? lifecycle.currentAudit : null
+          if (lifecycle.status !== 'pending' && lifecycle.status !== 'rejected') return { status: 409, body: { error: 'Proposal is not pending' } }
           if (existingAudit && !auditIdentityValid(proposal, existingAudit)) return invalidResponse('run_identity_mismatch')
           let validatedProposal = proposal
           if (!existingAudit) {
             const validation = validateExtractionProposal(boq, immutable.run, immutable.sourceRows, proposal)
             if (!validation.valid) return invalidResponse(validation.code)
+            if (validation.proposal.operation === 'needs_human_review') return invalidResponse('needs_human_review')
             validatedProposal = validation.proposal
           }
           const result = rejectExtractionProposal({ boq, proposal: validatedProposal, actorId, now: now().toISOString(), existingAudit, sourceRows: immutable.sourceRows })
           if (result.kind === 'invalid') return invalidResponse(result.code)
           if (result.kind === 'already_recorded') return { status: 200, body: { status: result.audit.status, audit: result.audit, idempotent: true } }
-          transaction.update(proposalRef, { lifecycleStatus: 'rejected', updatedAt: result.audit.timestamp })
-          transaction.create(auditRef, result.audit)
-          return { status: 200, body: { status: 'rejected', audit: result.audit } }
+          const audit = { ...result.audit, sequence: lifecycle.sequence + 1 }
+          transaction.update(proposalRef, { lifecycleStatus: 'rejected', lifecycleRevision: lifecycle.sequence + 1, updatedAt: result.audit.timestamp })
+          const actionRef = lifecycle.events.length === 0 ? auditRef : auditRef.collection('events').doc(`${lifecycle.sequence + 1}-rejected`)
+          transaction.create(actionRef, audit)
+          return { status: 200, body: { status: 'rejected', audit } }
         })
       } catch {
         return { status: 500, body: { error: 'Proposal rejection could not be saved' } }
+      }
+    },
+
+    async skip(boqId: string, runId: string, proposalId: string, actorId: string): Promise<ProposalStoreResponse> {
+      let immutable: Awaited<ReturnType<typeof loadImmutable>>
+      try { immutable = await loadImmutable(boqId, runId) } catch { return { status: 404, body: { error: 'Extraction run not found' } } }
+      if (!immutable) return { status: 404, body: { error: 'Extraction run not found' } }
+      try {
+        return await db.runTransaction(async (transaction) => {
+          const boqRef = db.collection('boqs').doc(boqId)
+          const runRef = db.doc(extractionRunPath(boqId, runId))
+          const auditRef = db.doc(auditPath(boqId, runId, proposalId))
+          const proposalRef = db.doc(proposalPath(boqId, runId, proposalId))
+          const [boqSnap, runSnap, proposalSnap, auditSnap] = await Promise.all([
+            transaction.get(boqRef), transaction.get(runRef), transaction.get(proposalRef), transaction.get(auditRef),
+          ])
+          if (!boqSnap.exists || !runSnap.exists || runSnap.data()?.status !== 'ready') return { status: 404, body: { error: 'Extraction run not found' } }
+          const proposal = proposalSnap.exists ? storedProposal(proposalSnap.data(), proposalId) : null
+          if (!proposal) return { status: 404, body: { error: 'Stored proposal not found' } }
+          const lifecycle = await readProposalLifecycleInTransaction(
+            transaction, db, auditPath(boqId, runId, proposalId), proposalRecordStatus(proposalSnap.data()), proposalId, runId,
+          )
+          if (!lifecycle || !lifecycleVersionMatches(proposalSnap, lifecycle)) return { status: 409, body: { error: 'Proposal lifecycle record is invalid' } }
+          if (!await verifyImmutableContext(transaction, db, boqId, runId, runSnap, immutable)) return { status: 409, body: { error: 'Extraction evidence changed; recheck the proposal' } }
+          if (auditSnap.exists && !isAudit(auditSnap.data())) return { status: 409, body: { error: 'Proposal audit record is invalid' } }
+          const boq = { id: boqSnap.id, ...boqSnap.data() } as Boq
+          if (boq.status === 'approved') return { status: 409, body: { error: 'Approved BOQs cannot change extraction review state' } }
+          const existingAudit = lifecycle.status === 'skipped' ? lifecycle.currentAudit : null
+          if (lifecycle.status !== 'pending' && lifecycle.status !== 'skipped') return { status: 409, body: { error: 'Proposal is not pending' } }
+          let validatedProposal: ValidatedProposal
+          if (existingAudit) {
+            validatedProposal = proposal
+          } else {
+            const validation = validateExtractionProposal(boq, immutable.run, immutable.sourceRows, proposal)
+            if (!validation.valid) return invalidResponse(validation.code)
+            validatedProposal = validation.proposal
+          }
+          const result = skipExtractionProposal({
+            boq, proposal: validatedProposal, actorId, now: now().toISOString(), existingAudit, sourceRows: immutable.sourceRows,
+          })
+          if (result.kind === 'invalid') return invalidResponse(result.code)
+          if (result.kind === 'already_recorded') return { status: 200, body: { status: 'skipped', audit: result.audit, idempotent: true } }
+          const audit = { ...result.audit, sequence: lifecycle.sequence + 1 }
+          transaction.update(proposalRef, { lifecycleStatus: 'skipped', lifecycleRevision: lifecycle.sequence + 1, updatedAt: result.audit.timestamp })
+          const actionRef = lifecycle.events.length === 0 ? auditRef : auditRef.collection('events').doc(`${lifecycle.sequence + 1}-skipped`)
+          transaction.create(actionRef, audit)
+          return { status: 200, body: { status: 'skipped', audit } }
+        })
+      } catch {
+        return { status: 500, body: { error: 'Proposal skip could not be saved' } }
+      }
+    },
+
+    async reopen(boqId: string, runId: string, proposalId: string, actorId: string): Promise<ProposalStoreResponse> {
+      let immutable: Awaited<ReturnType<typeof loadImmutable>>
+      try { immutable = await loadImmutable(boqId, runId) } catch { return { status: 404, body: { error: 'Extraction run not found' } } }
+      if (!immutable) return { status: 404, body: { error: 'Extraction run not found' } }
+      try {
+        return await db.runTransaction(async (transaction) => {
+          const boqRef = db.collection('boqs').doc(boqId)
+          const runRef = db.doc(extractionRunPath(boqId, runId))
+          const auditRef = db.doc(auditPath(boqId, runId, proposalId))
+          const proposalRef = db.doc(proposalPath(boqId, runId, proposalId))
+          const [boqSnap, runSnap, proposalSnap] = await Promise.all([
+            transaction.get(boqRef), transaction.get(runRef), transaction.get(proposalRef),
+          ])
+          if (!boqSnap.exists || !runSnap.exists || runSnap.data()?.status !== 'ready') return { status: 404, body: { error: 'Extraction run not found' } }
+          const proposal = proposalSnap.exists ? storedProposal(proposalSnap.data(), proposalId) : null
+          if (!proposal) return { status: 404, body: { error: 'Stored proposal not found' } }
+          const lifecycle = await readProposalLifecycleInTransaction(
+            transaction, db, auditPath(boqId, runId, proposalId), proposalRecordStatus(proposalSnap.data()), proposalId, runId,
+          )
+          if (!lifecycle || !lifecycleVersionMatches(proposalSnap, lifecycle)) return { status: 409, body: { error: 'Proposal lifecycle record is invalid' } }
+          if (!await verifyImmutableContext(transaction, db, boqId, runId, runSnap, immutable)) return { status: 409, body: { error: 'Extraction evidence changed; recheck the proposal' } }
+          if (lifecycle.status !== 'rejected' && lifecycle.status !== 'skipped' || !lifecycle.currentAudit) {
+            return { status: 409, body: { error: 'Proposal is not reopenable' } }
+          }
+          const boq = { id: boqSnap.id, ...boqSnap.data() } as Boq
+          if (boq.status === 'approved') return { status: 409, body: { error: 'Approved BOQs cannot change extraction review state' } }
+          const result = reopenExtractionProposal({
+            proposal, actorId, now: now().toISOString(), existingAudit: lifecycle.currentAudit,
+          })
+          if (result.kind !== 'reopened') {
+            const error = result.kind === 'invalid' && result.code === 'not_reopenable'
+              ? 'Proposal is not reopenable'
+              : 'Proposal audit does not match stored evidence'
+            return { status: 409, body: { error } }
+          }
+          const event = { ...result.event, sequence: lifecycle.sequence + 1 }
+          transaction.update(proposalRef, { lifecycleStatus: 'pending', lifecycleRevision: lifecycle.sequence + 1, updatedAt: event.timestamp })
+          transaction.create(auditRef.collection('events').doc(`${lifecycle.sequence + 1}-reopened`), event)
+          return { status: 200, body: { status: 'pending', audit: event } }
+        })
+      } catch {
+        return { status: 500, body: { error: 'Proposal reopen could not be saved' } }
       }
     },
 
@@ -635,51 +942,57 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
           const boqRef = db.collection('boqs').doc(boqId)
           const runRef = db.doc(extractionRunPath(boqId, runId))
           const auditRef = db.doc(auditPath(boqId, runId, proposalId))
-          const undoRef = auditRef.collection('events').doc('undo')
-          const [boqSnap, runSnap, auditSnap, undoSnap] = await Promise.all([
-            transaction.get(boqRef), transaction.get(runRef), transaction.get(auditRef), transaction.get(undoRef),
+          const proposalRef = db.doc(proposalPath(boqId, runId, proposalId))
+          const [boqSnap, runSnap, proposalSnap] = await Promise.all([
+            transaction.get(boqRef), transaction.get(runRef), transaction.get(proposalRef),
           ])
-          if (!boqSnap.exists || !runSnap.exists || runSnap.data()?.status !== 'ready' || !auditSnap.exists || !isAudit(auditSnap.data())) {
+          if (!boqSnap.exists || !runSnap.exists || !proposalSnap.exists || runSnap.data()?.status !== 'ready') {
             return { status: 404, body: { error: 'Accepted proposal not found' } }
           }
+          const lifecycle = await readProposalLifecycleInTransaction(
+            transaction, db, auditPath(boqId, runId, proposalId), proposalRecordStatus(proposalSnap.data()), proposalId, runId,
+          )
+          if (!lifecycle || !lifecycleVersionMatches(proposalSnap, lifecycle)) return { status: 409, body: { error: 'Proposal lifecycle record is invalid' } }
           if (!await verifyImmutableContext(transaction, db, boqId, runId, runSnap, immutable)) {
             return { status: 409, body: { error: 'Extraction evidence changed; recheck the proposal' } }
           }
+          if (lifecycle.status === 'undone') {
+            const previousUndo = lifecycle.events.filter(isUndoEvent).at(-1)
+            if (!previousUndo?.resultBoq) return { status: 409, body: { error: 'Proposal undo record is invalid' } }
+            return { status: 200, body: { status: 'undone', boq: structuredClone(previousUndo.resultBoq), audit: previousUndo, idempotent: true } }
+          }
+          if (lifecycle.status !== 'accepted' || !lifecycle.currentAudit) return { status: 409, body: { error: 'Proposal cannot be undone' } }
+          const batchProposalIds = (lifecycle.currentAudit as ExtractionProposalAudit & { batchProposalIds?: string[] }).batchProposalIds
+          if (batchProposalIds && batchProposalIds.at(-1) !== proposalId) {
+            return { status: 409, body: { error: 'Batch proposals must be undone in reverse order' } }
+          }
           const boq = { id: boqSnap.id, ...boqSnap.data() } as Boq
           if (boq.status === 'approved') return { status: 409, body: { error: 'Approved BOQs cannot be changed by extraction proposals' } }
-          if (undoSnap.exists && !isUndoEvent(undoSnap.data())) {
-            return { status: 409, body: { error: 'Proposal undo record is invalid' } }
-          }
-          if (undoSnap.exists) {
-            const event = undoSnap.data() as ExtractionProposalUndoEvent
-            return {
-              status: 200,
-              body: { status: 'undone', boq: structuredClone(event.resultBoq), audit: event, idempotent: true },
-            }
-          }
-          const acceptedAudit = auditSnap.data() as ExtractionProposalAudit
-          if ((acceptedAudit.batchProposalIds?.length ?? 0) > 1) {
-            return { status: 409, body: { error: 'Atomic proposal batches cannot be partially undone' } }
-          }
           const actionTimestamp = now().toISOString()
           const result = undoExtractionProposal({
             boq,
-            audit: acceptedAudit,
+            audit: lifecycle.currentAudit,
             actorId,
             now: actionTimestamp,
-            sourceRefs: acceptedAudit.sourceRefs,
+            sourceRefs: lifecycle.currentAudit.sourceRefs,
           })
           if (result.kind === 'conflict') return { status: 409, body: { error: 'BOQ changed after proposal acceptance' } }
           if (result.kind === 'not_accepted') return { status: 409, body: { error: 'Proposal cannot be undone' } }
           const undoneBoq = { ...result.boq, updatedAt: actionTimestamp }
-          const undoneAudit = { ...result.audit, resultBoq: structuredClone(undoneBoq) }
+          const legacyUndo = lifecycle.events.length === 1 && !(lifecycle.currentAudit as ExtractionProposalAudit & { batchProposalIds?: string[] }).batchProposalIds
+          const undoRef = legacyUndo ? auditRef.collection('events').doc('undo') : auditRef.collection('events').doc(`${lifecycle.sequence + 1}-undone`)
+          const undoneAudit = {
+            ...result.audit,
+            resultBoq: structuredClone(undoneBoq),
+            ...(legacyUndo ? {} : { sequence: lifecycle.sequence + 1 }),
+          }
           transaction.update(boqRef, {
             sections: undoneBoq.sections,
             totalItems: undoneBoq.totalItems,
             grandTotal: undoneBoq.grandTotal,
             updatedAt: actionTimestamp,
           })
-          transaction.update(db.doc(proposalPath(boqId, runId, proposalId)), { lifecycleStatus: 'undone', updatedAt: actionTimestamp })
+          transaction.update(proposalRef, { lifecycleStatus: 'undone', lifecycleRevision: lifecycle.sequence + 1, updatedAt: actionTimestamp })
           transaction.create(undoRef, undoneAudit)
           return { status: 200, body: { status: 'undone', boq: undoneBoq, audit: undoneAudit } }
         })
@@ -700,11 +1013,8 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
           const boqRef = db.collection('boqs').doc(boqId)
           const runRef = db.doc(extractionRunPath(boqId, runId))
           const proposalRefs = proposalIds.map((id) => db.doc(proposalPath(boqId, runId, id)))
-          const auditRefs = proposalIds.map((id) => db.doc(auditPath(boqId, runId, id)))
-          const undoRefs = auditRefs.map((ref) => ref.collection('events').doc('undo'))
-          const [boqSnap, runSnap, proposalSnaps, auditSnaps, undoSnaps] = await Promise.all([
+          const [boqSnap, runSnap, proposalSnaps] = await Promise.all([
             transaction.get(boqRef), transaction.get(runRef), transaction.getAll(...proposalRefs),
-            transaction.getAll(...auditRefs), transaction.getAll(...undoRefs),
           ])
           if (!boqSnap.exists || !runSnap.exists || runSnap.data()?.status !== 'ready') return { status: 404, body: { error: 'Extraction run not found' } }
           if (!await verifyImmutableContext(transaction, db, boqId, runId, runSnap, immutable)) {
@@ -712,21 +1022,23 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
           }
           const proposals = proposalSnaps.map((snapshot, index) => snapshot.exists ? storedProposal(snapshot.data(), proposalIds[index]) : null)
           if (proposals.some((proposal) => !proposal)) return { status: 404, body: { error: 'Stored proposal not found' } }
-          if (auditSnaps.some((snapshot) => snapshot.exists && !isAudit(snapshot.data()))
-            || undoSnaps.some((snapshot) => snapshot.exists && !isUndoEvent(snapshot.data()))) {
-            return { status: 409, body: { error: 'Proposal audit record is invalid' } }
+          const lifecycles = await Promise.all(proposalSnaps.map((snapshot, index) => readProposalLifecycleInTransaction(
+            transaction, db, auditPath(boqId, runId, proposalIds[index]!), proposalRecordStatus(snapshot.data()), proposalIds[index]!, runId,
+          )))
+          if (lifecycles.some((lifecycle, index) => !lifecycle || !lifecycleVersionMatches(proposalSnaps[index]!, lifecycle))) {
+            return { status: 409, body: { error: 'Proposal lifecycle record is invalid' } }
           }
+          const currentLifecycles = lifecycles as ProposalLifecycle[]
           const boq = { id: boqSnap.id, ...boqSnap.data() } as Boq
           if (boq.status === 'approved') return { status: 409, body: { error: 'Approved BOQs cannot be changed by extraction proposals' } }
-          const existingAudits = auditSnaps.map((snapshot) => snapshot.exists ? snapshot.data() as ExtractionProposalAudit : null)
-          if (existingAudits.some(Boolean) || undoSnaps.some((snapshot) => snapshot.exists)) {
-            const replayable = existingAudits.every((audit, index) => audit?.status === 'accepted'
-              && auditIdentityValid(proposals[index]!, audit) && !undoSnaps[index].exists && isBoqSnapshot(audit.resultBoq))
-            if (!replayable) return { status: 409, body: { error: 'Proposal batch is no longer pending' } }
-            return {
-              status: 200,
-              body: { status: 'accepted', acceptedProposalIds: [...proposalIds], boq: structuredClone(existingAudits.at(-1)!.resultBoq), idempotent: true },
-            }
+          const allAccepted = currentLifecycles.every((lifecycle, index) => lifecycle.status === 'accepted'
+            && lifecycle.currentAudit && auditIdentityValid(proposals[index]!, lifecycle.currentAudit)
+            && isBoqSnapshot(lifecycle.currentAudit.resultBoq))
+          if (allAccepted) {
+            return { status: 200, body: { status: 'accepted', acceptedProposalIds: [...proposalIds], boq: structuredClone(currentLifecycles.at(-1)!.currentAudit!.resultBoq), idempotent: true } }
+          }
+          if (currentLifecycles.some((lifecycle) => lifecycle.status !== 'pending')) {
+            return { status: 409, body: { error: 'Proposal batch is no longer pending' } }
           }
           const seenTargets = new Set<string>()
           const seenRows = new Set<string>()
@@ -739,17 +1051,13 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
             proposal.sourceRowIds.forEach((id) => seenRows.add(id))
             const validation = validateExtractionProposal(boq, immutable.run, immutable.sourceRows, proposal)
             if (!validation.valid) return invalidResponse(validation.code)
-            if (!isHighConfidenceProposal(validation.proposal)) return { status: 400, body: { error: 'Proposal is not eligible for batch acceptance' } }
+            if (validation.proposal.operation === 'separate_components') return { status: 400, body: { error: 'Proposal is not eligible for batch acceptance' } }
             validated.push(validation.proposal)
           }
-          // Insertions use indexes derived from the shared pre-batch revision.
-          // Apply them first, from the end of each section backwards, so index
-          // shifts cannot reverse or misplace source-ordered candidates.
           const mutationOrder = [...validated].sort((left, right) => {
             const leftInsert = left.operation === 'insert_missing_item' ? 0 : 1
             const rightInsert = right.operation === 'insert_missing_item' ? 0 : 1
-            return leftInsert - rightInsert
-              || (right.destinationSectionIndex ?? -1) - (left.destinationSectionIndex ?? -1)
+            return leftInsert - rightInsert || (right.destinationSectionIndex ?? -1) - (left.destinationSectionIndex ?? -1)
               || (right.destinationItemIndex ?? -1) - (left.destinationItemIndex ?? -1)
               || (right.candidateSourceOrder ?? -1) - (left.candidateSourceOrder ?? -1)
           })
@@ -757,11 +1065,8 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
           let currentBoq = boq
           const auditsById = new Map<string, ExtractionProposalAudit>()
           for (const proposal of mutationOrder) {
-            const result = acceptExtractionProposal({
-              boq: currentBoq, run: immutable.run, sourceRows: immutable.sourceRows,
-              proposal, validationBoq: boq, skipBaseRevisionCheck: true,
-              actorId, now: actionTimestamp, existingAudit: null,
-            })
+            const result = acceptExtractionProposal({ boq: currentBoq, run: immutable.run, sourceRows: immutable.sourceRows,
+              proposal, validationBoq: boq, skipBaseRevisionCheck: true, actorId, now: actionTimestamp, existingAudit: null })
             if (result.kind !== 'accepted') {
               const error = result.kind === 'invalid' ? result.code : 'Proposal batch is no longer pending'
               return result.kind === 'invalid' ? invalidResponse(error) : { status: 409, body: { error } }
@@ -769,18 +1074,18 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
             currentBoq = result.boq
             auditsById.set(proposal.id, result.audit)
           }
-          const audits = proposalIds.map((id) => auditsById.get(id)!)
           const acceptedBoq = { ...currentBoq, updatedAt: actionTimestamp }
-          transaction.update(boqRef, {
-            sections: acceptedBoq.sections, totalItems: acceptedBoq.totalItems,
-            grandTotal: acceptedBoq.grandTotal, updatedAt: actionTimestamp,
+          transaction.update(boqRef, { sections: acceptedBoq.sections, totalItems: acceptedBoq.totalItems, grandTotal: acceptedBoq.grandTotal, updatedAt: actionTimestamp })
+          const mutationProposalIds = proposalIds
+          proposalRefs.forEach((proposalRef, index) => {
+            const lifecycle = currentLifecycles[index]!
+            const audit = { ...auditsById.get(proposalIds[index]!)!, resultBoq: structuredClone(acceptedBoq), batchProposalIds: mutationProposalIds, sequence: lifecycle.sequence + 1 }
+            const auditRef = db.doc(auditPath(boqId, runId, proposalIds[index]!))
+            const actionRef = lifecycle.events.length === 0 ? auditRef : auditRef.collection('events').doc(`${lifecycle.sequence + 1}-accepted`)
+            transaction.create(actionRef, audit)
+            transaction.update(proposalRef, { lifecycleStatus: 'accepted', lifecycleRevision: lifecycle.sequence + 1, updatedAt: actionTimestamp })
           })
-          const mutationProposalIds = mutationOrder.map((proposal) => proposal.id)
-          audits.forEach((audit, index) => transaction.create(auditRefs[index], {
-            ...audit, resultBoq: structuredClone(acceptedBoq), batchProposalIds: mutationProposalIds,
-          }))
-          proposalRefs.forEach((proposalRef) => transaction.update(proposalRef, { lifecycleStatus: 'accepted', updatedAt: actionTimestamp }))
-          return { status: 200, body: { status: 'accepted', acceptedProposalIds: [...proposalIds], boq: acceptedBoq, audits } }
+          return { status: 200, body: { status: 'accepted', acceptedProposalIds: [...proposalIds], boq: acceptedBoq, audits: proposalIds.map((id) => auditsById.get(id)!) } }
         })
       } catch {
         return { status: 500, body: { error: 'Proposal batch acceptance could not be saved' } }
@@ -797,38 +1102,48 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
       let immutable: Awaited<ReturnType<typeof loadImmutable>>
       try { immutable = await loadImmutable(boqId, runId) } catch { return { status: 404, body: { error: 'Extraction run not found' } } }
       if (!immutable) return { status: 404, body: { error: 'Extraction run not found' } }
+      const existingProposalSnapshot = await db.doc(proposalPath(boqId, runId, proposalId)).get()
+      const existingStatus = proposalRecordStatus(existingProposalSnapshot.data())
+      if (existingStatus === 'rejected' || existingStatus === 'skipped' || existingStatus === 'undone') {
+        return { status: 409, body: { error: existingStatus === 'rejected' || existingStatus === 'skipped' ? 'proposal_rejected' : 'Proposal is not pending' } }
+      }
+      const preflightLifecycle = await readProposalLifecycle(db, auditPath(boqId, runId, proposalId), 'pending', proposalId, runId)
+      if (preflightLifecycle.status === 'rejected' || preflightLifecycle.status === 'skipped') {
+        return { status: 409, body: { error: 'proposal_rejected' } }
+      }
       try {
         return await db.runTransaction(async (transaction) => {
           const boqRef = db.collection('boqs').doc(boqId)
           const runRef = db.doc(extractionRunPath(boqId, runId))
           const auditRef = db.doc(auditPath(boqId, runId, proposalId))
           const proposalRef = db.doc(proposalPath(boqId, runId, proposalId))
-          const undoRef = auditRef.collection('events').doc('undo')
-          const [boqSnap, runSnap, proposalSnap, auditSnap, undoSnap] = await Promise.all([
+          const [boqSnap, runSnap, proposalSnap] = await Promise.all([
             transaction.get(boqRef), transaction.get(runRef), transaction.get(proposalRef),
-            transaction.get(auditRef), transaction.get(undoRef),
           ])
           if (!boqSnap.exists || !runSnap.exists || runSnap.data()?.status !== 'ready') {
             return { status: 404, body: { error: 'Extraction run not found' } }
           }
           const proposal = proposalSnap.exists ? storedProposal(proposalSnap.data(), proposalId) : null
           if (!proposal) return { status: 404, body: { error: 'Stored proposal not found' } }
+          const lifecycle = await readProposalLifecycleInTransaction(
+            transaction, db, auditPath(boqId, runId, proposalId), proposalRecordStatus(proposalSnap.data()), proposalId, runId,
+          )
+          if (!lifecycle || !lifecycleVersionMatches(proposalSnap, lifecycle)) return { status: 409, body: { error: 'Proposal lifecycle record is invalid' } }
           if (!await verifyImmutableContext(transaction, db, boqId, runId, runSnap, immutable)) {
             return { status: 409, body: { error: 'Extraction evidence changed; recheck the proposal' } }
           }
-          if (auditSnap.exists && !isAudit(auditSnap.data())) {
-            return { status: 409, body: { error: 'Proposal audit record is invalid' } }
-          }
           const boq = { id: boqSnap.id, ...boqSnap.data() } as Boq
           if (boq.status === 'approved') return { status: 409, body: { error: 'Approved BOQs cannot be changed by extraction proposals' } }
-          const existingAudit = auditSnap.exists && isAudit(auditSnap.data()) ? auditSnap.data() as ExtractionProposalAudit : null
-          if (undoSnap.exists && isUndoEvent(undoSnap.data())) return { status: 409, body: { error: 'Proposal was already undone' } }
-          if (existingAudit && !auditIdentityValid(proposal, existingAudit)) return invalidResponse('run_identity_mismatch')
-          if (existingAudit) {
-            if (existingAudit.status === 'accepted' && existingAudit.resultBoq) {
-              return { status: 200, body: { status: 'accepted', boq: structuredClone(existingAudit.resultBoq), audit: existingAudit, idempotent: true } }
-            }
-            return { status: 409, body: { error: 'proposal_rejected', audit: existingAudit } }
+          if (lifecycle.status === 'accepted' && lifecycle.currentAudit && auditIdentityValid(proposal, lifecycle.currentAudit)
+            && lifecycle.currentAudit.resultBoq) {
+            return { status: 200, body: { status: 'accepted', boq: structuredClone(lifecycle.currentAudit.resultBoq), audit: lifecycle.currentAudit, idempotent: true } }
+          }
+          if (lifecycle.status !== 'pending') {
+            return { status: 409, body: { error: lifecycle.currentAudit?.status === 'rejected' ? 'proposal_rejected' : 'Proposal is not pending', ...(lifecycle.currentAudit ? { audit: lifecycle.currentAudit } : {}) } }
+          }
+          const storedStatus = proposalRecordStatus(proposalSnap.data())
+          if (storedStatus === 'rejected' || storedStatus === 'skipped' || storedStatus === 'undone') {
+            return { status: 409, body: { error: storedStatus === 'rejected' || storedStatus === 'skipped' ? 'proposal_rejected' : 'Proposal is not pending' } }
           }
           if (!proposal.reviewDraft) {
             return { status: 409, body: { error: 'Proposal is not a source-backed review draft' } }
@@ -879,9 +1194,12 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
             stdStatus: updatedBoq.stdStatus,
             updatedAt: actionTimestamp,
           })
-          transaction.update(proposalRef, { lifecycleStatus: 'accepted', updatedAt: actionTimestamp })
-          transaction.create(auditRef, acceptedAudit)
-          return { status: 200, body: { status: 'accepted', boq: updatedBoq, audit: acceptedAudit } }
+          const sequence = lifecycle.sequence + 1
+          const sequencedAudit = { ...acceptedAudit, sequence }
+          transaction.update(proposalRef, { lifecycleStatus: 'accepted', lifecycleRevision: sequence, updatedAt: actionTimestamp })
+          const actionRef = lifecycle.events.length === 0 ? db.doc(auditPath(boqId, runId, proposalId)) : auditRef.collection('events').doc(`${sequence}-accepted`)
+          transaction.create(actionRef, sequencedAudit)
+          return { status: 200, body: { status: 'accepted', boq: updatedBoq, audit: sequencedAudit } }
         })
       } catch {
         return { status: 500, body: { error: 'Source-backed item could not be added' } }

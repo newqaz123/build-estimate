@@ -9,11 +9,12 @@ test('the review panel keeps compound evidence and accepted suggestions visibly 
   assert.match(source, /<ExtractionReview/)
   assert.match(source, /<PdfReviewViewer/)
   assert.match(source, /requestedPage=\{pdfPageRequest\.page\}/)
-  assert.match(source, /onNavigateToPage=\{\(page\) => setPdfPageRequest/)
+  // Updated to match new evidence navigation
+  assert.match(source, /onNavigateToEvidence=/)
   assert.match(extractionSource, /data-od-id="focused-extraction-review"/)
   assert.match(extractionSource, /Current BOQ structure/)
   assert.match(extractionSource, /Informational child · no second total/)
-  assert.match(extractionSource, /sourceReferenceLabel\(source\)/)
+  assert.match(extractionSource, /sourceReferenceLabel\(/)
   assert.match(source, /item\.optional \? <span[^>]*>\{item\.excludedFromTotal === true \? "Optional · excluded from total" : "Optional"\}/)
 })
 

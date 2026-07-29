@@ -11,8 +11,13 @@ import {
   type ExtractionStore,
 } from './boq-extraction-storage'
 import { boqSourcePath, isSourceObjectNotFound } from './boq-source-storage'
-import { DoclingClientError } from './docling-client'
+import { DoclingClientError, type DoclingParseOptions } from './docling-client'
 import type { WorkspaceSettings } from './settings-schema'
+
+export interface ConfirmedImportSelection {
+  preflightId: string
+  pages: readonly number[]
+}
 
 const DEFAULT_DOCLING_ENDPOINT = 'http://localhost:5001'
 
@@ -20,13 +25,25 @@ export interface ImportServiceDependencies {
   getWorkspaceSettings(): Promise<Pick<WorkspaceSettings, 'docling'> | null>
   saveSourcePdf(path: string, bytes: Uint8Array): Promise<void>
   sourcePdfExists(path: string): Promise<boolean>
-  parsePdfWithDocling(file: File, endpoint: string, signal?: AbortSignal): Promise<DoclingResult>
+  parsePdfWithDocling(file: File, endpoint: string, signal?: AbortSignal, options?: DoclingParseOptions): Promise<DoclingResult>
   createDocumentWithId(collection: string, id: string, data: Record<string, unknown>): Promise<void>
   getBoq(id: string): Promise<Boq | null>
   deleteSourcePdf(path: string): Promise<void>
   createRunId(): string
   now(): Date
   extractionStore: ExtractionStore
+}
+
+function normalizeSelection(selection?: ConfirmedImportSelection): ConfirmedImportSelection | undefined {
+  if (!selection) return undefined
+  if (selection.preflightId.trim() === '') throw new TypeError('preflightId must be a non-empty string')
+  if (selection.pages.length === 0 || selection.pages.some((page) => !Number.isInteger(page) || page < 1)) {
+    throw new TypeError('pages must contain positive integer page numbers')
+  }
+  return {
+    preflightId: selection.preflightId,
+    pages: [...new Set(selection.pages)].sort((left, right) => left - right),
+  }
 }
 
 function throwIfCancelled(signal?: AbortSignal): void {
@@ -49,8 +66,11 @@ export async function importPdfAtomically(
   id: string,
   dependencies: ImportServiceDependencies,
   signal?: AbortSignal,
+  selection?: ConfirmedImportSelection,
 ): Promise<Omit<Boq, 'createdAt' | 'updatedAt'> | Boq> {
   throwIfCancelled(signal)
+  const confirmedSelection = normalizeSelection(selection)
+  const selectedPages = confirmedSelection?.pages
   const sourcePath = boqSourcePath(id)
   const bytes = new Uint8Array(await file.arrayBuffer())
 
@@ -66,7 +86,12 @@ export async function importPdfAtomically(
     throwIfCancelled(signal)
     const settings = await dependencies.getWorkspaceSettings()
     endpoint = settings?.docling?.endpoint?.trim() || DEFAULT_DOCLING_ENDPOINT
-    parsed = await dependencies.parsePdfWithDocling(file, endpoint, signal)
+    parsed = await dependencies.parsePdfWithDocling(
+      file,
+      endpoint,
+      signal,
+      selectedPages ? { pages: selectedPages } : undefined,
+    )
     throwIfCancelled(signal)
   } catch (error) {
     await rollbackSource(sourcePath, dependencies)
@@ -90,10 +115,18 @@ export async function importPdfAtomically(
     try {
       const seed = draftImport.run
       if (!seed) throw new Error('Extraction run seed missing')
+      const parserConfig = {
+        endpoint,
+        contractVersion: 3 as const,
+        ...(selectedPages
+          ? { selectedPages, pageSelectionContract: 1 as const }
+          : {}),
+      }
       const run = buildExtractionRun({
         seed,
         sourceDigest: digestBytes(bytes),
-        parserConfigFingerprint: fingerprintParserConfig({ endpoint, contractVersion: 3 }),
+        parserConfigFingerprint: fingerprintParserConfig(parserConfig),
+        ...(selectedPages ? { selectedPages } : {}),
         now: dependencies.now(),
       })
       return await persistStagedRun({ boq: draftImport.boq, run, rows: seed.sourceRows }, dependencies.extractionStore, signal)

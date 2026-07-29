@@ -126,3 +126,33 @@ test('shared data table accepts accessible labels used by the BOQ page', () => {
   assert.match(dataTableSource, /dataOdId\?: string/)
   assert.match(dataTableSource, /aria-label=\{ariaLabel\}/)
 })
+
+test('upload-modal posts to preflight endpoint and renders BoqPreflight', () => {
+  assert.match(uploadSource, /BoqPreflight/)
+  assert.match(uploadSource, /fetch\("\/api\/boqs\/preflight"/)
+  assert.match(uploadSource, /formData\.append\("file", file\)/)
+  assert.match(uploadSource, /const preflightData = await response\.json\(\) as PreflightUpload/)
+  assert.match(uploadSource, /setPreflight\(preflightData\)/)
+  assert.match(uploadSource, /onExtract=\{/)
+})
+
+test('preflight-then-import submits confirmed pages to consume endpoint', () => {
+  assert.match(uploadSource, /formData\.append\("preflightId", preflight\.id\)/)
+  assert.match(uploadSource, /formData\.append\("pages", JSON\.stringify\(pages\)\)/)
+  assert.match(uploadSource, /\/api\/boqs\/import/)
+  assert.match(uploadSource, /setImportError\(/)
+})
+
+test('page selector is preserved when import fails', () => {
+  assert.match(uploadSource, /const \[preflight, setPreflight\]/)
+  assert.match(uploadSource, /setImportError\(/)
+  assert.match(uploadSource, /importError &&/)
+  // Check that preflight is not cleared on error - verify error message is displayed and state is preserved
+  const handleExtractSection = uploadSource.slice(uploadSource.indexOf('const handleExtract'))
+  // Verify error handling sets importError
+  assert.match(handleExtractSection, /setImportError\(errorMessage\)/)
+  assert.match(handleExtractSection, /toast\.error\(errorMessage\)/)
+  // The catch block should not reset preflight
+  const catchContent = handleExtractSection.match(/catch \([^)]+\) \{([\s\S]*?)\} finally/)?.[1] ?? ''
+  assert.doesNotMatch(catchContent, /setPreflight\(null\)/)
+})

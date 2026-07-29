@@ -24,9 +24,15 @@ import { toast } from "sonner"
 import { CatalogMatchModal } from "@/components/catalog-match-modal"
 import { ExtractionReview } from "@/components/extraction-review"
 import { ExtractionWarnings } from "@/components/extraction-warnings"
-import { PdfReviewViewer } from "@/components/pdf-review-viewer"
 import { ProtoBadge } from "@/components/proto-badge"
 import { ReviewWorkspace } from "@/components/review-workspace"
+import dynamic from "next/dynamic"
+// pdfjs-dist references browser-only APIs (DOMMatrix) at module evaluation, so the
+// viewer must never be server-rendered; load it client-side only.
+const PdfReviewViewer = dynamic(() => import("@/components/pdf-review-viewer").then((m) => m.PdfReviewViewer), {
+  ssr: false,
+  loading: () => <div className="pdf-review-loading" role="status" aria-label="Loading PDF viewer">…</div>,
+})
 import { UnifiedBoqItemsTable } from "@/components/unified-boq-items-table"
 import { useInlineCatalogMatching } from "@/components/use-inline-catalog-matching"
 import { Button } from "@/components/ui/button"
@@ -207,7 +213,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   const [deleting, setDeleting] = useState(false)
   const [addingItem, setAddingItem] = useState(false)
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("items")
-  const [pdfPageRequest, setPdfPageRequest] = useState({ page: 1, key: 0 })
+  const [pdfEvidenceFocus, setPdfEvidenceFocus] = useState<{ page: number; key: number }>({ page: 1, key: 0 })
   const [invalidDraftKeys, setInvalidDraftKeys] = useState<Set<string>>(new Set())
   const invalidDraftRef = useRef<Set<string>>(new Set())
   const isReadOnly = boq.status === "approved"
@@ -591,8 +597,8 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
               sourceUrl={`/api/boqs/${encodeURIComponent(boq.id)}/source`}
               sourceFileName={boq.sourceFileName || "source.pdf"}
               resetKey={boq.id}
-              requestedPage={pdfPageRequest.page}
-              requestedPageKey={pdfPageRequest.key}
+              requestedPage={pdfEvidenceFocus.page}
+              requestedPageKey={pdfEvidenceFocus.key}
             />
           ) : null}
         >
@@ -673,7 +679,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
               mutationBlockedReason={invalidDraftKeys.size > 0 ? "Component costs contain invalid drafts. Fix them before applying extraction corrections." : pendingChanges > 0 ? "You have unsaved BOQ item or detail edits. Use Save draft before applying extraction corrections." : undefined}
               sourceAvailable={hasSource}
               onBoqChange={applyMutationBoq}
-              onNavigateToPage={(page) => setPdfPageRequest((current) => ({ page, key: current.key + 1 }))}
+              onNavigateToEvidence={(focus) => setPdfEvidenceFocus((current) => ({ page: focus.page, key: current.key + 1 }))}
             />
           </div>
         </ReviewWorkspace>

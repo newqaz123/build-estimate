@@ -1,11 +1,12 @@
 import type { ExtractionReviewResponse } from "./boq-extraction-ai-review"
 import { isReviewActionableOperation, normalizeValidationSummary, type ProposalOperation, type ValidatedProposal } from "./boq-extraction-proposals"
 
-export type ExtractionProposalStatus = "accepted" | "rejected" | "undone"
+export type ExtractionProposalStatus = "accepted" | "rejected" | "skipped" | "superseded" | "undone"
 export type ExtractionProposalStatusMap = Record<string, ExtractionProposalStatus | undefined>
+export type ReviewTab = "needs-review" | "history"
 export type ExtractionReviewFilter = "all" | "pending" | "accepted" | "rejected" | "needs-attention" | "ambiguous" | "unreconciled" | "ai-pending"
 export type ExtractionReviewSourceFilter = Extract<ExtractionReviewFilter, "ambiguous" | "unreconciled" | "ai-pending">
-export type ExtractionProposalAction = "accepting" | "rejecting" | "undoing" | "adding"
+export type ExtractionProposalAction = "accepting" | "rejecting" | "skipping" | "reopening" | "undoing" | "adding"
 
 export interface ReviewSnapshotGeneration {
   current: number
@@ -31,6 +32,7 @@ export interface ExtractionReviewState {
   proposalActions: Record<string, ExtractionProposalAction | undefined>
   expandedProposalIds: Record<string, boolean | undefined>
   filter: ExtractionReviewFilter
+  tab: ReviewTab
   loading: boolean
   requestedSourceRowId?: string
   error: string | null
@@ -46,6 +48,7 @@ export type ExtractionReviewAction =
   | { type: "proposal_action_failed"; proposalId: string; error: string }
   | { type: "toggle_expanded"; proposalId: string }
   | { type: "set_filter"; filter: ExtractionReviewFilter }
+  | { type: "set_tab"; tab: ReviewTab }
 
 export function initialExtractionReviewState(): ExtractionReviewState {
   return {
@@ -55,6 +58,7 @@ export function initialExtractionReviewState(): ExtractionReviewState {
     proposalActions: {},
     expandedProposalIds: {},
     filter: "all",
+    tab: "needs-review",
     loading: false,
     error: null,
   }
@@ -125,6 +129,8 @@ export function extractionReviewReducer(state: ExtractionReviewState, action: Ex
       return { ...state, expandedProposalIds: { ...state.expandedProposalIds, [action.proposalId]: state.expandedProposalIds[action.proposalId] === false } }
     case "set_filter":
       return { ...state, filter: action.filter }
+    case "set_tab":
+      return { ...state, tab: action.tab }
   }
 }
 
@@ -142,6 +148,21 @@ export function filterReviewProposals(
     return !isReviewActionableOperation(proposal.operation) || proposal.stale || !proposal.evidenceValid || !proposal.reconciled
   })
 }
+
+export function selectReviewTab(
+  state: Pick<ExtractionReviewState, "review" | "proposalStatuses"> | { review: ExtractionReviewResponse; proposalStatuses: ExtractionProposalStatusMap },
+  tab: ReviewTab,
+): { tab: ReviewTab; proposals: ValidatedProposal[]; proposalIds: string[] } {
+  const proposals = state.review?.proposals ?? []
+  const selected = proposals.filter((proposal) => {
+    const status = state.proposalStatuses[proposal.id]
+    return tab === "history"
+      ? status === "accepted" || status === "rejected" || status === "skipped" || status === "undone" || status === "superseded"
+      : status === undefined
+  })
+  return { tab, proposals: selected, proposalIds: selected.map((proposal) => proposal.id) }
+}
+
 
 type ReviewWithRunState = ExtractionReviewResponse & {
   reviewRun?: {
@@ -260,7 +281,7 @@ function validProposalStatuses(value: unknown): boolean {
   if (value === undefined) return true
   if (!isRecord(value)) return false
   return Object.values(value).every((summary) => isRecord(summary)
-    && ["pending", "accepted", "rejected", "undone"].includes(String(summary.status))
+    && ["pending", "accepted", "rejected", "skipped", "undone", "superseded"].includes(String(summary.status))
     && typeof summary.canUndo === "boolean"
     && (summary.stale === undefined || typeof summary.stale === "boolean")
     && (summary.eligible === undefined || typeof summary.eligible === "boolean"))

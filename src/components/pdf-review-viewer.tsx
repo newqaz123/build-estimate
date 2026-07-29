@@ -29,12 +29,20 @@ import {
 
 type PdfTool = "pan" | "box-zoom"
 
+interface EvidenceFocus {
+  page: number
+  table: number
+  row: number
+  cells: Array<{ column: number; line: string | undefined }>
+}
+
 interface PdfReviewViewerProps {
   sourceUrl: string
   sourceFileName: string
   resetKey: string
   requestedPage?: number
   requestedPageKey?: string | number
+  evidenceFocus?: EvidenceFocus
 }
 
 async function loadPdf(sourceUrl: string) {
@@ -46,7 +54,7 @@ async function loadPdf(sourceUrl: string) {
 
 const INITIAL_PAN: PdfPoint = { x: 0, y: 0 }
 
-export function PdfReviewViewer({ sourceUrl, sourceFileName, resetKey, requestedPage, requestedPageKey }: PdfReviewViewerProps) {
+export function PdfReviewViewer({ sourceUrl, sourceFileName, resetKey, requestedPage, requestedPageKey, evidenceFocus: propsEvidenceFocus }: PdfReviewViewerProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const dragStartRef = useRef<PdfPoint | null>(null)
@@ -66,6 +74,8 @@ export function PdfReviewViewer({ sourceUrl, sourceFileName, resetKey, requested
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
   const [attempt, setAttempt] = useState(0)
+  const [evidenceFocus, setEvidenceFocus] = useState<EvidenceFocus | null>(null)
+  const previousFocusPageRef = useRef<number | null>(null)
 
   const clearInteraction = useCallback(() => {
     dragStartRef.current = null
@@ -131,6 +141,29 @@ export function PdfReviewViewer({ sourceUrl, sourceFileName, resetKey, requested
     })
     return () => { active = false }
   }, [clearInteraction, pageCount, requestedPage, requestedPageKey])
+
+  // Handle evidence focus changes - preserve zoom/pan when on the same page
+  useEffect(() => {
+    if (!propsEvidenceFocus) return
+    const { page: focusPage } = propsEvidenceFocus
+    if (typeof focusPage !== "number" || !Number.isFinite(focusPage) || pageCount < 1) return
+    const clampedPage = Math.min(pageCount, Math.max(1, Math.trunc(focusPage)))
+    let active = true
+    void Promise.resolve().then(() => {
+      if (!active) return
+      const pageChanged = previousFocusPageRef.current !== null && previousFocusPageRef.current !== clampedPage
+      setEvidenceFocus(propsEvidenceFocus)
+      setPageNumber(clampedPage)
+      // Only reset zoom/pan when navigating to a different page
+      if (pageChanged) {
+        setZoom(1)
+        setPan(INITIAL_PAN)
+        setTool("pan")
+      }
+      previousFocusPageRef.current = clampedPage
+    })
+    return () => { active = false }
+  }, [propsEvidenceFocus, pageCount])
 
   useEffect(() => {
     const viewport = viewportRef.current
@@ -381,6 +414,7 @@ export function PdfReviewViewer({ sourceUrl, sourceFileName, resetKey, requested
           style={{ transform: `translate(calc(-50% + ${pan.x}px), calc(-50% + ${pan.y}px))` }}
         />
         {selection ? <div className="pdf-review-selection" style={{ left: selection.x, top: selection.y, width: selection.width, height: selection.height }} /> : null}
+        {evidenceFocus ? <div className="pdf-evidence-focus" aria-label={`Focus marker for table ${evidenceFocus.table}, row ${evidenceFocus.row}`} /> : null}
         {loading ? (
           <div className="review-pdf-fallback pdf-review-status-overlay" role="status"><Loader2 className="spin" /><strong>Loading source PDF…</strong></div>
         ) : null}

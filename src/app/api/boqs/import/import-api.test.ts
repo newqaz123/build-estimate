@@ -706,6 +706,121 @@ test('handlers propagate request.signal and successful import returns 201', asyn
   assert.equal(proxySignal, proxyRequest.signal)
 })
 
+test('atomic import forwards confirmed pages and fingerprints the selection', async () => {
+  let receivedOptions: unknown
+  let fingerprint = ''
+  let checksum = ''
+  await importPdfAtomically(
+    pdfFile(),
+    'boq-selected',
+    serviceDependencies({
+      parsePdfWithDocling: async (_file, _endpoint, _signal, options) => {
+        receivedOptions = options
+        return validV3Payload()
+      },
+      extractionStore: extractionStore({
+        createRun: async (run) => { fingerprint = run.parser.configFingerprint; checksum = run.sourceRowChecksum; return 'created' },
+        verifySourceRows: async () => ({ count: 4, checksum }),
+      }),
+    }),
+    undefined,
+    { preflightId: 'preflight-1', pages: [3, 1] },
+  )
+  assert.deepEqual(receivedOptions, { pages: [1, 3] })
+  assert.notEqual(fingerprint, '')
+})
+
+test('preflight import uses the owned source and authoritative selected pages', async () => {
+  let selection: unknown
+  const imported = draftBoq('boq-from-preflight')
+  const handler = createImportHandler({
+    authenticate: async () => ({ user: { id: 'user-1' } }),
+    createId: () => 'boq-from-preflight',
+    importPdf: async (_file, _id, _signal, confirmed) => {
+      selection = confirmed
+      return imported
+    },
+    consumePreflight: async (id, actorId, confirmed, operation) => {
+      assert.equal(id, 'preflight-1')
+      assert.equal(actorId, 'user-1')
+      assert.deepEqual(confirmed.pages, [1, 3])
+      assert.ok(operation)
+      return {
+        file: pdfFile(),
+        pages: [2],
+        preflightId: id,
+        operationResult: await operation!({ file: pdfFile(), pages: [2], preflightId: id }),
+      }
+    },
+  })
+  const form = new FormData()
+  form.set('preflightId', 'preflight-1')
+  form.set('pages', '[3,1]')
+  form.set('file', new File(['attacker bytes'], 'tampered.pdf', { type: 'application/pdf' }))
+  const response = await handler(new Request('http://localhost/api', { method: 'POST', body: form }))
+  assert.equal(response.status, 201)
+  assert.deepEqual(selection, { preflightId: 'preflight-1', pages: [2] })
+  assert.deepEqual(await response.json(), imported)
+})
+
+test('concurrent preflight imports return one 201 winner and one 409 loser', async () => {
+  const record = {
+    id: 'preflight-1', fileName: 'source.pdf', pageCount: 1, status: 'ready' as const,
+    pages: [], confirmedPages: null, ownerId: 'user-1',
+    sourceDigest: 'sha256:315d429b7714cedb6ad04ac31240145257692630457f3c88253c5beceac76027',
+    sourceName: 'source.pdf', sourceType: 'application/pdf', sourceSize: 4,
+    expiresAt: '2026-07-28T00:00:00.000Z', createdAt: '2026-07-27T00:00:00.000Z', updatedAt: '2026-07-27T00:00:00.000Z',
+  }
+  let status: 'ready' | 'analyzing' | 'consumed' = 'ready'
+  let reserveCalls = 0
+  let release!: () => void
+  const bothReserved = new Promise<void>((resolve) => { release = resolve })
+  const service = (await import('@/lib/boq-preflight-service')).createPreflightService({
+    store: {
+      create: async () => record,
+      getOwned: async () => ({ ...record, status: 'ready' as const }),
+      update: async (_id, _ownerId, patch, conditions) => {
+        if (patch.status === 'analyzing') {
+          reserveCalls += 1
+          if (reserveCalls === 2) release()
+          await bothReserved
+          if (status !== conditions?.expectedStatus) throw new Error(`Preflight status compare-and-set failed: expected ready, got ${status}`)
+          status = 'analyzing'
+          return { ...record, ...patch, status: 'analyzing' as const }
+        }
+        if (patch.status === 'consumed') { status = 'consumed'; return null }
+        return { ...record, ...patch }
+      },
+      deleteArtifacts: async () => false,
+      claimExpired: async () => [],
+    },
+    storageAdapter: {
+      saveSource: async () => 'source.pdf',
+      loadSource: async () => pdfFile([Buffer.from('%PDF')]),
+    },
+    analysisAdapter: { analyzePdf: async () => [] },
+    requireSinglePdf: (file) => file,
+    createId: () => 'preflight-1',
+    now: () => new Date('2026-07-27T12:00:00.000Z'),
+  })
+  let importCalls = 0
+  const handler = createImportHandler({
+    authenticate: async () => ({ user: { id: 'user-1' } }),
+    createId: () => 'boq-1',
+    consumePreflight: service.consumePreflight.bind(service),
+    importPdf: async () => { importCalls += 1; return draftBoq('boq-1') },
+  })
+  const request = () => {
+    const form = new FormData()
+    form.set('preflightId', 'preflight-1')
+    form.set('pages', '[1]')
+    return new Request('http://localhost/api/boqs/import', { method: 'POST', body: form })
+  }
+  const responses = await Promise.all([handler(request()), handler(request())])
+  assert.deepEqual(responses.map((response) => response.status).sort(), [201, 409])
+  assert.equal(importCalls, 1)
+})
+
 test('storage adapter stays private, non-resumable, and supports existence checks', () => {
   const source = readFileSync(fileURLToPath(new URL('../../../../lib/boq-source-storage.ts', import.meta.url)), 'utf8')
   assert.match(source, /resumable:\s*false/)

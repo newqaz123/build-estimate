@@ -17,7 +17,19 @@ import {
   type ValidatedProposal,
 } from './boq-extraction-proposals'
 
-export type ExtractionProposalAuditStatus = 'accepted' | 'rejected'
+export type ExtractionProposalAuditStatus = 'accepted' | 'rejected' | 'skipped'
+
+/** Append-only lifecycle event that reopens a rejected or skipped proposal. */
+export interface ExtractionProposalReopenEvent {
+  eventId: string
+  proposalId: string
+  extractionRunId: string
+  status: 'reopened'
+  previousStatus: 'rejected' | 'skipped'
+  actorId: string
+  timestamp: string
+  sequence?: number
+}
 
 /** Immutable audit payload stored with a proposal action, not with source evidence. */
 export interface ExtractionProposalAudit {
@@ -55,6 +67,8 @@ export interface ExtractionProposalAudit {
   afterSectionsFingerprint: string
   /** Exact BOQ returned by the initial accepted action; never rebuild retries from current metadata. */
   resultBoq?: Boq
+  /** Monotonic proposal-local sequence assigned by the action store. */
+  sequence?: number
 }
 
 /** Append-only event written separately from the accepted proposal audit. */
@@ -75,6 +89,7 @@ export interface ExtractionProposalUndoEvent {
   resultGrandTotal: number
   /** Exact BOQ returned by the initial undo action; never rebuild retries from current metadata. */
   resultBoq?: Boq
+  sequence?: number
 }
 
 export type ProposalAcceptanceResult =
@@ -344,6 +359,84 @@ export function rejectExtractionProposal(input: {
     afterSectionsFingerprint: fingerprintCanonicalSections(beforeSections),
   }
   return { kind: 'rejected', audit }
+}
+
+export type ProposalSkipResult =
+  | { kind: 'skipped'; audit: ExtractionProposalAudit }
+  | { kind: 'already_recorded'; audit: ExtractionProposalAudit }
+  | { kind: 'invalid'; code: 'run_identity_mismatch' | 'not_incomplete' }
+
+/**
+ * Records an incomplete/exception proposal without applying any BOQ mutation.
+ * Skip deliberately shares the immutable proposal payload with reject, but has
+ * its own durable status so a reviewer can distinguish the two decisions.
+ */
+export function skipExtractionProposal(input: {
+  boq: Boq
+  proposal: ExtractionProposal
+  actorId: string
+  now: string
+  existingAudit: ExtractionProposalAudit | null
+  sourceRows?: readonly BoqSourceRowV3[]
+}): ProposalSkipResult {
+  if (input.existingAudit) {
+    if (!proposalMatchesAudit(input.proposal, input.existingAudit)) return { kind: 'invalid', code: 'run_identity_mismatch' }
+    if (input.existingAudit.status === 'skipped') return { kind: 'already_recorded', audit: input.existingAudit }
+    return { kind: 'invalid', code: 'run_identity_mismatch' }
+  }
+  const validated = input.proposal as ExtractionProposal & Partial<ValidatedProposal>
+  const incomplete = input.proposal.operation === 'needs_human_review'
+    || validated.evidenceValid !== true
+    || validated.reconciled !== true
+    || validated.stale === true
+  if (!incomplete) return { kind: 'invalid', code: 'not_incomplete' }
+  const beforeSections = structuredClone(input.boq.sections)
+  const audit: ExtractionProposalAudit = {
+    auditId: `${input.proposal.id}:${input.now}`,
+    proposalId: input.proposal.id,
+    extractionRunId: input.proposal.extractionRunId,
+    status: 'skipped', actorId: input.actorId, timestamp: input.now,
+    operation: input.proposal.operation, confidence: input.proposal.confidence, explanation: input.proposal.explanation,
+    ...(input.proposal.candidateItemIds ? { candidateItemIds: [...input.proposal.candidateItemIds] } : {}),
+    ...(input.proposal.baseSectionsFingerprint ? { baseSectionsFingerprint: input.proposal.baseSectionsFingerprint } : {}),
+    ...(input.proposal.destinationSectionIndex === undefined ? {} : { destinationSectionIndex: input.proposal.destinationSectionIndex }),
+    ...(input.proposal.destinationItemIndex === undefined ? {} : { destinationItemIndex: input.proposal.destinationItemIndex }),
+    ...(input.proposal.candidateSourceOrder === undefined ? {} : { candidateSourceOrder: input.proposal.candidateSourceOrder }),
+    targetItemIds: [...input.proposal.targetItemIds], affectedItemFingerprints: { ...input.proposal.affectedItemFingerprints },
+    sourceRowIds: [...input.proposal.sourceRowIds], sourceRefs: sourceRefs(input.sourceRows ?? [], input.proposal.sourceRowIds),
+    proposedItems: structuredClone(input.proposal.proposedItems),
+    ...(input.proposal.sourceCellMapping ? { sourceCellMapping: structuredClone(input.proposal.sourceCellMapping) } : {}),
+    ...(input.proposal.mappedCandidate ? { mappedCandidate: structuredClone(input.proposal.mappedCandidate) } : {}),
+    ...(input.proposal.reviewDraft ? { reviewDraft: structuredClone(input.proposal.reviewDraft) } : {}),
+    ...(validated.evidenceValid === undefined ? {} : { evidenceValid: validated.evidenceValid }),
+    ...(validated.reconciled === undefined ? {} : { reconciled: validated.reconciled }),
+    ...(validated.stale === undefined ? {} : { stale: validated.stale }),
+    beforeSections, afterSections: structuredClone(beforeSections),
+    beforeSectionsFingerprint: fingerprintCanonicalSections(beforeSections),
+    afterSectionsFingerprint: fingerprintCanonicalSections(beforeSections),
+  }
+  return { kind: 'skipped', audit }
+}
+
+export function reopenExtractionProposal(input: {
+  proposal: ExtractionProposal
+  actorId: string
+  now: string
+  existingAudit: ExtractionProposalAudit | null
+}): { kind: 'reopened'; event: ExtractionProposalReopenEvent } | { kind: 'already_pending' } | { kind: 'invalid'; code: 'run_identity_mismatch' | 'not_reopenable' } {
+  const audit = input.existingAudit
+  if (!audit || !proposalMatchesAudit(input.proposal, audit)) return { kind: 'invalid', code: 'run_identity_mismatch' }
+  if (audit.status !== 'rejected' && audit.status !== 'skipped') return { kind: 'invalid', code: 'not_reopenable' }
+  return {
+    kind: 'reopened',
+    event: {
+      eventId: `${input.proposal.id}:reopen:${input.now}`,
+      proposalId: input.proposal.id,
+      extractionRunId: input.proposal.extractionRunId,
+      status: 'reopened', previousStatus: audit.status,
+      actorId: input.actorId, timestamp: input.now,
+    },
+  }
 }
 
 export function undoExtractionProposal(input: {

@@ -3,9 +3,13 @@ import test from 'node:test'
 
 import type { PreflightUpload } from '@/lib/boq-preflight-schema'
 import type { PreflightCreateInput } from '@/lib/boq-preflight-storage'
-import { createPreflightService } from '@/lib/boq-preflight-service'
+import { createPreflightService, PreflightConsumptionConflictError } from '@/lib/boq-preflight-service'
 
-type PreflightUpdatePatch = Partial<PreflightUpload> & { preserveForRetry?: boolean }
+type PreflightUpdatePatch = Partial<PreflightUpload> & {
+  preserveForRetry?: boolean
+  importReservationToken?: string | null
+  importReservationLeaseExpiresAt?: string | null
+}
 
 function mockPreflightUpload(overrides: Partial<PreflightUpload> = {}): PreflightUpload {
   return {
@@ -26,7 +30,7 @@ function mockPreflightRecord(overrides: Partial<PreflightUpload> = {}) {
   return {
     ...mockPreflightUpload(overrides),
     ownerId: 'user-1',
-    sourceDigest: 'sha256:abc123',
+    sourceDigest: 'sha256:315d429b7714cedb6ad04ac31240145257692630457f3c88253c5beceac76027',
     sourceName: 'test.pdf',
     sourceType: 'application/pdf',
     sourceSize: 1234,
@@ -252,6 +256,7 @@ test('consumePreflight validates page selection', async () => {
         assert.deepEqual(patch.confirmedPages, [1])
         return { ...record, ...patch }
       },
+      consume: async () => 'consumed' as const,
       deleteArtifacts: async () => false,
       claimExpired: async () => [],
     },
@@ -285,6 +290,7 @@ test('consumePreflight throws on invalid page selection', async () => {
         assert.deepEqual(patch.confirmedPages, [1])
         return { ...record, ...patch }
       },
+      consume: async () => 'consumed' as const,
       deleteArtifacts: async () => false,
       claimExpired: async () => [],
     },
@@ -334,20 +340,20 @@ test('consumePreflight throws when status is not ready', async () => {
 })
 
 test('consumePreflight does NOT create Boq or ExtractionRun', async () => {
-  let updateCalled = false
+  let consumeCalled = false
   const record = mockPreflightRecord({ status: 'ready', pageCount: 2 })
   const service = createPreflightService({
     store: {
       create: async () => mockPreflightRecord(),
       getOwned: async () => record,
       update: async (_id: string, _ownerId: string, patch: PreflightUpdatePatch) => {
-        updateCalled = true
         assert.equal(patch.status, 'consumed')
         assert.ok(patch.confirmedPages !== undefined)
         assert.equal('createBoq' in patch, false)
         assert.equal('createRun' in patch, false)
         return { ...record, ...patch }
       },
+      consume: async () => { consumeCalled = true; return 'consumed' as const },
       deleteArtifacts: async () => false,
       claimExpired: async () => [],
     },
@@ -365,7 +371,192 @@ test('consumePreflight does NOT create Boq or ExtractionRun', async () => {
 
   await service.consumePreflight('preflight-1', 'user-1', { pages: [1] })
 
-  assert.equal(updateCalled, true)
+  assert.equal(consumeCalled, true)
+})
+
+test('operation-backed consumption restores a ready preflight when final import fails', async () => {
+  const record = mockPreflightRecord({ status: 'ready', pageCount: 2 })
+  const statuses: string[] = []
+  const patches: PreflightUpdatePatch[] = []
+  const service = createPreflightService({
+    store: {
+      create: async () => record,
+      getOwned: async () => record,
+      update: async (_id: string, _ownerId: string, patch: PreflightUpdatePatch) => {
+        patches.push(patch)
+        if (patch.status) statuses.push(patch.status)
+        return { ...record, ...patch }
+      },
+      consume: async () => 'consumed' as const,
+      deleteArtifacts: async () => false,
+      claimExpired: async () => [],
+    },
+    storageAdapter: {
+      saveSource: async () => 'path/to/source.pdf',
+      loadSource: async () => new File([Buffer.from('%PDF')], 'source.pdf', { type: 'application/pdf' }),
+    },
+    analysisAdapter: { analyzePdf: async () => [] },
+    requireSinglePdf: (f) => f,
+    createId: () => 'preflight-1',
+    now: () => new Date('2026-07-27T12:00:00.000Z'),
+  })
+
+  await assert.rejects(
+    () => service.consumePreflight('preflight-1', 'user-1', { pages: [1] }, async () => {
+      throw new Error('Docling failed')
+    }),
+    /Docling failed/,
+  )
+  assert.deepEqual(statuses, ['analyzing', 'ready'])
+  assert.deepEqual(patches[1]?.confirmedPages, [1])
+})
+
+test('replaced preflight source is rejected before final import', async () => {
+  const record = mockPreflightRecord({ status: 'ready', pageCount: 2 })
+  const patches: PreflightUpdatePatch[] = []
+  let operationCalled = false
+  const service = createPreflightService({
+    store: {
+      create: async () => record,
+      getOwned: async () => record,
+      update: async (_id: string, _ownerId: string, patch: PreflightUpdatePatch) => {
+        patches.push(patch)
+        return { ...record, ...patch }
+      },
+      consume: async () => 'consumed' as const,
+      deleteArtifacts: async () => false,
+      claimExpired: async () => [],
+    },
+    storageAdapter: {
+      saveSource: async () => 'path/to/source.pdf',
+      loadSource: async () => new File([Buffer.from('replaced')], 'source.pdf', { type: 'application/pdf' }),
+    },
+    analysisAdapter: { analyzePdf: async () => [] },
+    requireSinglePdf: (f) => f,
+    createId: () => 'preflight-1',
+    now: () => new Date('2026-07-27T12:00:00.000Z'),
+  })
+  await assert.rejects(
+    () => service.consumePreflight('preflight-1', 'user-1', { pages: [1] }, async () => {
+      operationCalled = true
+      return 'must not run'
+    }),
+    /integrity check/i,
+  )
+  assert.equal(operationCalled, false)
+  assert.equal(patches.at(-1)?.status, 'ready')
+  assert.deepEqual(patches.at(-1)?.confirmedPages, [1])
+})
+
+test('concurrent preloaded reservations yield one operation and one typed conflict', async () => {
+  const record = mockPreflightRecord({ status: 'ready', pageCount: 2 })
+  let status: 'ready' | 'analyzing' | 'consumed' = 'ready'
+  let reserveCalls = 0
+  let release!: () => void
+  const bothReserved = new Promise<void>((resolve) => { release = resolve })
+  const store = {
+    create: async () => record,
+    getOwned: async () => ({ ...record, status: 'ready' as const }),
+    update: async (_id: string, _ownerId: string, patch: PreflightUpdatePatch, conditions?: { expectedStatus?: string }) => {
+      if (patch.status === 'analyzing') {
+        reserveCalls += 1
+        if (reserveCalls === 2) release()
+        await bothReserved
+        if (status !== conditions?.expectedStatus) {
+          throw new Error(`Preflight status compare-and-set failed: expected ready, got ${status}`)
+        }
+        status = 'analyzing'
+        return { ...record, ...patch, status: 'analyzing' as const }
+      }
+      if (patch.status === 'consumed') {
+        status = 'consumed'
+        return null
+      }
+      return { ...record, ...patch }
+    },
+    deleteArtifacts: async () => false,
+    claimExpired: async () => [],
+  }
+  const service = createPreflightService({
+    store,
+    storageAdapter: {
+      saveSource: async () => 'path/to/source.pdf',
+      loadSource: async () => new File([Buffer.from('%PDF')], 'source.pdf', { type: 'application/pdf' }),
+    },
+    analysisAdapter: { analyzePdf: async () => [] },
+    requireSinglePdf: (f) => f,
+    createId: () => 'preflight-1',
+    now: () => new Date('2026-07-27T12:00:00.000Z'),
+  })
+  let operationCalls = 0
+  const operation = async () => { operationCalls += 1; return 'imported' }
+  const results = await Promise.allSettled([
+    service.consumePreflight('preflight-1', 'user-1', { pages: [1] }, operation),
+    service.consumePreflight('preflight-1', 'user-1', { pages: [1] }, operation),
+  ])
+  assert.equal(operationCalls, 1)
+  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1)
+  const rejected = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+  assert.ok(rejected)
+  assert.ok(rejected.reason instanceof PreflightConsumptionConflictError)
+})
+
+test('reservation CAS permits only one import and blocks cancellation races', async () => {
+  let state = mockPreflightRecord({ status: 'ready', pageCount: 2 }) as ReturnType<typeof mockPreflightRecord> & { importReservationToken?: string | null }
+  let started = false
+  let release!: () => void
+  const store = {
+    create: async () => state,
+    getOwned: async () => state,
+    update: async (
+      _id: string,
+      _ownerId: string,
+      patch: PreflightUpdatePatch,
+      conditions?: { expectedStatus?: string; expectedReservationToken?: string | null },
+    ) => {
+      if (conditions?.expectedStatus !== undefined && state.status !== conditions.expectedStatus) {
+        throw new Error(`status compare-and-set failed: ${state.status}`)
+      }
+      if ('expectedReservationToken' in (conditions ?? {})
+        && (state.importReservationToken ?? null) !== conditions?.expectedReservationToken) {
+        throw new Error('reservation compare-and-set failed')
+      }
+      state = { ...state, ...patch } as typeof state
+      return state.status === 'consumed' ? null : state
+    },
+    deleteArtifacts: async () => false,
+    claimExpired: async () => [],
+  }
+  const service = createPreflightService({
+    store,
+    storageAdapter: {
+      saveSource: async () => 'path/to/source.pdf',
+      loadSource: async () => new File([Buffer.from('%PDF')], 'source.pdf', { type: 'application/pdf' }),
+    },
+    analysisAdapter: { analyzePdf: async () => [] },
+    requireSinglePdf: (f) => f,
+    createId: () => 'preflight-1',
+    now: () => new Date('2026-07-27T12:00:00.000Z'),
+  })
+  const first = service.consumePreflight('preflight-1', 'user-1', { pages: [1] }, async () => {
+    started = true
+    await new Promise<void>((resolve) => { release = resolve })
+    return 'imported'
+  })
+  while (!started) await new Promise((resolve) => setImmediate(resolve))
+
+  await assert.rejects(
+    () => service.consumePreflight('preflight-1', 'user-1', { pages: [1] }, async () => 'second'),
+    /not ready/i,
+  )
+  await assert.rejects(
+    () => service.cancelPreflight('preflight-1', 'user-1'),
+    /not ready/i,
+  )
+  release()
+  const result = await first
+  assert.equal(result.operationResult, 'imported')
+  assert.equal(state.status, 'consumed')
 })
 
 test('cancelPreflight marks record as cancelled', async () => {
@@ -378,6 +569,7 @@ test('cancelPreflight marks record as cancelled', async () => {
         assert.equal(patch.status, 'cancelled')
         return { ...record, ...patch }
       },
+      consume: async () => 'consumed' as const,
       deleteArtifacts: async () => false,
       claimExpired: async () => [],
     },

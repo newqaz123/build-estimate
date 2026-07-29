@@ -12,6 +12,8 @@ const ROUTES: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['boqs/[id]/extraction-runs/[runId]/proposals/accept-batch/route.ts', ['POST']],
   ['boqs/[id]/extraction-runs/[runId]/proposals/[proposalId]/accept/route.ts', ['POST']],
   ['boqs/[id]/extraction-runs/[runId]/proposals/[proposalId]/reject/route.ts', ['POST']],
+  ['boqs/[id]/extraction-runs/[runId]/proposals/[proposalId]/skip/route.ts', ['POST']],
+  ['boqs/[id]/extraction-runs/[runId]/proposals/[proposalId]/reopen/route.ts', ['POST']],
   ['boqs/[id]/extraction-runs/[runId]/proposals/[proposalId]/undo/route.ts', ['POST']],
   ['boqs/[id]/extraction-runs/[runId]/proposals/[proposalId]/add-source-item/route.ts', ['POST']],
   ['boqs/preflight/route.ts', ['POST']],
@@ -36,4 +38,18 @@ test('new BOQ ingestion route modules export only supported HTTP handlers', () =
 
     assert.deepEqual(exports.sort(), [...expectedExports].sort(), relativePath)
   }
+})
+
+test('review route forwards preserved fallback proposals through the production lease adapter', () => {
+  const source = readFileSync(new URL('boqs/[id]/extraction-runs/[runId]/review/route.ts', import.meta.url), 'utf8')
+  const adapter = source.match(/failReviewLease:\s*\(([^)]*)\)\s*=>\s*createFirestoreExtractionProposalStore\(getDb\(\)\)\.failReviewLease\(([^)]*)\)/)
+  assert.ok(adapter, 'production review route must define the failReviewLease adapter')
+  assert.deepEqual(
+    adapter[1]!.split(',').map((value) => value.trim()),
+    ['boqId', 'runId', 'leaseId', 'failureCode', 'retryDelayMs', 'preservedProposals', 'refreshedSourceRowIds', 'validationSummary'],
+  )
+  assert.deepEqual(
+    adapter[2]!.split(',').map((value) => value.trim()),
+    ['boqId', 'runId', 'leaseId', 'failureCode', 'retryDelayMs', 'preservedProposals', 'refreshedSourceRowIds', 'validationSummary'],
+  )
 })

@@ -1,8 +1,9 @@
+import json
 import logging
 import re
 from functools import lru_cache
 from io import BytesIO
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from typing import Annotated, Any, List, Literal, Optional
@@ -116,9 +117,53 @@ async def health():
 
 @lru_cache(maxsize=1)
 def get_converter():
-    from docling.document_converter import DocumentConverter
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import PdfPipelineOptions, TesseractOcrOptions
+    from docling.document_converter import DocumentConverter, PdfFormatOption
 
-    return DocumentConverter()
+    pipeline_options = PdfPipelineOptions(
+        do_ocr=True,
+        ocr_options=TesseractOcrOptions(lang=['eng', 'tha']),
+    )
+    return DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
+        },
+    )
+
+
+def _parse_page_selection(value: str | None, page_count: int) -> list[int] | None:
+    if value is None:
+        return None
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise ValueError('pages must be a JSON array') from error
+    if type(parsed) is not list or not parsed:
+        raise ValueError('pages must be a non-empty JSON array')
+    if any(type(page) is not int or page < 1 for page in parsed):
+        raise ValueError('pages must contain positive integer page numbers')
+    if len(set(parsed)) != len(parsed):
+        raise ValueError('pages must not contain duplicate page numbers')
+    if any(page > page_count for page in parsed):
+        raise ValueError(f'pages must be between 1 and {page_count}')
+    return sorted(parsed)
+
+
+def _selected_pdf(content: bytes, pages: list[int]) -> tuple[bytes, list[int], int]:
+    from pypdf import PdfReader, PdfWriter
+
+    reader = PdfReader(BytesIO(content))
+    original_page_count = len(reader.pages)
+    validated_pages = _parse_page_selection(json.dumps(pages), original_page_count)
+    if validated_pages is None:
+        raise ValueError('selected pages are required')
+    writer = PdfWriter()
+    for page in validated_pages:
+        writer.add_page(reader.pages[page - 1])
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue(), validated_pages, original_page_count
 
 
 def _table_page(table: Any) -> int:
@@ -131,6 +176,30 @@ def _table_page(table: Any) -> int:
     return page
 
 
+def _table_number(
+    table: Any,
+    fallback: int,
+    local_index: int,
+    selected_page_map: bool,
+) -> int:
+    for candidate in (
+        getattr(table, "table_no", None),
+        getattr(table, "table_number", None),
+        getattr(table, "global_table_no", None),
+    ):
+        if type(candidate) is int and candidate >= 1:
+            return candidate
+    self_ref = getattr(table, "self_ref", None)
+    if type(self_ref) is str:
+        match = re.search(r"/tables/(\d+)$", self_ref)
+        if match:
+            return int(match.group(1)) + 1
+    # Reduced PDFs cannot recover the full-document ordinal when Docling does
+    # not expose one. Keep the source reference page-local instead of claiming
+    # that selected-document enumeration is a global original table number.
+    return local_index if selected_page_map else fallback
+
+
 def _table_data(table: Any) -> Any:
     data = getattr(table, "data", None)
     if data is None:
@@ -141,22 +210,39 @@ def _table_data(table: Any) -> Any:
     return data
 
 
-def build_parse_response(filename: str, document: Any) -> ParseResponseV3:
+def build_parse_response(
+    filename: str,
+    document: Any,
+    *,
+    original_page_map: list[int] | None = None,
+    original_page_count: int | None = None,
+) -> ParseResponseV3:
     document_text = document.export_to_text(page_break_placeholder="\n\f\n")
     tables: list[dict[str, Any]] = []
     raw_tables: list[dict[str, Any]] = []
+    table_indices_by_page: dict[int, int] = {}
+    selected_page_map = original_page_map is not None
     for index, table in enumerate(document.tables, start=1):
-        page = _table_page(table)
+        filtered_page = _table_page(table)
+        if original_page_map is None:
+            page = filtered_page
+        elif filtered_page < 1 or filtered_page > len(original_page_map):
+            raise ValueError("Docling table page provenance is outside the selected page map")
+        else:
+            page = original_page_map[filtered_page - 1]
         data = _table_data(table)
+        local_index = table_indices_by_page.get(page, 0) + 1
+        table_indices_by_page[page] = local_index
+        table_number = _table_number(table, index, local_index, selected_page_map)
         frame = table.export_to_dataframe(doc=document).fillna("")
         tables.append({
             "page": page,
-            "table": index,
+            "table": table_number,
             "rows": [list(frame.columns), *frame.values.tolist()],
         })
         raw_tables.append({
             "page": page,
-            "table": index,
+            "table": table_number,
             "cells": list(data.table_cells),
             "num_rows": data.num_rows,
             "num_cols": data.num_cols,
@@ -177,7 +263,7 @@ def build_parse_response(filename: str, document: Any) -> ParseResponseV3:
     return ParseResponseV3(
         contractVersion=3,
         documentName=filename,
-        pageCount=len(document.pages),
+        pageCount=(original_page_count if original_page_count is not None else len(document.pages)),
         documentText=document_text,
         sourceRows=deterministic["sourceRows"],
         sections=sections,
@@ -189,24 +275,46 @@ def build_parse_response(filename: str, document: Any) -> ParseResponseV3:
     )
 
 
-def convert_pdf(filename: str, content: bytes):
+def convert_pdf(filename: str, content: bytes, pages: list[int] | None = None):
     from docling.datamodel.base_models import DocumentStream
 
-    source = DocumentStream(name=filename, stream=BytesIO(content))
+    original_page_map: list[int] | None = None
+    original_page_count: int | None = None
+    source_content = content
+    if pages is not None:
+        source_content, original_page_map, original_page_count = _selected_pdf(content, pages)
+    source = DocumentStream(name=filename, stream=BytesIO(source_content))
     result = get_converter().convert(source, max_num_pages=500, max_file_size=20 * 1024 * 1024)
-    return build_parse_response(filename, result.document)
+    return build_parse_response(
+        filename,
+        result.document,
+        original_page_map=original_page_map,
+        original_page_count=original_page_count,
+    )
 
 
 @app.post("/parse", response_model=ParseResponseV3, response_model_exclude_none=True)
-async def parse_pdf(file: UploadFile = File(...)):
+async def parse_pdf(file: UploadFile = File(...), pages: str | None = Form(default=None)):
     filename = file.filename or "document.pdf"
     if not filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
     content = await file.read()
     if not content or len(content) > 20 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="PDF must be between 1 byte and 20 MB")
+    selected_pages: list[int] | None = None
+    pages_value = pages if isinstance(pages, str) else None
+    if pages_value is not None:
+        try:
+            from pypdf import PdfReader
+
+            page_count = len(PdfReader(BytesIO(content)).pages)
+            selected_pages = _parse_page_selection(pages_value, page_count)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="Invalid selected PDF pages") from error
+        except Exception as error:
+            raise HTTPException(status_code=422, detail="Docling could not parse this PDF") from error
     try:
-        response = await run_in_threadpool(convert_pdf, filename, content)
+        response = await run_in_threadpool(convert_pdf, filename, content, selected_pages)
     except ImportError as error:
         raise HTTPException(status_code=503, detail="Docling is not installed") from error
     except Exception as error:

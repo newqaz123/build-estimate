@@ -7,7 +7,7 @@ function seed(ownerId: string): PreflightRecord {
   return {
     ownerId, id: `upload-${ownerId}`, fileName: 'source.pdf', pageCount: 1, status: 'uploaded',
     pages: [{ page: 1, suggested: true, confidence: 1, reasons: [], textSource: 'embedded' }],
-    confirmedPages: null, sourceDigest: 'sha256:test', sourceName: 'source.pdf', sourceType: 'application/pdf', sourceSize: 3,
+    confirmedPages: null, sourceDigest: 'sha256:0000000000000000000000000000000000000000000000000000000000000000', sourceName: 'source.pdf', sourceType: 'application/pdf', sourceSize: 3,
     expiresAt: '2026-07-26T00:00:00.000Z', createdAt: '2026-07-25T00:00:00.000Z', updatedAt: '2026-07-25T00:00:00.000Z',
   }
 }
@@ -109,6 +109,17 @@ function firestoreHarness(clock = new Date('2026-07-27T00:00:00.000Z')) {
   return { db, bucket, store: createFirestorePreflightStore(db as never, bucket as never, () => clock) }
 }
 
+test('create accepts an uploaded record with pageCount 0 (page count unknown until analysis)', async () => {
+  const harness = firestoreHarness()
+  const uploaded = await harness.store.create({ ...seed('owner-a'), pageCount: 0, pages: [] })
+  assert.equal(uploaded.pageCount, 0)
+  assert.equal(uploaded.status, 'uploaded')
+  const reloaded = await harness.store.getOwned(uploaded.id, 'owner-a')
+  assert.equal(reloaded?.pageCount, 0)
+  // A negative pageCount is still invalid.
+  await assert.rejects(() => harness.store.create({ ...seed('owner-b'), pageCount: -1 }), /non-negative integer/)
+})
+
 test('Firestore adapter rejects invalid transitions and cleans up on cancel from uploaded', async () => {
   const harness = firestoreHarness()
   const upload = await harness.store.create(seed('owner-a'))
@@ -179,6 +190,37 @@ test('expired cleanup lease uses invocation time and blocks a concurrent claim',
   assert.deepEqual(secondClaim, [])
   const stored = await harness.store.getOwned(upload.id, 'owner-a')
   assert.equal(stored?.cleanupLeaseExpiresAt, '2026-07-27T00:15:00.000Z')
+})
+
+test('consume returns a single-winner outcome for repeated attempts', async () => {
+  const harness = firestoreHarness()
+  const upload = await harness.store.create(seed('owner-a'))
+  await harness.store.update(upload.id, 'owner-a', { status: 'analyzing' })
+  await harness.store.update(upload.id, 'owner-a', { status: 'ready' })
+  const consumed = await harness.store.consume!(upload.id, 'owner-a', [1])
+  const loser = await harness.store.consume!(upload.id, 'owner-a', [1])
+  assert.equal(consumed, 'consumed')
+  assert.equal(loser, 'missing')
+})
+
+test('active reservation lease blocks cleanup while expired abandoned lease is reclaimable', async () => {
+  const now = new Date('2026-07-27T00:10:00.000Z')
+  const harness = firestoreHarness(now)
+  const upload = await harness.store.create(seed('owner-a'))
+  await harness.store.update(upload.id, 'owner-a', {
+    status: 'analyzing',
+    importReservationToken: 'active-token',
+    importReservationLeaseExpiresAt: '2026-07-27T00:15:00.000Z',
+  })
+  assert.deepEqual(await harness.store.claimExpired(new Date('2026-07-27T00:01:00.000Z'), 10), [])
+
+  const path = `preflightUploads/owner-a/uploads/${upload.id}`
+  const current = harness.db.docs.get(path)!
+  harness.db.docs.set(path, { ...current, importReservationLeaseExpiresAt: '2026-07-27T00:05:00.000Z' })
+  assert.deepEqual(
+    await harness.store.claimExpired(new Date('2026-07-27T00:10:00.000Z'), 10),
+    [{ id: upload.id, ownerId: 'owner-a' }],
+  )
 })
 
 test('missing preview and OCR artifacts do not prevent cleanup', async () => {

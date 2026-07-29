@@ -2,9 +2,11 @@
 
 import { signIn } from "next-auth/react";
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { safeReviewReturnPath } from "@/lib/auth-return-url";
 
 export default function LoginPage() {
+  const searchParams = useSearchParams();
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -36,7 +38,7 @@ export default function LoginPage() {
 
       if (result?.ok && !result.error) {
         navigationStarted = true;
-        router.push("/dashboard");
+        router.push(safeReviewReturnPath(searchParams.get("returnTo")));
         return;
       }
 

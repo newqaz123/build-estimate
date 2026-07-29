@@ -7,6 +7,7 @@ import {
   buildExtractionRun,
   checksumSourceRows,
   extractionRunIdentityFingerprint,
+  fingerprintParserConfig,
   stableCanonicalJson,
 } from './boq-extraction-run'
 
@@ -91,6 +92,13 @@ test('review targeting preserves distinct compound, ambiguous, and row reconcili
   assert.deepEqual(run.reviewTargeting.ambiguousRowIds, ['row-2'])
   assert.deepEqual(run.reviewTargeting.unreconciledRowIds, ['row-4'])
   assert.equal(run.reviewTargeting.unreconciled, true)
+})
+
+test('parser identity changes when confirmed original pages change', () => {
+  assert.notEqual(
+    fingerprintParserConfig({ contractVersion: 3, selectedPages: [1], pageSelectionContract: 1 }),
+    fingerprintParserConfig({ contractVersion: 3, selectedPages: [2], pageSelectionContract: 1 }),
+  )
 })
 
 test('extraction identity changes when immutable source or parser metadata changes', () => {

@@ -23,7 +23,7 @@ import { fingerprintCanonicalItem, type ExtractionProposal, type ValidatedPropos
 type RecordData = Record<string, unknown>
 
 interface MemoryTransaction {
-  get(ref: MemoryDoc): Promise<MemorySnapshot>
+  get(ref: MemoryDoc | MemoryCollection): Promise<MemorySnapshot | { docs: MemorySnapshot[] }>
   getAll(...refs: MemoryDoc[]): Promise<MemorySnapshot[]>
   create(ref: MemoryDoc, data: RecordData): void
   update(ref: MemoryDoc, data: RecordData): void
@@ -278,6 +278,172 @@ function surasakHarness(clock: () => Date = () => new Date('2026-07-20T12:00:00.
     store: createFirestoreExtractionProposalStore(db as never, clock),
   }
 }
+
+test('incomplete proposals can be skipped and reopened without mutating BOQ sections or totals', async () => {
+  const fixture = harness()
+  const incomplete = { ...fixture.proposal, id: 'incomplete', operation: 'needs_human_review' as const, proposedItems: [] }
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [incomplete])
+  const before = structuredClone(fixture.db.docs.get('boqs/boq-1'))
+
+  const skipped = await fixture.store.skip('boq-1', 'run-1', 'incomplete', 'user-1')
+  assert.equal(skipped.status, 200)
+  assert.equal(skipped.body.status, 'skipped')
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+  assert.equal(fixture.db.docs.get(`${fixture.runPath}/proposalAudits/incomplete`)?.status, 'skipped')
+
+  let state = await fixture.store.getReviewState('boq-1', 'run-1')
+  assert.equal(state?.proposalStatuses.incomplete?.status, 'skipped')
+  assert.equal(state?.auditEvents.some((event) => event.proposalId === 'incomplete' && event.status === 'skipped'), true)
+
+  const reopened = await fixture.store.reopen('boq-1', 'run-1', 'incomplete', 'user-1')
+  assert.equal(reopened.status, 200)
+  assert.equal(reopened.body.status, 'pending')
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+  state = await fixture.store.getReviewState('boq-1', 'run-1')
+  assert.equal(state?.proposalStatuses.incomplete?.status, 'pending')
+  assert.equal(state?.auditEvents.some((event) => event.proposalId === 'incomplete' && event.status === 'reopened'), true)
+  assert.equal((await fixture.store.skip('boq-1', 'run-1', 'incomplete', 'user-1')).status, 200)
+  assert.equal((await fixture.store.getReviewState('boq-1', 'run-1'))?.proposalStatuses.incomplete?.status, 'skipped')
+})
+
+test('reopened rejected complete proposals can be accepted through a new append-only audit event', async () => {
+  const fixture = harness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  assert.equal((await fixture.store.reject('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+  assert.equal((await fixture.store.reopen('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+  const accepted = await fixture.store.accept('boq-1', 'run-1', 'proposal-1', 'user-1')
+  assert.equal(accepted.status, 200)
+  const lifecycleAudits = [...fixture.db.docs.entries()]
+    .filter(([path, value]) => path.includes(`${fixture.runPath}/proposalAudits/proposal-1`) && value.status === 'accepted')
+  assert.equal(lifecycleAudits.length, 1)
+  assert.equal((await fixture.store.getReviewState('boq-1', 'run-1'))?.proposalStatuses['proposal-1']?.status, 'accepted')
+  assert.equal((await fixture.store.undo('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+})
+
+test('lifecycle sequence supports repeated decisions, fresh acceptance after undo, and rejects invalid reopen transitions', async () => {
+  const fixture = harness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+
+  assert.equal((await fixture.store.reject('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+  assert.equal((await fixture.store.reopen('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+  assert.equal((await fixture.store.reject('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+  let state = await fixture.store.getReviewState('boq-1', 'run-1')
+  assert.equal(state?.proposalStatuses['proposal-1']?.status, 'rejected')
+  assert.equal((await fixture.store.reopen('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+  assert.equal((await fixture.store.accept('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+  state = await fixture.store.getReviewState('boq-1', 'run-1')
+  assert.equal(state?.proposalStatuses['proposal-1']?.status, 'accepted')
+  assert.equal(state?.proposalStatuses['proposal-1']?.canUndo, true)
+  assert.equal((await fixture.store.reopen('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 409)
+  assert.equal((await fixture.store.undo('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+  assert.equal((await fixture.store.reopen('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 409)
+  const reaccepted = await fixture.store.accept('boq-1', 'run-1', 'proposal-1', 'user-1')
+  assert.equal(reaccepted.status, 200)
+  assert.equal((await fixture.store.getReviewState('boq-1', 'run-1'))?.proposalStatuses['proposal-1']?.status, 'accepted')
+})
+
+test('batch acceptance derives pending state after reopen and appends fresh decisions', async () => {
+  const fixture = harness()
+  const bundle = fixture.boq.sections.flatMap((section) => section.items).find((item) => item.id === 'bundle')!
+  const option = fixture.boq.sections.flatMap((section) => section.items).find((item) => item.id === 'option')!
+  const proposals = [keepProposal('batch-bundle', 'row-1', 'bundle', bundle), keepProposal('batch-option', 'row-3', 'option', option)]
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', proposals as never)
+  assert.equal((await fixture.store.reject('boq-1', 'run-1', 'batch-bundle', 'user-1')).status, 200)
+  assert.equal((await fixture.store.reject('boq-1', 'run-1', 'batch-option', 'user-1')).status, 200)
+  assert.equal((await fixture.store.reopen('boq-1', 'run-1', 'batch-bundle', 'user-1')).status, 200)
+  assert.equal((await fixture.store.reopen('boq-1', 'run-1', 'batch-option', 'user-1')).status, 200)
+  const accepted = await fixture.store.acceptBatch('boq-1', 'run-1', proposals.map((proposal) => proposal.id), 'user-1')
+  assert.equal(accepted.status, 200)
+  const state = await fixture.store.getReviewState('boq-1', 'run-1')
+  assert.equal(state?.proposalStatuses['batch-bundle']?.status, 'accepted')
+  assert.equal(state?.proposalStatuses['batch-option']?.status, 'accepted')
+})
+
+test('malformed or misbound child lifecycle events fail closed during reload and mutation', async () => {
+  const fixture = harness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  fixture.db.docs.set(`${fixture.runPath}/proposalAudits/proposal-1/events/1-rejected`, {
+    proposalId: 'other-proposal', extractionRunId: 'run-1', status: 'rejected',
+  })
+  await assert.rejects(fixture.store.getReviewState('boq-1', 'run-1'), /lifecycle (event|root audit)/)
+  assert.equal((await fixture.store.reject('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 409)
+})
+
+test('batch replay returns canonical current BOQ for separately accepted proposals regardless of caller order', async () => {
+  const fixture = harness()
+  const bundle = fixture.boq.sections.flatMap((section) => section.items).find((item) => item.id === 'bundle')!
+  const option = fixture.boq.sections.flatMap((section) => section.items).find((item) => item.id === 'option')!
+  const proposals = [keepProposal('separate-bundle', 'row-1', 'bundle', bundle), keepProposal('separate-option', 'row-3', 'option', option)]
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', proposals as never)
+  assert.equal((await fixture.store.accept('boq-1', 'run-1', 'separate-bundle', 'user-1')).status, 200)
+  assert.equal((await fixture.store.accept('boq-1', 'run-1', 'separate-option', 'user-1')).status, 200)
+  const replay = await fixture.store.acceptBatch('boq-1', 'run-1', ['separate-option', 'separate-bundle'], 'user-1')
+  assert.equal(replay.status, 200)
+  assert.deepEqual(replay.body.boq, fixture.db.docs.get('boqs/boq-1'))
+})
+
+test('transaction lifecycle head version rejects a stale concurrent transition', async () => {
+  const fixture = harness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  assert.equal((await fixture.store.reject('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+  fixture.db.docs.set(`${fixture.runPath}/proposalAudits/proposal-1/events/2-reopened`, {
+    eventId: 'proposal-1:reopen:stale', proposalId: 'proposal-1', extractionRunId: 'run-1',
+    status: 'reopened', previousStatus: 'rejected', actorId: 'user-2', timestamp: '2026-07-20T12:00:01.000Z', sequence: 2,
+  })
+  assert.equal((await fixture.store.reopen('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 409)
+})
+
+test('lifecycle reducer rejects sequence gaps, duplicates, nonpositive values, key mismatches, and illegal reopen history', async () => {
+  const cases = [
+    { key: '4-reopened', sequence: 4, previousStatus: 'rejected' as const },
+    { key: '1-reopened', sequence: 1, previousStatus: 'rejected' as const },
+    { key: '0-reopened', sequence: 0, previousStatus: 'rejected' as const },
+    { key: '2-skipped', sequence: 2, previousStatus: 'rejected' as const },
+    { key: '2-reopened', sequence: 2, previousStatus: 'skipped' as const },
+  ]
+  for (const event of cases) {
+    const fixture = harness()
+    await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+    assert.equal((await fixture.store.reject('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+    fixture.db.docs.set(`${fixture.runPath}/proposalAudits/proposal-1/events/${event.key}`, {
+      eventId: `proposal-1:${event.key}`, proposalId: 'proposal-1', extractionRunId: 'run-1',
+      status: 'reopened', previousStatus: event.previousStatus, actorId: 'user-1',
+      timestamp: '2026-07-20T12:00:01.000Z', sequence: event.sequence,
+    })
+    await assert.rejects(fixture.store.getReviewState('boq-1', 'run-1'))
+  }
+})
+
+test('legacy roots establish an implicit sequence base before modern append events', async () => {
+  const rejected = harness()
+  await rejected.store.saveValidatedProposals('boq-1', 'run-1', [rejected.proposal])
+  assert.equal((await rejected.store.reject('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+  delete rejected.db.docs.get(`${rejected.runPath}/proposalAudits/proposal-1`)!.sequence
+  delete rejected.db.docs.get(`${rejected.runPath}/proposals/proposal-1`)!.lifecycleRevision
+  assert.equal((await rejected.store.reopen('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+  assert.equal((await rejected.store.getReviewState('boq-1', 'run-1'))?.proposalStatuses['proposal-1']?.status, 'pending')
+
+  const skipped = harness()
+  const incomplete = { ...skipped.proposal, operation: 'needs_human_review' as const, proposedItems: [] }
+  await skipped.store.saveValidatedProposals('boq-1', 'run-1', [incomplete])
+  assert.equal((await skipped.store.skip('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+  delete skipped.db.docs.get(`${skipped.runPath}/proposalAudits/proposal-1`)!.sequence
+  delete skipped.db.docs.get(`${skipped.runPath}/proposals/proposal-1`)!.lifecycleRevision
+  assert.equal((await skipped.store.reopen('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+  assert.equal((await skipped.store.getReviewState('boq-1', 'run-1'))?.proposalStatuses['proposal-1']?.status, 'pending')
+
+  const accepted = harness()
+  await accepted.store.saveValidatedProposals('boq-1', 'run-1', [accepted.proposal])
+  assert.equal((await accepted.store.accept('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+  delete accepted.db.docs.get(`${accepted.runPath}/proposalAudits/proposal-1`)!.sequence
+  delete accepted.db.docs.get(`${accepted.runPath}/proposals/proposal-1`)!.lifecycleRevision
+  assert.equal((await accepted.store.undo('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+  assert.equal((await accepted.store.getReviewState('boq-1', 'run-1'))?.proposalStatuses['proposal-1']?.status, 'undone')
+  assert.equal((await accepted.store.accept('boq-1', 'run-1', 'proposal-1', 'user-1')).status, 200)
+  const state = await accepted.store.getReviewState('boq-1', 'run-1')
+  assert.equal(state?.proposalStatuses['proposal-1']?.status, 'accepted')
+  assert.equal(state?.proposalStatuses['proposal-1']?.canUndo, true)
+})
 
 test('store undo fences immutable evidence and replays exact accepted/undo BOQ snapshots', async () => {
   const fixture = harness()
@@ -534,14 +700,17 @@ test('addSourceItem rejects invalid section destinations and bad arithmetic as 4
   assert.equal(fixture.db.docs.has(`${fixture.runPath}/proposalAudits/${fixture.proposal.id}`), false)
 })
 
-test('addSourceItem conflicts with a prior rejected audit', async () => {
+test('addSourceItem conflicts with a prior skipped audit until reopened', async () => {
   const fixture = reviewDraftHarness()
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
-  await fixture.store.reject('boq-1', 'run-1', fixture.proposal.id, 'user-1')
+  await fixture.store.skip('boq-1', 'run-1', fixture.proposal.id, 'user-1')
   const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
   const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
   assert.equal(result.status, 409)
   assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+  assert.equal((await fixture.store.reopen('boq-1', 'run-1', fixture.proposal.id, 'user-1')).status, 200)
+  const reopened = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  assert.equal(reopened.status, 200)
 })
 
 test('store reload and acceptance reject mapped provenance with an unused declared row', async () => {
@@ -780,9 +949,9 @@ test('a refreshed row supersedes old pending proposals and safely versions a reu
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [refreshed])
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [refreshed])
   const state = await fixture.store.getReviewState('boq-1', 'run-1')
-  assert.equal(state?.proposals.length, 1)
-  assert.equal(state?.proposals[0]?.explanation, 'Fresh evidence review.')
-  assert.notEqual(state?.proposals[0]?.id, 'proposal-1')
+  assert.equal(state?.proposals.length, 2)
+  assert.equal(state?.proposals[1]?.explanation, 'Fresh evidence review.')
+  assert.notEqual(state?.proposals[1]?.id, 'proposal-1')
   const stored = [...fixture.db.docs.entries()].filter(([path]) => path.includes('/proposals/'))
   assert.equal(stored.length, 2)
   assert.equal(stored.filter(([, value]) => value.lifecycleStatus === 'superseded').length, 1)
@@ -793,7 +962,8 @@ test('a refreshed row with no new suggestion still supersedes its old pending pr
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [], ['row-4'])
   const state = await fixture.store.getReviewState('boq-1', 'run-1')
-  assert.deepEqual(state?.proposals, [])
+  assert.deepEqual(state?.proposals.map((entry) => entry.id), ['proposal-1'])
+  assert.equal(state?.proposalStatuses['proposal-1']?.status, 'superseded')
   assert.equal(fixture.db.docs.get(`${fixture.runPath}/proposals/proposal-1`)?.lifecycleStatus, 'superseded')
 })
 
@@ -864,7 +1034,7 @@ test('late expired lease cannot persist or supersede proposals after the replace
   )
 
   const state = await fixture.store.getReviewState('boq-1', 'run-1')
-  assert.deepEqual(state?.proposals.map((entry) => entry.id), ['proposal-b'])
+  assert.deepEqual(state?.proposals.map((entry) => entry.id), ['proposal-1', 'proposal-b'])
   assert.equal(fixture.db.docs.has(`${fixture.runPath}/proposals/proposal-a`), false)
   assert.equal(fixture.db.docs.get(`${fixture.runPath}/proposals/proposal-1`)?.lifecycleStatus, 'superseded')
   assert.equal((fixture.db.docs.get(fixture.runPath)?.reviewRun as { status?: string }).status, 'completed')
@@ -877,7 +1047,8 @@ test('lease completion with zero proposals still atomically supersedes refreshed
 
   await fixture.store.completeReviewLease('boq-1', 'run-1', 'lease-1', 'completed', [], ['row-4'])
 
-  assert.deepEqual((await fixture.store.getReviewState('boq-1', 'run-1'))?.proposals, [])
+  assert.deepEqual((await fixture.store.getReviewState('boq-1', 'run-1'))?.proposals.map((entry) => entry.id), ['proposal-1'])
+  assert.equal((await fixture.store.getReviewState('boq-1', 'run-1'))?.proposalStatuses['proposal-1']?.status, 'superseded')
   assert.equal(fixture.db.docs.get(`${fixture.runPath}/proposals/proposal-1`)?.lifecycleStatus, 'superseded')
   assert.equal((fixture.db.docs.get(fixture.runPath)?.reviewRun as { status?: string }).status, 'completed')
 })

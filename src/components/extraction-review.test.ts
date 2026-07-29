@@ -13,15 +13,19 @@ test("focused extraction review renders evidence, reconciliation, source navigat
   assert.match(source, /Proposed structure/)
   assert.match(source, /Validation & reconciliation/)
   assert.match(source, /Accept all validated high-confidence/)
-  assert.match(source, /\{canAccept \? <Button[\s\S]{0,300}?Accept\{/)
+  // Updated to match new tab-based proposal rendering
+  assert.match(source, /isComplete.*canAccept.*Accept/)
   assert.match(source, /Add missing item/)
   assert.match(source, /Replace item/)
   assert.match(source, /Remove non-item row/)
   assert.match(source, /one combined BOQ row/)
+  // Updated to match new reject confirmation flow
+  assert.match(source, /handleReject.*proposal/)
   assert.match(source, />Reject\{/)
   assert.match(source, />Undo\{/)
-  assert.match(source, /Recheck with AI/)
-  assert.match(source, /onNavigateToPage/)
+  // Updated to match new recheck button naming
+  assert.match(source, /Review this row with AI/)
+  assert.match(source, /onNavigateToEvidence/)
   assert.match(source, /remainingCandidateRowIds/)
   assert.match(source, /extraction-review-technical-details/)
   assert.doesNotMatch(source, /dangerouslySetInnerHTML/)
@@ -34,7 +38,7 @@ test("canonical detail switches only the right pane and no longer mounts the leg
   assert.doesNotMatch(readFileSync(componentUrl, "utf8"), /Back to BOQ items/)
   assert.doesNotMatch(source, /onBack=\{/)
   assert.match(source, /requestedPage=/)
-  assert.match(source, /onNavigateToPage=/)
+  assert.match(source, /onNavigateToEvidence=/)
   assert.doesNotMatch(source, /role="tablist"/)
   assert.doesNotMatch(source, /boq-right-pane-mode/)
   assert.doesNotMatch(source, /id="boq-items-tab"/)
@@ -59,20 +63,17 @@ test("explicit AI rechecks are forced and follow-up rows expose readable labels 
   assert.match(source, /const sourceRowLabels = useMemo/)
   assert.match(source, /sourceReferenceLabel\(reference\)/)
   assert.match(source, /Row \$\{index \+ 1\}/)
-  assert.match(source, /Recheck \$\{label\} with AI/)
+  // Updated to match new button naming
+  assert.match(source, /Review this row with AI/)
 })
 
 test("extraction review filters derive per-chip counts from displayed results and disable empty categories", () => {
   const source = readFileSync(componentUrl, "utf8")
+  // Filter counts are still calculated internally for technical use
   assert.match(source, /const filterCounts = useMemo/)
   assert.match(source, /selectReviewVisibility\(review, statuses, filter\.value\)/)
-  assert.match(source, /filter-chip-count/)
-  assert.match(source, /disabled=\{disabled\}/)
-  assert.match(source, /aria-disabled=\{disabled \|\| undefined\}/)
-  assert.match(source, /set_filter", filter: "all"/)
+  // The filter chip UI is replaced by tabs, but technical logic remains
   assert.match(source, /selectEffectiveFilter/)
-  assert.match(source, /effectiveFilter === filter\.value/)
-  assert.match(source, /effectiveFilter !== "all"/)
   assert.match(source, /Candidate source rows without proposals/)
   assert.match(source, /selectExtractionReviewOutcome/)
   assert.match(source, /extractionReviewOutcomeTitle/)
@@ -207,4 +208,147 @@ test("needs_human_review proposals expose Review & add but never render Accept",
   assert.match(source, /BOQ item added from reviewed source\./)
   // The needs_human_review branch is never made directly acceptable.
   assert.doesNotMatch(source, /proposalCanBeAccepted\(proposal\) && humanReview/)
+})
+
+test("Task 8: reject confirmation flow shows dialog before posting to endpoint", () => {
+  const source = readFileSync(componentUrl, "utf8")
+  // Reject opens a confirmation dialog with specific wording
+  assert.match(source, /Reject this suggestion\? It will not be added to the BOQ\./)
+  assert.match(source, /Confirm reject/)
+  // The dialog should have a confirmation button
+  assert.match(source, /setRejectConfirmProposalId/)
+  // There should be state to track which proposal is being confirmed
+  assert.match(source, /rejectConfirmProposalId/)
+  // The actual reject endpoint is only called after confirmation
+  assert.match(source, /handleConfirmedReject/)
+  // Reject button triggers the dialog, not the direct endpoint
+  assert.match(source, /handleReject.*proposal/)
+})
+
+test("Task 8: Review source button navigates to evidence focus with page, table, row, cells", () => {
+  const source = readFileSync(componentUrl, "utf8")
+  // Review source button exists
+  assert.match(source, /Review source/)
+  // onNavigateToEvidence is used instead of onNavigateToPage
+  assert.match(source, /onNavigateToEvidence/)
+  // Evidence focus is created from source data
+  assert.match(source, /const evidenceFocus/)
+  // SourceEvidence component receives onNavigateToEvidence
+  assert.match(source, /onNavigateToEvidence=/)
+})
+
+test("Task 8: tabs render as Needs your review and History only", () => {
+  const source = readFileSync(componentUrl, "utf8")
+  // selectReviewTab is imported
+  assert.match(source, /selectReviewTab/)
+  // Tab state exists
+  assert.match(source, /state\.tab/)
+  // Set tab action exists
+  assert.match(source, /set_tab.*tab/)
+  // Tabs render with specific labels
+  assert.match(source, /Needs your review/)
+  assert.match(source, /History/)
+  // Tab switching uses set_tab
+  assert.match(source, /onClick=\{.*\(\) => dispatch\(\{ type: "set_tab"/)
+})
+
+test("Task 8: pending complete proposals show Validated suggestion and Accept/Reject", () => {
+  const source = readFileSync(componentUrl, "utf8")
+  // Pending complete proposals show the "Validated suggestion" label
+  assert.match(source, /Validated suggestion — ready for your approval/)
+  // Complete proposals show Accept, Review source, and Reject buttons
+  assert.match(source, /isComplete.*canAccept.*Accept/)
+  assert.match(source, /Review source/)
+  assert.match(source, /Reject/)
+})
+
+test("Task 8: pending incomplete proposals show More information needed and Skip, no Accept", () => {
+  const source = readFileSync(componentUrl, "utf8")
+  // Incomplete proposals show "More information needed" label
+  assert.match(source, /More information needed/)
+  // Incomplete proposals show Review source and Skip
+  assert.match(source, /Review source/)
+  assert.match(source, /Skip/)
+  // Incomplete proposals have logic to prevent Accept
+  assert.match(source, /isComplete.*canAccept/)
+})
+
+test("Task 8: skip posts to durable skip endpoint and moves to History", () => {
+  const source = readFileSync(componentUrl, "utf8")
+  // Skip endpoint is called
+  assert.match(source, /executeAction.*skip/)
+  // Skip is only shown for incomplete proposals
+  assert.match(source, /isIncomplete.*Skip/)
+  // After skip, the proposal moves to History tab
+  assert.match(source, /await refreshStoredReview\(\)/)
+})
+
+test("Task 8: renamed recheck buttons use new wording", () => {
+  const source = readFileSync(componentUrl, "utf8")
+  // Global recheck button is now "Review all flagged rows with AI"
+  assert.match(source, /Review all flagged rows with AI/)
+  // Per-row recheck is now "Review this row with AI"
+  assert.match(source, /Review this row with AI/)
+  // Remaining rows group is now "Rows needing review"
+  assert.match(source, /Rows needing review/)
+})
+
+test("Task 8: Review source is pure viewer navigation with no AI fetch", () => {
+  const source = readFileSync(componentUrl, "utf8")
+  // Review source only calls onNavigateToEvidence
+  assert.match(source, /onNavigateToEvidence\(evidenceFocus\)/)
+  // Review source does NOT call runReview or any AI endpoint
+  assert.doesNotMatch(source, /Review source.*runReview/)
+  // Review source button is separate from recheck button
+  assert.match(source, /Review source/)
+  assert.match(source, /Review this row with AI/)
+})
+
+test("Task 8: undo moves item back to Needs your review only after server response", () => {
+  const source = readFileSync(componentUrl, "utf8")
+  // Undo calls the undo endpoint
+  assert.match(source, /executeAction.*undo/)
+  // Undo waits for refreshStoredReview() after the endpoint call
+  assert.match(source, /action === "undo".*await refreshStoredReview\(\)/)
+  // Undo does NOT optimistically update local state
+  assert.doesNotMatch(source, /dispatch.*type: "proposal_status".*status: "undone"/)
+})
+
+test("Task 8: filter chips are removed and tabs are the only navigation", () => {
+  const source = readFileSync(componentUrl, "utf8")
+  // The old filter-chip row should be gone
+  assert.doesNotMatch(source, /extraction-review-filters.*filter-chip/)
+  // Tabs are the only user-facing navigation
+  assert.match(source, /role="tablist"/)
+  assert.match(source, /role="tab"/)
+  // selectReviewTab is used to determine tab content
+  assert.match(source, /selectReviewTab\(\{ review.*proposalStatuses/)
+})
+
+test("Task 9: session-expired recovery detects 401 and shows sign-in link", () => {
+  const source = readFileSync(componentUrl, "utf8")
+  // Component should detect 401 responses
+  assert.match(source, /response\.status === 401/)
+  // Session-expired state should be managed
+  assert.match(source, /sessionExpired|session-expired/)
+  // Exact session-expired message should be rendered
+  assert.match(source, /Your session has expired\. Sign in again to continue reviewing this BOQ\./)
+  // Sign in again link should be present
+  assert.match(source, /Sign in again/)
+  // Link should use safeReviewReturnPath
+  assert.match(source, /safeReviewReturnPath/)
+  // returnTo query parameter should be used
+  assert.match(source, /returnTo=/)
+  // 401 detection should happen before error parsing
+  assert.match(source, /response\.status === 401[\s\S]*?readError/)
+  // All mutation paths should check for 401: accept, reject, undo, skip
+  assert.match(source, /executeAction[\s\S]*?response\.status === 401/)
+  // AI review fetch should check for 401
+  assert.match(source, /runReview[\s\S]*?response\.status === 401/)
+  // Review snapshot GET should check for 401
+  assert.match(source, /fetch.*\/review[\s\S]*?response\.ok[\s\S]*?response\.status === 401/)
+  // add-source-item should check for 401
+  assert.match(source, /submitSourceBackedItem[\s\S]*?response\.status === 401/)
+  // accept-batch should check for 401
+  assert.match(source, /acceptAll[\s\S]*?response\.status === 401/)
 })

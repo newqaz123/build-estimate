@@ -232,6 +232,89 @@ test('durable snapshot preserves reason-specific source-row targeting', () => {
   assert.deepEqual(response.sourceRowIds, ['row-compound', 'row-ambiguous', 'row-unreconciled'])
 })
 
+test('durable human-review failure code is preserved instead of normalized to provider_failure', () => {
+  const selectedRun = {
+    ...run,
+    reviewTargeting: { candidateRowIds: ['row-1'], candidateCount: 1, unreconciled: false },
+    reconciliation: { itemTotal: 0, sourceTotal: 0, reconciled: true, difference: 0 },
+    sections: [],
+  }
+  const response = buildDurableExtractionReviewResponse({
+    imported: { boq, run: selectedRun },
+    sourceRows: rows,
+    stored: { proposals: [], proposalStatuses: {}, auditEvents: [], reviewRun: { status: 'failed', failureCode: 'human_review_required' } },
+  })
+  assert.equal(response.mode, 'fallback')
+  assert.equal(response.aiStatus, 'human_review_required')
+})
+
+test('durable partial mixed results keep human-review status and concise exception message', () => {
+  const selectedRun = {
+    ...run,
+    reviewTargeting: { candidateRowIds: ['row-1'], candidateCount: 1, unreconciled: false },
+    reconciliation: { itemTotal: 0, sourceTotal: 0, reconciled: true, difference: 0 },
+    sections: [],
+  }
+  const response = buildDurableExtractionReviewResponse({
+    imported: { boq, run: selectedRun },
+    sourceRows: rows,
+    stored: {
+      proposals: [{ id: 'human', operation: 'needs_human_review', sourceRowIds: ['row-1'] } as never],
+      proposalStatuses: {},
+      auditEvents: [],
+      reviewRun: { status: 'partial' },
+    },
+  })
+  assert.equal(response.mode, 'ai')
+  assert.equal(response.aiStatus, 'human_review_required')
+  assert.match(response.message, /retained cells do not prove/i)
+})
+
+test('fallback persistence keeps valid proposals alongside a second-call failure category', async () => {
+  let preserved: readonly { id?: string }[] = []
+  const pending = { id: 'valid-first', sourceRowIds: ['row-1'] } as never
+  const selectedRun = {
+    ...run,
+    reviewTargeting: { candidateRowIds: ['row-1'], candidateCount: 1, unreconciled: false },
+    reconciliation: { itemTotal: 0, sourceTotal: 0, reconciled: true, difference: 0 }, sections: [],
+  }
+  const response = await handler({
+    getReadyImport: async () => ({ boq, run: selectedRun }),
+    executeReview: async () => ({
+      status: 200,
+      body: {
+        mode: 'fallback',
+        aiStatus: 'timeout',
+        message: 'The provider timed out.',
+        sourceRowIds: ['row-1'],
+        remainingCandidateRowIds: [],
+        sourceRefs: [],
+        sourceRows: [],
+        proposals: [pending],
+        rejectedProposals: [],
+      },
+    } as never),
+    getReviewState: async () => ({
+      proposals: preserved as never,
+      proposalStatuses: {},
+      auditEvents: [],
+      reviewRun: { status: 'failed', failureCode: 'timeout' },
+    }),
+    failReviewLease: async (_boqId, _runId, _leaseId, failureCode, _retryDelayMs, proposals) => {
+      preserved = (proposals ?? []) as readonly { id?: string }[]
+      return { status: 'failed', failureCode }
+    },
+  })(new Request('https://example.test', { method: 'POST', body: JSON.stringify({ manual: false }) }), {
+    params: Promise.resolve({ id: 'boq-1', runId: 'run-1' }),
+  })
+
+  assert.equal(response.status, 200)
+  const body = await response.json() as { aiStatus: string; proposals: Array<{ id?: string }> }
+  assert.equal(body.aiStatus, 'timeout')
+  assert.deepEqual(body.proposals.map((proposal) => proposal.id), ['valid-first'])
+  assert.deepEqual(preserved.map((proposal) => proposal.id), ['valid-first'])
+})
+
 test('a completed review atomically refreshes every reviewed source row even when no proposal is returned', async () => {
   const selectedRun = {
     ...run,

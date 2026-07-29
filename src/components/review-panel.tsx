@@ -481,7 +481,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
                 }))
                 setCanonicalRevisionKey(buildCanonicalRevisionKey(updated))
               }}
-              onNavigateToPage={(page) => setPdfPageRequest((current) => ({ page, key: current.key + 1 }))}
+              onNavigateToEvidence={(focus) => setPdfPageRequest((current) => ({ page: focus.page, key: current.key + 1 }))}
             />
 
             <div className="review-items-heading">

@@ -4,6 +4,7 @@ import {
   extractionReviewOutcomeMessage,
   extractionReviewOutcomeTitle,
   proposalCanBeAccepted,
+  selectReviewTab,
   proposalIsHighConfidence,
   rejectionLabelGroups,
   selectExtractionReviewOutcome,
@@ -50,6 +51,22 @@ test('human-review suggestions are surfaced but cannot be accepted as automatic 
   assert.equal(proposalCanBeAccepted(proposal({ operation: 'keep' })), false)
   assert.equal(proposalCanBeAccepted(proposal({ operation: 'separate_components' })), false)
   assert.equal(proposalCanBeAccepted(proposal({ stale: true })), false)
+})
+
+test('review presenter exposes the two durable tabs without changing acceptance gates', () => {
+  const pending = proposal()
+  const accepted = proposal({ id: 'accepted' })
+  const review = { proposals: [pending, accepted] } as never
+  assert.deepEqual(selectReviewTab({ review, proposalStatuses: { accepted: 'accepted' } }, 'needs-review').proposalIds, ['proposal-1'])
+  assert.deepEqual(selectReviewTab({ review, proposalStatuses: { accepted: 'accepted' } }, 'history').proposalIds, ['accepted'])
+})
+
+test('review presenter exposes the two durable tabs without changing acceptance gates', () => {
+  const pending = proposal()
+  const accepted = proposal({ id: 'accepted' })
+  const review = { proposals: [pending, accepted] } as never
+  assert.deepEqual(selectReviewTab({ review, proposalStatuses: { accepted: 'accepted' } }, 'needs-review').proposalIds, ['proposal-1'])
+  assert.deepEqual(selectReviewTab({ review, proposalStatuses: { accepted: 'accepted' } }, 'history').proposalIds, ['accepted'])
 })
 
 test('source references remain compact and auditable in the review panel', () => {

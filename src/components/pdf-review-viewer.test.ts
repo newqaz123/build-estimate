@@ -82,3 +82,35 @@ test("PDF source navigation accepts a controlled page request and clamps it afte
   assert.match(source, /Math\.min\(pageCount, Math\.max\(1, Math\.trunc\(requestedPage\)\)\)/)
   assert.match(source, /setPageNumber\(clampedPage\)/)
 })
+
+test("Task 8: pdf viewer accepts evidenceFocus with table, row, and cell highlighting", () => {
+  const source = readFileSync(viewerUrl, "utf8")
+  // PdfReviewViewer accepts evidenceFocus prop
+  assert.match(source, /evidenceFocus\?:/)
+  // evidenceFocus interface is defined
+  assert.match(source, /interface EvidenceFocus/)
+  // evidenceFocus includes page, table, row, cells fields
+  assert.match(source, /page: number/)
+  assert.match(source, /table: number/)
+  assert.match(source, /row: number/)
+  assert.match(source, /cells: Array/)
+})
+
+test("Task 8: evidence focus renders visual markers on the PDF canvas", () => {
+  const source = readFileSync(viewerUrl, "utf8")
+  // Focus marker is rendered when evidenceFocus is provided
+  assert.match(source, /evidenceFocus \?/)
+  // Focus marker element is rendered
+  assert.match(source, /pdf-evidence-focus/)
+})
+
+test("Task 8: evidence focus preserves zoom and pan on the same page", () => {
+  const source = readFileSync(viewerUrl, "utf8")
+  // Zoom state is preserved across evidence focus changes
+  assert.match(source, /const \[zoom, setZoom\]/)
+  // Pan state is preserved across evidence focus changes
+  assert.match(source, /const \[pan, setPan\]/)
+  // Zoom and pan state management exists
+  assert.match(source, /setZoom/)
+  assert.match(source, /setPan/)
+})

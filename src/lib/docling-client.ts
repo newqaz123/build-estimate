@@ -88,11 +88,28 @@ async function documentRejectionMessage(response: Response): Promise<string | nu
   return null
 }
 
+export type DoclingParseOptions = {
+  pages: readonly number[]
+}
+
+function selectedPagesValue(options?: DoclingParseOptions): string | undefined {
+  if (!options) return undefined
+  if (
+    options.pages.length === 0
+    || options.pages.some((page) => !Number.isInteger(page) || page < 1)
+  ) {
+    throw new DoclingClientError('rejected', 'At least one valid PDF page must be selected')
+  }
+  return JSON.stringify([...new Set(options.pages)].sort((left, right) => left - right))
+}
+
 export async function parsePdfWithDocling(
   file: File,
   endpoint: string,
   signal?: AbortSignal,
+  options?: DoclingParseOptions,
 ): Promise<DoclingResult> {
+  const pages = selectedPagesValue(options)
   if (signal?.aborted) throw new DoclingClientError('cancelled', 'Request cancelled')
 
   const timeoutController = new AbortController()
@@ -102,6 +119,7 @@ export async function parsePdfWithDocling(
     : timeoutController.signal
   const body = new FormData()
   body.append('file', file, file.name)
+  if (pages !== undefined) body.append('pages', pages)
 
   try {
     const response = await fetch(buildDoclingParseUrl(endpoint), {

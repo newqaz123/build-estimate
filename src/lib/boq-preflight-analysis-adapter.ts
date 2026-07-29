@@ -47,8 +47,20 @@ export function createPreflightAnalysisAdapter(): PreflightAnalysisAdapter {
     async analyzePdf(file: File, signal?: AbortSignal): Promise<PreflightPageInput[]> {
       const bytes = await file.arrayBuffer()
 
-      // Dynamically import pdfjs-dist to avoid issues in environments where it's not available
-      const pdfjsLib = await import('pdfjs-dist')
+      // pdfjs-dist is a browser library; its main entry references DOMMatrix and
+      // is unusable in Node. pdfjs recommends the legacy build for server use.
+      const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs')
+
+      // In Node pdfjs disables its web worker and runs a "fake worker" on the
+      // main thread via `import(workerSrc)` (bundler-ignored, resolved at runtime).
+      // The default "./pdf.worker.mjs" is relative and breaks under Next's bundler,
+      // so point it at the installed worker file via an absolute file URL.
+      const { createRequire } = await import('node:module')
+      const { pathToFileURL } = await import('node:url')
+      const require = createRequire(import.meta.url)
+      pdfjsLib.GlobalWorkerOptions.workerSrc = pathToFileURL(
+        require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs'),
+      ).href
 
       // Load the PDF document
       const loadingTask = pdfjsLib.getDocument({

@@ -1,6 +1,9 @@
 import { isReviewActionableOperation, type ProposalOperation, type ProposalValidationFailureCode, type ProposalValidationSummary, type ValidatedProposal } from './boq-extraction-proposals'
 import type { ExtractionReviewResponse } from './boq-extraction-ai-review'
 
+export { selectReviewTab } from './boq-extraction-review-state'
+export type { ReviewTab } from './boq-extraction-review-state'
+
 type ReviewableProposal = Pick<ValidatedProposal, 'confidence'> & {
   operation: ProposalOperation
   evidenceValid: boolean

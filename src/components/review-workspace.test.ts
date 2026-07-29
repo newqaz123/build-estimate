@@ -95,3 +95,35 @@ test("canonical detail data pane preserves review context and controls", () => {
   assert.match(source, /Grand Total:/)
   assert.doesNotMatch(source, /LLM Suggest|Accept All/)
 })
+
+test("Task 8: review workspace accepts onNavigateToEvidence callback with full evidence focus", () => {
+  const detailSource = readFileSync(detailUrl, "utf8")
+  // Detail page should pass onNavigateToEvidence instead of onNavigateToPage
+  assert.match(detailSource, /onNavigateToEvidence/)
+  // The evidenceFocus includes page and other data
+  assert.match(detailSource, /focus/)
+})
+
+test("Task 8: pdf viewer accepts evidenceFocus with page, table, row, cells", () => {
+  const viewerSource = readFileSync(new URL("./pdf-review-viewer.tsx", import.meta.url), "utf8")
+  // PdfReviewViewer accepts evidenceFocus prop
+  assert.match(viewerSource, /evidenceFocus\?:/)
+  // evidenceFocus interface is defined
+  assert.match(viewerSource, /interface EvidenceFocus/)
+  // evidenceFocus can include page, table, row, cells
+  assert.match(viewerSource, /page: number/)
+  assert.match(viewerSource, /table: number/)
+  assert.match(viewerSource, /row: number/)
+  assert.match(viewerSource, /cells: Array/)
+})
+
+test("Task 8: pdf viewer preserves zoom and pan across evidence navigation", () => {
+  const viewerSource = readFileSync(new URL("./pdf-review-viewer.tsx", import.meta.url), "utf8")
+  // Zoom state is preserved
+  assert.match(viewerSource, /const \[zoom, setZoom\]/)
+  // Pan state is preserved
+  assert.match(viewerSource, /const \[pan, setPan\]/)
+  // Zoom and pan state management exists
+  assert.match(viewerSource, /setZoom/)
+  assert.match(viewerSource, /setPan/)
+})

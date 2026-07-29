@@ -15,7 +15,7 @@ const handler = createExtractionReviewHandler({
   getReviewState: (boqId, runId) => createFirestoreExtractionProposalStore(getDb()).getReviewState(boqId, runId),
   acquireReviewLease: (boqId, runId, requestKey, leaseId, ttl, force) => createFirestoreExtractionProposalStore(getDb()).acquireReviewLease(boqId, runId, requestKey, leaseId, ttl, force),
   completeReviewLease: (boqId, runId, leaseId, status, proposals, refreshedSourceRowIds, validationSummary) => createFirestoreExtractionProposalStore(getDb()).completeReviewLease(boqId, runId, leaseId, status, proposals, refreshedSourceRowIds, validationSummary),
-  failReviewLease: (boqId, runId, leaseId, failureCode, retryDelayMs) => createFirestoreExtractionProposalStore(getDb()).failReviewLease(boqId, runId, leaseId, failureCode, retryDelayMs),
+  failReviewLease: (boqId, runId, leaseId, failureCode, retryDelayMs, preservedProposals, refreshedSourceRowIds, validationSummary) => createFirestoreExtractionProposalStore(getDb()).failReviewLease(boqId, runId, leaseId, failureCode, retryDelayMs, preservedProposals, refreshedSourceRowIds, validationSummary),
   createLeaseId: () => crypto.randomUUID(),
   getSettings: () => getDocument<WorkspaceSettings>('settings', 'workspace'),
   callProvider: callLLM,
