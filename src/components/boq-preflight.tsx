@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ZoomIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { PreflightUpload } from "@/lib/boq-preflight-schema";
@@ -236,39 +237,43 @@ export function BoqPreflight({
 								)}
 							</button>
 
-							{isMagnified && magnifierStyle && (
-								<div
-									ref={magnifierRef}
-									role="img"
-									aria-label={`Magnified Page ${pageInfo.page}`}
-									className="preflight-magnifier"
-									style={{ left: magnifierStyle.left, top: magnifierStyle.top }}
-								>
-									{previewSrc ? (
-										// eslint-disable-next-line @next/next/no-img-element
-										<img
-											src={previewSrc}
-											alt={`Magnified preview of page ${pageInfo.page}`}
-											className="preflight-magnifier-image"
-										/>
-									) : (
-										<div className="preflight-magnifier-empty">
-											Preview unavailable for page {pageInfo.page}
-										</div>
-									)}
-									<div className="preflight-magnifier-info">
-										<span className="preflight-magnifier-icon">
-											<ZoomIn size={16} />
-										</span>
-										<span>Page {pageInfo.page}</span>
-										{pageInfo.suggested && (
-											<span className="preflight-magnifier-badge">
-												Suggested
-											</span>
+							{isMagnified &&
+								magnifierStyle &&
+								typeof document !== "undefined" &&
+								createPortal(
+									<div
+										ref={magnifierRef}
+										role="img"
+										aria-label={`Magnified Page ${pageInfo.page}`}
+										className="preflight-magnifier"
+										style={{ left: magnifierStyle.left, top: magnifierStyle.top }}
+									>
+										{previewSrc ? (
+											// eslint-disable-next-line @next/next/no-img-element
+											<img
+												src={previewSrc}
+												alt={`Magnified preview of page ${pageInfo.page}`}
+												className="preflight-magnifier-image"
+											/>
+										) : (
+											<div className="preflight-magnifier-empty">
+												Preview unavailable for page {pageInfo.page}
+											</div>
 										)}
-									</div>
-								</div>
-							)}
+										<div className="preflight-magnifier-info">
+											<span className="preflight-magnifier-icon">
+												<ZoomIn size={16} />
+											</span>
+											<span>Page {pageInfo.page}</span>
+											{pageInfo.suggested && (
+												<span className="preflight-magnifier-badge">
+													Suggested
+												</span>
+											)}
+										</div>
+									</div>,
+									document.body,
+								)}
 						</div>
 					);
 				})}

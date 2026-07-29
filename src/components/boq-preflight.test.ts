@@ -80,6 +80,35 @@ test.describe("BoqPreflight component", () => {
 		);
 	});
 
+	test("BoqPreflight body-portals the magnifier outside modal clipping ancestors", () => {
+		assert.match(
+			preflightSource,
+			/import\s*\{\s*createPortal\s*\}\s*from\s*"react-dom"/,
+		);
+		assert.match(
+			preflightSource,
+			/typeof document !== "undefined"[\s\S]*createPortal\([\s\S]*className="preflight-magnifier"[\s\S]*document\.body/,
+		);
+		assert.doesNotMatch(
+			preflightSource,
+			/\{isMagnified && magnifierStyle && \(\s*<div\s+ref=\{magnifierRef\}/,
+		);
+
+		// Accessibility and event ownership remain in BoqPreflight.
+		assert.match(preflightSource, /role="img"/);
+		assert.match(
+			preflightSource,
+			/aria-label=\{`Magnified Page \$\{pageInfo\.page\}`\}/,
+		);
+		assert.match(preflightSource, /onClick=\{\(\) => toggleSelection\(pageInfo\.page\)\}/);
+
+		const css = readFileSync(globalCssPath, "utf8");
+		assert.match(
+			css,
+			/\.preflight-magnifier\s*\{[^}]*pointer-events:\s*none/,
+		);
+	});
+
 	test("BoqPreflight disables extract button when no pages selected", () => {
 		assert.match(preflightSource, /selectedPages\.length === 0/);
 		assert.match(preflightSource, /Select at least one page to continue/);
