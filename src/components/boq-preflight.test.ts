@@ -33,7 +33,7 @@ test.describe("BoqPreflight component", () => {
 
 	test("BoqPreflight pre-selects suggested pages and allows toggle", () => {
 		assert.match(preflightSource, /useState/);
-		assert.match(preflightSource, /preflight\.pages\.filter/);
+		assert.match(preflightSource, /preflight\.pages\s*\.\s*filter/);
 		assert.match(preflightSource, /toggleSelection/);
 	});
 
