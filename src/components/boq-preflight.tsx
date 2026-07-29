@@ -65,8 +65,11 @@ export function BoqPreflight({
 	onExtract,
 	onCancel,
 }: BoqPreflightProps) {
-	const initialSuggested = preflight.pages.filter((p) => p.suggested).map((p) => p.page);
-	const [selectedPages, setSelectedPages] = useState<number[]>(initialSuggested);
+	const initialSuggested = preflight.pages
+		.filter((p) => p.suggested)
+		.map((p) => p.page);
+	const [selectedPages, setSelectedPages] =
+		useState<number[]>(initialSuggested);
 	const [magnifiedPage, setMagnifiedPage] = useState<number | null>(null);
 	const [magnifierPos, setMagnifierPos] = useState<Point | null>(null);
 	const [popupSize, setPopupSize] = useState(FALLBACK_POPUP_SIZE);
@@ -246,7 +249,10 @@ export function BoqPreflight({
 										role="img"
 										aria-label={`Magnified Page ${pageInfo.page}`}
 										className="preflight-magnifier"
-										style={{ left: magnifierStyle.left, top: magnifierStyle.top }}
+										style={{
+											left: magnifierStyle.left,
+											top: magnifierStyle.top,
+										}}
 									>
 										{previewSrc ? (
 											// eslint-disable-next-line @next/next/no-img-element

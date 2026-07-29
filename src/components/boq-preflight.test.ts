@@ -58,10 +58,7 @@ test.describe("BoqPreflight component", () => {
 		// Focus without a prior mouse move still shows the magnifier.
 		assert.match(preflightSource, /getBoundingClientRect/);
 		// Uses the measured pure placement helper, not inline midpoint guesses.
-		assert.match(
-			preflightSource,
-			/computeMagnifierPlacement/,
-		);
+		assert.match(preflightSource, /computeMagnifierPlacement/);
 		assert.match(preflightSource, /preflight-magnifier-position/);
 		// Magnifier content still present.
 		assert.match(preflightSource, /preflight-magnifier/);
@@ -71,9 +68,18 @@ test.describe("BoqPreflight component", () => {
 		// CSS: viewport-anchored (fixed), not centered, no transform.
 		const css = readFileSync(globalCssPath, "utf8");
 		assert.match(css, /\.preflight-magnifier\s*\{[^}]*position:\s*fixed/);
-		assert.match(css, /\.preflight-magnifier\s*\{[^}]*max-width:\s*calc\(100vw - 16px\)/);
-		assert.match(css, /\.preflight-magnifier\s*\{[^}]*max-height:\s*calc\(100vh - 16px\)/);
-		assert.match(css, /\.preflight-magnifier-image\s*\{[^}]*object-fit:\s*contain/);
+		assert.match(
+			css,
+			/\.preflight-magnifier\s*\{[^}]*max-width:\s*calc\(100vw - 16px\)/,
+		);
+		assert.match(
+			css,
+			/\.preflight-magnifier\s*\{[^}]*max-height:\s*calc\(100vh - 16px\)/,
+		);
+		assert.match(
+			css,
+			/\.preflight-magnifier-image\s*\{[^}]*object-fit:\s*contain/,
+		);
 		assert.doesNotMatch(
 			css,
 			/\.preflight-magnifier\s*\{[^}]*transform:\s*translate/,
@@ -100,13 +106,13 @@ test.describe("BoqPreflight component", () => {
 			preflightSource,
 			/aria-label=\{`Magnified Page \$\{pageInfo\.page\}`\}/,
 		);
-		assert.match(preflightSource, /onClick=\{\(\) => toggleSelection\(pageInfo\.page\)\}/);
+		assert.match(
+			preflightSource,
+			/onClick=\{\(\) => toggleSelection\(pageInfo\.page\)\}/,
+		);
 
 		const css = readFileSync(globalCssPath, "utf8");
-		assert.match(
-			css,
-			/\.preflight-magnifier\s*\{[^}]*pointer-events:\s*none/,
-		);
+		assert.match(css, /\.preflight-magnifier\s*\{[^}]*pointer-events:\s*none/);
 	});
 
 	test("BoqPreflight disables extract button when no pages selected", () => {
