@@ -207,16 +207,28 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
     if (sectionIndex < 0) return false
     setCatalogBusyIndex(itemIndex)
     setSaveError(null)
+    const trimmedReason = reason.trim()
     try {
       const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/items`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sectionIndex, items: [{ ...getBoqItemRequestIdentity(item), stdStatus: "excluded", stdExclusionReason: reason.trim() }] }),
+        body: JSON.stringify({
+          sectionIndex,
+          items: [{
+            ...getBoqItemRequestIdentity(item),
+            stdStatus: "excluded",
+            ...(trimmedReason ? { stdExclusionReason: trimmedReason } : {}),
+          }],
+        }),
       })
       if (!response.ok) throw new Error(await readError(response, "The item could not be excluded."))
       setItems((current) => current.map((candidate, index) => {
         if (index !== itemIndex) return candidate
-        const next = { ...candidate, stdStatus: "excluded" as const, stdExclusionReason: reason.trim() }
+        const next = {
+          ...candidate,
+          stdStatus: "excluded" as const,
+          stdExclusionReason: trimmedReason || undefined,
+        }
         delete next.stdId
         delete next.stdMatch
         delete next.stdConfidence
@@ -550,7 +562,7 @@ export function ReviewPanel({ boq, onClose, onApproved, primaryActionLabel = "Ap
                 <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">
                   <div className="h-full bg-accent transition-[width]" style={{ width: `${catalogReadiness.total ? (catalogReadiness.resolved / catalogReadiness.total) * 100 : 100}%` }} />
                 </div>
-                <p className="mt-2 text-xs text-muted-foreground">Match an existing item, create a catalog entry, or exclude a one-off line with a reason before approval.</p>
+                <p className="mt-2 text-xs text-muted-foreground">Match an existing item, create a catalog entry, or exclude a one-off line (reason optional) before approval.</p>
               </div>
             ) : null}
 

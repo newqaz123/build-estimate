@@ -240,8 +240,8 @@ export function StandardizationReview({ items, onItemsChange, onMatchRequest, on
                   </div>
                   {excludeIndex === idx && onExcludeRequest ? (
                     <div className="mt-2 flex items-center gap-2 border-t border-border pt-2">
-                      <Input value={excludeReason} onChange={(event) => setExcludeReason(event.target.value)} placeholder="Reason this line should not use catalog pricing" aria-label={`Exclusion reason for ${item.desc}`} className="h-8" autoFocus />
-                      <Button type="button" size="sm" onClick={async () => { if (await onExcludeRequest(item, idx, excludeReason)) { setExcludeIndex(null); setExcludeReason("") } }} disabled={busy || !excludeReason.trim()}>
+                      <Input value={excludeReason} onChange={(event) => setExcludeReason(event.target.value)} placeholder="Optional — reason this line should not use catalog pricing" aria-label={`Exclusion reason for ${item.desc}`} className="h-8" autoFocus />
+                      <Button type="button" size="sm" onClick={async () => { if (await onExcludeRequest(item, idx, excludeReason)) { setExcludeIndex(null); setExcludeReason("") } }} disabled={busy}>
                         {busy ? <Loader2 className="animate-spin" /> : null} Confirm
                       </Button>
                       <Button type="button" size="sm" variant="ghost" onClick={() => setExcludeIndex(null)} disabled={busy}>Cancel</Button>
