@@ -98,3 +98,18 @@ test('invalidates stale add operations before they can update selection or state
     /if \(addOperationGenerationRef\.current !== operationGeneration\) return\s+selectUnit\(canonical\)/,
   )
 })
+
+test('routes both selection paths through selectUnit rather than direct onChange', () => {
+  // Browse selection from the Base UI listbox handler must go through selectUnit
+  // so it invalidates any in-flight add operation before applying the selection.
+  assert.match(
+    source,
+    /onValueChange=\{\(unit\) => \{\s+if \(!unit\) return\s+selectUnit\(unit\)/,
+  )
+  // The existing-canonical branch inside commitAdd must go through selectUnit
+  // instead of calling onChange directly.
+  assert.match(
+    source,
+    /if \(existingUnit\) \{\s+selectUnit\(existingUnit\)\s+return/,
+  )
+})
