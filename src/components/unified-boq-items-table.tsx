@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { Trash2 } from "lucide-react"
+import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { InlineCatalogCell } from "@/components/inline-catalog-cell"
@@ -237,20 +238,21 @@ export function UnifiedBoqItemsTable({
 
   return (
     <div className="unified-boq-table-scroll">
-      <table className="unified-boq-items-table" data-od-id="review-items-table">
-        <thead>
-          <tr>
-            <th>Description</th>
-            <th>Unit</th>
-            <th className="num-col">Qty</th>
-            <th className="num-col">Rate</th>
-            <th className="num-col">Material</th>
-            <th className="num-col">Labour</th>
-            <th className="num-col">Total</th>
-            <th>Catalog</th>
-            <th aria-label="Actions" />
-          </tr>
-        </thead>
+      <TooltipPrimitive.Provider delay={350}>
+        <table className="unified-boq-items-table" data-od-id="review-items-table">
+          <thead>
+            <tr>
+              <th>Description</th>
+              <th>Unit</th>
+              <th className="num-col">Qty</th>
+              <th className="num-col">Rate</th>
+              <th className="num-col">Material</th>
+              <th className="num-col">Labour</th>
+              <th className="num-col">Total</th>
+              <th>Catalog</th>
+              <th aria-label="Actions" className="unified-boq-action-rail" />
+            </tr>
+          </thead>
         <tbody>
           {sections.map((section, sectionIndex) => (
             <FragmentSection
@@ -276,9 +278,10 @@ export function UnifiedBoqItemsTable({
               workspaceUnitsError={workspaceUnitsError}
               onAddUnit={onAddUnit}
             />
-          ))}
-        </tbody>
-      </table>
+            ))}
+          </tbody>
+        </table>
+      </TooltipPrimitive.Provider>
     </div>
   )
 }
@@ -330,7 +333,7 @@ function FragmentSection({
               <td colSpan={5} className="unified-boq-informational-placeholder" data-label="Pricing">—</td>
               <td className="num-col unified-boq-total" data-label="Total">Included</td>
               <td className="unified-boq-catalog-cell" data-label="Catalog"><span className="inline-catalog-status">Informational</span></td>
-              <td className="unified-boq-row-actions" data-label="Actions" aria-hidden="true" />
+              <td className="unified-boq-action-rail" data-label="Actions" aria-hidden="true" />
             </tr>
           )
         }
@@ -475,18 +478,32 @@ function FragmentSection({
                 onClearError={onClearCatalogError}
               />
             </td>
-            <td className="unified-boq-row-actions" data-label="Actions">
+            <td className="unified-boq-action-rail unified-boq-row-actions" data-label="Actions">
               {!readOnly ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Delete row ${rowNumber}`}
-                  disabled={editingLocked}
-                  onClick={() => onDelete?.(row)}
-                >
-                  <Trash2 className="size-4" aria-hidden="true" />
-                </Button>
+                <TooltipPrimitive.Root>
+                  <TooltipPrimitive.Trigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="unified-boq-delete-button"
+                        disabled={editingLocked}
+                        aria-label={`Delete item: ${row.item.desc}`}
+                        onClick={() => onDelete?.(row)}
+                      />
+                    }
+                  >
+                    <Trash2 className="size-4" aria-hidden="true" />
+                  </TooltipPrimitive.Trigger>
+                  <TooltipPrimitive.Portal>
+                    <TooltipPrimitive.Positioner side="left" sideOffset={6}>
+                      <TooltipPrimitive.Popup className="boq-row-action-tooltip">
+                        Delete item
+                      </TooltipPrimitive.Popup>
+                    </TooltipPrimitive.Positioner>
+                  </TooltipPrimitive.Portal>
+                </TooltipPrimitive.Root>
               ) : null}
             </td>
           </tr>

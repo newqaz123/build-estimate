@@ -51,3 +51,20 @@ test('coordinates overlapping mutations before force-applying a refresh', () => 
   assert.match(source, /canonicalRefreshRef/)
   assert.match(source, /refreshWasOvertaken/)
 })
+
+test('stashes only the deleted row draft and serializes final commits', () => {
+  assert.match(source, /takeBoqDetailDraft/)
+  assert.match(source, /restoreBoqDetailDraft/)
+  assert.match(source, /createSerialTaskQueue/)
+  assert.match(source, /resolveBoqItemIdentityKey/)
+  assert.doesNotMatch(source, /Save pending changes before deleting an item/)
+  assert.doesNotMatch(source, /pending\.sectionIndex === row\.sectionIndex/)
+})
+
+test('keeps the idempotent six-second Sonner finalizer', () => {
+  assert.match(source, /duration:\s*6000/)
+  assert.match(source, /label:\s*"Undo"/)
+  assert.match(source, /onAutoClose:\s*finalize/)
+  assert.match(source, /onDismiss:\s*finalize/)
+  assert.match(source, /if \(undone \|\| committed\) return/)
+})

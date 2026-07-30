@@ -333,7 +333,7 @@ test('a missing item identity disables persistent controls and renders a visible
   assert.match(html, /no persistent item identity/)
   const description = html.match(/<input[^>]*aria-label="Description for Anonymous item, row 1"/)?.[0] ?? ''
   assert.match(description, /\sdisabled=""/)
-  const deleteButton = html.match(/<button[^>]*aria-label="Delete row 1"[^>]*>/)?.[0] ?? ''
+  const deleteButton = html.match(/<button[^>]*aria-label="Delete item: Anonymous item"[^>]*>/)?.[0] ?? ''
   assert.match(deleteButton, /disabled=""/)
 })
 
@@ -393,10 +393,19 @@ test('informational bundle children remain on the non-editable placeholder path'
 test('renders a hover-revealed delete action on each priced row when editable', () => {
   const html = renderTable([{ header: 'Valves', items: [item()] }])
   assert.match(html, /unified-boq-row-actions/)
-  assert.match(html, /aria-label="Delete row 1"/)
+  assert.match(html, /aria-label="Delete item: Valve installation"/)
 })
 
 test('omits the delete action when readOnly', () => {
   const html = renderTable([{ header: 'Valves', items: [item()] }], { readOnly: true })
   assert.doesNotMatch(html, /Delete row/)
+})
+
+test('renders a sticky 40px delete rail without dropping columns', () => {
+  assert.match(tableSource, /unified-boq-action-rail/)
+  assert.match(globalsSource, /\.unified-boq-action-rail[^}]*position:\s*sticky/)
+  assert.match(globalsSource, /\.unified-boq-action-rail[^}]*right:\s*0/)
+  assert.match(globalsSource, /width:\s*40px/)
+  assert.match(globalsSource, /@media \(hover:\s*none\)/)
+  assert.match(globalsSource, /pointer:\s*coarse/)
 })

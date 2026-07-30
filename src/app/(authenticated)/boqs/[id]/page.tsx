@@ -52,17 +52,20 @@ import {
   compareBoqUpdatedAt,
   reconcileBoqMutation,
   resolveBoqDetailEdits,
+  restoreBoqDetailDraft,
+  takeBoqDetailDraft,
   type BoqDetailEdits,
 } from "@/lib/boq-detail-state"
-import { getBoqItemIdentityKey, getBoqItemRequestIdentity } from "@/lib/boq-item-identity"
+import { getBoqItemIdentityKey, getBoqItemRequestIdentity, resolveBoqItemIdentityKey } from "@/lib/boq-item-identity"
 import { calculateBoqTotals, isPricedBoqItem, parseNonNegativeBoqEditValue } from "@/lib/boq-pricing"
 import { boqDetailHref, isBoqReviewMode } from "@/lib/boq-review-route"
 import { buildCanonicalRevisionKey, buildReviewVerification } from "@/lib/boq-review-state"
-import type { Boq, BoqItem, BoqPricedItem, WorkType } from "@/lib/boq-schema"
+import type { Boq, BoqItem, WorkType } from "@/lib/boq-schema"
 import {
   buildUnifiedBoqSections,
   type UnifiedBoqPricedRow,
 } from "@/lib/boq-unified-rows"
+import { createSerialTaskQueue } from "@/lib/serial-task-queue"
 import { combineUnitOptions } from "@/lib/units"
 import { addWorkspaceUnit, loadWorkspaceCustomUnits } from "@/lib/workspace-units-client"
 
@@ -180,7 +183,7 @@ function BoqDetailContent() {
   return <CanonicalBoqWorkspace key={boq.id} boq={boq} onBoqChange={setBoq} />
 }
 
-type StashedDelete = { sectionIndex: number; itemIndex: number; item: BoqPricedItem }
+type StashedDelete = { identityKey: string; draft?: BoqDetailEdits[string] }
 
 function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (next: Boq) => void }) {
   const [edits, setEdits] = useState<EditsMap>({})
@@ -327,34 +330,51 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   // sync with the latest published canonical state.
   void activeCanonicalMutations
 
+  const deleteQueueRef = useRef(createSerialTaskQueue())
   const commitDeleteRef = useRef<(stash: StashedDelete) => Promise<void>>(async () => {})
   useEffect(() => {
     commitDeleteRef.current = async (stash) => {
       try {
-        await runCanonicalMutation(async () => {
-          const response = await fetch(`/api/boqs/${encodeURIComponent(boqRef.current.id)}/items`, {
+        // Resolve the latest canonical location by identity at commit time so
+        // earlier section/item indices never target a different row.
+        const resolution = resolveBoqItemIdentityKey(
+          boqRef.current.sections,
+          stash.identityKey,
+        )
+        if (resolution.status !== "found") {
+          throw new Error("The item no longer has a unique location in this BOQ.")
+        }
+        const response = await fetch(
+          `/api/boqs/${encodeURIComponent(boqRef.current.id)}/items`,
+          {
             method: "DELETE",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ sectionIndex: stash.sectionIndex, ...getBoqItemRequestIdentity(stash.item) }),
-          })
-          if (!response.ok) throw new Error(await readError(response, "The item could not be deleted."))
-          applyMutationBoq(await response.json() as Boq)
-          const identityKey = getBoqItemIdentityKey(stash.item)
-          if (identityKey && editsRef.current[identityKey]) {
-            const nextEdits = { ...editsRef.current }
-            delete nextEdits[identityKey]
-            replaceEdits(nextEdits)
-          }
-        })
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : "The item could not be deleted.")
-      } finally {
+            body: JSON.stringify({
+              sectionIndex: resolution.location.sectionIndex,
+              ...getBoqItemRequestIdentity(resolution.location.item),
+            }),
+          },
+        )
+        if (!response.ok) throw new Error(await readError(response, "The item could not be deleted."))
+        // Apply the returned BOQ through stable reconciliation. Unrelated drafts
+        // are preserved; the stashed draft is intentionally discarded.
+        applyMutationBoq(await response.json() as Boq)
+        // Success: the canonical row is gone. Drop the optimistic stash so
+        // pendingDeletes stays accurate.
         setPendingDeletes((prev) => prev.filter(
-          (pending) => !(pending.sectionIndex === stash.sectionIndex && pending.itemIndex === stash.itemIndex),
+          (pending) => pending.identityKey !== stash.identityKey,
         ))
+      } catch (error) {
+        // Failure (identity lost or server error): restore the exact row draft
+        // and reveal the canonical row again. Unrelated drafts stay intact.
+        replaceEdits(restoreBoqDetailDraft(editsRef.current, stash.identityKey, stash.draft))
+        setPendingDeletes((prev) => prev.filter(
+          (pending) => pending.identityKey !== stash.identityKey,
+        ))
+        toast.error(error instanceof Error ? error.message : "The item could not be deleted.")
       }
     }
-  }, [applyMutationBoq, replaceEdits, runCanonicalMutation])
+  }, [applyMutationBoq, replaceEdits])
 
   const displayedItems = useMemo(
     () => applyBoqDetailEdits(boq, edits),
@@ -369,11 +389,10 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   const allUnifiedSections = useMemo(() => {
     const built = buildUnifiedBoqSections(displayBoq.sections)
     if (pendingDeletes.length === 0) return built
+    const hiddenIdentities = new Set(pendingDeletes.map((pending) => pending.identityKey))
     return built.map((section) => ({
       ...section,
-      rows: section.rows.filter((row) => !pendingDeletes.some(
-        (pending) => pending.sectionIndex === row.sectionIndex && pending.itemIndex === row.itemIndex,
-      )),
+      rows: section.rows.filter((row) => !(row.identityKey && hiddenIdentities.has(row.identityKey))),
     }))
   }, [displayBoq.sections, pendingDeletes])
   const unifiedSections = useMemo(() => {
@@ -514,15 +533,23 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
 
   const handleDelete = useCallback((row: UnifiedBoqPricedRow) => {
     if (isReadOnly || approving || approvalBarrierRef.current) return
-    const stash: StashedDelete = { sectionIndex: row.sectionIndex, itemIndex: row.itemIndex, item: row.item }
+    const identityKey = row.identityKey ?? getBoqItemIdentityKey(row.item)
+    if (!identityKey || row.identityIssue) return
+    // Stash only the deleted row's draft so it can be restored verbatim on Undo
+    // or a failed commit. Unrelated drafts are never touched.
+    const { edits: remainingEdits, draft } = takeBoqDetailDraft(editsRef.current, identityKey)
+    replaceEdits(remainingEdits)
+    const stash: StashedDelete = { identityKey, draft }
     setPendingDeletes((prev) => [...prev, stash])
-    const toastId = `delete-${row.key}`
+    const toastId = `delete-${identityKey}`
     let undone = false
     let committed = false
     const finalize = () => {
       if (undone || committed) return
       committed = true
-      void commitDeleteRef.current(stash)
+      void deleteQueueRef.current
+        .enqueue(() => runCanonicalMutation(() => commitDeleteRef.current(stash)))
+        .catch(() => undefined)
     }
     toast("Line item deleted", {
       id: toastId,
@@ -532,15 +559,16 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
         onClick: () => {
           undone = true
           setPendingDeletes((prev) => prev.filter(
-            (pending) => !(pending.sectionIndex === stash.sectionIndex && pending.itemIndex === stash.itemIndex),
+            (pending) => pending.identityKey !== stash.identityKey,
           ))
+          replaceEdits(restoreBoqDetailDraft(editsRef.current, stash.identityKey, stash.draft))
           toast.dismiss(toastId)
         },
       },
       onAutoClose: finalize,
       onDismiss: finalize,
     })
-  }, [isReadOnly, approving])
+  }, [isReadOnly, approving, replaceEdits, runCanonicalMutation])
 
   const handleMetadataChange = useCallback((field: MetadataField, value: string) => {
     if (isReadOnly || saving || approving || approvalBarrierRef.current) return
