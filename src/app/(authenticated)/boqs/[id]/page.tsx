@@ -37,6 +37,15 @@ import { UnifiedBoqItemsTable } from "@/components/unified-boq-items-table"
 import { useInlineCatalogMatching } from "@/components/use-inline-catalog-matching"
 import { Button } from "@/components/ui/button"
 import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -208,6 +217,8 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   const canonicalRefreshNeededRef = useRef(false)
   const canonicalRefreshRef = useRef<Promise<void> | null>(null)
   const approvalBarrierRef = useRef(false)
+  const [approveWarningOpen, setApproveWarningOpen] = useState(false)
+  const approveCancelRef = useRef<HTMLButtonElement>(null)
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("items")
   const [pdfEvidenceFocus, setPdfEvidenceFocus] = useState<{ page: number; key: number }>({ page: 1, key: 0 })
   const [invalidDraftKeys, setInvalidDraftKeys] = useState<Set<string>>(new Set())
@@ -597,7 +608,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   }, [])
 
   const handleSaveAll = async () => {
-    if (isReadOnly || saving || approving) return
+    if (isReadOnly || saving || approving || approvalBarrierRef.current) return
     if (invalidDraftRef.current.size > 0) {
       toast.error("Component costs contain invalid drafts. Fix them before saving.")
       return
@@ -671,12 +682,38 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
     }
   }
 
-  const handleApprove = async () => {
-    if (isReadOnly || approving || approvalBarrierRef.current) return
-    if (invalidDraftRef.current.size > 0) return void toast.error("Component costs contain invalid drafts. Fix them before approving.")
-    if (pendingChanges > 0) return void toast.error("Save pending changes before approving")
-    if (verification.hasBlockingIssues) return void toast.error("Resolve the review blockers before approving")
-    if (requireCatalogReadiness && catalogReadiness.blocking > 0) return void toast.error("Resolve catalog matching before approving")
+  // Approval of the saved version is gated only by `approvalBlockedReason`,
+  // which never considers local drafts (pendingChanges) or invalid component
+  // drafts — those are discarded by approving the version that is already
+  // saved. Saved-state blockers (verification/catalog), in-flight canonical
+  // mutations, pending deletes, and other actions still block approval.
+  const approvalBlockedReason = (): string | undefined => {
+    if (isReadOnly) return "This BOQ is approved and read only."
+    if (approving) return "Approval is already in progress."
+    if (saving) return "Save is in progress. Wait for it to finish before approving the saved version."
+    if (addingItem) return "Adding a missing item is in progress."
+    if (deletingBoq) return "A deletion is in progress."
+    if (pendingDeletes.length > 0) return "Commit or undo the pending item deletion before approving."
+    if (includingItemKeys.size > 0) return "Including an optional item is in progress."
+    if (catalogModalBusy) return "Catalog matching is in progress."
+    if (excludeBusy) return "Excluding an item is in progress."
+    if (activeCanonicalMutations > 0) return "Another change is still syncing. Wait for it to settle before approving the saved version."
+    if (verification.hasBlockingIssues) return "Resolve the review blockers before approving."
+    if (requireCatalogReadiness && catalogReadiness.blocking > 0) return "Resolve catalog matching before approving."
+    return undefined
+  }
+
+  const approveSavedVersion = async () => {
+    // Re-check blockers at execute time: the warning may have been open for a
+    // while and the canonical state could have shifted underneath us.
+    const blockedReason = approvalBlockedReason()
+    if (blockedReason) {
+      toast.error(blockedReason)
+      return
+    }
+    setApproveWarningOpen(false)
+    // Raise the synchronous barrier before publishing the approving state so no
+    // draft/canonical handler can race the approval PUT during the render gap.
     approvalBarrierRef.current = true
     setApproving(true)
     try {
@@ -688,6 +725,14 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
         })
         if (!response.ok) throw new Error(await readError(response, "Failed to approve BOQ"))
         applyMutationBoq(await response.json() as Boq, { force: true })
+        // Only after the protected saved version has been force-applied do we
+        // discard the local drafts (item edits, metadata edits, invalid
+        // component drafts). A failure above throws before reaching here, so
+        // every draft survives verbatim for a retry.
+        replaceEdits({})
+        replaceMetadataEdits({})
+        invalidDraftRef.current = new Set()
+        setInvalidDraftKeys(new Set())
         toast.success("BOQ approved and linked to the Standard Catalog")
       })
     } catch (error) {
@@ -696,6 +741,21 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
       approvalBarrierRef.current = false
       setApproving(false)
     }
+  }
+
+  const requestApproval = () => {
+    const blockedReason = approvalBlockedReason()
+    if (blockedReason) {
+      toast.error(blockedReason)
+      return
+    }
+    // Drafts exist: confirm before approving the saved version and discarding
+    // them. With no drafts, approve the saved version directly.
+    if (pendingChanges > 0) {
+      setApproveWarningOpen(true)
+      return
+    }
+    void approveSavedVersion()
   }
 
   const reloadAfterManualMatch = async (_standardId: string, standardDescription: string) => {
@@ -813,10 +873,11 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
             ) : null}
             {!isReadOnly ? (
               <>
+                {pendingChanges > 0 ? <span className="boq-unsaved-status" role="status">Unsaved changes</span> : null}
                 <Button type="button" variant="outline" size="sm" onClick={() => void handleSaveAll()} disabled={saving || approving || invalidDraftKeys.size > 0}>
                   {saving ? <Loader2 className="animate-spin" /> : <Save aria-hidden="true" />}Save draft
                 </Button>
-                <Button type="button" size="sm" onClick={() => void handleApprove()} disabled={approving || invalidDraftKeys.size > 0 || pendingChanges > 0 || verification.hasBlockingIssues || (requireCatalogReadiness && catalogReadiness.blocking > 0)}>
+                <Button type="button" size="sm" onClick={requestApproval} disabled={Boolean(approvalBlockedReason())}>
                   {approving ? <Loader2 className="animate-spin" /> : <Check aria-hidden="true" />}Approve BOQ
                 </Button>
               </>
@@ -955,6 +1016,19 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={approveWarningOpen} onOpenChange={(open) => { if (!open) setApproveWarningOpen(false) }}>
+        <AlertDialogContent initialFocus={approveCancelRef} showCloseButton={false}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Approve saved version?</AlertDialogTitle>
+            <AlertDialogDescription>{pendingChanges} unsaved change(s) will not be included and will be discarded.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose ref={approveCancelRef} render={<Button type="button" variant="outline" />}>Cancel</AlertDialogClose>
+            <Button type="button" onClick={() => void approveSavedVersion()} disabled={approving}>{approving ? <Loader2 className="animate-spin" /> : null}Approve saved version</Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
     </div>
   )

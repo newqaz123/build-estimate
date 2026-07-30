@@ -68,3 +68,41 @@ test('keeps the idempotent six-second Sonner finalizer', () => {
   assert.match(source, /onDismiss:\s*finalize/)
   assert.match(source, /if \(undone \|\| committed\) return/)
 })
+
+test('approves the saved version explicitly and warns before discarding drafts', () => {
+  // Explicit approve-the-saved-version flow with a confirm warning dialog.
+  assert.match(source, /approveWarningOpen/)
+  assert.match(source, /approveCancelRef/)
+  assert.match(source, /requestApproval/)
+  assert.match(source, /approveSavedVersion/)
+  assert.match(source, /approvalBlockedReason/)
+
+  // Warning dialog title, exact copy, and Cancel/Approve saved version actions.
+  assert.match(source, /Approve saved version\?/)
+  assert.match(source, /unsaved change\(s\) will not be included and will be discarded/)
+  assert.match(source, /Approve saved version</)
+  assert.match(source, /Cancel</)
+
+  // Amber "Unsaved changes" status beside the Save action.
+  assert.match(source, /Unsaved changes/)
+
+  // The Approve request runs the explicit saved-version approval and is gated
+  // only by approvalBlockedReason — not by local drafts or invalid draft keys.
+  assert.match(source, /onClick=\{requestApproval\}/)
+  assert.match(source, /disabled=\{Boolean\(approvalBlockedReason\(\)\)\}/)
+  assert.doesNotMatch(source, /handleApprove/)
+
+  // The approval PUT sends only the saved status and force-applies the response.
+  assert.match(source, /JSON\.stringify\(\{ status: "approved" \}\)/)
+  assert.match(source, /force: true/)
+
+  // The synchronous approval barrier is raised before the approving state.
+  assert.match(source, /approvalBarrierRef\.current = true[\s\S]*?setApproving\(true\)/)
+
+  // Drafts (item edits, metadata edits, invalid component drafts) clear only
+  // inside the approve success path; a failure preserves them verbatim.
+  const approveFlow = source.slice(source.indexOf('approveSavedVersion'))
+  assert.match(approveFlow, /replaceEdits\(\{\}\)/)
+  assert.match(approveFlow, /replaceMetadataEdits\(\{\}\)/)
+  assert.match(approveFlow, /setInvalidDraftKeys\(new Set\(\)\)/)
+})
