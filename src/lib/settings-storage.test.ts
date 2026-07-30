@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { decodeNormalizeRules } from './settings-storage'
+import {
+  DEFAULT_SETTINGS,
+  decodeNormalizeRules,
+  fromStoredSettings,
+  toStoredSettings,
+} from './settings-storage'
 
 const defaults: [string, string][] = [['default', 'replacement']]
 
@@ -31,4 +36,30 @@ test('uses safe defaults when storage contains no valid rules', () => {
 
 test('preserves an intentionally empty stored rules list', () => {
   assert.deepEqual(decodeNormalizeRules([], defaults), [])
+})
+
+test('older workspace settings default to an empty custom-unit list', () => {
+  const decoded = fromStoredSettings({
+    llm: DEFAULT_SETTINGS.llm,
+    docling: DEFAULT_SETTINGS.docling,
+    fuzzy: {
+      unitMap: {},
+      normalizeRules: [],
+    },
+    prompts: DEFAULT_SETTINGS.prompts,
+  })
+
+  assert.deepEqual(decoded.units, { customUnits: [] })
+})
+
+test('stored custom units are sanitized without changing their first casing or order', () => {
+  const decoded = fromStoredSettings({
+    units: { customUnits: [' Bag ', 'bag', 'drum', 'bad\u0000unit'] },
+  })
+
+  assert.deepEqual(decoded.units.customUnits, ['Bag', 'drum'])
+  assert.deepEqual(
+    toStoredSettings(decoded).units,
+    { customUnits: ['Bag', 'drum'] },
+  )
 })

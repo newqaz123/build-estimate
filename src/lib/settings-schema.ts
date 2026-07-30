@@ -19,6 +19,10 @@ export interface PromptSettings {
   estimatePrompt: string
 }
 
+export interface UnitSettings {
+  customUnits: string[]
+}
+
 export interface Vendor {
   id: string
   name: string
@@ -35,4 +39,5 @@ export interface WorkspaceSettings {
   docling: DoclingSettings
   fuzzy: FuzzySettings
   prompts: PromptSettings
+  units: UnitSettings
 }
