@@ -1,4 +1,4 @@
-import type { BoqItem } from './boq-schema'
+import type { BoqItem, BoqSection } from './boq-schema'
 
 export interface BoqItemRequestIdentity {
   itemId?: string
@@ -12,6 +12,17 @@ export type BoqItemIdentity =
 export type BoqItemIdentityResolution =
   | { status: 'found'; index: number }
   | { status: 'missing' | 'not-found' | 'ambiguous' }
+
+export interface BoqItemLocation {
+  identityKey: string
+  sectionIndex: number
+  itemIndex: number
+  item: BoqItem
+}
+
+export type BoqItemLocationResolution =
+  | { status: 'found'; location: BoqItemLocation }
+  | { status: 'not-found' | 'ambiguous' }
 
 function cleanIdentity(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
@@ -69,4 +80,31 @@ export function resolveBoqItemIdentity(
   if (matches.length === 0) return { status: 'not-found' }
   if (matches.length > 1) return { status: 'ambiguous' }
   return { status: 'found', index: matches[0]! }
+}
+
+export function resolveBoqItemIdentityKey(
+  sections: BoqSection[],
+  identityKey: string,
+): BoqItemLocationResolution {
+  const matches: Array<{ sectionIndex: number; itemIndex: number; item: BoqItem }> = []
+  sections.forEach((section, sectionIndex) => {
+    section.items.forEach((item, itemIndex) => {
+      if (getBoqItemIdentityKey(item) === identityKey) {
+        matches.push({ sectionIndex, itemIndex, item })
+      }
+    })
+  })
+
+  if (matches.length === 0) return { status: 'not-found' }
+  if (matches.length > 1) return { status: 'ambiguous' }
+  const match = matches[0]!
+  return {
+    status: 'found',
+    location: {
+      identityKey,
+      sectionIndex: match.sectionIndex,
+      itemIndex: match.itemIndex,
+      item: match.item,
+    },
+  }
 }

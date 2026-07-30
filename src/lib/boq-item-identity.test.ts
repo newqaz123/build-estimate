@@ -7,6 +7,7 @@ import {
   getBoqItemRequestIdentity,
   parseBoqItemRequestIdentity,
   resolveBoqItemIdentity,
+  resolveBoqItemIdentityKey,
 } from './boq-item-identity'
 
 function item(overrides: Partial<BoqPricedItem>): BoqPricedItem {
@@ -75,4 +76,40 @@ test('request identity parsing accepts IDs and legacy codes but rejects malforme
   assert.deepEqual(parseBoqItemRequestIdentity({ itemCode: ' A-1 ' }), { itemCode: 'A-1' })
   assert.equal(parseBoqItemRequestIdentity({}), undefined)
   assert.equal(parseBoqItemRequestIdentity({ itemId: null, itemCode: 'A-1' }), undefined)
+})
+
+test('resolves an item after earlier sections and rows are removed', () => {
+  const sections = [
+    { header: 'Remaining', items: [item({ id: 'target' })] },
+  ]
+
+  assert.deepEqual(
+    resolveBoqItemIdentityKey(sections, 'id:target'),
+    {
+      status: 'found',
+      location: {
+        identityKey: 'id:target',
+        sectionIndex: 0,
+        itemIndex: 0,
+        item: sections[0]!.items[0]!,
+      },
+    },
+  )
+})
+
+test('rejects missing and globally duplicated identities', () => {
+  const duplicate = item({ id: undefined, code: 'DUP' })
+  const sections = [
+    { header: 'A', items: [duplicate] },
+    { header: 'B', items: [{ ...duplicate }] },
+  ]
+
+  assert.deepEqual(
+    resolveBoqItemIdentityKey(sections, 'code:DUP'),
+    { status: 'ambiguous' },
+  )
+  assert.deepEqual(
+    resolveBoqItemIdentityKey(sections, 'id:missing'),
+    { status: 'not-found' },
+  )
 })

@@ -10,6 +10,8 @@ interface UnifiedBoqRowBase {
   key: string
   sectionIndex: number
   itemIndex: number
+  identityKey?: string
+  identityIssue?: 'missing' | 'ambiguous'
 }
 
 export interface UnifiedBoqPricedRow extends UnifiedBoqRowBase {
@@ -44,15 +46,32 @@ export interface ComponentCostView {
 }
 
 export function buildUnifiedBoqSections(sections: BoqSection[]): UnifiedBoqSection[] {
+  const identityCounts = new Map<string, number>()
+  for (const section of sections) {
+    for (const item of section.items) {
+      const identityKey = getBoqItemIdentityKey(item)
+      if (!identityKey) continue
+      identityCounts.set(identityKey, (identityCounts.get(identityKey) ?? 0) + 1)
+    }
+  }
+
   return sections.map((section, sectionIndex) => ({
     header: section.header,
     sectionIndex,
     rows: section.items.map((item, itemIndex) => {
+      const identityKey = getBoqItemIdentityKey(item)
+      const identityIssue: 'missing' | 'ambiguous' | undefined = !identityKey
+        ? 'missing'
+        : identityCounts.get(identityKey) === 1
+          ? undefined
+          : 'ambiguous'
       const row: UnifiedBoqRowDraft = {
-        key: `section:${sectionIndex}:${getBoqItemIdentityKey(item) ?? `item:${itemIndex}`}`,
+        key: `section:${sectionIndex}:${identityKey ?? `item:${itemIndex}`}`,
         sectionIndex,
         itemIndex,
         item,
+        identityKey,
+        identityIssue,
       }
       return row as UnifiedBoqRow
     }),

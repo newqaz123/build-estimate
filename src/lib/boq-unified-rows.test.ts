@@ -58,6 +58,32 @@ test('uses a stable item ID before legacy row-position fallback', () => {
   assert.equal(rows[1]!.key, 'section:0:item:1')
 })
 
+test('annotates each unified row with its global identity validity', () => {
+  const sections: BoqSection[] = [
+    { header: 'A', items: [item({ id: 'unique' })] },
+    {
+      header: 'B',
+      items: [
+        item({ id: undefined, code: undefined }),
+        item({ id: undefined, code: 'DUP' }),
+      ],
+    },
+    { header: 'C', items: [item({ id: undefined, code: 'DUP' })] },
+  ]
+
+  const rows = buildUnifiedBoqSections(sections).flatMap((section) => section.rows)
+
+  assert.deepEqual(rows.map((row) => ({
+    identityKey: row.identityKey,
+    identityIssue: row.identityIssue,
+  })), [
+    { identityKey: 'id:unique', identityIssue: undefined },
+    { identityKey: undefined, identityIssue: 'missing' },
+    { identityKey: 'code:DUP', identityIssue: 'ambiguous' },
+    { identityKey: 'code:DUP', identityIssue: 'ambiguous' },
+  ])
+})
+
 test('namespaces stable identities by section so catalog row state cannot collide', () => {
   const sections: BoqSection[] = [
     { header: 'Materials', items: [item({ id: 'reused-import-id', code: 'VALVE' })] },
