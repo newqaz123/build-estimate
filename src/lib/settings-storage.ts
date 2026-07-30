@@ -83,6 +83,7 @@ export function toStoredSettings(settings: WorkspaceSettings): StoredWorkspaceSe
           normalizeRules: settings.fuzzy.normalizeRules.map(([find, replace]) => ({ find, replace })),
         }
       : undefined,
+    units: { customUnits: sanitizeCustomUnits(settings.units.customUnits) },
   }
 }
 

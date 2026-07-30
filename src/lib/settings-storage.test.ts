@@ -63,3 +63,14 @@ test('stored custom units are sanitized without changing their first casing or o
     { customUnits: ['Bag', 'drum'] },
   )
 })
+
+test('toStoredSettings normalizes dirty custom units before serialization', () => {
+  const stored = toStoredSettings({
+    ...DEFAULT_SETTINGS,
+    units: {
+      customUnits: [' Bag ', 'bag', 'drum', 'bad\u0000unit', 'x'.repeat(25)],
+    },
+  })
+
+  assert.deepEqual(stored.units, { customUnits: ['Bag', 'drum'] })
+})
