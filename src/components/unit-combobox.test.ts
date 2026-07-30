@@ -61,3 +61,40 @@ test('delegates option keyboard behavior to Base UI listbox primitives', () => {
   assert.match(source, /ComboboxPrimitive\.Item/)
   assert.match(source, /\bautoHighlight(?:=\{true\})?/)
 })
+
+test('invalidates stale add operations before they can update selection or state', () => {
+  assert.match(source, /const addOperationGenerationRef = useRef\(0\)/)
+  assert.match(
+    source,
+    /const operationGeneration = \+\+addOperationGenerationRef\.current/,
+  )
+  assert.match(
+    source,
+    /const invalidateAddOperation = useCallback\(\(\) => \{\s+addOperationGenerationRef\.current \+= 1/,
+  )
+  assert.match(
+    source,
+    /const closePopup = useCallback\(\(\) => \{\s+invalidateAddOperation\(\)/,
+  )
+  assert.match(
+    source,
+    /const selectUnit = useCallback\(\(unit: string\) => \{\s+invalidateAddOperation\(\)\s+onChange\(unit\)/,
+  )
+  assert.match(source, /const closeForLayoutChange = \(\) => closePopup\(\)/)
+  assert.match(
+    source,
+    /onOpenChange=\{\(nextOpen\) => \{\s+if \(nextOpen\) setOpen\(true\)\s+else closePopup\(\)/,
+  )
+  assert.match(
+    source,
+    /catch \(error\) \{\s+if \(addOperationGenerationRef\.current === operationGeneration\) \{\s+setAddError/,
+  )
+  assert.match(
+    source,
+    /finally \{\s+if \(addOperationGenerationRef\.current === operationGeneration\) \{\s+setAddingUnit\(false\)/,
+  )
+  assert.match(
+    source,
+    /if \(addOperationGenerationRef\.current !== operationGeneration\) return\s+selectUnit\(canonical\)/,
+  )
+})

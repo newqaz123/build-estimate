@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Combobox as ComboboxPrimitive } from '@base-ui/react/combobox'
 import { Check, ChevronDown, Plus, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -47,16 +47,33 @@ export function UnitCombobox({
   const triggerRef = useRef<HTMLButtonElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const addInputRef = useRef<HTMLInputElement>(null)
+  const addOperationGenerationRef = useRef(0)
   const addInputId = useId()
   const filteredUnits = filterUnits(units, query)
 
-  const closePopup = () => {
+  const resetPopupState = useCallback(() => {
     setOpen(false)
     setQuery('')
     setAdding(false)
     setDraft('')
     setAddError(null)
-  }
+  }, [])
+
+  const invalidateAddOperation = useCallback(() => {
+    addOperationGenerationRef.current += 1
+    setAddingUnit(false)
+  }, [])
+
+  const closePopup = useCallback(() => {
+    invalidateAddOperation()
+    resetPopupState()
+  }, [invalidateAddOperation, resetPopupState])
+
+  const selectUnit = useCallback((unit: string) => {
+    invalidateAddOperation()
+    onChange(unit)
+    resetPopupState()
+  }, [invalidateAddOperation, onChange, resetPopupState])
 
   const cancelAdd = () => {
     setAdding(false)
@@ -76,13 +93,7 @@ export function UnitCombobox({
     const scrollContainer = triggerRef.current?.closest<HTMLElement>(
       '.unified-boq-table-scroll',
     )
-    const closeForLayoutChange = () => {
-      setOpen(false)
-      setQuery('')
-      setAdding(false)
-      setDraft('')
-      setAddError(null)
-    }
+    const closeForLayoutChange = () => closePopup()
 
     window.addEventListener('resize', closeForLayoutChange)
     scrollContainer?.addEventListener('scroll', closeForLayoutChange)
@@ -91,7 +102,7 @@ export function UnitCombobox({
       window.removeEventListener('resize', closeForLayoutChange)
       scrollContainer?.removeEventListener('scroll', closeForLayoutChange)
     }
-  }, [open, readOnly])
+  }, [closePopup, open, readOnly])
 
   if (readOnly) {
     return <span className="unit-combobox-readonly">{value || '—'}</span>
@@ -111,24 +122,28 @@ export function UnitCombobox({
 
     const existingUnit = findCanonicalUnit(units, unit)
     if (existingUnit) {
-      onChange(existingUnit)
-      closePopup()
+      selectUnit(existingUnit)
       return
     }
 
+    const operationGeneration = ++addOperationGenerationRef.current
     setAddingUnit(true)
     let canonical = unit
     try {
       canonical = (await onAddUnit(unit)) ?? unit
     } catch (error) {
-      setAddError(getAddErrorMessage(error))
+      if (addOperationGenerationRef.current === operationGeneration) {
+        setAddError(getAddErrorMessage(error))
+      }
       return
     } finally {
-      setAddingUnit(false)
+      if (addOperationGenerationRef.current === operationGeneration) {
+        setAddingUnit(false)
+      }
     }
 
-    onChange(canonical)
-    closePopup()
+    if (addOperationGenerationRef.current !== operationGeneration) return
+    selectUnit(canonical)
   }
 
   return (
@@ -145,18 +160,12 @@ export function UnitCombobox({
         disabled={disabled}
         onInputValueChange={setQuery}
         onOpenChange={(nextOpen) => {
-          setOpen(nextOpen)
-          if (!nextOpen) {
-            setQuery('')
-            setAdding(false)
-            setDraft('')
-            setAddError(null)
-          }
+          if (nextOpen) setOpen(true)
+          else closePopup()
         }}
         onValueChange={(unit) => {
           if (!unit) return
-          onChange(unit)
-          closePopup()
+          selectUnit(unit)
         }}
       >
         <ComboboxPrimitive.Trigger
