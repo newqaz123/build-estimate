@@ -21,7 +21,8 @@ type EditableBoqField = "desc" | "unit" | "qty" | "rate" | "materialCost" | "lab
 export interface UnifiedBoqItemsTableProps {
   sections: UnifiedBoqSection[]
   readOnly: boolean
-  disabled: boolean
+  editingDisabled: boolean
+  catalogDisabled?: boolean
   catalogState: (row: UnifiedBoqPricedRow) => InlineCatalogRowState
   onFieldChange: (row: UnifiedBoqPricedRow, field: EditableBoqField, value: string | number | undefined) => void
   onAcceptSuggestion: (row: UnifiedBoqPricedRow) => void
@@ -29,12 +30,14 @@ export interface UnifiedBoqItemsTableProps {
   onDismissSuggestion: (row: UnifiedBoqPricedRow) => void
   onFindMatch: (row: UnifiedBoqPricedRow) => void
   onExclude: (row: UnifiedBoqPricedRow) => void
-  onDelete?: (row: UnifiedBoqPricedRow) => void
-  onIncludeOptional?: (row: UnifiedBoqPricedRow) => void
   onClearCatalogError?: (key: string) => void
   onComponentDraftValidityChange?: (key: string, isInvalid: boolean) => void
-  units?: string[]
-  onAddUnit?: (unit: string) => void
+  onDelete?: (row: UnifiedBoqPricedRow) => void
+  onIncludeOptional?: (row: UnifiedBoqPricedRow) => void
+  isIncludeBusy?: (row: UnifiedBoqPricedRow) => boolean
+  units: string[]
+  workspaceUnitsError?: string | null
+  onAddUnit: (unit: string) => Promise<string>
 }
 
 function currency(value: number): string {
@@ -208,7 +211,8 @@ function ComponentCostInput({
 export function UnifiedBoqItemsTable({
   sections,
   readOnly,
-  disabled,
+  editingDisabled,
+  catalogDisabled,
   catalogState,
   onFieldChange,
   onAcceptSuggestion,
@@ -220,8 +224,10 @@ export function UnifiedBoqItemsTable({
   onIncludeOptional = () => undefined,
   onClearCatalogError = () => undefined,
   onComponentDraftValidityChange,
+  isIncludeBusy,
   units = [...STANDARD_UNITS],
-  onAddUnit = () => undefined,
+  workspaceUnitsError,
+  onAddUnit = async (unit: string) => unit,
 }: UnifiedBoqItemsTableProps) {
   const rowStarts: number[] = []
   sections.reduce((rowStart, section) => {
@@ -252,7 +258,8 @@ export function UnifiedBoqItemsTable({
               section={section}
               rowStart={rowStarts[sectionIndex] ?? 0}
               readOnly={readOnly}
-              disabled={disabled}
+              editingDisabled={editingDisabled}
+              catalogDisabled={catalogDisabled}
               catalogState={catalogState}
               onFieldChange={onFieldChange}
               onAcceptSuggestion={onAcceptSuggestion}
@@ -264,7 +271,9 @@ export function UnifiedBoqItemsTable({
               onIncludeOptional={onIncludeOptional}
               onClearCatalogError={onClearCatalogError}
               onComponentDraftValidityChange={onComponentDraftValidityChange}
+              isIncludeBusy={isIncludeBusy}
               units={units}
+              workspaceUnitsError={workspaceUnitsError}
               onAddUnit={onAddUnit}
             />
           ))}
@@ -283,7 +292,8 @@ function FragmentSection({
   section,
   rowStart,
   readOnly,
-  disabled,
+  editingDisabled,
+  catalogDisabled,
   catalogState,
   onFieldChange,
   onAcceptSuggestion,
@@ -295,8 +305,10 @@ function FragmentSection({
   onIncludeOptional = () => undefined,
   onClearCatalogError = () => undefined,
   onComponentDraftValidityChange,
+  isIncludeBusy,
   units = [...STANDARD_UNITS],
-  onAddUnit = () => undefined,
+  workspaceUnitsError,
+  onAddUnit = async (unit: string) => unit,
 }: FragmentSectionProps) {
   return (
     <>
@@ -323,7 +335,9 @@ function FragmentSection({
           )
         }
         const rowCatalogState = catalogState(row)
-        const locked = readOnly || disabled || rowCatalogState.busy !== null
+        const identityLocked = row.identityIssue !== undefined
+        const editingLocked = readOnly || editingDisabled || identityLocked
+        const catalogLocked = readOnly || catalogDisabled || identityLocked
         const isMaterialRow = row.item.costComponent === "material"
         const isLabourRow = row.item.costComponent === "labour"
         const isLumpSumRow = row.item.costComponent === "lump_sum" || row.item.type === "lump_sum"
@@ -346,9 +360,14 @@ function FragmentSection({
               <Input
                 aria-label={`Description for ${row.item.desc}, row ${rowNumber}`}
                 value={row.item.desc}
-                disabled={locked}
+                disabled={editingLocked}
                 onChange={(event) => onFieldChange(row, "desc", event.target.value)}
               />
+              {row.identityIssue === "missing" ? (
+                <span className="review-item-warning">This row has no persistent item identity.</span>
+              ) : row.identityIssue === "ambiguous" ? (
+                <span className="review-item-warning">{"This row's item identity is duplicated."}</span>
+              ) : null}
               {isSeparateComponentRow ? (
                 <span className={`unified-boq-component-badge ${isMaterialRow ? "material" : "labour"}`}>
                   {isMaterialRow ? "Material component" : "Labour component"}
@@ -358,7 +377,7 @@ function FragmentSection({
                 <span className="review-item-warning" key={`${warning.code}-${warningIndex}`}>{warning.message}</span>
               ))}
               {row.item.optional ? <span className="review-optional-state">{row.item.excludedFromTotal ? "Optional · excluded from total" : "Optional · included in total"}</span> : null}
-              {row.item.optional && row.item.excludedFromTotal && !readOnly ? <button type="button" className="unified-boq-include-option" disabled={disabled} onClick={() => onIncludeOptional(row)}>Include in total</button> : null}
+              {row.item.optional && row.item.excludedFromTotal && !readOnly ? <button type="button" className="unified-boq-include-option" disabled={editingLocked || (isIncludeBusy?.(row) ?? false)} onClick={() => onIncludeOptional(row)}>Include in total</button> : null}
             </td>
             <td data-label="Unit">
               <UnitCombobox
@@ -366,8 +385,9 @@ function FragmentSection({
                 units={units}
                 onAddUnit={onAddUnit}
                 onChange={(unit) => onFieldChange(row, "unit", unit)}
-                disabled={locked}
+                disabled={editingLocked}
                 readOnly={readOnly}
+                workspaceLoadError={workspaceUnitsError}
                 ariaLabel={`Unit for ${row.item.desc}, row ${rowNumber}`}
               />
             </td>
@@ -377,7 +397,7 @@ function FragmentSection({
                 type="text"
                 inputMode="decimal"
                 value={row.item.qty}
-                disabled={locked}
+                disabled={editingLocked}
                 onChange={(event) => onFieldChange(row, "qty", Number(event.target.value))}
               />
             </td>
@@ -407,7 +427,7 @@ function FragmentSection({
                   basis={evidenceBasis}
                   evidence={materialEvidence}
                   origin={origin}
-                  disabled={locked}
+                  disabled={editingLocked}
                   onFieldChange={handleComponentChange}
                   onValidityChange={onComponentDraftValidityChange}
                 />
@@ -434,7 +454,7 @@ function FragmentSection({
                   basis={evidenceBasis}
                   evidence={labourEvidence}
                   origin={origin}
-                  disabled={locked}
+                  disabled={editingLocked}
                   onFieldChange={handleComponentChange}
                   onValidityChange={onComponentDraftValidityChange}
                 />
@@ -446,7 +466,7 @@ function FragmentSection({
                 locator={row}
                 state={rowCatalogState}
                 readOnly={readOnly}
-                disabled={disabled}
+                disabled={catalogLocked}
                 onAccept={onAcceptSuggestion}
                 onAiSuggest={onAiSuggest}
                 onDismiss={onDismissSuggestion}
@@ -462,7 +482,7 @@ function FragmentSection({
                   variant="ghost"
                   size="icon"
                   aria-label={`Delete row ${rowNumber}`}
-                  disabled={disabled}
+                  disabled={editingLocked}
                   onClick={() => onDelete?.(row)}
                 >
                   <Trash2 className="size-4" aria-hidden="true" />

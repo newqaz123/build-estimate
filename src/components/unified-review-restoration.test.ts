@@ -34,12 +34,11 @@ test("the unified workspace restores resizable and collapsible PDF controls", ()
   assert.match(workspaceSource, /data-od-id="review-workspace-resizer"/)
 })
 
-test("catalog acceptance participates in the page-level mutation lock", () => {
+test("catalog acceptance is guarded and routed through the canonical mutation coordinator", () => {
   const detailSource = readFileSync(detailUrl, "utf8")
 
   assert.match(detailSource, /const handleAcceptCatalogSuggestion = async/)
-  assert.match(detailSource, /if \(isReadOnly \|\| mutationBusy\) return\s+setMatching\(true\)/)
-  assert.match(detailSource, /await catalogMatching\.acceptSuggestion\(row\)/)
-  assert.match(detailSource, /finally \{\s+setMatching\(false\)\s+\}/)
+  assert.match(detailSource, /if \(isReadOnly \|\| approving \|\| approvalBarrierRef\.current\) return/)
+  assert.match(detailSource, /runCanonicalMutation\(\(\) => catalogMatching\.acceptSuggestion\(row\)\)/)
   assert.match(detailSource, /onAcceptSuggestion=\{\(row\) => \{ void handleAcceptCatalogSuggestion\(row\) \}\}/)
 })

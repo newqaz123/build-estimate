@@ -44,26 +44,35 @@ function renderTable(
     onIncludeOptional = () => undefined,
     onDelete = () => undefined,
     readOnly = false,
-    disabled = false,
+    editingDisabled = false,
+    catalogDisabled,
+    isIncludeBusy,
+    workspaceUnitsError,
     onComponentDraftValidityChange = () => undefined,
     units = ['m³', 'm²', 'Pcs'],
-    onAddUnit = () => undefined,
+    onAddUnit = async (unit: string) => unit,
   }: {
     catalogState?: (row: { item: BoqPricedItem }) => InlineCatalogRowState
     onIncludeOptional?: (row: unknown) => void
     onDelete?: (row: unknown) => void
     readOnly?: boolean
-    disabled?: boolean
+    editingDisabled?: boolean
+    catalogDisabled?: boolean
+    isIncludeBusy?: (row: { item: BoqPricedItem }) => boolean
+    workspaceUnitsError?: string | null
     onComponentDraftValidityChange?: (key: string, isInvalid: boolean) => void
     units?: string[]
-    onAddUnit?: (unit: string) => void
+    onAddUnit?: (unit: string) => Promise<string>
   } = {},
 ): string {
   const noopRow = () => undefined
   return renderToStaticMarkup(createElement(UnifiedBoqItemsTable, {
     sections: buildUnifiedBoqSections(sections),
     readOnly,
-    disabled,
+    editingDisabled,
+    catalogDisabled,
+    isIncludeBusy,
+    workspaceUnitsError,
     catalogState,
     onFieldChange: () => undefined,
     onAcceptSuggestion: noopRow,
@@ -289,8 +298,8 @@ test('converts BOQ rows to labelled two-column cards at 920px and one-column car
   assert.match(globalsSource, /@media \(max-width: 520px\)[\s\S]*?\.pdf-review-viewer[^{]*\{[^}]*min-width:\s*280px/)
 })
 
-test('disables only an active catalog row while its suggestion request is in flight', () => {
-  const html = renderTable([{ header: 'Valves', items: [item({ desc: 'Busy row', costComponent: 'material' }), item({ id: 'other', desc: 'Other row', costComponent: 'material' })] }], {
+test('keeps edit fields editable while only catalog controls are disabled during a suggestion request', () => {
+  const html = renderTable([{ header: 'Valves', items: [item({ desc: 'Busy row' }), item({ id: 'other', desc: 'Other row' })] }], {
     catalogState: (row) => ({
       suggestion: null,
       busy: row.item.desc === 'Busy row' ? 'ai' : null,
@@ -298,12 +307,50 @@ test('disables only an active catalog row while its suggestion request is in fli
     }),
   })
   const busyDescription = html.match(/<input[^>]*aria-label="Description for Busy row, row 1"/)?.[0] ?? ''
+  const busyQty = html.match(/<input[^>]*aria-label="Quantity for Busy row, row 1"/)?.[0] ?? ''
   const busyMaterial = html.match(/<input[^>]*aria-label="Material for Busy row, row 1"/)?.[0] ?? ''
+  const busyLabour = html.match(/<input[^>]*aria-label="Labour for Busy row, row 1"/)?.[0] ?? ''
+  const busyUnitTrigger = html.match(/<button[^>]*aria-label="Unit for Busy row, row 1"/)?.[0] ?? ''
   const otherDescription = html.match(/<input[^>]*aria-label="Description for Other row, row 2"/)?.[0] ?? ''
 
-  assert.match(busyDescription, /\sdisabled=""/)
-  assert.match(busyMaterial, /\sdisabled=""/)
+  // Editing controls stay editable while a catalog suggestion request is in flight.
+  assert.doesNotMatch(busyDescription, /\sdisabled=""/)
+  assert.doesNotMatch(busyQty, /\sdisabled=""/)
+  assert.doesNotMatch(busyMaterial, /\sdisabled=""/)
+  assert.doesNotMatch(busyLabour, /\sdisabled=""/)
+  assert.doesNotMatch(busyUnitTrigger, /\sdisabled=""/)
+  // The catalog cell's own row-busy lock still disables its action buttons.
+  const busyRow = html.match(/<tr[^>]*data-row-key="section:0:id:item-1"[\s\S]*?<\/tr>/)?.[0] ?? ''
+  const busyCatalogActions = busyRow.match(/<div class="inline-catalog-actions">[\s\S]*?<\/div>/)?.[0] ?? ''
+  assert.match(busyCatalogActions, /disabled=""[^>]*>AI suggest/)
+  // The other row is left untouched.
   assert.doesNotMatch(otherDescription, /\sdisabled=""/)
+})
+
+test('a missing item identity disables persistent controls and renders a visible warning', () => {
+  const html = renderTable([{ header: 'Anon', items: [item({ id: '', code: undefined, desc: 'Anonymous item' })] }])
+
+  assert.match(html, /no persistent item identity/)
+  const description = html.match(/<input[^>]*aria-label="Description for Anonymous item, row 1"/)?.[0] ?? ''
+  assert.match(description, /\sdisabled=""/)
+  const deleteButton = html.match(/<button[^>]*aria-label="Delete row 1"[^>]*>/)?.[0] ?? ''
+  assert.match(deleteButton, /disabled=""/)
+})
+
+test('a duplicated item identity disables persistent controls and renders a visible warning', () => {
+  const html = renderTable([{
+    header: 'Dups',
+    items: [
+      item({ id: '', code: 'C1', desc: 'First dup' }),
+      item({ id: '', code: 'C1', desc: 'Second dup' }),
+    ],
+  }])
+
+  assert.match(html, /item identity is duplicated/)
+  const firstDescription = html.match(/<input[^>]*aria-label="Description for First dup, row 1"/)?.[0] ?? ''
+  const secondDescription = html.match(/<input[^>]*aria-label="Description for Second dup, row 2"/)?.[0] ?? ''
+  assert.match(firstDescription, /\sdisabled=""/)
+  assert.match(secondDescription, /\sdisabled=""/)
 })
 
 test('approved rows render component evidence as read-only values without inputs', () => {

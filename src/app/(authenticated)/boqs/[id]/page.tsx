@@ -47,9 +47,14 @@ import {
 import { Input } from "@/components/ui/input"
 import { buildBoqCsv } from "@/lib/boq-csv"
 import { getBoqCatalogReadiness } from "@/lib/boq-catalog-readiness"
-import { applyManualCostAllocation, deriveSourceCostAllocation } from "@/lib/boq-cost-allocation"
-import { reconcileBoqMutation, type BoqDetailEdits } from "@/lib/boq-detail-state"
-import { getBoqItemRequestIdentity } from "@/lib/boq-item-identity"
+import {
+  applyBoqDetailEdits,
+  compareBoqUpdatedAt,
+  reconcileBoqMutation,
+  resolveBoqDetailEdits,
+  type BoqDetailEdits,
+} from "@/lib/boq-detail-state"
+import { getBoqItemIdentityKey, getBoqItemRequestIdentity } from "@/lib/boq-item-identity"
 import { calculateBoqTotals, isPricedBoqItem, parseNonNegativeBoqEditValue } from "@/lib/boq-pricing"
 import { boqDetailHref, isBoqReviewMode } from "@/lib/boq-review-route"
 import { buildCanonicalRevisionKey, buildReviewVerification } from "@/lib/boq-review-state"
@@ -58,9 +63,9 @@ import {
   buildUnifiedBoqSections,
   type UnifiedBoqPricedRow,
 } from "@/lib/boq-unified-rows"
-import { STANDARD_UNITS } from "@/lib/units"
+import { combineUnitOptions } from "@/lib/units"
+import { addWorkspaceUnit, loadWorkspaceCustomUnits } from "@/lib/workspace-units-client"
 
-type ItemEdit = Record<string, string | number | undefined>
 type EditsMap = BoqDetailEdits
 type LoadState = "loading" | "loaded" | "not-found" | "error"
 type MetadataField = "vendor" | "project" | "workType" | "date"
@@ -68,28 +73,6 @@ type MetadataEdits = Partial<Pick<Boq, MetadataField>>
 type RightPaneMode = "items" | "extraction"
 
 const requireCatalogReadiness = true
-
-function rowEditKey(row: Pick<UnifiedBoqPricedRow, "sectionIndex" | "itemIndex">): string {
-  return `${row.sectionIndex}-${row.itemIndex}`
-}
-
-function mergeItemEdits(item: BoqItem, edited: ItemEdit = {}): BoqItem {
-  const { materialCost, labourCost, ...directEdits } = edited
-  if (!isPricedBoqItem(item)) {
-    return typeof directEdits.desc === "string" ? { ...item, desc: directEdits.desc } : item
-  }
-  let merged = { ...item, ...directEdits } as BoqPricedItem
-  if (materialCost !== undefined || labourCost !== undefined) {
-    const allocation = deriveSourceCostAllocation(item)
-    merged = applyManualCostAllocation(
-      merged,
-      Number(materialCost ?? allocation?.material ?? 0),
-      Number(labourCost ?? allocation?.labour ?? 0),
-    )
-  }
-  if (directEdits.qty !== undefined || directEdits.rate !== undefined) merged.total = merged.qty * merged.rate
-  return merged
-}
 
 function confidenceLabel(value: number | undefined): string | null {
   if (!Number.isFinite(value)) return null
@@ -210,19 +193,44 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   const [excludeReason, setExcludeReason] = useState("")
   const [saving, setSaving] = useState(false)
   const [approving, setApproving] = useState(false)
-  const [matching, setMatching] = useState(false)
-  const [deleting, setDeleting] = useState(false)
   const [addingItem, setAddingItem] = useState(false)
+  const [catalogModalBusy, setCatalogModalBusy] = useState(false)
+  const [excludeBusy, setExcludeBusy] = useState(false)
+  const [includingItemKeys, setIncludingItemKeys] = useState<Set<string>>(new Set())
+  const [deletingBoq, setDeletingBoq] = useState(false)
+  const [activeCanonicalMutations, setActiveCanonicalMutations] = useState(0)
+  const activeCanonicalMutationsRef = useRef(0)
+  const mutationEpochRef = useRef(0)
+  const mutationOverlapRef = useRef(false)
+  const canonicalRefreshNeededRef = useRef(false)
+  const canonicalRefreshRef = useRef<Promise<void> | null>(null)
+  const approvalBarrierRef = useRef(false)
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("items")
   const [pdfEvidenceFocus, setPdfEvidenceFocus] = useState<{ page: number; key: number }>({ page: 1, key: 0 })
   const [invalidDraftKeys, setInvalidDraftKeys] = useState<Set<string>>(new Set())
   const invalidDraftRef = useRef<Set<string>>(new Set())
   const [customUnits, setCustomUnits] = useState<string[]>([])
+  const [workspaceUnitsError, setWorkspaceUnitsError] = useState<string | null>(null)
   const [pendingDeletes, setPendingDeletes] = useState<StashedDelete[]>([])
-  const units = useMemo(() => [...STANDARD_UNITS, ...customUnits], [customUnits])
+  const boqRef = useRef(boq)
+  const units = useMemo(() => combineUnitOptions(customUnits), [customUnits])
   const isReadOnly = boq.status === "approved"
-  const mutationBusy = saving || approving || matching || deleting || addingItem || pendingDeletes.length > 0
   const canonicalRevisionKey = useMemo(() => buildCanonicalRevisionKey(boq), [boq])
+
+  useEffect(() => {
+    boqRef.current = boq
+  }, [boq])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void loadWorkspaceCustomUnits(fetch, controller.signal).then((loaded) => {
+      setCustomUnits(loaded)
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return
+      setWorkspaceUnitsError("Workspace units could not be loaded. Standard units are still available.")
+    })
+    return () => controller.abort()
+  }, [])
 
   const replaceEdits = useCallback((next: EditsMap) => {
     editsRef.current = next
@@ -234,56 +242,129 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
     setMetadataEdits(next)
   }, [])
 
-  const applyMutationBoq = useCallback((updated: Boq) => {
-    const reconciled = reconcileBoqMutation(boq, updated, editsRef.current)
+  const applyMutationBoq = useCallback((incoming: Boq, { force = false }: { force?: boolean } = {}) => {
+    if (!force) {
+      const comparison = compareBoqUpdatedAt(boqRef.current, incoming)
+      if (comparison === "incoming-older" || comparison === "invalid") {
+        canonicalRefreshNeededRef.current = true
+        return
+      }
+      if (comparison === "equal") {
+        if (JSON.stringify(boqRef.current) === JSON.stringify(incoming)) return
+        canonicalRefreshNeededRef.current = true
+        return
+      }
+    }
+    const reconciled = reconcileBoqMutation(boqRef.current, incoming, editsRef.current)
+    boqRef.current = reconciled.boq
     replaceEdits(reconciled.edits)
     onBoqChange(reconciled.boq)
-  }, [boq, onBoqChange, replaceEdits])
+  }, [onBoqChange, replaceEdits])
+
+  const refreshCanonicalAfterIdle = useCallback(async (): Promise<void> => {
+    if (canonicalRefreshRef.current) return canonicalRefreshRef.current
+    const epoch = mutationEpochRef.current
+    let ownedTask: Promise<void> | null = null
+    const runRefresh = async (): Promise<void> => {
+      let refreshWasOvertaken = false
+      try {
+        const response = await fetch(`/api/boqs/${encodeURIComponent(boqRef.current.id)}`)
+        if (!response.ok) throw new Error("The latest BOQ could not be refreshed.")
+        const result = await response.json() as Boq
+        if (activeCanonicalMutationsRef.current > 0 || mutationEpochRef.current !== epoch) {
+          refreshWasOvertaken = true
+          canonicalRefreshNeededRef.current = true
+          return
+        }
+        applyMutationBoq(result, { force: true })
+        mutationOverlapRef.current = false
+        canonicalRefreshNeededRef.current = false
+      } catch {
+        if (activeCanonicalMutationsRef.current > 0 || mutationEpochRef.current !== epoch) {
+          refreshWasOvertaken = true
+        }
+        toast.error("The latest BOQ could not be refreshed. Your edits are preserved.")
+      } finally {
+        if (canonicalRefreshRef.current === ownedTask) {
+          canonicalRefreshRef.current = null
+        }
+        if (refreshWasOvertaken && activeCanonicalMutationsRef.current === 0 && canonicalRefreshNeededRef.current) {
+          void refreshCanonicalAfterIdle()
+        }
+      }
+    }
+    ownedTask = runRefresh()
+    canonicalRefreshRef.current = ownedTask
+    return ownedTask
+  }, [applyMutationBoq])
+
+  const runCanonicalMutation = useCallback(
+    async <T,>(work: () => Promise<T>): Promise<T> => {
+      if (activeCanonicalMutationsRef.current > 0) {
+        mutationOverlapRef.current = true
+      }
+      activeCanonicalMutationsRef.current += 1
+      mutationEpochRef.current += 1
+      setActiveCanonicalMutations((count) => count + 1)
+      try {
+        return await work()
+      } finally {
+        activeCanonicalMutationsRef.current -= 1
+        setActiveCanonicalMutations((count) => count - 1)
+        if (
+          activeCanonicalMutationsRef.current === 0
+          && (mutationOverlapRef.current || canonicalRefreshNeededRef.current)
+        ) {
+          void refreshCanonicalAfterIdle()
+        }
+      }
+    },
+    [refreshCanonicalAfterIdle],
+  )
+
+  // `activeCanonicalMutations` mirrors the ref so React re-renders whenever an
+  // overlap-safe canonical mutation starts or settles, keeping derived UI in
+  // sync with the latest published canonical state.
+  void activeCanonicalMutations
 
   const commitDeleteRef = useRef<(stash: StashedDelete) => Promise<void>>(async () => {})
   useEffect(() => {
     commitDeleteRef.current = async (stash) => {
-      if (Object.keys(editsRef.current).length > 0) {
-        setPendingDeletes((prev) => prev.filter(
-          (pending) => !(pending.sectionIndex === stash.sectionIndex && pending.itemIndex === stash.itemIndex),
-        ))
-        toast.error("Save pending changes before deleting an item")
-        return
-      }
-      setDeleting(true)
       try {
-        const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/items`, {
-          method: "DELETE",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sectionIndex: stash.sectionIndex, ...getBoqItemRequestIdentity(stash.item) }),
+        await runCanonicalMutation(async () => {
+          const response = await fetch(`/api/boqs/${encodeURIComponent(boqRef.current.id)}/items`, {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sectionIndex: stash.sectionIndex, ...getBoqItemRequestIdentity(stash.item) }),
+          })
+          if (!response.ok) throw new Error(await readError(response, "The item could not be deleted."))
+          applyMutationBoq(await response.json() as Boq)
+          const identityKey = getBoqItemIdentityKey(stash.item)
+          if (identityKey && editsRef.current[identityKey]) {
+            const nextEdits = { ...editsRef.current }
+            delete nextEdits[identityKey]
+            replaceEdits(nextEdits)
+          }
         })
-        if (!response.ok) throw new Error(await readError(response, "The item could not be deleted."))
-        applyMutationBoq(await response.json() as Boq)
-        const editKey = `${stash.sectionIndex}-${stash.itemIndex}`
-        if (editsRef.current[editKey]) {
-          const nextEdits = { ...editsRef.current }
-          delete nextEdits[editKey]
-          replaceEdits(nextEdits)
-        }
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "The item could not be deleted.")
       } finally {
         setPendingDeletes((prev) => prev.filter(
           (pending) => !(pending.sectionIndex === stash.sectionIndex && pending.itemIndex === stash.itemIndex),
         ))
-        setDeleting(false)
       }
     }
-  }, [boq, applyMutationBoq, replaceEdits])
+  }, [applyMutationBoq, replaceEdits, runCanonicalMutation])
+
+  const displayedItems = useMemo(
+    () => applyBoqDetailEdits(boq, edits),
+    [boq, edits],
+  )
 
   const displayBoq = useMemo<Boq>(() => ({
-    ...boq,
+    ...displayedItems.boq,
     ...metadataEdits,
-    sections: boq.sections.map((section, sectionIndex) => ({
-      ...section,
-      items: section.items.map((item, itemIndex) => mergeItemEdits(item, edits[`${sectionIndex}-${itemIndex}`])),
-    })),
-  }), [boq, edits, metadataEdits])
+  }), [displayedItems.boq, metadataEdits])
 
   const allUnifiedSections = useMemo(() => {
     const built = buildUnifiedBoqSections(displayBoq.sections)
@@ -332,25 +413,36 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   const catalogMatching = useInlineCatalogMatching({
     boq: displayBoq,
     onBoqChange: handleCatalogBoqChange,
-    disabled: isReadOnly || mutationBusy,
+    disabled: isReadOnly || approving,
   })
 
   const handleAcceptCatalogSuggestion = async (row: UnifiedBoqPricedRow) => {
-    if (isReadOnly || mutationBusy) return
-    setMatching(true)
-    try {
-      await catalogMatching.acceptSuggestion(row)
-    } finally {
-      setMatching(false)
-    }
+    if (isReadOnly || approving || approvalBarrierRef.current) return
+    await runCanonicalMutation(() => catalogMatching.acceptSuggestion(row)).catch(() => {
+      // The inline catalog controller surfaces its own per-row errors.
+    })
+  }
+
+  const handleAiSuggest = async (row: UnifiedBoqPricedRow) => {
+    if (isReadOnly || approving || approvalBarrierRef.current) return
+    await runCanonicalMutation(() => catalogMatching.suggestWithAi(row)).catch(() => {
+      // The inline catalog controller surfaces its own per-row errors.
+    })
   }
 
   const handleEdit = useCallback((row: UnifiedBoqPricedRow, field: string, value: string | number | undefined) => {
-    if (isReadOnly || mutationBusy) return
-    const key = rowEditKey(row)
+    if (isReadOnly || saving || approving || approvalBarrierRef.current) return
+    const identityKey = getBoqItemIdentityKey(row.item)
+    if (!identityKey || row.identityIssue) {
+      toast.error("This item has no unique identity and cannot be edited.")
+      return
+    }
     const current = editsRef.current
-    replaceEdits({ ...current, [key]: { ...current[key], [field]: value } })
-  }, [isReadOnly, mutationBusy, replaceEdits])
+    replaceEdits({
+      ...current,
+      [identityKey]: { ...current[identityKey], [field]: value },
+    })
+  }, [isReadOnly, saving, approving, replaceEdits])
 
   const handleFieldChange = useCallback((row: UnifiedBoqPricedRow, field: "code" | "desc" | "unit" | "qty" | "rate" | "type" | "materialCost" | "labourCost", value: string | number | undefined) => {
     if (field === "qty" || field === "rate" || field === "materialCost" || field === "labourCost") {
@@ -363,17 +455,20 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   }, [handleEdit])
 
   const handleAddMissingItem = async () => {
-    if (isReadOnly || mutationBusy || boq.sections.length === 0) return
+    if (isReadOnly || addingItem || approving || approvalBarrierRef.current) return
+    if (boq.sections.length === 0) return
     setAddingItem(true)
     try {
-      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/items`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sectionIndex: boq.sections.length - 1, desc: "New missing item" }),
+      await runCanonicalMutation(async () => {
+        const response = await fetch(`/api/boqs/${encodeURIComponent(boqRef.current.id)}/items`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sectionIndex: boqRef.current.sections.length - 1, desc: "New missing item" }),
+        })
+        if (!response.ok) throw new Error(await readError(response, "The missing item could not be added."))
+        applyMutationBoq(await response.json() as Boq)
+        toast.success("Missing item added as a user-entered unpriced row")
       })
-      if (!response.ok) throw new Error(await readError(response, "The missing item could not be added."))
-      applyMutationBoq(await response.json() as Boq)
-      toast.success("Missing item added as a user-entered unpriced row")
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "The missing item could not be added.")
     } finally {
@@ -382,32 +477,46 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   }
 
   const handleIncludeOptional = async (row: UnifiedBoqPricedRow) => {
-    if (isReadOnly || mutationBusy || !row.item.optional || !row.item.excludedFromTotal) return
-    setMatching(true)
-    try {
-      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/items`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ updates: [{ sectionIndex: row.sectionIndex, items: [{ ...getBoqItemRequestIdentity(row.item), excludedFromTotal: false }] }] }),
+    if (isReadOnly || approving || approvalBarrierRef.current) return
+    if (!row.item.optional || !row.item.excludedFromTotal) return
+    const identityKey = row.identityKey ?? getBoqItemIdentityKey(row.item)
+    if (identityKey && includingItemKeys.has(identityKey)) return
+    if (identityKey) {
+      setIncludingItemKeys((prev) => {
+        const next = new Set(prev)
+        next.add(identityKey)
+        return next
       })
-      if (!response.ok) throw new Error(await readError(response, "The optional item could not be included."))
-      applyMutationBoq(await response.json() as Boq)
-      toast.success("Optional item included in the BOQ total")
+    }
+    try {
+      await runCanonicalMutation(async () => {
+        const response = await fetch(`/api/boqs/${encodeURIComponent(boqRef.current.id)}/items`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ updates: [{ sectionIndex: row.sectionIndex, items: [{ ...getBoqItemRequestIdentity(row.item), excludedFromTotal: false }] }] }),
+        })
+        if (!response.ok) throw new Error(await readError(response, "The optional item could not be included."))
+        applyMutationBoq(await response.json() as Boq)
+        toast.success("Optional item included in the BOQ total")
+      })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "The optional item could not be included.")
     } finally {
-      setMatching(false)
+      if (identityKey) {
+        setIncludingItemKeys((prev) => {
+          const next = new Set(prev)
+          next.delete(identityKey)
+          return next
+        })
+      }
     }
   }
 
   const handleDelete = useCallback((row: UnifiedBoqPricedRow) => {
-    if (isReadOnly || mutationBusy) return
-    if (Object.keys(editsRef.current).length > 0) {
-      return void toast.error("Save pending changes before deleting an item")
-    }
+    if (isReadOnly || approving || approvalBarrierRef.current) return
     const stash: StashedDelete = { sectionIndex: row.sectionIndex, itemIndex: row.itemIndex, item: row.item }
     setPendingDeletes((prev) => [...prev, stash])
-    const toastId = `delete-${row.sectionIndex}-${row.itemIndex}`
+    const toastId = `delete-${row.key}`
     let undone = false
     let committed = false
     const finalize = () => {
@@ -431,10 +540,10 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
       onAutoClose: finalize,
       onDismiss: finalize,
     })
-  }, [isReadOnly, mutationBusy])
+  }, [isReadOnly, approving])
 
   const handleMetadataChange = useCallback((field: MetadataField, value: string) => {
-    if (isReadOnly || mutationBusy) return
+    if (isReadOnly || saving || approving || approvalBarrierRef.current) return
     const current = metadataEditsRef.current
     if (value === boq[field]) {
       const remaining = { ...current }
@@ -446,7 +555,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
       ...current,
       [field]: field === "workType" ? value as WorkType : value,
     })
-  }, [boq, isReadOnly, mutationBusy, replaceMetadataEdits])
+  }, [boq, isReadOnly, saving, approving, replaceMetadataEdits])
 
   const handleComponentDraftValidityChange = useCallback((key: string, isInvalid: boolean) => {
     const next = new Set(invalidDraftRef.current)
@@ -460,31 +569,31 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   }, [])
 
   const handleSaveAll = async () => {
-    if (isReadOnly || mutationBusy) return
+    if (isReadOnly || saving || approving) return
     if (invalidDraftRef.current.size > 0) {
       toast.error("Component costs contain invalid drafts. Fix them before saving.")
       return
     }
     const editSnapshot = editsRef.current
     const metadataSnapshot = metadataEditsRef.current
-    const keys = Object.keys(editSnapshot)
-    if (keys.length === 0 && Object.keys(metadataSnapshot).length === 0) {
+    const resolution = resolveBoqDetailEdits(boqRef.current, editSnapshot)
+    if (resolution.issues.length > 0) {
+      toast.error("Some unsaved items no longer have a unique BOQ identity.")
+      return
+    }
+    if (resolution.resolved.length === 0 && Object.keys(metadataSnapshot).length === 0) {
       toast.info("No changes to save")
       return
     }
 
     const updates = new Map<number, { sectionIndex: number; items: Array<Record<string, string | number | undefined>> }>()
     const linkedCanonicalEdits: Array<{ item: BoqItem; standardId: string }> = []
-    for (const key of keys) {
-      const [sectionIndex, itemIndex] = key.split("-").map(Number)
-      const item = boq.sections[sectionIndex]?.items[itemIndex]
-      const edit = editSnapshot[key]
-      if (!item || !edit) continue
-      const group = updates.get(sectionIndex) ?? { sectionIndex, items: [] }
-      group.items.push({ ...getBoqItemRequestIdentity(item), ...edit })
-      updates.set(sectionIndex, group)
-      if (isPricedBoqItem(item) && item.stdId && ((edit.desc !== undefined && edit.desc !== item.desc) || (edit.unit !== undefined && edit.unit !== item.unit))) {
-        linkedCanonicalEdits.push({ item, standardId: item.stdId })
+    for (const resolved of resolution.resolved) {
+      const group = updates.get(resolved.sectionIndex) ?? { sectionIndex: resolved.sectionIndex, items: [] }
+      group.items.push({ ...getBoqItemRequestIdentity(resolved.item), ...resolved.edit })
+      updates.set(resolved.sectionIndex, group)
+      if (isPricedBoqItem(resolved.item) && resolved.item.stdId && ((resolved.edit.desc !== undefined && resolved.edit.desc !== resolved.item.desc) || (resolved.edit.unit !== undefined && resolved.edit.unit !== resolved.item.unit))) {
+        linkedCanonicalEdits.push({ item: resolved.item, standardId: resolved.item.stdId })
       }
     }
 
@@ -498,31 +607,35 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
 
     setSaving(true)
     try {
-      if (Object.keys(metadataSnapshot).length > 0) {
-        const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(metadataSnapshot),
-        })
-        if (!response.ok) throw new Error(await readError(response, "Failed to save BOQ details"))
-        applyMutationBoq(await response.json() as Boq)
-        replaceMetadataEdits({})
-      }
+      await runCanonicalMutation(async () => {
+        if (Object.keys(metadataSnapshot).length > 0) {
+          const response = await fetch(`/api/boqs/${encodeURIComponent(boqRef.current.id)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(metadataSnapshot),
+          })
+          if (!response.ok) throw new Error(await readError(response, "Failed to save BOQ details"))
+          applyMutationBoq(await response.json() as Boq)
+        }
 
-      let synced = 0
-      if (keys.length > 0) {
-        const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/items`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ updates: Array.from(updates.values()) }),
-        })
-        if (!response.ok) throw new Error(await readError(response, "Failed to save changes"))
-        const result = await response.json() as { boq?: Boq; sync?: { affectedItems?: number } } & Boq
-        applyMutationBoq(result.boq ?? result)
+        let synced = 0
+        if (resolution.resolved.length > 0) {
+          const response = await fetch(`/api/boqs/${encodeURIComponent(boqRef.current.id)}/items`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ updates: Array.from(updates.values()) }),
+          })
+          if (!response.ok) throw new Error(await readError(response, "Failed to save changes"))
+          const result = await response.json() as { boq?: Boq; sync?: { affectedItems?: number } } & Boq
+          applyMutationBoq(result.boq ?? result)
+          synced = result.sync?.affectedItems ?? 0
+        }
+        // Common success boundary: clear both snapshots together only after
+        // every request in Save draft has succeeded, so retry stays idempotent.
+        replaceMetadataEdits({})
         replaceEdits({})
-        synced = result.sync?.affectedItems ?? 0
-      }
-      toast.success(synced > 0 ? `All changes saved · synced ${synced} linked item${synced === 1 ? "" : "s"}` : "All changes saved")
+        toast.success(synced > 0 ? `All changes saved · synced ${synced} linked item${synced === 1 ? "" : "s"}` : "All changes saved")
+      })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to save changes")
     } finally {
@@ -531,73 +644,93 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   }
 
   const handleApprove = async () => {
-    if (isReadOnly || mutationBusy) return
+    if (isReadOnly || approving || approvalBarrierRef.current) return
     if (invalidDraftRef.current.size > 0) return void toast.error("Component costs contain invalid drafts. Fix them before approving.")
     if (pendingChanges > 0) return void toast.error("Save pending changes before approving")
     if (verification.hasBlockingIssues) return void toast.error("Resolve the review blockers before approving")
     if (requireCatalogReadiness && catalogReadiness.blocking > 0) return void toast.error("Resolve catalog matching before approving")
+    approvalBarrierRef.current = true
     setApproving(true)
     try {
-      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "approved" }),
+      await runCanonicalMutation(async () => {
+        const response = await fetch(`/api/boqs/${encodeURIComponent(boqRef.current.id)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "approved" }),
+        })
+        if (!response.ok) throw new Error(await readError(response, "Failed to approve BOQ"))
+        applyMutationBoq(await response.json() as Boq, { force: true })
+        toast.success("BOQ approved and linked to the Standard Catalog")
       })
-      if (!response.ok) throw new Error(await readError(response, "Failed to approve BOQ"))
-      applyMutationBoq(await response.json() as Boq)
-      toast.success("BOQ approved and linked to the Standard Catalog")
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to approve BOQ")
     } finally {
+      approvalBarrierRef.current = false
       setApproving(false)
     }
   }
 
   const reloadAfterManualMatch = async (_standardId: string, standardDescription: string) => {
-    setMatching(true)
+    if (approving || approvalBarrierRef.current) return
+    setCatalogModalBusy(true)
     try {
-      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}`)
-      if (!response.ok) throw new Error(await readError(response, "The updated BOQ could not be loaded"))
-      applyMutationBoq(await response.json() as Boq)
-      setCatalogMatchTarget(null)
-      toast.success(`Matched to: “${standardDescription}”`)
+      await runCanonicalMutation(async () => {
+        const response = await fetch(`/api/boqs/${encodeURIComponent(boqRef.current.id)}`)
+        if (!response.ok) throw new Error(await readError(response, "The updated BOQ could not be loaded"))
+        applyMutationBoq(await response.json() as Boq)
+        setCatalogMatchTarget(null)
+        toast.success(`Matched to: “${standardDescription}”`)
+      })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "The catalog match could not be applied")
     } finally {
-      setMatching(false)
+      setCatalogModalBusy(false)
     }
   }
 
   const handleExclude = async () => {
-    if (!excludeTarget || isReadOnly || mutationBusy) return
-    setMatching(true)
+    if (!excludeTarget || isReadOnly || approving || approvalBarrierRef.current) return
+    setExcludeBusy(true)
     try {
-      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/items`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          updates: [{
-            sectionIndex: excludeTarget.sectionIndex,
-            items: [{
-              ...getBoqItemRequestIdentity(excludeTarget.item),
-              stdStatus: "excluded",
-              ...(excludeReason.trim() ? { stdExclusionReason: excludeReason.trim() } : {}),
+      await runCanonicalMutation(async () => {
+        const response = await fetch(`/api/boqs/${encodeURIComponent(boqRef.current.id)}/items`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            updates: [{
+              sectionIndex: excludeTarget.sectionIndex,
+              items: [{
+                ...getBoqItemRequestIdentity(excludeTarget.item),
+                stdStatus: "excluded",
+                ...(excludeReason.trim() ? { stdExclusionReason: excludeReason.trim() } : {}),
+              }],
             }],
-          }],
-        }),
+          }),
+        })
+        if (!response.ok) throw new Error(await readError(response, "The item could not be excluded"))
+        const result = await response.json() as { boq?: Boq } & Boq
+        applyMutationBoq(result.boq ?? result)
+        setExcludeTarget(null)
+        setExcludeReason("")
+        toast.success("Item excluded from catalog matching")
       })
-      if (!response.ok) throw new Error(await readError(response, "The item could not be excluded"))
-      const result = await response.json() as { boq?: Boq } & Boq
-      applyMutationBoq(result.boq ?? result)
-      setExcludeTarget(null)
-      setExcludeReason("")
-      toast.success("Item excluded from catalog matching")
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "The item could not be excluded")
     } finally {
-      setMatching(false)
+      setExcludeBusy(false)
     }
   }
+
+  const handleAddWorkspaceUnit = useCallback(
+    async (raw: string): Promise<string> => {
+      const result = await addWorkspaceUnit(raw)
+      setCustomUnits(result.customUnits)
+      setWorkspaceUnitsError(null)
+      toast.success(`“${result.unit}” added to workspace units`)
+      return result.unit
+    },
+    [],
+  )
 
   const handleExportCsv = () => {
     const csv = buildBoqCsv(displayBoq)
@@ -612,19 +745,22 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   }
 
   const handleDeleteBoq = async () => {
-    if (mutationBusy) return
+    if (deletingBoq || approving || approvalBarrierRef.current) return
     const confirmed = window.confirm(
       `Delete the entire BOQ “${boq.project}” and its source PDF? This cannot be undone.`,
     )
     if (!confirmed) return
-    setDeleting(true)
+    setDeletingBoq(true)
     try {
-      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}`, { method: "DELETE" })
-      if (!response.ok) throw new Error(await readError(response, "The BOQ could not be deleted"))
-      window.location.assign("/boqs")
+      await runCanonicalMutation(async () => {
+        const response = await fetch(`/api/boqs/${encodeURIComponent(boqRef.current.id)}`, { method: "DELETE" })
+        if (!response.ok) throw new Error(await readError(response, "The BOQ could not be deleted"))
+        window.location.assign("/boqs")
+      })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "The BOQ could not be deleted")
-      setDeleting(false)
+    } finally {
+      setDeletingBoq(false)
     }
   }
 
@@ -643,16 +779,16 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
           </div>
           <div className="review-header-actions boq-unified-actions">
             {hasSource || boq.activeExtractionRunId ? (
-              <Button type="button" variant="outline" size="sm" onClick={() => setRightPaneMode(rightPaneMode === "items" ? "extraction" : "items")} disabled={mutationBusy} aria-controls={rightPaneMode === "items" ? "boq-extraction-panel" : "boq-items-panel"}>
+              <Button type="button" variant="outline" size="sm" onClick={() => setRightPaneMode(rightPaneMode === "items" ? "extraction" : "items")} aria-controls={rightPaneMode === "items" ? "boq-extraction-panel" : "boq-items-panel"}>
                 {rightPaneMode === "items" ? <><Sparkles aria-hidden="true" />Extraction review</> : <><FileSearch aria-hidden="true" />BOQ items</>}
               </Button>
             ) : null}
             {!isReadOnly ? (
               <>
-                <Button type="button" variant="outline" size="sm" onClick={() => void handleSaveAll()} disabled={mutationBusy || invalidDraftKeys.size > 0}>
+                <Button type="button" variant="outline" size="sm" onClick={() => void handleSaveAll()} disabled={saving || approving || invalidDraftKeys.size > 0}>
                   {saving ? <Loader2 className="animate-spin" /> : <Save aria-hidden="true" />}Save draft
                 </Button>
-                <Button type="button" size="sm" onClick={() => void handleApprove()} disabled={mutationBusy || invalidDraftKeys.size > 0 || pendingChanges > 0 || verification.hasBlockingIssues || (requireCatalogReadiness && catalogReadiness.blocking > 0)}>
+                <Button type="button" size="sm" onClick={() => void handleApprove()} disabled={approving || invalidDraftKeys.size > 0 || pendingChanges > 0 || verification.hasBlockingIssues || (requireCatalogReadiness && catalogReadiness.blocking > 0)}>
                   {approving ? <Loader2 className="animate-spin" /> : <Check aria-hidden="true" />}Approve BOQ
                 </Button>
               </>
@@ -662,7 +798,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
               <div className="boq-overflow-menu-content" role="menu">
                 <button type="button" role="menuitem" onClick={handleExportCsv}><FileDown aria-hidden="true" />Export CSV</button>
                 <button type="button" role="menuitem" onClick={() => window.print()}><Printer aria-hidden="true" />Print / download</button>
-                <button type="button" role="menuitem" className="text-destructive" disabled={mutationBusy} onClick={() => void handleDeleteBoq()}><Trash2 aria-hidden="true" />Delete BOQ</button>
+                <button type="button" role="menuitem" className="text-destructive" disabled={deletingBoq || approving} onClick={() => void handleDeleteBoq()}><Trash2 aria-hidden="true" />Delete BOQ</button>
               </div>
             </details>
           </div>
@@ -685,10 +821,10 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
           <div className="review-metadata">
             <h2 className="text-sm font-medium mb-3">BOQ Details</h2>
             <div className="grid grid-cols-2 gap-3">
-              <MetaField label="Vendor" value={displayBoq.vendor} field="vendor" disabled={isReadOnly || mutationBusy} confidence={confidenceLabel(boq.metadataConfidence?.vendor)} onChange={handleMetadataChange} />
-              <MetaField label="Project" value={displayBoq.project} field="project" disabled={isReadOnly || mutationBusy} confidence={confidenceLabel(boq.metadataConfidence?.project)} onChange={handleMetadataChange} />
-              <MetaField label="Work Type" value={displayBoq.workType} field="workType" type="select" options={["Unclassified", "Structural", "MEP", "Finishing"]} disabled={isReadOnly || mutationBusy} confidence={confidenceLabel(boq.metadataConfidence?.workType)} onChange={handleMetadataChange} />
-              <MetaField label="Document Date" value={displayBoq.date} field="date" type="date" disabled={isReadOnly || mutationBusy} confidence={confidenceLabel(boq.metadataConfidence?.date)} onChange={handleMetadataChange} />
+              <MetaField label="Vendor" value={displayBoq.vendor} field="vendor" disabled={isReadOnly || saving || approving} confidence={confidenceLabel(boq.metadataConfidence?.vendor)} onChange={handleMetadataChange} />
+              <MetaField label="Project" value={displayBoq.project} field="project" disabled={isReadOnly || saving || approving} confidence={confidenceLabel(boq.metadataConfidence?.project)} onChange={handleMetadataChange} />
+              <MetaField label="Work Type" value={displayBoq.workType} field="workType" type="select" options={["Unclassified", "Structural", "MEP", "Finishing"]} disabled={isReadOnly || saving || approving} confidence={confidenceLabel(boq.metadataConfidence?.workType)} onChange={handleMetadataChange} />
+              <MetaField label="Document Date" value={displayBoq.date} field="date" type="date" disabled={isReadOnly || saving || approving} confidence={confidenceLabel(boq.metadataConfidence?.date)} onChange={handleMetadataChange} />
             </div>
           </div>
 
@@ -707,27 +843,30 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
             <span className="text-sm font-medium">Parsed Items · {items.length} line items</span>
             <div className="review-items-heading-actions">
               <span className="font-mono text-sm">Grand Total: ฿{grandTotal.toLocaleString()}</span>
-              {!isReadOnly ? <Button type="button" variant="outline" size="sm" onClick={() => void handleAddMissingItem()} disabled={mutationBusy || boq.sections.length === 0} data-od-id="add-missing-item">{addingItem ? <Loader2 className="animate-spin" /> : <Plus aria-hidden="true" />}Add missing item</Button> : null}
+              {!isReadOnly ? <Button type="button" variant="outline" size="sm" onClick={() => void handleAddMissingItem()} disabled={addingItem || approving || boq.sections.length === 0} data-od-id="add-missing-item">{addingItem ? <Loader2 className="animate-spin" /> : <Plus aria-hidden="true" />}Add missing item</Button> : null}
             </div>
           </div>
           {unifiedSections.length > 0 ? (
             <UnifiedBoqItemsTable
               sections={unifiedSections}
               readOnly={isReadOnly}
-              disabled={isReadOnly || mutationBusy}
+              editingDisabled={saving || approving}
+              catalogDisabled={approving}
               catalogState={catalogMatching.rowState}
               onFieldChange={handleFieldChange}
               onAcceptSuggestion={(row) => { void handleAcceptCatalogSuggestion(row) }}
-              onAiSuggest={(row) => { void catalogMatching.suggestWithAi(row) }}
+              onAiSuggest={(row) => { void handleAiSuggest(row) }}
               onDismissSuggestion={catalogMatching.dismissSuggestion}
               onFindMatch={setCatalogMatchTarget}
               onExclude={(row) => { setExcludeTarget(row); setExcludeReason("") }}
               onIncludeOptional={(row) => { void handleIncludeOptional(row) }}
               onClearCatalogError={catalogMatching.clearRowError}
               onComponentDraftValidityChange={handleComponentDraftValidityChange}
-              units={units}
-              onAddUnit={(unit) => setCustomUnits((prev) => (prev.includes(unit) ? prev : [...prev, unit]))}
               onDelete={handleDelete}
+              isIncludeBusy={(row) => Boolean(row.identityKey && includingItemKeys.has(row.identityKey))}
+              units={units}
+              workspaceUnitsError={workspaceUnitsError}
+              onAddUnit={handleAddWorkspaceUnit}
             />
           ) : (
             <div className="proto-empty-state boq-filter-empty"><p>No items match your search</p></div>
@@ -775,16 +914,16 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
         />
       ) : null}
 
-      <Dialog open={Boolean(excludeTarget)} onOpenChange={(open) => { if (!open && !matching) { setExcludeTarget(null); setExcludeReason("") } }}>
-        <DialogContent showCloseButton={!matching}>
+      <Dialog open={Boolean(excludeTarget)} onOpenChange={(open) => { if (!open && !excludeBusy) { setExcludeTarget(null); setExcludeReason("") } }}>
+        <DialogContent showCloseButton={!excludeBusy}>
           <DialogHeader>
             <DialogTitle>Exclude from catalog matching</DialogTitle>
             <DialogDescription>Add a reason so reviewers understand why {excludeTarget?.item.desc ?? "this item"} should not use catalog pricing. (optional)</DialogDescription>
           </DialogHeader>
-          <Input value={excludeReason} onChange={(event) => setExcludeReason(event.target.value)} placeholder="Optional — reason this line should not use catalog pricing" aria-label={`Exclusion reason for ${excludeTarget?.item.desc ?? "item"}`} disabled={matching} autoFocus />
+          <Input value={excludeReason} onChange={(event) => setExcludeReason(event.target.value)} placeholder="Optional — reason this line should not use catalog pricing" aria-label={`Exclusion reason for ${excludeTarget?.item.desc ?? "item"}`} disabled={excludeBusy} autoFocus />
           <DialogFooter>
-            <Button type="button" variant="outline" disabled={matching} onClick={() => { setExcludeTarget(null); setExcludeReason("") }}>Cancel</Button>
-            <Button type="button" disabled={matching} onClick={() => void handleExclude()}>{matching ? <Loader2 className="animate-spin" /> : null}Exclude item</Button>
+            <Button type="button" variant="outline" disabled={excludeBusy} onClick={() => { setExcludeTarget(null); setExcludeReason("") }}>Cancel</Button>
+            <Button type="button" disabled={excludeBusy} onClick={() => void handleExclude()}>{excludeBusy ? <Loader2 className="animate-spin" /> : null}Exclude item</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -19,11 +19,35 @@ test('wires row delete with an optimistic hide and an undoable DELETE commit', (
   assert.match(source, /unit-combobox|UnitCombobox|units=\{units\}|onAddUnit=/)
 })
 
-test('blocks delete when there are pending edits', () => {
-  assert.match(source, /Save pending changes before deleting an item/)
+test('uses stable item identities for display and save resolution', () => {
+  assert.doesNotMatch(source, /function rowEditKey/)
+  assert.doesNotMatch(source, /\$\{row\.sectionIndex\}-\$\{row\.itemIndex\}/)
+  assert.match(source, /getBoqItemIdentityKey/)
+  assert.match(source, /applyBoqDetailEdits/)
+  assert.match(source, /resolveBoqDetailEdits/)
 })
 
-test('rechecks pending edits at commit time, not just at click time', () => {
-  // The pending-edit guard appears both at click time and at commit time.
-  assert.ok((source.match(/Save pending changes before deleting an item/g) || []).length >= 2, 'pending-edit guard must run at click time AND commit time')
+test('does not use one broad mutation busy flag', () => {
+  assert.doesNotMatch(source, /\bmutationBusy\b/)
+  assert.match(source, /editingDisabled=\{saving \|\| approving\}/)
+  assert.match(source, /disabled:\s*isReadOnly/)
+  assert.match(source, /disabled=\{addingItem/)
+})
+
+test('loads and persists workspace units through settings APIs', () => {
+  assert.match(source, /loadWorkspaceCustomUnits/)
+  assert.match(source, /addWorkspaceUnit/)
+  assert.match(source, /combineUnitOptions/)
+  assert.match(source, /workspaceUnitsError=/)
+  assert.match(source, /added to workspace units/)
+})
+
+test('coordinates overlapping mutations before force-applying a refresh', () => {
+  assert.match(source, /compareBoqUpdatedAt/)
+  assert.match(source, /activeCanonicalMutationsRef/)
+  assert.match(source, /mutationEpochRef/)
+  assert.match(source, /mutationOverlapRef/)
+  assert.match(source, /canonicalRefreshNeededRef/)
+  assert.match(source, /canonicalRefreshRef/)
+  assert.match(source, /refreshWasOvertaken/)
 })
