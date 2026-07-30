@@ -58,3 +58,16 @@ test('maps validation and cap failures without leaking infrastructure details', 
     assert.equal((await POST(request({ unit: 'bag' }))).status, status)
   }
 })
+
+test('maps a non-validation error from storage to a generic 500', async () => {
+  const POST = createWorkspaceUnitsPostHandler({
+    authenticate: async () => ({ user: {} }),
+    addUnit: async () => {
+      throw new SyntaxError('unexpected token in storage payload')
+    },
+  })
+
+  const response = await POST(request({ unit: 'bag' }))
+  assert.equal(response.status, 500)
+  assert.deepEqual(await response.json(), { error: 'Internal server error' })
+})

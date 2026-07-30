@@ -18,26 +18,12 @@ export function createWorkspaceUnitsPostHandler({
       return Response.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
+    // Parse the request body in its own narrow try/catch so that a
+    // SyntaxError from storage/Firestore (raised by addUnit below) can never
+    // be mistaken for malformed JSON.
+    let body: unknown
     try {
-      const body: unknown = await request.json()
-      if (
-        typeof body !== 'object'
-        || body === null
-        || Array.isArray(body)
-        || Object.keys(body).length !== 1
-        || !('unit' in body)
-      ) {
-        return Response.json(
-          { error: 'Request must contain only unit.' },
-          { status: 400 },
-        )
-      }
-
-      const result = await addUnit((body as { unit: unknown }).unit)
-      return Response.json({
-        unit: result.unit,
-        customUnits: result.customUnits,
-      })
+      body = await request.json()
     } catch (error) {
       if (error instanceof SyntaxError) {
         return Response.json(
@@ -45,6 +31,33 @@ export function createWorkspaceUnitsPostHandler({
           { status: 400 },
         )
       }
+      console.error('Error reading workspace unit request:', error)
+      return Response.json(
+        { error: 'Internal server error' },
+        { status: 500 },
+      )
+    }
+
+    if (
+      typeof body !== 'object'
+      || body === null
+      || Array.isArray(body)
+      || Object.keys(body).length !== 1
+      || !('unit' in body)
+    ) {
+      return Response.json(
+        { error: 'Request must contain only unit.' },
+        { status: 400 },
+      )
+    }
+
+    try {
+      const result = await addUnit((body as { unit: unknown }).unit)
+      return Response.json({
+        unit: result.unit,
+        customUnits: result.customUnits,
+      })
+    } catch (error) {
       if (error instanceof WorkspaceUnitError) {
         return Response.json(
           { error: error.message },
