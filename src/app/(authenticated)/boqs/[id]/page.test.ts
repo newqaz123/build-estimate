@@ -86,10 +86,13 @@ test('approves the saved version explicitly and warns before discarding drafts',
   // Amber "Unsaved changes" status beside the Save action.
   assert.match(source, /Unsaved changes/)
 
-  // The Approve request runs the explicit saved-version approval and is gated
-  // only by approvalBlockedReason — not by local drafts or invalid draft keys.
+  // The Approve request runs the explicit saved-version approval. Its disabled
+  // state is a render-safe gate (approvalDisabledReason) derived from canonical
+  // state — not local drafts or invalid draft keys; ref-based revalidation
+  // lives in the request/confirm handlers.
   assert.match(source, /onClick=\{requestApproval\}/)
-  assert.match(source, /disabled=\{Boolean\(approvalBlockedReason\(\)\)\}/)
+  assert.match(source, /disabled=\{Boolean\(approvalDisabledReason\)\}/)
+  assert.doesNotMatch(source, /disabled=\{Boolean\(approvalBlockedReason\(\)\)\}/)
   assert.doesNotMatch(source, /handleApprove/)
 
   // The approval PUT sends only the saved status and force-applies the response.
@@ -105,4 +108,76 @@ test('approves the saved version explicitly and warns before discarding drafts',
   assert.match(approveFlow, /replaceEdits\(\{\}\)/)
   assert.match(approveFlow, /replaceMetadataEdits\(\{\}\)/)
   assert.match(approveFlow, /setInvalidDraftKeys\(new Set\(\)\)/)
+})
+
+// Extract a top-level (2-space-indented) handler body up to the next sibling.
+function handlerBody(name: string): string {
+  const start = source.indexOf(`const ${name} =`)
+  assert.ok(start !== -1, `${name} is defined`)
+  const rest = source.slice(start)
+  const nextIdx = rest.search(/\n  const [A-Za-z]/)
+  return nextIdx === -1 ? rest : rest.slice(0, nextIdx)
+}
+
+test('splits approval gating into a render-safe gate and a ref-based event revalidation', () => {
+  // One shared predicate takes an explicit saved BOQ + active mutation count.
+  assert.match(source, /computeApprovalBlockedReason\s*=\s*\(\s*savedBoq[^)]*activeMutationCount/)
+  const predStart = source.indexOf('computeApprovalBlockedReason =')
+  const predEnd = source.indexOf('return undefined', predStart)
+  assert.ok(predStart !== -1 && predEnd !== -1, 'shared predicate is defined')
+  const predFn = source.slice(predStart, predEnd)
+  // Saved-version blockers are computed from the saved BOQ, never displayBoq.
+  assert.match(predFn, /buildReviewVerification\(savedBoq/)
+  assert.match(predFn, /getBoqCatalogReadiness\(savedBoq/)
+  // Pending deletes still block; local drafts and invalid component drafts do not.
+  assert.match(predFn, /pendingDeletes\.length\s*>\s*0/)
+  assert.doesNotMatch(predFn, /pendingChanges/)
+  assert.doesNotMatch(predFn, /invalidDraftKeys/)
+
+  // Render-safe gate: derived from canonical boq state + state mutation count.
+  assert.match(source, /approvalDisabledReason\s*=\s*computeApprovalBlockedReason\(\s*boq\s*,\s*activeCanonicalMutations\s*\)/)
+  assert.match(source, /disabled=\{Boolean\(approvalDisabledReason\)\}/)
+  assert.doesNotMatch(source, /disabled=\{Boolean\(approvalBlockedReason\(\)\)\}/)
+
+  // Event-only revalidation reads the synchronous refs.
+  assert.match(source, /computeApprovalBlockedReason\(\s*boqRef\.current\s*,\s*activeCanonicalMutationsRef\.current\s*\)/)
+})
+
+test('all canonical and draft action handlers respect the synchronous approval barrier', () => {
+  const barrierHandlers = [
+    'handleAcceptCatalogSuggestion',
+    'handleAiSuggest',
+    'handleEdit',
+    'handleAddMissingItem',
+    'handleIncludeOptional',
+    'handleDelete',
+    'handleMetadataChange',
+    'handleSaveAll',
+    'reloadAfterManualMatch',
+    'handleExclude',
+    'handleDeleteBoq',
+  ]
+  for (const name of barrierHandlers) {
+    assert.match(
+      handlerBody(name),
+      /approvalBarrierRef\.current/,
+      `${name} must guard with the synchronous approval barrier`,
+    )
+  }
+})
+
+test('clears drafts only after the saved version is force-applied and preserves them on failure', () => {
+  const approveStart = source.indexOf('const approveSavedVersion')
+  const approveEnd = source.indexOf('const requestApproval', approveStart)
+  assert.ok(approveStart !== -1 && approveEnd !== -1)
+  const approveFn = source.slice(approveStart, approveEnd)
+  const forceIdx = approveFn.indexOf('force: true')
+  const clearIdx = approveFn.indexOf('replaceEdits({})')
+  assert.ok(forceIdx !== -1, 'force-apply is present')
+  assert.ok(clearIdx > forceIdx, 'drafts cleared only after force-apply')
+  const failureStart = approveFn.indexOf('catch', forceIdx)
+  const failureBlock = approveFn.slice(failureStart)
+  assert.doesNotMatch(failureBlock, /replaceEdits\(\{\}\)/)
+  assert.doesNotMatch(failureBlock, /replaceMetadataEdits\(\{\}\)/)
+  assert.doesNotMatch(failureBlock, /setInvalidDraftKeys\(new Set/)
 })

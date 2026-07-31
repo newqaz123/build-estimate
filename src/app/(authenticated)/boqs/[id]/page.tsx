@@ -682,13 +682,13 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
     }
   }
 
-  // Approval of the saved version is gated only by `approvalBlockedReason`,
-  // which never considers local drafts (pendingChanges) or invalid component
-  // drafts — those are discarded by approving the version that is already
-  // saved. Saved-state blockers (verification/catalog), in-flight canonical
-  // mutations, pending deletes, and other actions still block approval.
-  const approvalBlockedReason = (): string | undefined => {
-    if (isReadOnly) return "This BOQ is approved and read only."
+  // Approval is for the saved version. `computeApprovalBlockedReason` is a
+  // single shared predicate that evaluates review/catalog blockers against an
+  // explicit saved BOQ and active-mutation count, so the same logic can serve a
+  // render-safe gate (state) and a synchronous event revalidation (refs)
+  // without reading refs during render. It deliberately ignores unsaved drafts.
+  const computeApprovalBlockedReason = (savedBoq: Boq, activeMutationCount: number): string | undefined => {
+    if (savedBoq.status === "approved") return "This BOQ is approved and read only."
     if (approving) return "Approval is already in progress."
     if (saving) return "Save is in progress. Wait for it to finish before approving the saved version."
     if (addingItem) return "Adding a missing item is in progress."
@@ -697,11 +697,32 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
     if (includingItemKeys.size > 0) return "Including an optional item is in progress."
     if (catalogModalBusy) return "Catalog matching is in progress."
     if (excludeBusy) return "Excluding an item is in progress."
-    if (activeCanonicalMutations > 0) return "Another change is still syncing. Wait for it to settle before approving the saved version."
-    if (verification.hasBlockingIssues) return "Resolve the review blockers before approving."
-    if (requireCatalogReadiness && catalogReadiness.blocking > 0) return "Resolve catalog matching before approving."
+    if (activeMutationCount > 0) return "Another change is still syncing. Wait for it to settle before approving the saved version."
+    // Saved-version blockers are verified against the canonical boq so drafts
+    // can neither fix nor introduce them.
+    const savedVerification = buildReviewVerification(savedBoq, {
+      vendor: savedBoq.vendor,
+      project: savedBoq.project,
+      workType: savedBoq.workType,
+      date: savedBoq.date,
+      items: savedBoq.sections.flatMap((section) => section.items),
+    })
+    if (savedVerification.hasBlockingIssues) return "Resolve the review blockers before approving."
+    if (requireCatalogReadiness) {
+      const savedCatalogReadiness = getBoqCatalogReadiness(savedBoq)
+      if (savedCatalogReadiness.blocking > 0) return "Resolve catalog matching before approving."
+    }
     return undefined
   }
+
+  // Render-safe gate: derived from canonical boq state + the state-tracked
+  // active mutation count. Never reads a ref, so it is safe to call in render.
+  const approvalDisabledReason = computeApprovalBlockedReason(boq, activeCanonicalMutations)
+
+  // Event-only revalidation: re-checks blockers synchronously against the refs
+  // so the click path stays accurate even mid render-batch.
+  const approvalBlockedReason = (): string | undefined =>
+    computeApprovalBlockedReason(boqRef.current, activeCanonicalMutationsRef.current)
 
   const approveSavedVersion = async () => {
     // Re-check blockers at execute time: the warning may have been open for a
@@ -877,7 +898,7 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
                 <Button type="button" variant="outline" size="sm" onClick={() => void handleSaveAll()} disabled={saving || approving || invalidDraftKeys.size > 0}>
                   {saving ? <Loader2 className="animate-spin" /> : <Save aria-hidden="true" />}Save draft
                 </Button>
-                <Button type="button" size="sm" onClick={requestApproval} disabled={Boolean(approvalBlockedReason())}>
+                <Button type="button" size="sm" onClick={requestApproval} disabled={Boolean(approvalDisabledReason)}>
                   {approving ? <Loader2 className="animate-spin" /> : <Check aria-hidden="true" />}Approve BOQ
                 </Button>
               </>
