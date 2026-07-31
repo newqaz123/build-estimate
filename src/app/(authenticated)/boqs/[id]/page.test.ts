@@ -243,21 +243,24 @@ test('Save clears only the captured snapshot drafts, preserving edits restored d
   // whole current draft — so an Undo restored mid-save survives.
   assert.match(saveBody, /clearBoqDetailDraftSnapshot\(editsRef\.current, editSnapshot\)/)
   assert.doesNotMatch(saveBody, /replaceEdits\(\{\}\)/)
-  // Metadata clears only the captured snapshot fields, not unrelated edits.
+  // Metadata clears only the captured snapshot fields, not unrelated edits,
+  // and only when the current value still equals the captured snapshot value
+  // (a newer same-field value is preserved).
   assert.match(saveBody, /Object\.entries\(metadataEditsRef\.current\)\.filter\(/)
-  assert.match(saveBody, /!\(field in metadataSnapshot\)/)
+  assert.match(saveBody, /!\(field in metadataSnapshot\)\s*\|\|\s*!Object\.is\(value, metadataSnapshot\[field as MetadataField\]\)/)
 })
 
 test('serial canonical mutations await the authoritative refresh before resolving', () => {
   // The mutation finally must await (not fire-and-forget) the required idle
   // refresh so the serial delete queue cannot start the next task first.
   const mutationBody = handlerBody('runCanonicalMutation')
+  // Literal await (not fire-and-forget) of the required idle refresh.
+  assert.match(mutationBody, /await refreshCanonicalAfterIdle\(\)/)
   assert.doesNotMatch(mutationBody, /void refreshCanonicalAfterIdle\(\)/)
-  const refreshCallIdx = mutationBody.indexOf('refreshCanonicalAfterIdle()')
-  assert.notStrictEqual(refreshCallIdx, -1)
+  const awaitIdx = mutationBody.indexOf('await refreshCanonicalAfterIdle()')
   const finallyIdx = mutationBody.lastIndexOf('finally')
   assert.ok(
-    refreshCallIdx > finallyIdx,
+    awaitIdx > finallyIdx,
     'refresh is awaited inside the mutation finally block',
   )
 
@@ -275,6 +278,25 @@ test('serial canonical mutations await the authoritative refresh before resolvin
   // The overtaken-replacement boundary is never fire-and-forget.
   assert.doesNotMatch(refreshBody, /void refreshCanonicalAfterIdle\(\)/)
   assert.doesNotMatch(refreshBody, /void refreshCanonicalAfterIdleRef\.current\(\)/)
+})
+
+test('a refresh network/parse failure unconditionally keeps a canonical refresh required', () => {
+  // A failed refresh (non-ok response or a thrown parse/network error) must
+  // unconditionally keep `canonicalRefreshNeededRef.current = true`: if
+  // overtaken this guarantees the awaited replacement scheduling, and if
+  // ordinary it stays required without looping (the finally only schedules a
+  // replacement when overtaken) so approval's explicit retry can recover.
+  const refreshBody = handlerBody('refreshCanonicalAfterIdle')
+  const catchIdx = refreshBody.indexOf('} catch {')
+  assert.notStrictEqual(catchIdx, -1, 'refresh has a catch block')
+  const catchBlock = refreshBody.slice(catchIdx)
+  const neededIdx = catchBlock.indexOf('canonicalRefreshNeededRef.current = true')
+  const overtakenIdx = catchBlock.indexOf('refreshWasOvertaken = true')
+  assert.notStrictEqual(neededIdx, -1, 'catch sets canonicalRefreshNeededRef.current = true')
+  assert.ok(
+    overtakenIdx === -1 || neededIdx < overtakenIdx,
+    'needed flag is set before the conditional overtaken check',
+  )
 })
 
 test('approval freshness gates on a render-safe in-flight refresh mirror with an event-time retry escape hatch', () => {

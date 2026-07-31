@@ -302,6 +302,13 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
         mutationOverlapRef.current = false
         canonicalRefreshNeededRef.current = false
       } catch {
+        // A failed refresh (non-ok response or a thrown parse/network error)
+        // must unconditionally keep the canonical refresh required: if
+        // overtaken this guarantees the awaited replacement scheduling, and if
+        // ordinary it stays required without looping (the finally only
+        // schedules a replacement when overtaken) so approval's explicit retry
+        // can recover.
+        canonicalRefreshNeededRef.current = true
         if (activeCanonicalMutationsRef.current > 0 || mutationEpochRef.current !== epoch) {
           refreshWasOvertaken = true
         }
@@ -692,12 +699,14 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
         }
         // Common success boundary: clear only the captured snapshot drafts so
         // edits restored or created during the in-flight Save (e.g. an Undo)
-        // survive. Clearing the snapshot — not the whole current draft — keeps
-        // retry idempotent and preserves unrelated work.
+        // survive. A captured item/metadata key is removed only when its current
+        // value still equals the snapshot value; a newer same-key value is kept.
         replaceMetadataEdits(
           Object.fromEntries(
             Object.entries(metadataEditsRef.current).filter(
-              ([field]) => !(field in metadataSnapshot),
+              ([field, value]) =>
+                !(field in metadataSnapshot) ||
+                !Object.is(value, metadataSnapshot[field as MetadataField]),
             ),
           ) as MetadataEdits,
         )

@@ -211,6 +211,47 @@ test("clearing a saved snapshot preserves drafts restored or created after captu
   )
 })
 
+test("clearing a saved snapshot removes an unchanged same-key draft but preserves a changed one", () => {
+  const snapshot = { "id:A": { desc: "a", qty: 1 } }
+  // Same identity key, unchanged value -> cleared (already saved).
+  assert.deepEqual(
+    clearBoqDetailDraftSnapshot({ "id:A": { desc: "a", qty: 1 } }, snapshot),
+    {},
+  )
+  // Equality is field-order independent (deterministic shallow record
+  // equality, not JSON string ordering).
+  assert.deepEqual(
+    clearBoqDetailDraftSnapshot({ "id:A": { qty: 1, desc: "a" } }, snapshot),
+    {},
+  )
+  // Same identity key, value changed during the in-flight Save -> preserved.
+  assert.deepEqual(
+    clearBoqDetailDraftSnapshot({ "id:A": { desc: "a", qty: 9 } }, snapshot),
+    { "id:A": { desc: "a", qty: 9 } },
+  )
+  // A field added during the in-flight Save is a change -> preserved.
+  assert.deepEqual(
+    clearBoqDetailDraftSnapshot(
+      { "id:A": { desc: "a", qty: 1, rate: 5 } },
+      snapshot,
+    ),
+    { "id:A": { desc: "a", qty: 1, rate: 5 } },
+  )
+  // A field dropped during the in-flight Save is a change -> preserved.
+  assert.deepEqual(
+    clearBoqDetailDraftSnapshot({ "id:A": { desc: "a" } }, snapshot),
+    { "id:A": { desc: "a" } },
+  )
+  // Object.is value semantics: NaN differs from NaN's absence and 0 from "0".
+  assert.deepEqual(
+    clearBoqDetailDraftSnapshot(
+      { "id:A": { desc: "a", qty: 1 }, "id:B": { qty: 2 } },
+      { "id:A": { desc: "a", qty: 1 } },
+    ),
+    { "id:B": { qty: 2 } },
+  )
+})
+
 test("orders canonical responses by updatedAt and rejects invalid revisions", () => {
   assert.equal(
     compareBoqUpdatedAt(

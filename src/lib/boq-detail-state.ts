@@ -153,11 +153,32 @@ export function restoreBoqDetailDraft(
 }
 
 /**
- * Returns a copy of `edits` with every key present in `snapshot` removed, while
- * leaving any drafts created or restored after the snapshot was captured (for
- * example a draft restored by an Undo during an in-flight Save) completely
- * intact. Used at the Save success boundary so clearing the saved drafts never
- * discards unrelated or newer work.
+ * Deterministic shallow equality for two primitive-field edit records: equal
+ * when they share the same keys and every value is `Object.is`-equal. Order-
+ * independent (no JSON string comparison), so two records with the same fields in
+ * a different declaration order compare equal.
+ */
+function shallowEditRecordEqual(
+  a: BoqDetailEdits[string],
+  b: BoqDetailEdits[string],
+): boolean {
+  const aKeys = Object.keys(a)
+  const bKeys = Object.keys(b)
+  if (aKeys.length !== bKeys.length) return false
+  for (const key of aKeys) {
+    if (!Object.prototype.hasOwnProperty.call(b, key)) return false
+    if (!Object.is(a[key], b[key])) return false
+  }
+  return true
+}
+
+/**
+ * Returns a copy of `edits` with a snapshot key removed only when the current
+ * draft value still equals the captured snapshot value. Drafts created or
+ * restored after capture (absent from the snapshot) and drafts for the same key
+ * that were changed during the in-flight Save (current value no longer equals
+ * the captured value) are preserved. Used at the Save success boundary so
+ * clearing the saved drafts never discards unrelated or newer work.
  */
 export function clearBoqDetailDraftSnapshot(
   edits: BoqDetailEdits,
@@ -166,7 +187,12 @@ export function clearBoqDetailDraftSnapshot(
   if (Object.keys(snapshot).length === 0) return edits
   const next: BoqDetailEdits = {}
   for (const key of Object.keys(edits)) {
-    if (!(key in snapshot)) next[key] = edits[key]
+    const captured = snapshot[key]
+    // Keep the draft when it was created/restored after capture (absent from
+    // the snapshot) or when the same key changed during the in-flight Save.
+    if (captured === undefined || !shallowEditRecordEqual(edits[key]!, captured)) {
+      next[key] = edits[key]
+    }
   }
   return next
 }
