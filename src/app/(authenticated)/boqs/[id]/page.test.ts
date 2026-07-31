@@ -181,3 +181,37 @@ test('clears drafts only after the saved version is force-applied and preserves 
   assert.doesNotMatch(failureBlock, /replaceMetadataEdits\(\{\}\)/)
   assert.doesNotMatch(failureBlock, /setInvalidDraftKeys\(new Set/)
 })
+
+test('requestApproval and approveSavedVersion each recheck blockers via approvalBlockedReason before acting', () => {
+  // Characterization coverage: the production already re-validates at the top of
+  // each handler. These independent slices pin that ordering so a future refactor
+  // cannot drop or reorder the synchronous ref-based recheck.
+
+  // requestApproval (click handler): must re-validate before opening the
+  // warning or delegating to approveSavedVersion.
+  const requestBody = handlerBody('requestApproval')
+  const requestCheck = requestBody.indexOf('approvalBlockedReason()')
+  assert.notStrictEqual(requestCheck, -1, 'requestApproval calls approvalBlockedReason()')
+  assert.ok(
+    requestBody.indexOf('setApproveWarningOpen') > requestCheck,
+    'requestApproval opens the warning only after rechecking blockers',
+  )
+  assert.ok(
+    requestBody.indexOf('approveSavedVersion') > requestCheck,
+    'requestApproval delegates to approveSavedVersion only after rechecking blockers',
+  )
+
+  // approveSavedVersion (confirm handler): must re-validate before raising the
+  // synchronous barrier or publishing the approving state.
+  const approveBody = handlerBody('approveSavedVersion')
+  const approveCheck = approveBody.indexOf('approvalBlockedReason()')
+  assert.notStrictEqual(approveCheck, -1, 'approveSavedVersion calls approvalBlockedReason()')
+  assert.ok(
+    approveBody.indexOf('approvalBarrierRef.current = true') > approveCheck,
+    'approveSavedVersion raises the approval barrier only after rechecking blockers',
+  )
+  assert.ok(
+    approveBody.indexOf('setApproving(true)') > approveCheck,
+    'approveSavedVersion publishes the approving state only after rechecking blockers',
+  )
+})
