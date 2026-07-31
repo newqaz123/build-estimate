@@ -303,20 +303,23 @@ test('a refresh failure keeps the canonical refresh required and schedules repla
   // Finally: the awaited replacement is invoked ONLY under the combined guard
   // (overtaken AND active mutation count zero AND refresh-needed), which pins
   // ordinary-failure no-loop vs overtaken replacement.
+  const guardedReplacement = /if \(\s*refreshWasOvertaken\s*&&\s*activeCanonicalMutationsRef\.current === 0\s*&&\s*canonicalRefreshNeededRef\.current\s*\) \{[^}]*await refreshCanonicalAfterIdleRef\.current\(\)[^}]*\}/
   assert.match(
     finallyBlock,
-    /if \([^)]*refreshWasOvertaken[^)]*activeCanonicalMutationsRef\.current === 0[^)]*canonicalRefreshNeededRef\.current[^)]*\)/,
+    guardedReplacement,
+    'replacement await is nested inside the complete overtaken-refresh guard',
   )
   const guardIdx = finallyBlock.indexOf(
     'refreshWasOvertaken && activeCanonicalMutationsRef.current === 0 && canonicalRefreshNeededRef.current',
   )
+  assert.notStrictEqual(guardIdx, -1, 'combined replacement guard exists')
   const replIdx = finallyBlock.search(
     /await refreshCanonicalAfterIdleRef\.current\(\)/,
   )
   assert.notStrictEqual(replIdx, -1, 'finally awaits the replacement refresh')
   assert.ok(
     replIdx > guardIdx,
-    'replacement await sits inside the guarded condition',
+    'replacement await follows the combined guard',
   )
   // No unguarded replacement invocation precedes the awaited one.
   assert.doesNotMatch(
