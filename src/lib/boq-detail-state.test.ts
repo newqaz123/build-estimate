@@ -242,7 +242,28 @@ test("clearing a saved snapshot removes an unchanged same-key draft but preserve
     clearBoqDetailDraftSnapshot({ "id:A": { desc: "a" } }, snapshot),
     { "id:A": { desc: "a" } },
   )
-  // Object.is value semantics: NaN differs from NaN's absence and 0 from "0".
+  // Object.is value semantics: NaN equals NaN (unlike ===), so an unchanged
+  // NaN-valued draft is cleared; numeric 0 vs string "0" are distinct (type
+  // sensitive), so a value of the wrong type is preserved.
+  assert.deepEqual(
+    clearBoqDetailDraftSnapshot(
+      { "id:A": { qty: NaN } },
+      { "id:A": { qty: NaN } },
+    ),
+    {},
+  )
+  assert.deepEqual(
+    clearBoqDetailDraftSnapshot(
+      { "id:A": { qty: 0 } },
+      { "id:A": { qty: "0" } },
+    ),
+    { "id:A": { qty: 0 } },
+  )
+  assert.deepEqual(
+    clearBoqDetailDraftSnapshot({ "id:A": { qty: 0 } }, { "id:A": { qty: 0 } }),
+    {},
+  )
+  // An unrelated key is always preserved regardless of value semantics.
   assert.deepEqual(
     clearBoqDetailDraftSnapshot(
       { "id:A": { desc: "a", qty: 1 }, "id:B": { qty: 2 } },

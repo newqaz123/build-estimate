@@ -280,22 +280,48 @@ test('serial canonical mutations await the authoritative refresh before resolvin
   assert.doesNotMatch(refreshBody, /void refreshCanonicalAfterIdleRef\.current\(\)/)
 })
 
-test('a refresh network/parse failure unconditionally keeps a canonical refresh required', () => {
-  // A failed refresh (non-ok response or a thrown parse/network error) must
-  // unconditionally keep `canonicalRefreshNeededRef.current = true`: if
-  // overtaken this guarantees the awaited replacement scheduling, and if
-  // ordinary it stays required without looping (the finally only schedules a
-  // replacement when overtaken) so approval's explicit retry can recover.
+test('a refresh failure keeps the canonical refresh required and schedules replacement only when overtaken', () => {
+  // Slice the catch and finally blocks of refreshCanonicalAfterIdle
+  // independently to pin the failure-recovery contract.
   const refreshBody = handlerBody('refreshCanonicalAfterIdle')
   const catchIdx = refreshBody.indexOf('} catch {')
+  const finallyIdx = refreshBody.indexOf('} finally {')
   assert.notStrictEqual(catchIdx, -1, 'refresh has a catch block')
-  const catchBlock = refreshBody.slice(catchIdx)
-  const neededIdx = catchBlock.indexOf('canonicalRefreshNeededRef.current = true')
-  const overtakenIdx = catchBlock.indexOf('refreshWasOvertaken = true')
-  assert.notStrictEqual(neededIdx, -1, 'catch sets canonicalRefreshNeededRef.current = true')
+  assert.notStrictEqual(finallyIdx, -1, 'refresh has a finally block')
+  assert.ok(finallyIdx > catchIdx, 'finally follows catch')
+  const catchBlock = refreshBody.slice(catchIdx, finallyIdx)
+  const finallyBlock = refreshBody.slice(
+    finallyIdx,
+    refreshBody.indexOf('ownedTask = runRefresh()'),
+  )
+
+  // Catch: unconditionally keep the refresh required, and do NOT itself trigger
+  // an immediate refresh/replacement (so an ordinary failure cannot loop).
+  assert.match(catchBlock, /canonicalRefreshNeededRef\.current = true/)
+  assert.doesNotMatch(catchBlock, /refreshCanonicalAfterIdle/)
+
+  // Finally: the awaited replacement is invoked ONLY under the combined guard
+  // (overtaken AND active mutation count zero AND refresh-needed), which pins
+  // ordinary-failure no-loop vs overtaken replacement.
+  assert.match(
+    finallyBlock,
+    /if \([^)]*refreshWasOvertaken[^)]*activeCanonicalMutationsRef\.current === 0[^)]*canonicalRefreshNeededRef\.current[^)]*\)/,
+  )
+  const guardIdx = finallyBlock.indexOf(
+    'refreshWasOvertaken && activeCanonicalMutationsRef.current === 0 && canonicalRefreshNeededRef.current',
+  )
+  const replIdx = finallyBlock.search(
+    /await refreshCanonicalAfterIdleRef\.current\(\)/,
+  )
+  assert.notStrictEqual(replIdx, -1, 'finally awaits the replacement refresh')
   assert.ok(
-    overtakenIdx === -1 || neededIdx < overtakenIdx,
-    'needed flag is set before the conditional overtaken check',
+    replIdx > guardIdx,
+    'replacement await sits inside the guarded condition',
+  )
+  // No unguarded replacement invocation precedes the awaited one.
+  assert.doesNotMatch(
+    finallyBlock.slice(0, replIdx),
+    /refreshCanonicalAfterIdleRef\.current\(\)/,
   )
 })
 
