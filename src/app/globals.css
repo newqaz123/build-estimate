@@ -1518,6 +1518,7 @@
   .unified-boq-delete-button,
   .boq-row-action-tooltip,
   .alert-dialog-content,
+  [data-slot="alert-dialog-backdrop"],
   .boq-unsaved-status {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;

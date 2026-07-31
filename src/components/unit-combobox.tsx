@@ -104,6 +104,25 @@ export function UnitCombobox({
     }
   }, [closePopup, open, readOnly])
 
+  // When the combobox transitions to read-only or disabled while a workspace-unit
+  // add is in flight (e.g. the BOQ is approved), invalidate the stale operation
+  // (generation bump) and reset the popup so its completion can neither call
+  // onChange nor repopulate errors/loading, and the popup never reopens on
+  // unlock. The prev-locked ref guard is the recognized cascade-free idiom.
+  const prevLockedRef = useRef(readOnly || disabled)
+  useEffect(() => {
+    if (prevLockedRef.current !== (readOnly || disabled)) {
+      prevLockedRef.current = readOnly || disabled
+      addOperationGenerationRef.current += 1
+      setOpen(false)
+      setQuery('')
+      setAdding(false)
+      setDraft('')
+      setAddError(null)
+      setAddingUnit(false)
+    }
+  }, [readOnly, disabled])
+
   if (readOnly) {
     return <span className="unit-combobox-readonly">{value || '—'}</span>
   }

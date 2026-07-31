@@ -152,6 +152,25 @@ export function restoreBoqDetailDraft(
   return { ...edits, [identityKey]: draft }
 }
 
+/**
+ * Returns a copy of `edits` with every key present in `snapshot` removed, while
+ * leaving any drafts created or restored after the snapshot was captured (for
+ * example a draft restored by an Undo during an in-flight Save) completely
+ * intact. Used at the Save success boundary so clearing the saved drafts never
+ * discards unrelated or newer work.
+ */
+export function clearBoqDetailDraftSnapshot(
+  edits: BoqDetailEdits,
+  snapshot: BoqDetailEdits,
+): BoqDetailEdits {
+  if (Object.keys(snapshot).length === 0) return edits
+  const next: BoqDetailEdits = {}
+  for (const key of Object.keys(edits)) {
+    if (!(key in snapshot)) next[key] = edits[key]
+  }
+  return next
+}
+
 export function reconcileBoqMutation(
   previous: Boq,
   incoming: Boq,

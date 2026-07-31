@@ -398,7 +398,7 @@ test('renders a hover-revealed delete action on each priced row when editable', 
 
 test('omits the delete action when readOnly', () => {
   const html = renderTable([{ header: 'Valves', items: [item()] }], { readOnly: true })
-  assert.doesNotMatch(html, /Delete row/)
+  assert.doesNotMatch(html, /Delete item/)
 })
 
 test('renders a sticky 40px delete rail without dropping columns', () => {

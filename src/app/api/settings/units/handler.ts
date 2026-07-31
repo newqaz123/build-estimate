@@ -13,7 +13,19 @@ export function createWorkspaceUnitsPostHandler({
   addUnit,
 }: WorkspaceUnitsHandlerDependencies) {
   return async function POST(request: Request): Promise<Response> {
-    const session = await authenticate()
+    let session
+    try {
+      session = await authenticate()
+    } catch (error) {
+      // An authentication backend rejection (Firestore/JWT/transport error)
+      // must surface as a generic 500 so infrastructure details never leak.
+      // The normal unauthenticated result remains a 401 below.
+      console.error('Error authenticating workspace unit request:', error)
+      return Response.json(
+        { error: 'Internal server error' },
+        { status: 500 },
+      )
+    }
     if (!session?.user) {
       return Response.json({ error: 'Unauthorized' }, { status: 401 })
     }

@@ -58,6 +58,7 @@ import { buildBoqCsv } from "@/lib/boq-csv"
 import { getBoqCatalogReadiness } from "@/lib/boq-catalog-readiness"
 import {
   applyBoqDetailEdits,
+  clearBoqDetailDraftSnapshot,
   compareBoqUpdatedAt,
   reconcileBoqMutation,
   resolveBoqDetailEdits,
@@ -216,6 +217,13 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   const mutationOverlapRef = useRef(false)
   const canonicalRefreshNeededRef = useRef(false)
   const canonicalRefreshRef = useRef<Promise<void> | null>(null)
+  // Latest-ref indirection so an overtaken refresh can await its own
+  // replacement without a self-referential call the compiler cannot preserve
+  // as manual memoization.
+  const refreshCanonicalAfterIdleRef = useRef<() => Promise<void>>(async () => {})
+  // Render-safe mirror of whether a canonical refresh is in flight, so the
+  // approval gate can block during a refresh without reading a ref in render.
+  const [canonicalRefreshInFlight, setCanonicalRefreshInFlight] = useState(false)
   const approvalBarrierRef = useRef(false)
   const [approveWarningOpen, setApproveWarningOpen] = useState(false)
   const approveCancelRef = useRef<HTMLButtonElement>(null)
@@ -301,16 +309,27 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
       } finally {
         if (canonicalRefreshRef.current === ownedTask) {
           canonicalRefreshRef.current = null
+          setCanonicalRefreshInFlight(false)
         }
         if (refreshWasOvertaken && activeCanonicalMutationsRef.current === 0 && canonicalRefreshNeededRef.current) {
-          void refreshCanonicalAfterIdle()
+          // Await the replacement AFTER clearing the old promise (via the
+          // latest-ref indirection) so an overtaken refresh cannot resolve until
+          // its authoritative replacement completes.
+          await refreshCanonicalAfterIdleRef.current()
         }
       }
     }
     ownedTask = runRefresh()
     canonicalRefreshRef.current = ownedTask
+    setCanonicalRefreshInFlight(true)
     return ownedTask
   }, [applyMutationBoq])
+
+  // Keep the latest-ref indirection in sync so the overtaken refresh always
+  // awaits the current replacement implementation.
+  useEffect(() => {
+    refreshCanonicalAfterIdleRef.current = refreshCanonicalAfterIdle
+  }, [refreshCanonicalAfterIdle])
 
   const runCanonicalMutation = useCallback(
     async <T,>(work: () => Promise<T>): Promise<T> => {
@@ -329,7 +348,9 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
           activeCanonicalMutationsRef.current === 0
           && (mutationOverlapRef.current || canonicalRefreshNeededRef.current)
         ) {
-          void refreshCanonicalAfterIdle()
+          // Await the authoritative refresh so the serial delete queue (and any
+          // other caller) cannot start the next task before it fully completes.
+          await refreshCanonicalAfterIdle()
         }
       }
     },
@@ -510,14 +531,16 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
     if (isReadOnly || approving || approvalBarrierRef.current) return
     if (!row.item.optional || !row.item.excludedFromTotal) return
     const identityKey = row.identityKey ?? getBoqItemIdentityKey(row.item)
-    if (identityKey && includingItemKeys.has(identityKey)) return
-    if (identityKey) {
-      setIncludingItemKeys((prev) => {
-        const next = new Set(prev)
-        next.add(identityKey)
-        return next
-      })
+    if (!identityKey || row.identityIssue) {
+      toast.error("This item has no unique identity and cannot be edited.")
+      return
     }
+    if (includingItemKeys.has(identityKey)) return
+    setIncludingItemKeys((prev) => {
+      const next = new Set(prev)
+      next.add(identityKey)
+      return next
+    })
     try {
       await runCanonicalMutation(async () => {
         const response = await fetch(`/api/boqs/${encodeURIComponent(boqRef.current.id)}/items`, {
@@ -532,13 +555,11 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "The optional item could not be included.")
     } finally {
-      if (identityKey) {
-        setIncludingItemKeys((prev) => {
-          const next = new Set(prev)
-          next.delete(identityKey)
-          return next
-        })
-      }
+      setIncludingItemKeys((prev) => {
+        const next = new Set(prev)
+        next.delete(identityKey)
+        return next
+      })
     }
   }
 
@@ -669,10 +690,18 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
           applyMutationBoq(result.boq ?? result)
           synced = result.sync?.affectedItems ?? 0
         }
-        // Common success boundary: clear both snapshots together only after
-        // every request in Save draft has succeeded, so retry stays idempotent.
-        replaceMetadataEdits({})
-        replaceEdits({})
+        // Common success boundary: clear only the captured snapshot drafts so
+        // edits restored or created during the in-flight Save (e.g. an Undo)
+        // survive. Clearing the snapshot — not the whole current draft — keeps
+        // retry idempotent and preserves unrelated work.
+        replaceMetadataEdits(
+          Object.fromEntries(
+            Object.entries(metadataEditsRef.current).filter(
+              ([field]) => !(field in metadataSnapshot),
+            ),
+          ) as MetadataEdits,
+        )
+        replaceEdits(clearBoqDetailDraftSnapshot(editsRef.current, editSnapshot))
         toast.success(synced > 0 ? `All changes saved · synced ${synced} linked item${synced === 1 ? "" : "s"}` : "All changes saved")
       })
     } catch (error) {
@@ -687,7 +716,11 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   // explicit saved BOQ and active-mutation count, so the same logic can serve a
   // render-safe gate (state) and a synchronous event revalidation (refs)
   // without reading refs during render. It deliberately ignores unsaved drafts.
-  const computeApprovalBlockedReason = (savedBoq: Boq, activeMutationCount: number): string | undefined => {
+  const computeApprovalBlockedReason = (
+    savedBoq: Boq,
+    activeMutationCount: number,
+    refresh: { inFlight: boolean; required?: boolean },
+  ): string | undefined => {
     if (savedBoq.status === "approved") return "This BOQ is approved and read only."
     if (approving) return "Approval is already in progress."
     if (saving) return "Save is in progress. Wait for it to finish before approving the saved version."
@@ -698,6 +731,8 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
     if (catalogModalBusy) return "Catalog matching is in progress."
     if (excludeBusy) return "Excluding an item is in progress."
     if (activeMutationCount > 0) return "Another change is still syncing. Wait for it to settle before approving the saved version."
+    if (refresh.inFlight) return "The latest BOQ is still refreshing. Wait for it to finish, then retry approval."
+    if (refresh.required) return "The latest BOQ needs to refresh before approval. Retry in a moment."
     // Saved-version blockers are verified against the canonical boq so drafts
     // can neither fix nor introduce them.
     const savedVerification = buildReviewVerification(savedBoq, {
@@ -716,19 +751,38 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   }
 
   // Render-safe gate: derived from canonical boq state + the state-tracked
-  // active mutation count. Never reads a ref, so it is safe to call in render.
-  const approvalDisabledReason = computeApprovalBlockedReason(boq, activeCanonicalMutations)
+  // active mutation count + the in-flight refresh state mirror. Never reads a
+  // ref, so it is safe to call in render. It blocks on an in-flight refresh but
+  // intentionally not on `required`, so an approval attempt can still schedule a
+  // needed refresh and ask the user to retry (no permanent no-retry dead end).
+  const approvalDisabledReason = computeApprovalBlockedReason(
+    boq,
+    activeCanonicalMutations,
+    { inFlight: canonicalRefreshInFlight },
+  )
 
   // Event-only revalidation: re-checks blockers synchronously against the refs
-  // so the click path stays accurate even mid render-batch.
+  // so the click path stays accurate even mid render-batch, including the
+  // in-flight and required canonical-refresh refs.
   const approvalBlockedReason = (): string | undefined =>
-    computeApprovalBlockedReason(boqRef.current, activeCanonicalMutationsRef.current)
+    computeApprovalBlockedReason(
+      boqRef.current,
+      activeCanonicalMutationsRef.current,
+      { inFlight: canonicalRefreshRef.current !== null, required: canonicalRefreshNeededRef.current },
+    )
 
   const approveSavedVersion = async () => {
     // Re-check blockers at execute time: the warning may have been open for a
     // while and the canonical state could have shifted underneath us.
     const blockedReason = approvalBlockedReason()
     if (blockedReason) {
+      // If approval is only blocked by a required-but-not-in-flight canonical
+      // refresh, kick it off so retrying isn't a permanent no-retry dead end.
+      if (canonicalRefreshNeededRef.current && !canonicalRefreshRef.current) {
+        void refreshCanonicalAfterIdle()
+        toast.error("Refreshing the latest BOQ. Please retry approval in a moment.")
+        return
+      }
       toast.error(blockedReason)
       return
     }
@@ -767,6 +821,13 @@ function CanonicalBoqWorkspace({ boq, onBoqChange }: { boq: Boq; onBoqChange: (n
   const requestApproval = () => {
     const blockedReason = approvalBlockedReason()
     if (blockedReason) {
+      // If approval is only blocked by a required-but-not-in-flight canonical
+      // refresh, kick it off so retrying isn't a permanent no-retry dead end.
+      if (canonicalRefreshNeededRef.current && !canonicalRefreshRef.current) {
+        void refreshCanonicalAfterIdle()
+        toast.error("Refreshing the latest BOQ. Please retry approval in a moment.")
+        return
+      }
       toast.error(blockedReason)
       return
     }

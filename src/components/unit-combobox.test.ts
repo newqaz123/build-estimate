@@ -113,3 +113,15 @@ test('routes both selection paths through selectUnit rather than direct onChange
     /if \(existingUnit\) \{\s+selectUnit\(existingUnit\)\s+return/,
   )
 })
+
+test('invalidates in-flight add operations and closes the popup when readOnly or disabled transitions true', () => {
+  // A prev-locked ref guards a cascade-free effect (the recognized
+  // setState-in-effect idiom) that bumps the add-generation token and resets
+  // popup/loading/error state exactly when readOnly or disabled changes, so a
+  // stale completion can neither call onChange nor repopulate errors/loading.
+  assert.match(source, /const prevLockedRef = useRef\(readOnly \|\| disabled\)/)
+  assert.match(
+    source,
+    /useEffect\(\(\) => \{\s+if \(prevLockedRef\.current !== \(readOnly \|\| disabled\)\) \{\s+prevLockedRef\.current = readOnly \|\| disabled\s+addOperationGenerationRef\.current \+= 1[\s\S]*?setAddingUnit\(false\)\s+\}\s+\}, \[readOnly, disabled\]\)/,
+  )
+})

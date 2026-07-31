@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import {
   applyBoqDetailEdits,
+  clearBoqDetailDraftSnapshot,
   compareBoqUpdatedAt,
   reconcileBoqMutation,
   restoreBoqDetailDraft,
@@ -180,6 +181,33 @@ test("delete staging removes and restores only the selected draft", () => {
   assert.deepEqual(
     restoreBoqDetailDraft(taken.edits, "id:first", taken.draft),
     original,
+  )
+})
+
+test("clearing a saved snapshot preserves drafts restored or created after capture", () => {
+  // After a successful Save, only the captured snapshot drafts should be cleared.
+  // A draft restored by an Undo during the in-flight Save (a key absent from the
+  // snapshot) must survive the success boundary intact.
+  const snapshot = { "id:A": { desc: "a" } }
+  const restoredDuringSave = {
+    "id:A": { desc: "a" },
+    "code:B": { qty: 2 },
+  }
+  assert.deepEqual(clearBoqDetailDraftSnapshot(restoredDuringSave, snapshot), {
+    "code:B": { qty: 2 },
+  })
+  // An empty snapshot clears nothing.
+  assert.deepEqual(
+    clearBoqDetailDraftSnapshot(restoredDuringSave, {}),
+    restoredDuringSave,
+  )
+  // Unrelated drafts across many sections are all preserved.
+  assert.deepEqual(
+    clearBoqDetailDraftSnapshot(
+      { "id:A": { desc: "a" }, "id:C": { rate: 5 }, "code:B": { qty: 2 } },
+      { "id:A": { desc: "a" } },
+    ),
+    { "id:C": { rate: 5 }, "code:B": { qty: 2 } },
   )
 })
 

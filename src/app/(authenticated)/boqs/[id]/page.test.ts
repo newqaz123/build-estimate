@@ -134,13 +134,16 @@ test('splits approval gating into a render-safe gate and a ref-based event reval
   assert.doesNotMatch(predFn, /pendingChanges/)
   assert.doesNotMatch(predFn, /invalidDraftKeys/)
 
-  // Render-safe gate: derived from canonical boq state + state mutation count.
-  assert.match(source, /approvalDisabledReason\s*=\s*computeApprovalBlockedReason\(\s*boq\s*,\s*activeCanonicalMutations\s*\)/)
+  // Render-safe gate: derived from canonical boq state + the state mutation
+  // count + the in-flight refresh state mirror. It intentionally does NOT gate on
+  // `required` so an approval attempt can still schedule a needed refresh.
+  assert.match(source, /approvalDisabledReason\s*=\s*computeApprovalBlockedReason\(\s*boq\s*,\s*activeCanonicalMutations\s*,\s*\{\s*inFlight:\s*canonicalRefreshInFlight\s*\}/)
   assert.match(source, /disabled=\{Boolean\(approvalDisabledReason\)\}/)
   assert.doesNotMatch(source, /disabled=\{Boolean\(approvalBlockedReason\(\)\)\}/)
 
-  // Event-only revalidation reads the synchronous refs.
-  assert.match(source, /computeApprovalBlockedReason\(\s*boqRef\.current\s*,\s*activeCanonicalMutationsRef\.current\s*\)/)
+  // Event-only revalidation reads the synchronous refs, including the in-flight
+  // and required canonical-refresh refs.
+  assert.match(source, /computeApprovalBlockedReason\(\s*boqRef\.current\s*,\s*activeCanonicalMutationsRef\.current\s*,\s*\{\s*inFlight:\s*canonicalRefreshRef\.current !== null,\s*required:\s*canonicalRefreshNeededRef\.current\s*\}/)
 })
 
 test('all canonical and draft action handlers respect the synchronous approval barrier', () => {
@@ -230,4 +233,81 @@ test('approveSavedVersion rechecks blockers before the network request and befor
     approveBody.indexOf('approvalBarrierRef.current = true') > approveCheck,
     'approveSavedVersion raises the barrier only after rechecking blockers (retained)',
   )
+})
+
+test('Save clears only the captured snapshot drafts, preserving edits restored during the in-flight save', () => {
+  const saveBody = handlerBody('handleSaveAll')
+  assert.match(saveBody, /const editSnapshot = editsRef\.current/)
+  assert.match(saveBody, /const metadataSnapshot = metadataEditsRef\.current/)
+  // Success boundary clears only the snapshot via the pure helper — never the
+  // whole current draft — so an Undo restored mid-save survives.
+  assert.match(saveBody, /clearBoqDetailDraftSnapshot\(editsRef\.current, editSnapshot\)/)
+  assert.doesNotMatch(saveBody, /replaceEdits\(\{\}\)/)
+  // Metadata clears only the captured snapshot fields, not unrelated edits.
+  assert.match(saveBody, /Object\.entries\(metadataEditsRef\.current\)\.filter\(/)
+  assert.match(saveBody, /!\(field in metadataSnapshot\)/)
+})
+
+test('serial canonical mutations await the authoritative refresh before resolving', () => {
+  // The mutation finally must await (not fire-and-forget) the required idle
+  // refresh so the serial delete queue cannot start the next task first.
+  const mutationBody = handlerBody('runCanonicalMutation')
+  assert.doesNotMatch(mutationBody, /void refreshCanonicalAfterIdle\(\)/)
+  const refreshCallIdx = mutationBody.indexOf('refreshCanonicalAfterIdle()')
+  assert.notStrictEqual(refreshCallIdx, -1)
+  const finallyIdx = mutationBody.lastIndexOf('finally')
+  assert.ok(
+    refreshCallIdx > finallyIdx,
+    'refresh is awaited inside the mutation finally block',
+  )
+
+  // An overtaken refresh must await its replacement AFTER clearing the old
+  // promise, so callers cannot return between the old and replacement refreshes.
+  const refreshBody = handlerBody('refreshCanonicalAfterIdle')
+  const clearIdx = refreshBody.indexOf('canonicalRefreshRef.current = null')
+  const replIdx = refreshBody.search(/await refreshCanonicalAfterIdleRef\.current\(\)/)
+  assert.notStrictEqual(clearIdx, -1)
+  assert.notStrictEqual(replIdx, -1)
+  assert.ok(
+    replIdx > clearIdx,
+    'overtaken replacement refresh is awaited after clearing the old promise',
+  )
+  // The overtaken-replacement boundary is never fire-and-forget.
+  assert.doesNotMatch(refreshBody, /void refreshCanonicalAfterIdle\(\)/)
+  assert.doesNotMatch(refreshBody, /void refreshCanonicalAfterIdleRef\.current\(\)/)
+})
+
+test('approval freshness gates on a render-safe in-flight refresh mirror with an event-time retry escape hatch', () => {
+  // Render-safe state mirror for the in-flight canonical refresh.
+  assert.match(source, /const \[canonicalRefreshInFlight, setCanonicalRefreshInFlight\] = useState\(false\)/)
+
+  // The shared predicate accepts refresh freshness and blocks on in-flight /
+  // required refreshes.
+  const predStart = source.indexOf('computeApprovalBlockedReason =')
+  const predEnd = source.indexOf('return undefined', predStart)
+  const predFn = source.slice(predStart, predEnd)
+  assert.match(predFn, /refresh:\s*\{\s*inFlight:\s*boolean;\s*required\?:\s*boolean\s*\}/)
+  assert.match(predFn, /if \(refresh\.inFlight\) return/)
+  assert.match(predFn, /if \(refresh\.required\) return/)
+
+  // An approval attempt blocked only by a required-but-not-in-flight refresh
+  // schedules that refresh and asks the user to retry (no permanent dead end).
+  const approveBody = handlerBody('approveSavedVersion')
+  assert.match(approveBody, /canonicalRefreshNeededRef\.current && !canonicalRefreshRef\.current/)
+  assert.match(approveBody, /void refreshCanonicalAfterIdle\(\)/)
+  assert.match(approveBody, /Please retry approval in a moment/)
+})
+
+test('handleIncludeOptional fails closed on a missing or ambiguous identity before the network', () => {
+  const body = handlerBody('handleIncludeOptional')
+  // The unique-identity check runs before the network request and surfaces the
+  // existing error, so no section-only PATCH is ever sent for an unsafe row.
+  const checkIdx = body.search(/if \(!identityKey \|\| row\.identityIssue\) \{/)
+  assert.notStrictEqual(checkIdx, -1, 'identity gate exists before the network')
+  const toastIdx = body.indexOf('cannot be edited')
+  assert.ok(toastIdx > checkIdx, 'identity failure surfaces the unique-identity error')
+  const fetchIdx = body.indexOf('fetch(')
+  assert.ok(fetchIdx > toastIdx, 'no network request runs before the identity check')
+  // The PATCH still carries the request identity, not a bare section mutation.
+  assert.match(body, /getBoqItemRequestIdentity\(row\.item\)/)
 })

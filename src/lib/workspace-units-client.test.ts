@@ -23,6 +23,17 @@ test('loads custom units while accepting legacy settings without a units section
   )
 })
 
+test('loads a valid non-empty workspace unit list', async () => {
+  const fetchImpl = (async () => jsonResponse({
+    units: { customUnits: ['bag', 'drum'] },
+  })) as typeof fetch
+
+  assert.deepEqual(
+    await loadWorkspaceCustomUnits(fetchImpl),
+    ['bag', 'drum'],
+  )
+})
+
 test('throws a readable error for failed or malformed settings responses', async () => {
   const failedFetch = (async () => jsonResponse(
     { error: 'Settings unavailable.' },
@@ -72,5 +83,25 @@ test('preserves the server error message for an add failure', async () => {
   await assert.rejects(
     addWorkspaceUnit('bag', fetchImpl),
     /Workspace unit limit reached\./,
+  )
+})
+
+test('rejects a malformed successful add response', async () => {
+  // A 200 response missing the canonical unit must not be trusted.
+  const missingUnit = (async () => jsonResponse({
+    customUnits: ['bag'],
+  })) as typeof fetch
+  await assert.rejects(
+    addWorkspaceUnit('bag', missingUnit),
+    /Workspace units returned an invalid response\./,
+  )
+
+  // A 200 response missing the updated custom-unit list is equally invalid.
+  const missingUnits = (async () => jsonResponse({
+    unit: 'bag',
+  })) as typeof fetch
+  await assert.rejects(
+    addWorkspaceUnit('bag', missingUnits),
+    /Workspace units returned an invalid response\./,
   )
 })
