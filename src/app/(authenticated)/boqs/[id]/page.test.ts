@@ -215,3 +215,19 @@ test('requestApproval and approveSavedVersion each recheck blockers via approval
     'approveSavedVersion publishes the approving state only after rechecking blockers',
   )
 })
+
+test('approveSavedVersion rechecks blockers before the network request and before raising the barrier', () => {
+  // Explicit ordering: the synchronous ref-based recheck must happen before any
+  // network action (the approval PUT), and (retained) before the barrier rises.
+  const approveBody = handlerBody('approveSavedVersion')
+  const approveCheck = approveBody.indexOf('approvalBlockedReason()')
+  assert.notStrictEqual(approveCheck, -1, 'approveSavedVersion calls approvalBlockedReason()')
+  assert.ok(
+    approveBody.indexOf('fetch(') > approveCheck,
+    'approveSavedVersion issues the approval PUT only after rechecking blockers',
+  )
+  assert.ok(
+    approveBody.indexOf('approvalBarrierRef.current = true') > approveCheck,
+    'approveSavedVersion raises the barrier only after rechecking blockers (retained)',
+  )
+})
