@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  createWorkspaceUnitCascadeStore,
   createWorkspaceUnitStore,
+  type CascadeRunner,
   type WorkspaceSettingsTransactionRunner,
 } from './workspace-unit-storage'
 
@@ -62,4 +64,84 @@ test('duplicate additions are idempotent', async () => {
     customUnits: ['Bag'],
     added: false,
   })
+})
+
+interface FakeState {
+  settings: unknown
+  boqs: Record<string, unknown>
+}
+
+function fakeRunner(state: FakeState): CascadeRunner {
+  return (work) =>
+    work({
+      async readSettings() {
+        return state.settings
+      },
+      writeSettings(patch) {
+        state.settings = { ...(state.settings as object | null ?? {}), ...patch }
+      },
+      async readAllBoqs() {
+        return Object.entries(state.boqs).map(([id, data]) => ({ id, data }))
+      },
+      writeBoq(id, patch) {
+        state.boqs[id] = { ...(state.boqs[id] as object), ...patch }
+      },
+    })
+}
+
+test('removeWorkspaceUnitAtomically removes the unit from settings only', async () => {
+  const state: FakeState = {
+    settings: { units: { customUnits: ['pallet', 'crate'] } },
+    boqs: {},
+  }
+  const store = createWorkspaceUnitCascadeStore(fakeRunner(state))
+  const result = await store.remove('crate')
+  assert.deepEqual(result.customUnits, ['pallet'])
+  assert.deepEqual(
+    (state.settings as { units: { customUnits: string[] } }).units.customUnits,
+    ['pallet'],
+  )
+})
+
+test('renameWorkspaceUnitAtomically renames in settings and cascades matching priced items across BOQs', async () => {
+  const state: FakeState = {
+    settings: { units: { customUnits: ['pallet', 'crate'] } },
+    boqs: {
+      b1: {
+        sections: [
+          {
+            header: 'A',
+            items: [
+              { pricingRole: 'standard', unit: 'pallet', desc: 'one' },
+              { pricingRole: 'bundle_child', unit: 'pallet', desc: 'child' },
+              { pricingRole: 'standard', unit: 'crate', desc: 'two' },
+            ],
+          },
+        ],
+      },
+      b2: { sections: [{ header: 'B', items: [{ unit: 'm³', desc: 'std' }] }] },
+    },
+  }
+  const store = createWorkspaceUnitCascadeStore(fakeRunner(state))
+  const result = await store.rename('pallet', 'PLT')
+  assert.deepEqual(result.customUnits, ['PLT', 'crate'])
+  assert.equal(result.updatedBoqs, 1)
+  assert.equal(result.updatedItems, 1)
+  const b1 = state.boqs.b1 as { sections: { items: { unit: string; pricingRole?: string; desc: string }[] }[] }
+  assert.equal(b1.sections[0].items[0].unit, 'PLT')
+  // bundle_child provenance/row left untouched (not a priced item).
+  assert.equal(b1.sections[0].items[1].unit, 'pallet')
+  assert.equal(b1.sections[0].items[2].unit, 'crate')
+})
+
+test('countWorkspaceUnitUsage counts priced items via the pure helper', async () => {
+  const state: FakeState = {
+    settings: { units: { customUnits: [] } },
+    boqs: {
+      b1: { sections: [{ items: [{ pricingRole: 'standard', unit: 'ton' }, { unit: 'ton' }] }] },
+    },
+  }
+  const store = createWorkspaceUnitCascadeStore(fakeRunner(state))
+  assert.equal(await store.countUsage('ton'), 2)
+  assert.equal(await store.countUsage('absent'), 0)
 })

@@ -1,10 +1,16 @@
 import { runTransaction } from '@/lib/db'
+import type { Boq } from '@/lib/boq-schema'
 import {
   fromStoredSettings,
   type StoredWorkspaceSettings,
   WORKSPACE_SETTINGS_ID,
 } from '@/lib/settings-storage'
-import { mergeWorkspaceUnit } from '@/lib/units'
+import {
+  mapUnitUsage,
+  mergeWorkspaceUnit,
+  removeWorkspaceUnit,
+  renameWorkspaceUnit,
+} from '@/lib/units'
 
 /**
  * Narrow adapter over the workspace settings document, used so the
@@ -71,3 +77,100 @@ const productionRunner: WorkspaceSettingsTransactionRunner = (work) =>
 
 export const addWorkspaceUnitAtomically =
   createWorkspaceUnitStore(productionRunner).add
+
+export interface WorkspaceUnitCascadeDocument {
+  readSettings(): Promise<unknown | null>
+  writeSettings(patch: Record<string, unknown>): void
+  readAllBoqs(): Promise<Array<{ id: string; data: unknown }>>
+  writeBoq(id: string, patch: Record<string, unknown>): void
+}
+
+export type CascadeRunner = <T>(
+  work: (document: WorkspaceUnitCascadeDocument) => Promise<T>,
+) => Promise<T>
+
+export function createWorkspaceUnitCascadeStore(runCascade: CascadeRunner) {
+  return {
+    async remove(unit: string) {
+      return runCascade(async (document) => {
+        const current = fromStoredSettings(
+          (await document.readSettings()) as StoredWorkspaceSettings | null,
+        )
+        const customUnits = removeWorkspaceUnit(current.units.customUnits, unit)
+        document.writeSettings({ units: { customUnits } })
+        return { customUnits }
+      })
+    },
+    async rename(oldUnit: string, newUnit: string) {
+      return runCascade(async (document) => {
+        const current = fromStoredSettings(
+          (await document.readSettings()) as StoredWorkspaceSettings | null,
+        )
+        const { customUnits } = renameWorkspaceUnit(current.units.customUnits, oldUnit, newUnit)
+        document.writeSettings({ units: { customUnits } })
+
+        const boqs = (await document.readAllBoqs()) as Array<{ id: string; data: Boq }>
+        let updatedBoqs = 0
+        let updatedItems = 0
+        for (const { id, data } of boqs) {
+          let touched = false
+          const sections = data.sections.map((section) => ({
+            ...section,
+            items: section.items.map((item) => {
+              if (item.pricingRole === 'bundle_child') return item
+              if (item.unit === oldUnit) {
+                touched = true
+                updatedItems += 1
+                return { ...item, unit: newUnit.trim() }
+              }
+              return item
+            }),
+          }))
+          if (touched) {
+            updatedBoqs += 1
+            document.writeBoq(id, { sections, updatedAt: new Date().toISOString() })
+          }
+        }
+        return { customUnits, updatedBoqs, updatedItems }
+      })
+    },
+    async countUsage(unit: string) {
+      return runCascade(async (document) => {
+        const boqs = (await document.readAllBoqs()) as Array<{ data: Boq }>
+        return mapUnitUsage(boqs.map(({ data }) => data))[unit] ?? 0
+      })
+    },
+  }
+}
+
+/**
+ * Production cascade runner: settings + all BOQs read/written inside one
+ * `runTransaction`. Reads use the transaction for consistency.
+ */
+const productionCascadeRunner: CascadeRunner = (work) =>
+  runTransaction(async (transaction, db) => {
+    const settingsRef = db.collection('settings').doc(WORKSPACE_SETTINGS_ID)
+    const boqsCollection = db.collection('boqs')
+    return work({
+      readSettings: async () => {
+        const snap = await transaction.get(settingsRef)
+        return snap.exists ? snap.data() : null
+      },
+      writeSettings: (patch) => {
+        transaction.set(settingsRef, patch, { merge: true })
+      },
+      readAllBoqs: async () => {
+        const snap = await transaction.get(boqsCollection)
+        return snap.docs.map((d) => ({ id: d.id, data: d.data() }))
+      },
+      writeBoq: (id, patch) => {
+        transaction.update(db.collection('boqs').doc(id), patch)
+      },
+    })
+  })
+
+const cascadeStore = createWorkspaceUnitCascadeStore(productionCascadeRunner)
+
+export const removeWorkspaceUnitAtomically = cascadeStore.remove
+export const renameWorkspaceUnitAtomically = cascadeStore.rename
+export const countWorkspaceUnitUsage = cascadeStore.countUsage
