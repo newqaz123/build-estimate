@@ -1,189 +1,327 @@
-"use client";
+'use client'
 
-import { useEffect, useId, useRef, useState } from "react";
-import { Check, ChevronDown, Plus, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { filterUnits, normalizeNewUnit } from "@/lib/units";
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import Link from 'next/link'
+import { Combobox as ComboboxPrimitive } from '@base-ui/react/combobox'
+import { Check, ChevronDown, Plus, Search } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import {
+  filterUnits,
+  findCanonicalUnit,
+  MAX_UNIT_LENGTH,
+  normalizeWorkspaceUnit,
+} from '@/lib/units'
 
 export interface UnitComboboxProps {
-	value: string;
-	units: string[];
-	onChange: (unit: string) => void;
-	onAddUnit: (unit: string) => void;
-	disabled?: boolean;
-	readOnly?: boolean;
-	ariaLabel?: string;
+  value: string
+  units: string[]
+  onChange: (unit: string) => void
+  onAddUnit: (unit: string) => Promise<string> | string | void
+  workspaceLoadError?: string | null
+  disabled?: boolean
+  readOnly?: boolean
+  ariaLabel?: string
+}
+
+function getAddErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message
+  return 'Unable to add workspace unit.'
 }
 
 export function UnitCombobox({
-	value,
-	units,
-	onChange,
-	onAddUnit,
-	disabled,
-	readOnly,
-	ariaLabel = "Unit",
+  value,
+  units,
+  onChange,
+  onAddUnit,
+  workspaceLoadError,
+  disabled,
+  readOnly,
+  ariaLabel = 'Unit',
 }: UnitComboboxProps) {
-	const [open, setOpen] = useState(false);
-	const [query, setQuery] = useState("");
-	const [adding, setAdding] = useState(false);
-	const [draft, setDraft] = useState("");
-	const rootRef = useRef<HTMLDivElement>(null);
-	const listId = useId();
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [adding, setAdding] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [addingUnit, setAddingUnit] = useState(false)
+  const [addError, setAddError] = useState<string | null>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const addInputRef = useRef<HTMLInputElement>(null)
+  const addOperationGenerationRef = useRef(0)
+  const addInputId = useId()
+  const filteredUnits = filterUnits(units, query)
 
-	useEffect(() => {
-		if (!open) return;
-		const onPointer = (event: MouseEvent) => {
-			if (rootRef.current && !rootRef.current.contains(event.target as Node))
-				setOpen(false);
-		};
-		const onKey = (event: KeyboardEvent) => {
-			if (event.key === "Escape") setOpen(false);
-		};
-		document.addEventListener("mousedown", onPointer);
-		document.addEventListener("keydown", onKey);
-		return () => {
-			document.removeEventListener("mousedown", onPointer);
-			document.removeEventListener("keydown", onKey);
-		};
-	}, [open]);
+  const resetPopupState = useCallback(() => {
+    setOpen(false)
+    setQuery('')
+    setAdding(false)
+    setDraft('')
+    setAddError(null)
+  }, [])
 
-	if (readOnly) {
-		return <span className="unit-combobox-readonly">{value || "—"}</span>;
-	}
+  const invalidateAddOperation = useCallback(() => {
+    addOperationGenerationRef.current += 1
+    setAddingUnit(false)
+  }, [])
 
-	const filtered = filterUnits(units, query);
+  const closePopup = useCallback(() => {
+    invalidateAddOperation()
+    resetPopupState()
+  }, [invalidateAddOperation, resetPopupState])
 
-	const commitAdd = () => {
-		const created = normalizeNewUnit(draft, units);
-		if (!created) {
-			setAdding(false);
-			setDraft("");
-			return;
-		}
-		onAddUnit(created);
-		onChange(created);
-		setAdding(false);
-		setDraft("");
-		setQuery("");
-		setOpen(false);
-	};
+  const selectUnit = useCallback((unit: string) => {
+    invalidateAddOperation()
+    onChange(unit)
+    resetPopupState()
+  }, [invalidateAddOperation, onChange, resetPopupState])
 
-	return (
-		<div className="unit-combobox" ref={rootRef} data-od-id="unit-combobox">
-			<Button
-				type="button"
-				variant="outline"
-				size="sm"
-				className="unit-combobox-trigger"
-				disabled={disabled}
-				aria-haspopup="listbox"
-				aria-expanded={open}
-				aria-controls={open ? listId : undefined}
-				aria-label={ariaLabel}
-				onClick={() => setOpen((prev) => !prev)}
-			>
-				<span className="unit-combobox-value">{value || "Unit…"}</span>
-				<ChevronDown className="size-3.5" aria-hidden="true" />
-			</Button>
-			{open ? (
-				<div
-					className="unit-combobox-popover"
-					role="dialog"
-					aria-label={ariaLabel}
-				>
-					<div className="unit-combobox-search">
-						<Input
-							type="text"
-							value={query}
-							onChange={(event) => setQuery(event.target.value)}
-							placeholder="Search units…"
-							aria-label={`Search ${ariaLabel}`}
-							className="h-7 text-xs"
-							autoFocus
-						/>
-					</div>
-					<ul id={listId} role="listbox" className="unit-combobox-list">
-						{filtered.length === 0 ? (
-							<li className="unit-combobox-empty">No units match</li>
-						) : (
-							filtered.map((unit) => (
-								<li key={unit} role="option" aria-selected={unit === value}>
-									<button
-										type="button"
-										className="unit-combobox-option"
-										onClick={() => {
-											onChange(unit);
-											setOpen(false);
-											setQuery("");
-										}}
-									>
-										<span>{unit}</span>
-										{unit === value ? (
-											<Check className="size-3" aria-hidden="true" />
-										) : null}
-									</button>
-								</li>
-							))
-						)}
-					</ul>
-					<div className="unit-combobox-add">
-						{adding ? (
-							<div className="unit-combobox-add-form">
-								<Input
-									type="text"
-									value={draft}
-									onChange={(event) => setDraft(event.target.value)}
-									placeholder="New unit"
-									aria-label={`New ${ariaLabel} name`}
-									className="h-7 text-xs"
-									autoFocus
-									onKeyDown={(event) => {
-										if (event.key === "Enter") {
-											event.preventDefault();
-											commitAdd();
-										}
-										if (event.key === "Escape") {
-											setAdding(false);
-											setDraft("");
-										}
-									}}
-								/>
-								<Button
-									type="button"
-									size="icon-xs"
-									variant="ghost"
-									aria-label="Save new unit"
-									onClick={commitAdd}
-								>
-									<Check className="size-3" />
-								</Button>
-								<Button
-									type="button"
-									size="icon-xs"
-									variant="ghost"
-									aria-label="Cancel add unit"
-									onClick={() => {
-										setAdding(false);
-										setDraft("");
-									}}
-								>
-									<X className="size-3" />
-								</Button>
-							</div>
-						) : (
-							<button
-								type="button"
-								className="unit-combobox-add-toggle"
-								onClick={() => setAdding(true)}
-							>
-								<Plus className="size-3" aria-hidden="true" /> Add new unit
-							</button>
-						)}
-					</div>
-				</div>
-			) : null}
-		</div>
-	);
+  const cancelAdd = () => {
+    setAdding(false)
+    setDraft('')
+    setAddError(null)
+  }
+
+  useEffect(() => {
+    if (!open || readOnly) return
+    if (adding) addInputRef.current?.focus()
+    else searchRef.current?.focus()
+  }, [adding, open, readOnly])
+
+  useEffect(() => {
+    if (!open || readOnly) return
+
+    const scrollContainer = triggerRef.current?.closest<HTMLElement>(
+      '.unified-boq-table-scroll',
+    )
+    const closeForLayoutChange = () => closePopup()
+
+    window.addEventListener('resize', closeForLayoutChange)
+    scrollContainer?.addEventListener('scroll', closeForLayoutChange)
+
+    return () => {
+      window.removeEventListener('resize', closeForLayoutChange)
+      scrollContainer?.removeEventListener('scroll', closeForLayoutChange)
+    }
+  }, [closePopup, open, readOnly])
+
+  // When the combobox transitions to read-only or disabled while a workspace-unit
+  // add is in flight (e.g. the BOQ is approved), invalidate the stale operation
+  // (generation bump) and reset the popup so its completion can neither call
+  // onChange nor repopulate errors/loading, and the popup never reopens on
+  // unlock. The prev-locked ref guard is the recognized cascade-free idiom.
+  const prevLockedRef = useRef(readOnly || disabled)
+  useEffect(() => {
+    if (prevLockedRef.current !== (readOnly || disabled)) {
+      prevLockedRef.current = readOnly || disabled
+      addOperationGenerationRef.current += 1
+      setOpen(false)
+      setQuery('')
+      setAdding(false)
+      setDraft('')
+      setAddError(null)
+      setAddingUnit(false)
+    }
+  }, [readOnly, disabled])
+
+  if (readOnly) {
+    return <span className="unit-combobox-readonly">{value || '—'}</span>
+  }
+
+  const commitAdd = async () => {
+    if (addingUnit) return
+    setAddError(null)
+
+    let unit: string
+    try {
+      unit = normalizeWorkspaceUnit(draft)
+    } catch (error) {
+      setAddError(getAddErrorMessage(error))
+      return
+    }
+
+    const existingUnit = findCanonicalUnit(units, unit)
+    if (existingUnit) {
+      selectUnit(existingUnit)
+      return
+    }
+
+    const operationGeneration = ++addOperationGenerationRef.current
+    setAddingUnit(true)
+    let canonical = unit
+    try {
+      canonical = (await onAddUnit(unit)) ?? unit
+    } catch (error) {
+      if (addOperationGenerationRef.current === operationGeneration) {
+        setAddError(getAddErrorMessage(error))
+      }
+      return
+    } finally {
+      if (addOperationGenerationRef.current === operationGeneration) {
+        setAddingUnit(false)
+      }
+    }
+
+    if (addOperationGenerationRef.current !== operationGeneration) return
+    selectUnit(canonical)
+  }
+
+  return (
+    <div className="unit-combobox" data-od-id="unit-combobox">
+      <ComboboxPrimitive.Root<string>
+        items={units}
+        filteredItems={filteredUnits}
+        filter={null}
+        value={value || null}
+        open={open}
+        inputValue={query}
+        autoHighlight
+        modal={false}
+        disabled={disabled}
+        onInputValueChange={setQuery}
+        onOpenChange={(nextOpen) => {
+          if (nextOpen) setOpen(true)
+          else closePopup()
+        }}
+        onValueChange={(unit) => {
+          if (!unit) return
+          selectUnit(unit)
+        }}
+      >
+        <ComboboxPrimitive.Trigger
+          ref={triggerRef}
+          render={
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="unit-combobox-trigger"
+              disabled={disabled}
+              aria-label={ariaLabel}
+            />
+          }
+        >
+          <span className="unit-combobox-value">{value || 'Unit…'}</span>
+          <ChevronDown aria-hidden="true" />
+        </ComboboxPrimitive.Trigger>
+
+        <ComboboxPrimitive.Portal>
+          <ComboboxPrimitive.Positioner
+            align="start"
+            sideOffset={4}
+            collisionPadding={8}
+            className="unit-combobox-positioner"
+          >
+            <ComboboxPrimitive.Popup
+              className="unit-combobox-popover"
+              initialFocus={adding ? addInputRef : searchRef}
+              finalFocus={triggerRef}
+            >
+              {adding ? (
+                <form
+                  className="unit-combobox-add-form"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    void commitAdd()
+                  }}
+                >
+                  <label htmlFor={addInputId}>Workspace unit</label>
+                  <Input
+                    id={addInputId}
+                    ref={addInputRef}
+                    value={draft}
+                    maxLength={MAX_UNIT_LENGTH}
+                    disabled={addingUnit}
+                    aria-invalid={addError ? true : undefined}
+                    autoComplete="off"
+                    onChange={(event) => {
+                      setDraft(event.target.value)
+                      setAddError(null)
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Escape') return
+                      event.preventDefault()
+                      event.stopPropagation()
+                      cancelAdd()
+                    }}
+                  />
+                  <p className="unit-combobox-add-hint">
+                    Available in all BOQs in this workspace.
+                  </p>
+                  {addError ? (
+                    <p className="unit-combobox-add-error" role="alert">
+                      {addError}
+                    </p>
+                  ) : null}
+                  <div className="unit-combobox-add-actions">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={addingUnit}
+                      onClick={cancelAdd}
+                    >
+                      <span>Cancel</span>
+                    </Button>
+                    <Button type="submit" size="sm" disabled={addingUnit}>
+                      <span>Add unit</span>
+                    </Button>
+                  </div>
+                </form>
+              ) : (
+                <>
+                  <div className="unit-combobox-search">
+                    <Search aria-hidden="true" />
+                    <ComboboxPrimitive.Input
+                      ref={searchRef}
+                      className="unit-combobox-search-input"
+                      placeholder="Search units…"
+                      aria-label={`Search ${ariaLabel}`}
+                    />
+                  </div>
+                  {workspaceLoadError ? (
+                    <p className="unit-combobox-load-error" role="status">
+                      {workspaceLoadError}
+                    </p>
+                  ) : null}
+                  <ComboboxPrimitive.List className="unit-combobox-list">
+                    <ComboboxPrimitive.Empty className="unit-combobox-empty">
+                      No units match
+                    </ComboboxPrimitive.Empty>
+                    {filteredUnits.map((unit) => (
+                      <ComboboxPrimitive.Item
+                        key={unit}
+                        value={unit}
+                        className="unit-combobox-option"
+                      >
+                        <span>{unit}</span>
+                        <ComboboxPrimitive.ItemIndicator className="unit-combobox-indicator">
+                          <Check aria-hidden="true" />
+                        </ComboboxPrimitive.ItemIndicator>
+                      </ComboboxPrimitive.Item>
+                    ))}
+                  </ComboboxPrimitive.List>
+                  <button
+                    type="button"
+                    className="unit-combobox-add-toggle"
+                    onClick={() => setAdding(true)}
+                  >
+                    <Plus aria-hidden="true" />
+                    <span>Add workspace unit</span>
+                  </button>
+                  <Link
+                    href="/settings#units"
+                    className="unit-combobox-manage"
+                    onClick={() => setOpen(false)}
+                  >
+                    Manage units…
+                  </Link>
+                </>
+              )}
+            </ComboboxPrimitive.Popup>
+          </ComboboxPrimitive.Positioner>
+        </ComboboxPrimitive.Portal>
+      </ComboboxPrimitive.Root>
+    </div>
+  )
 }

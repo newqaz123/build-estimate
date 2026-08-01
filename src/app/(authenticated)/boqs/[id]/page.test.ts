@@ -31,3 +31,12 @@ test("rechecks pending edits at commit time, not just at click time", () => {
 		"pending-edit guard must run at click time AND commit time",
 	);
 });
+
+test("loads workspace custom units and persists added units through the settings API", () => {
+	assert.match(source, /loadWorkspaceCustomUnits/);
+	assert.match(source, /addWorkspaceUnit/);
+	assert.match(source, /handleAddWorkspaceUnit/);
+	assert.match(source, /workspaceUnitsError=/);
+	assert.match(source, /setWorkspaceUnitsError/);
+	assert.match(source, /onAddUnit=\{handleAddWorkspaceUnit\}/);
+});

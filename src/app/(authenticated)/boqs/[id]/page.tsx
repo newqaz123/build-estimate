@@ -90,6 +90,10 @@ import {
 	type UnifiedBoqPricedRow,
 } from "@/lib/boq-unified-rows";
 import { STANDARD_UNITS } from "@/lib/units";
+import {
+	addWorkspaceUnit,
+	loadWorkspaceCustomUnits,
+} from "@/lib/workspace-units-client";
 
 type ItemEdit = Record<string, string | number | undefined>;
 type EditsMap = BoqDetailEdits;
@@ -317,11 +321,34 @@ function CanonicalBoqWorkspace({
 	);
 	const invalidDraftRef = useRef<Set<string>>(new Set());
 	const [customUnits, setCustomUnits] = useState<string[]>([]);
+	const [workspaceUnitsError, setWorkspaceUnitsError] = useState<
+		string | null
+	>(null);
 	const [pendingDeletes, setPendingDeletes] = useState<StashedDelete[]>([]);
 	const units = useMemo(
 		() => [...STANDARD_UNITS, ...customUnits],
 		[customUnits],
 	);
+	useEffect(() => {
+		let active = true;
+		void loadWorkspaceCustomUnits()
+			.then((loaded) => {
+				if (!active) return;
+				setWorkspaceUnitsError(null);
+				setCustomUnits(loaded);
+			})
+			.catch((error) => {
+				if (!active) return;
+				setWorkspaceUnitsError(
+					error instanceof Error && error.message
+						? error.message
+						: "Workspace units could not be loaded.",
+				);
+			});
+		return () => {
+			active = false;
+		};
+	}, []);
 	const isReadOnly = boq.status === "approved";
 	const mutationBusy =
 		saving ||
@@ -593,6 +620,13 @@ function CanonicalBoqWorkspace({
 		} finally {
 			setAddingItem(false);
 		}
+	};
+
+	const handleAddWorkspaceUnit = async (unit: string): Promise<string> => {
+		const result = await addWorkspaceUnit(unit);
+		setCustomUnits(result.customUnits);
+		setWorkspaceUnitsError(null);
+		return result.unit;
 	};
 
 	const handleIncludeOptional = async (row: UnifiedBoqPricedRow) => {
@@ -1231,11 +1265,8 @@ function CanonicalBoqWorkspace({
 									handleComponentDraftValidityChange
 								}
 								units={units}
-								onAddUnit={(unit) =>
-									setCustomUnits((prev) =>
-										prev.includes(unit) ? prev : [...prev, unit],
-									)
-								}
+								workspaceUnitsError={workspaceUnitsError}
+								onAddUnit={handleAddWorkspaceUnit}
 								onDelete={handleDelete}
 							/>
 						) : (

@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { getDocument, setDocument } from '@/lib/db'
-import { decodeNormalizeRules } from '@/lib/settings-storage'
-import { withPromptDefaults } from '@/lib/prompt-defaults'
-import type { DoclingSettings, FuzzySettings, LlmSettings, PromptSettings, WorkspaceSettings } from '@/lib/settings-schema'
+import {
+  DEFAULT_SETTINGS,
+  fromStoredSettings,
+  type StoredWorkspaceSettings,
+  WORKSPACE_SETTINGS_ID,
+} from '@/lib/settings-storage'
+import type { DoclingSettings, FuzzySettings, LlmSettings, PromptSettings } from '@/lib/settings-schema'
 
-const SETTINGS_ID = 'workspace'
 const MAX_ENDPOINT_LENGTH = 2048
 const MAX_PROMPT_LENGTH = 20_000
 const PROVIDERS = new Set(['openai', 'anthropic', 'google', 'openrouter'])
@@ -54,51 +57,6 @@ function validateSection(section: unknown, data: unknown): { valid: true; data: 
   return { valid: false, error: 'Invalid section' }
 }
 
-const DEFAULT_SETTINGS: WorkspaceSettings = {
-  llm: { provider: 'openai', model: 'gpt-4o' },
-  docling: { endpoint: 'http://localhost:5001' },
-  fuzzy: {
-    unitMap: { LS: 'L/S', SQFT: 'sq ft', SQM: 'sq m' },
-    normalizeRules: [['\\bsq\\.?\\s*ft\\b', 'sq ft'], ['\\bsq\\.?\\s*m\\b', 'sq m']],
-  },
-  prompts: withPromptDefaults(),
-}
-
-type StoredWorkspaceSettings = Omit<WorkspaceSettings, 'fuzzy'> & {
-  fuzzy?: Omit<FuzzySettings, 'normalizeRules'> & { normalizeRules?: unknown }
-  prompts?: Partial<PromptSettings>
-}
-
-function toStoredSettings(settings: WorkspaceSettings): StoredWorkspaceSettings {
-  return {
-    ...settings,
-    fuzzy: settings.fuzzy
-      ? {
-          ...settings.fuzzy,
-          // Firestore rejects arrays nested directly inside another array.
-          normalizeRules: settings.fuzzy.normalizeRules.map(([find, replace]) => ({ find, replace })),
-        }
-      : undefined,
-  }
-}
-
-function fromStoredSettings(settings: StoredWorkspaceSettings): WorkspaceSettings {
-  return {
-    ...DEFAULT_SETTINGS,
-    ...settings,
-    prompts: withPromptDefaults(settings.prompts),
-    fuzzy: settings.fuzzy
-      ? {
-          ...settings.fuzzy,
-          normalizeRules: decodeNormalizeRules(
-            settings.fuzzy.normalizeRules,
-            DEFAULT_SETTINGS.fuzzy.normalizeRules,
-          ),
-        }
-      : DEFAULT_SETTINGS.fuzzy,
-  }
-}
-
 export async function GET() {
   const session = await auth()
   if (!session?.user) {
@@ -106,9 +64,8 @@ export async function GET() {
   }
 
   try {
-    const existing = await getDocument<StoredWorkspaceSettings>('settings', SETTINGS_ID)
+    const existing = await getDocument<StoredWorkspaceSettings>('settings', WORKSPACE_SETTINGS_ID)
     if (!existing) {
-      await setDocument('settings', SETTINGS_ID, toStoredSettings(DEFAULT_SETTINGS) as unknown as Record<string, unknown>, false)
       return NextResponse.json(DEFAULT_SETTINGS)
     }
     return NextResponse.json(fromStoredSettings(existing))
@@ -136,7 +93,7 @@ export async function PUT(request: NextRequest) {
           normalizeRules: (result.data as FuzzySettings).normalizeRules.map(([find, replace]) => ({ find, replace })),
         }
       : result.data
-    await setDocument('settings', SETTINGS_ID, { [section]: persistedData })
+    await setDocument('settings', WORKSPACE_SETTINGS_ID, { [section]: persistedData })
     return NextResponse.json({ success: true })
   } catch (error) {
     if (error instanceof SyntaxError) return NextResponse.json({ error: 'Malformed JSON request' }, { status: 400 })

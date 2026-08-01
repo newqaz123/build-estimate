@@ -44,7 +44,8 @@ export interface UnifiedBoqItemsTableProps {
 	onClearCatalogError?: (key: string) => void;
 	onComponentDraftValidityChange?: (key: string, isInvalid: boolean) => void;
 	units?: string[];
-	onAddUnit?: (unit: string) => void;
+	workspaceUnitsError?: string | null;
+	onAddUnit?: (unit: string) => Promise<string> | string | void;
 }
 
 function currency(value: number): string {
@@ -262,6 +263,7 @@ export function UnifiedBoqItemsTable({
 	onClearCatalogError = () => undefined,
 	onComponentDraftValidityChange,
 	units = [...STANDARD_UNITS],
+	workspaceUnitsError,
 	onAddUnit = () => undefined,
 }: UnifiedBoqItemsTableProps) {
 	const rowStarts: number[] = [];
@@ -309,6 +311,7 @@ export function UnifiedBoqItemsTable({
 							onClearCatalogError={onClearCatalogError}
 							onComponentDraftValidityChange={onComponentDraftValidityChange}
 							units={units}
+							workspaceUnitsError={workspaceUnitsError}
 							onAddUnit={onAddUnit}
 						/>
 					))}
@@ -341,6 +344,7 @@ function FragmentSection({
 	onClearCatalogError = () => undefined,
 	onComponentDraftValidityChange,
 	units = [...STANDARD_UNITS],
+	workspaceUnitsError,
 	onAddUnit = () => undefined,
 }: FragmentSectionProps) {
 	return (
@@ -472,6 +476,7 @@ function FragmentSection({
 								value={row.item.unit}
 								units={units}
 								onAddUnit={onAddUnit}
+								workspaceLoadError={workspaceUnitsError}
 								onChange={(unit) => onFieldChange(row, "unit", unit)}
 								disabled={locked}
 								readOnly={readOnly}
