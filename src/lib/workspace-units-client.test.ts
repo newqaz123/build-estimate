@@ -2,7 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   addWorkspaceUnit,
+  fetchWorkspaceUnitsOverview,
   loadWorkspaceCustomUnits,
+  removeWorkspaceUnit,
+  renameWorkspaceUnit,
+  WorkspaceUnitInUseError,
 } from './workspace-units-client'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -104,4 +108,61 @@ test('rejects a malformed successful add response', async () => {
     addWorkspaceUnit('bag', missingUnits),
     /Workspace units returned an invalid response\./,
   )
+})
+
+function fakeFetch(map: Record<string, { status?: number; body: unknown }>) {
+  return ((url: string | URL, init?: RequestInit) => {
+    const key = `${init?.method ?? 'GET'} ${String(url)}`
+    const entry = map[key]
+    if (!entry) throw new Error(`unexpected ${key}`)
+    return Promise.resolve(
+      new Response(JSON.stringify(entry.body), {
+        status: entry.status ?? 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+  }) as unknown as typeof fetch
+}
+
+test('fetchWorkspaceUnitsOverview parses standard/custom/usage', async () => {
+  const overview = await fetchWorkspaceUnitsOverview(
+    fakeFetch({
+      'GET /api/settings/units': {
+        body: { standardUnits: ['m³'], customUnits: ['pallet'], usage: { pallet: 2 } },
+      },
+    }),
+  )
+  assert.deepEqual(overview, { standardUnits: ['m³'], customUnits: ['pallet'], usage: { pallet: 2 } })
+})
+
+test('removeWorkspaceUnit returns the list and surfaces 409 as WorkspaceUnitInUseError', async () => {
+  const ok = await removeWorkspaceUnit(
+    'crate',
+    fakeFetch({ 'DELETE /api/settings/units': { body: { customUnits: ['pallet'] } } }),
+  )
+  assert.deepEqual(ok.customUnits, ['pallet'])
+
+  await assert.rejects(
+    removeWorkspaceUnit(
+      'pallet',
+      fakeFetch({
+        'DELETE /api/settings/units': { status: 409, body: { error: 'in use', usageCount: 4 } },
+      }),
+    ),
+    (err: unknown) => err instanceof WorkspaceUnitInUseError && err.usageCount === 4,
+  )
+})
+
+test('renameWorkspaceUnit returns the list and updatedItems', async () => {
+  const result = await renameWorkspaceUnit(
+    'pallet',
+    'PLT',
+    fakeFetch({
+      'PATCH /api/settings/units': {
+        body: { customUnits: ['PLT', 'crate'], updatedItems: 2 },
+      },
+    }),
+  )
+  assert.deepEqual(result.customUnits, ['PLT', 'crate'])
+  assert.equal(result.updatedItems, 2)
 })
