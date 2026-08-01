@@ -2,9 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Loader2, Pencil, Plus, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { DEFAULT_ESTIMATE_PROMPT, buildPromptSavePayload, promptSettingsAreDirty } from "@/lib/prompt-defaults"
+import { addWorkspaceUnit, fetchWorkspaceUnitsOverview, removeWorkspaceUnit, renameWorkspaceUnit, WorkspaceUnitInUseError } from "@/lib/workspace-units-client"
+import { STANDARD_UNITS } from "@/lib/units"
 import type { DoclingSettings, FuzzySettings, LlmSettings, PromptSettings, Vendor, WorkspaceSettings } from "@/lib/settings-schema"
 
 const LLM_PROVIDERS = [
@@ -132,6 +135,14 @@ export default function SettingsPage() {
   const [savingEstimatePrompt, setSavingEstimatePrompt] = useState(false)
   const [promptStatus, setPromptStatus] = useState<PromptStatus | null>(null)
   const savedEstimateRef = useRef(DEFAULT_ESTIMATE_PROMPT)
+
+  const [unitsOverview, setUnitsOverview] = useState<{ customUnits: string[]; usage: Record<string, number> }>({ customUnits: [], usage: {} })
+  const [unitsLoaded, setUnitsLoaded] = useState(false)
+  const [unitAddValue, setUnitAddValue] = useState("")
+  const [unitBusy, setUnitBusy] = useState<string | null>(null)
+  const [renamingUnit, setRenamingUnit] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState("")
+  const [deleteTarget, setDeleteTarget] = useState<{ unit: string; usageCount: number | null } | null>(null)
   const analysisTokenEstimate = tokenEstimate(analysisPrompt)
   const stdTokenEstimate = tokenEstimate(stdPrompt)
   const estimateTokenEstimate = tokenEstimate(estimatePrompt)
@@ -217,6 +228,10 @@ export default function SettingsPage() {
     mountedRef.current = true
     void Promise.resolve().then(() => fetchSettings())
     void Promise.resolve().then(() => fetchVendors())
+    void fetchWorkspaceUnitsOverview()
+      .then((o) => { if (mountedRef.current) setUnitsOverview({ customUnits: o.customUnits, usage: o.usage }) })
+      .catch(() => { if (mountedRef.current) toast.error("Could not load workspace units") })
+      .finally(() => { if (mountedRef.current) setUnitsLoaded(true) })
     return () => {
       mountedRef.current = false
       settingsRefreshRef.current.controller?.abort()
@@ -384,6 +399,58 @@ export default function SettingsPage() {
     }
   }
 
+  const handleAddUnit = async () => {
+    const value = unitAddValue.trim()
+    if (!value) return
+    setUnitBusy("__add__")
+    try {
+      const result = await addWorkspaceUnit(value)
+      setUnitsOverview((prev) => ({ customUnits: result.customUnits, usage: prev.usage }))
+      setUnitAddValue("")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not add unit.")
+    } finally {
+      setUnitBusy(null)
+    }
+  }
+
+  const startRename = (unit: string) => {
+    setRenamingUnit(unit); setRenameValue(unit)
+  }
+
+  const handleRenameUnit = async (oldUnit: string) => {
+    setUnitBusy(oldUnit)
+    try {
+      const result = await renameWorkspaceUnit(oldUnit, renameValue)
+      setUnitsOverview((prev) => ({ customUnits: result.customUnits, usage: prev.usage }))
+      setRenamingUnit(null)
+      toast.success(`Renamed; updated ${result.updatedItems} item${result.updatedItems === 1 ? "" : "s"}.`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not rename unit.")
+    } finally {
+      setUnitBusy(null)
+    }
+  }
+
+  const handleConfirmDelete = async () => {
+    const target = deleteTarget
+    if (!target) return
+    setUnitBusy(target.unit)
+    try {
+      const result = await removeWorkspaceUnit(target.unit)
+      setUnitsOverview((prev) => ({ customUnits: result.customUnits, usage: prev.usage }))
+      setDeleteTarget(null)
+    } catch (error) {
+      if (error instanceof WorkspaceUnitInUseError) {
+        setDeleteTarget({ unit: target.unit, usageCount: error.usageCount })
+      } else {
+        toast.error(error instanceof Error ? error.message : "Could not delete unit.")
+      }
+    } finally {
+      setUnitBusy(null)
+    }
+  }
+
   const currentPromptSettings = (): PromptSettings => ({
     analysisPrompt: analysisCurrentRef.current,
     stdPrompt: stdCurrentRef.current,
@@ -485,6 +552,8 @@ export default function SettingsPage() {
           <article className="proto-card settings-section" data-od-id="fuzzy-rules-settings"><header className="settings-section-header"><div><h2>Catalog fuzzy rules</h2><p>Rules applied when incoming BOQ items are matched to the standard catalog.</p></div>{dirty.fuzzy && <span className="settings-dirty">Unsaved changes</span>}</header><div className="settings-section-body"><div className="proto-field"><label htmlFor="fuzzy-unit-map">Unit equivalence map <span className="meta">(JSON object)</span></label><textarea id="fuzzy-unit-map" className="proto-textarea settings-code" rows={7} value={unitMap} onChange={(event) => { const nextUnitMap = event.target.value; const next = { ...fuzzyCurrentRef.current, unitMap: nextUnitMap }; setUnitMap(nextUnitMap); fuzzyCurrentRef.current = next; markDirty("fuzzy", JSON.stringify(next) !== JSON.stringify(savedFuzzyRef.current)) }} /></div><div className="proto-field"><label htmlFor="fuzzy-normalize-rules">Description normalisation rules <span className="meta">([find, replace] pairs)</span></label><textarea id="fuzzy-normalize-rules" className="proto-textarea settings-code" rows={7} value={normalizeRules} onChange={(event) => { const nextNormalizeRules = event.target.value; const next = { ...fuzzyCurrentRef.current, normalizeRules: nextNormalizeRules }; setNormalizeRules(nextNormalizeRules); fuzzyCurrentRef.current = next; markDirty("fuzzy", JSON.stringify(next) !== JSON.stringify(savedFuzzyRef.current)) }} /></div><div className="settings-actions"><button className="btn btn-primary btn-sm" onClick={handleSaveFuzzy} disabled={savingFuzzy}>{savingFuzzy && <Loader2 className="proto-spinner" aria-hidden="true" />}Save rules</button><button className="btn btn-secondary btn-sm" onClick={handleTestFuzzy}>Test match</button><span className="settings-inline-status" role="status" aria-live="polite">{fuzzyTestResult}</span></div></div></article>
         </section>
 
+        <article className="proto-card settings-section" data-od-id="workspace-units-settings" id="units"><header className="settings-section-header"><div><h2>Workspace units</h2><p>Standard units are fixed. Custom units can be renamed (updates all BOQ items) or deleted when not in use.</p></div></header><div className="settings-section-body"><div className="proto-field"><label htmlFor="units-add-input">Add custom unit</label><div className="settings-actions"><input id="units-add-input" className="proto-input" data-od-id="units-add-input" value={unitAddValue} onChange={(e) => setUnitAddValue(e.target.value)} placeholder="e.g. pallet" maxLength={24} /><button className="btn btn-primary btn-sm" data-od-id="units-add-button" onClick={() => void handleAddUnit()} disabled={unitBusy === "__add__" || unitAddValue.trim() === ""}>Add unit</button></div></div><div className="proto-field"><span className="settings-label">Standard units</span><ul className="unit-chips">{STANDARD_UNITS.map((u) => <li key={u} className="unit-chip unit-chip-standard">{u}</li>)}</ul></div><div className="proto-field"><span className="settings-label">Custom units</span>{!unitsLoaded ? <p className="meta">Loading…</p> : unitsOverview.customUnits.length === 0 ? <p className="meta">No custom units yet.</p> : <ul className="unit-rows">{unitsOverview.customUnits.map((unit) => { const usage = unitsOverview.usage[unit] ?? 0; return <li key={unit} className="unit-row">{renamingUnit === unit ? <><input className="proto-input" value={renameValue} onChange={(e) => setRenameValue(e.target.value)} maxLength={24} aria-label={`Rename ${unit}`} /><button className="btn btn-primary btn-sm" onClick={() => void handleRenameUnit(unit)} disabled={unitBusy === unit}>Save</button><button className="btn btn-secondary btn-sm" onClick={() => setRenamingUnit(null)}>Cancel</button></> : <><span className="unit-row-value">{unit}</span><span className="unit-row-usage">{usage} item{usage === 1 ? "" : "s"}</span><button className="btn btn-secondary btn-sm" data-od-id={`units-rename-${unit}`} onClick={() => startRename(unit)} disabled={unitBusy !== null}>Rename</button><button className="btn btn-outline-danger btn-sm" data-od-id={`units-delete-${unit}`} onClick={() => setDeleteTarget({ unit, usageCount: null })} disabled={unitBusy !== null}>Delete</button></>}</li> })}</ul>}</div></div></article>
+
         <section id="settings-vendors" className="proto-card settings-section" data-od-id="vendor-settings"><header className="settings-section-header"><div><h2>Vendors</h2><p>Maintain contractor contacts used across BOQs and estimates.</p></div><button className="btn btn-primary btn-sm" onClick={openAddVendor} disabled={savingVendor || deletingVendorBusyId !== null}><Plus aria-hidden="true" />Add vendor</button></header><div className="settings-table-wrap" tabIndex={0} aria-label="Vendors table, horizontally scrollable"><table className="data-table"><thead><tr><th>Vendor name</th><th>Specialty</th><th className="num-col">Linked BOQs</th><th>Last used</th><th>Actions</th></tr></thead><tbody>{loadingVendors ? <tr><td colSpan={5}><div className="settings-row-status" role="status"><Loader2 className="proto-spinner" aria-hidden="true" />Loading vendors…</div></td></tr> : vendors.length === 0 ? <tr><td colSpan={5}><div className="settings-row-status">No vendors yet. Add one to begin.</div></td></tr> : vendors.map((vendor) => <tr key={vendor.id}><td><strong>{vendor.name}</strong>{vendor.contact && <span className="meta settings-vendor-contact">{vendor.contact}</span>}</td><td>{vendor.specialty}</td><td className="num-col">{vendor.linkedBoqCount}</td><td>{vendor.lastUsed ? new Date(vendor.lastUsed).toLocaleDateString() : "—"}</td><td><div className="settings-row-actions"><button className="btn btn-ghost btn-sm" disabled={savingVendor || deletingVendorBusyId !== null} onClick={() => openEditVendor(vendor)} aria-label={`Edit ${vendor.name}`}><Pencil aria-hidden="true" />Edit</button><button className="btn btn-outline-danger btn-sm" disabled={savingVendor || deletingVendorBusyId !== null} onClick={() => void handleDeleteVendor(vendor)} aria-label={`${deletingVendorId === vendor.id ? "Confirm removal of" : "Remove"} ${vendor.name}`}><Trash2 aria-hidden="true" />{deletingVendorBusyId === vendor.id ? "Removing…" : deletingVendorId === vendor.id ? "Confirm" : "Remove"}</button></div></td></tr>)}</tbody></table></div><p className="settings-table-note">Renaming a vendor updates the name across all linked BOQs and historical data.</p></section>
 
         <section id="settings-prompts" role="group" aria-label="Prompt settings" className={`settings-section-group${settingsReady ? "" : " settings-configuration-locked"}`} aria-disabled={!settingsReady} inert={!settingsReady ? true : undefined}>
@@ -506,6 +575,8 @@ export default function SettingsPage() {
       </div>
 
       <Dialog open={vendorDialogOpen} onOpenChange={(open) => { if (!open) closeVendorDialog(); else setVendorDialogOpen(true) }}><DialogContent className="settings-vendor-modal" data-od-id="add-vendor-modal" aria-busy={savingVendor}><DialogHeader><DialogTitle>{editingVendor ? "Edit vendor" : "Add vendor"}</DialogTitle></DialogHeader><div className="settings-modal-fields"><div className="proto-field"><label htmlFor="vendor-name">Vendor name</label><input id="vendor-name" className="proto-input" value={vendorName} disabled={savingVendor} onChange={(event) => updateVendorDraft({ name: event.target.value, contact: vendorContact, specialty: vendorSpecialty })} placeholder="e.g. Bangkok Construction Co." /></div><div className="proto-field"><label htmlFor="vendor-contact">Contact info</label><input id="vendor-contact" className="proto-input" value={vendorContact} disabled={savingVendor} onChange={(event) => updateVendorDraft({ name: vendorName, contact: event.target.value, specialty: vendorSpecialty })} placeholder="email or phone" /></div><div className="proto-field"><label htmlFor="vendor-specialty">Specialty</label><select id="vendor-specialty" className="proto-select" value={vendorSpecialty} disabled={savingVendor} onChange={(event) => updateVendorDraft({ name: vendorName, contact: vendorContact, specialty: event.target.value })}>{SPECIALTIES.map((specialty) => <option key={specialty}>{specialty}</option>)}</select></div>{editingVendor && <p className="settings-warning">Renaming this vendor updates <strong>{editingVendor.linkedBoqCount}</strong> linked BOQs.</p>}</div><DialogFooter><button className="btn btn-secondary" onClick={closeVendorDialog} disabled={savingVendor}>Cancel</button><button className="btn btn-primary" onClick={() => void handleSaveVendor()} disabled={savingVendor}>{savingVendor && <Loader2 className="proto-spinner" aria-hidden="true" />}{savingVendor ? "Saving…" : editingVendor ? "Save changes" : "Add vendor"}</button></DialogFooter></DialogContent></Dialog>
+
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(o) => { if (!o) setDeleteTarget(null) }}><AlertDialogContent showCloseButton={false}><AlertDialogHeader><AlertDialogTitle>Delete unit “{deleteTarget?.unit}”?</AlertDialogTitle><AlertDialogDescription>{deleteTarget?.usageCount === null ? "This removes the unit from the workspace picker. BOQ items keep their value until reassigned." : `Cannot delete: ${deleteTarget?.usageCount} item${deleteTarget?.usageCount === 1 ? "" : "s"} use this unit. Reassign them first.`}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter>{deleteTarget?.usageCount === null && <button className="btn btn-danger btn-sm" onClick={() => void handleConfirmDelete()} disabled={unitBusy !== null}>Delete</button>}<button className="btn btn-secondary btn-sm" onClick={() => setDeleteTarget(null)}>Close</button></AlertDialogFooter></AlertDialogContent></AlertDialog>
     </div>
   )
 }
