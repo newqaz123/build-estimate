@@ -1,7 +1,13 @@
 import {
+  STANDARD_UNITS,
+  sanitizeCustomUnits,
   WorkspaceUnitError,
   type WorkspaceUnitMergeResult,
 } from '@/lib/units'
+import {
+  fromStoredSettings,
+  type StoredWorkspaceSettings,
+} from '@/lib/settings-storage'
 
 interface WorkspaceUnitsHandlerDependencies {
   authenticate: () => Promise<{ user?: unknown } | null>
@@ -81,6 +87,167 @@ export function createWorkspaceUnitsPostHandler({
         { error: 'Internal server error' },
         { status: 500 },
       )
+    }
+  }
+}
+
+interface WorkspaceUnitsGetDependencies {
+  authenticate: () => Promise<{ user?: unknown } | null>
+  readSettings: () => Promise<unknown | null>
+  readAllBoqs: () => Promise<Array<{ id: string; data: unknown }>>
+}
+
+export function createWorkspaceUnitsGetHandler({
+  authenticate,
+  readSettings,
+  readAllBoqs,
+}: WorkspaceUnitsGetDependencies) {
+  return async function GET(request: Request): Promise<Response> {
+    let session
+    try {
+      session = await authenticate()
+    } catch (error) {
+      console.error('Error authenticating workspace units overview:', error)
+      return Response.json({ error: 'Internal server error' }, { status: 500 })
+    }
+    if (!session?.user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
+    try {
+      const settings = fromStoredSettings(
+        (await readSettings()) as StoredWorkspaceSettings | null,
+      )
+      const customUnits = sanitizeCustomUnits(settings.units.customUnits)
+      const boqs = await readAllBoqs()
+      const usage: Record<string, number> = {}
+      const all: Record<string, number> = {}
+      for (const { data } of boqs) {
+        const sections = (data as { sections?: { items?: unknown[] }[] })?.sections ?? []
+        for (const section of sections) {
+          for (const item of (section.items ?? []) as readonly { pricingRole?: string; unit?: unknown }[]) {
+            if (item.pricingRole === 'bundle_child') continue
+            if (typeof item.unit !== 'string') continue
+            all[item.unit] = (all[item.unit] ?? 0) + 1
+          }
+        }
+      }
+      for (const unit of customUnits) usage[unit] = all[unit] ?? 0
+      return Response.json({ standardUnits: [...STANDARD_UNITS], customUnits, usage })
+    } catch (error) {
+      console.error('Error reading workspace units overview:', error)
+      return Response.json({ error: 'Internal server error' }, { status: 500 })
+    }
+  }
+}
+
+interface WorkspaceUnitsDeleteDependencies {
+  authenticate: () => Promise<{ user?: unknown } | null>
+  countUsage: (unit: string) => Promise<number>
+  removeUnit: (unit: string) => Promise<{ customUnits: string[] }>
+}
+
+export function createWorkspaceUnitsDeleteHandler({
+  authenticate,
+  countUsage,
+  removeUnit,
+}: WorkspaceUnitsDeleteDependencies) {
+  return async function DELETE(request: Request): Promise<Response> {
+    let session
+    try {
+      session = await authenticate()
+    } catch (error) {
+      console.error('Error authenticating workspace unit delete:', error)
+      return Response.json({ error: 'Internal server error' }, { status: 500 })
+    }
+    if (!session?.user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
+
+    let body: unknown
+    try {
+      body = await request.json()
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        return Response.json({ error: 'Request body must be valid JSON.' }, { status: 400 })
+      }
+      console.error('Error reading workspace unit delete:', error)
+      return Response.json({ error: 'Internal server error' }, { status: 500 })
+    }
+    if (
+      typeof body !== 'object' || body === null || Array.isArray(body)
+      || Object.keys(body as object).length !== 1
+      || (body as { unit?: unknown }).unit === undefined
+      || typeof (body as { unit: unknown }).unit !== 'string'
+    ) {
+      return Response.json({ error: 'Request must contain only unit.' }, { status: 400 })
+    }
+    const unit = (body as { unit: string }).unit
+
+    try {
+      const usageCount = await countUsage(unit)
+      if (usageCount > 0) {
+        return Response.json(
+          { error: 'Unit is in use by existing BOQ items.', usageCount },
+          { status: 409 },
+        )
+      }
+      const result = await removeUnit(unit)
+      return Response.json({ customUnits: result.customUnits })
+    } catch (error) {
+      if (error instanceof WorkspaceUnitError) {
+        return Response.json({ error: error.message }, { status: error.status })
+      }
+      console.error('Error deleting workspace unit:', error)
+      return Response.json({ error: 'Internal server error' }, { status: 500 })
+    }
+  }
+}
+
+interface WorkspaceUnitsPatchDependencies {
+  authenticate: () => Promise<{ user?: unknown } | null>
+  renameUnit: (oldUnit: string, newUnit: string) => Promise<{ customUnits: string[]; updatedBoqs: number; updatedItems: number }>
+}
+
+export function createWorkspaceUnitsPatchHandler({
+  authenticate,
+  renameUnit,
+}: WorkspaceUnitsPatchDependencies) {
+  return async function PATCH(request: Request): Promise<Response> {
+    let session
+    try {
+      session = await authenticate()
+    } catch (error) {
+      console.error('Error authenticating workspace unit rename:', error)
+      return Response.json({ error: 'Internal server error' }, { status: 500 })
+    }
+    if (!session?.user) return Response.json({ error: 'Unauthorized' }, { status: 401 })
+
+    let body: unknown
+    try {
+      body = await request.json()
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        return Response.json({ error: 'Request body must be valid JSON.' }, { status: 400 })
+      }
+      console.error('Error reading workspace unit rename:', error)
+      return Response.json({ error: 'Internal server error' }, { status: 500 })
+    }
+    const obj = body as { oldUnit?: unknown; newUnit?: unknown }
+    if (
+      typeof body !== 'object' || body === null || Array.isArray(body)
+      || typeof obj.oldUnit !== 'string' || typeof obj.newUnit !== 'string'
+    ) {
+      return Response.json(
+        { error: 'Request must contain oldUnit and newUnit.' },
+        { status: 400 },
+      )
+    }
+
+    try {
+      const result = await renameUnit(obj.oldUnit, obj.newUnit)
+      return Response.json({ customUnits: result.customUnits, updatedItems: result.updatedItems })
+    } catch (error) {
+      if (error instanceof WorkspaceUnitError) {
+        return Response.json({ error: error.message }, { status: error.status })
+      }
+      console.error('Error renaming workspace unit:', error)
+      return Response.json({ error: 'Internal server error' }, { status: 500 })
     }
   }
 }
