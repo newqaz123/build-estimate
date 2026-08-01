@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import Link from 'next/link'
 import { Combobox as ComboboxPrimitive } from '@base-ui/react/combobox'
 import { Check, ChevronDown, Plus, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -308,6 +309,13 @@ export function UnitCombobox({
                     <Plus aria-hidden="true" />
                     <span>Add workspace unit</span>
                   </button>
+                  <Link
+                    href="/settings#units"
+                    className="unit-combobox-manage"
+                    onClick={() => setOpen(false)}
+                  >
+                    Manage units…
+                  </Link>
                 </>
               )}
             </ComboboxPrimitive.Popup>

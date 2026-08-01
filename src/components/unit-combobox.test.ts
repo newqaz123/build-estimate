@@ -125,3 +125,8 @@ test('invalidates in-flight add operations and closes the popup when readOnly or
     /useEffect\(\(\) => \{\s+if \(prevLockedRef\.current !== \(readOnly \|\| disabled\)\) \{\s+prevLockedRef\.current = readOnly \|\| disabled\s+addOperationGenerationRef\.current \+= 1[\s\S]*?setAddingUnit\(false\)\s+\}\s+\}, \[readOnly, disabled\]\)/,
   )
 })
+
+test('unit combobox offers a Manage units link to the settings anchor', () => {
+  assert.match(source, /Manage units/)
+  assert.match(source, /\/settings#units/)
+})
