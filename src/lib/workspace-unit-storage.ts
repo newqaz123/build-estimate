@@ -109,6 +109,15 @@ export function createWorkspaceUnitCascadeStore(runCascade: CascadeRunner) {
         const { customUnits } = renameWorkspaceUnit(current.units.customUnits, oldUnit, newUnit)
         document.writeSettings({ units: { customUnits } })
 
+        // A rename to the same canonical value is a no-op success: the
+        // customUnits list is already unchanged, so skip the BOQ read+writes
+        // entirely to avoid needlessly bumping each BOQ's `updatedAt`.
+        const renamed = newUnit.trim()
+        const isNoOp = renamed === oldUnit
+        if (isNoOp) {
+          return { customUnits, updatedBoqs: 0, updatedItems: 0 }
+        }
+
         const boqs = (await document.readAllBoqs()) as Array<{ id: string; data: Boq }>
         let updatedBoqs = 0
         let updatedItems = 0
@@ -121,7 +130,7 @@ export function createWorkspaceUnitCascadeStore(runCascade: CascadeRunner) {
               if (item.unit === oldUnit) {
                 touched = true
                 updatedItems += 1
-                return { ...item, unit: newUnit.trim() }
+                return { ...item, unit: renamed }
               }
               return item
             }),

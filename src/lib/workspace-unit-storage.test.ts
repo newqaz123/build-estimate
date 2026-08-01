@@ -134,6 +134,38 @@ test('renameWorkspaceUnitAtomically renames in settings and cascades matching pr
   assert.equal(b1.sections[0].items[2].unit, 'crate')
 })
 
+test('rename no-op (same value) short-circuits BOQ read/write and returns zero updates', async () => {
+  const state: FakeState = {
+    settings: { units: { customUnits: ['pallet', 'crate'] } },
+    boqs: {
+      b1: { sections: [{ items: [{ pricingRole: 'standard', unit: 'pallet' }] }] },
+    },
+  }
+  let boqReads = 0
+  let boqWrites = 0
+  const runner: CascadeRunner = (work) =>
+    work({
+      async readSettings() {
+        return state.settings
+      },
+      writeSettings(patch) {
+        state.settings = { ...((state.settings as object | null) ?? {}), ...patch }
+      },
+      async readAllBoqs() {
+        boqReads += 1
+        return Object.entries(state.boqs).map(([id, data]) => ({ id, data }))
+      },
+      writeBoq() {
+        boqWrites += 1
+      },
+    })
+  const store = createWorkspaceUnitCascadeStore(runner)
+  const result = await store.rename('pallet', 'pallet')
+  assert.deepEqual(result, { customUnits: ['pallet', 'crate'], updatedBoqs: 0, updatedItems: 0 })
+  assert.equal(boqReads, 0)
+  assert.equal(boqWrites, 0)
+})
+
 test('countWorkspaceUnitUsage counts priced items via the pure helper', async () => {
   const state: FakeState = {
     settings: { units: { customUnits: [] } },

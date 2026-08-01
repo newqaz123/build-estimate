@@ -1,4 +1,5 @@
 import {
+  mapUnitUsage,
   STANDARD_UNITS,
   sanitizeCustomUnits,
   WorkspaceUnitError,
@@ -117,18 +118,12 @@ export function createWorkspaceUnitsGetHandler({
       )
       const customUnits = sanitizeCustomUnits(settings.units.customUnits)
       const boqs = await readAllBoqs()
+      const all = mapUnitUsage(
+        boqs.map(({ data }) => data) as ReadonlyArray<{
+          sections: { items: readonly unknown[] }[]
+        }>,
+      )
       const usage: Record<string, number> = {}
-      const all: Record<string, number> = {}
-      for (const { data } of boqs) {
-        const sections = (data as { sections?: { items?: unknown[] }[] })?.sections ?? []
-        for (const section of sections) {
-          for (const item of (section.items ?? []) as readonly { pricingRole?: string; unit?: unknown }[]) {
-            if (item.pricingRole === 'bundle_child') continue
-            if (typeof item.unit !== 'string') continue
-            all[item.unit] = (all[item.unit] ?? 0) + 1
-          }
-        }
-      }
       for (const unit of customUnits) usage[unit] = all[unit] ?? 0
       return Response.json({ standardUnits: [...STANDARD_UNITS], customUnits, usage })
     } catch (error) {
