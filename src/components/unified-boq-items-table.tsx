@@ -288,7 +288,7 @@ export function UnifiedBoqItemsTable({
 						<th className="num-col">Labour</th>
 						<th className="num-col">Total</th>
 						<th>Catalog</th>
-						<th aria-label="Actions" />
+						<th aria-label="Actions" className="unified-boq-action-rail" />
 					</tr>
 				</thead>
 				<tbody>
@@ -394,7 +394,7 @@ function FragmentSection({
 								<span className="inline-catalog-status">Informational</span>
 							</td>
 							<td
-								className="unified-boq-row-actions"
+								className="unified-boq-row-actions unified-boq-action-rail"
 								data-label="Actions"
 								aria-hidden="true"
 							/>
@@ -594,12 +594,16 @@ function FragmentSection({
 								onClearError={onClearCatalogError}
 							/>
 						</td>
-						<td className="unified-boq-row-actions" data-label="Actions">
+						<td
+							className="unified-boq-row-actions unified-boq-action-rail"
+							data-label="Actions"
+						>
 							{!readOnly ? (
 								<Button
 									type="button"
 									variant="ghost"
 									size="icon"
+									className="unified-boq-delete-button"
 									aria-label={`Delete row ${rowNumber}`}
 									disabled={disabled}
 									onClick={() => onDelete?.(row)}
