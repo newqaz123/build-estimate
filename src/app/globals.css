@@ -1431,7 +1431,7 @@
 .unit-combobox-search input::placeholder { color: var(--muted-text); }
 .unit-combobox-search input:focus-visible { border-color: var(--accent); box-shadow: var(--focus-ring); }
 .unit-combobox-load-error { margin: 0; padding: 7px 10px; border-bottom: 1px solid color-mix(in oklab, var(--danger) 20%, var(--border-soft)); background: color-mix(in oklab, var(--danger) 5%, var(--surface)); color: var(--danger); font-size: 10px; line-height: 1.35; }
-.unit-combobox-list { max-height: 192px; overflow-y: auto; margin: 0; padding: 5px; }
+.unit-combobox-list { max-height: 192px; overflow-y: auto; margin: 0; padding: 5px; font-size: 12px; line-height: 1.4; }
 .unit-combobox-empty { padding: 8px 9px; color: var(--muted-text); font-size: 11px; }
 .unit-combobox-option {
   display: flex;
@@ -1481,6 +1481,24 @@
 .unit-combobox-add-error { margin: -5px 0 12px; color: var(--danger); font-size: 10px; line-height: 1.35; }
 .unit-combobox-add-actions { display: flex; justify-content: flex-end; gap: 7px; }
 .unit-combobox-add-actions button { height: 30px; padding-inline: 9px; border-radius: 7px; font-size: 11px; }
+.unit-combobox-manage {
+  display: flex;
+  width: 100%;
+  min-height: 38px;
+  align-items: center;
+  padding: 6px 14px;
+  box-sizing: border-box;
+  border-top: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--fg-2);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.unit-combobox-manage:hover { background: color-mix(in oklab, var(--accent) 6%, transparent); color: var(--accent); }
+.unit-combobox-manage:focus-visible { box-shadow: inset var(--focus-ring); }
 
 .boq-unified-header { min-width: 0; }
 .boq-unified-header .review-header-title { flex: 1; }

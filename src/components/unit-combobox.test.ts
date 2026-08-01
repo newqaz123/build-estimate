@@ -9,6 +9,10 @@ const source = readFileSync(
   new URL('./unit-combobox.tsx', import.meta.url),
   'utf8',
 )
+const globalStyles = readFileSync(
+  new URL('../app/globals.css', import.meta.url),
+  'utf8',
+)
 
 const baseProps = {
   units: ['m³', 'm²', 'ton'],
@@ -129,4 +133,13 @@ test('invalidates in-flight add operations and closes the popup when readOnly or
 test('unit combobox offers a Manage units link to the settings anchor', () => {
   assert.match(source, /Manage units/)
   assert.match(source, /\/settings#units/)
+})
+
+test('unit combobox keeps the list compact and styles the manage footer row', () => {
+  assert.match(globalStyles, /\.unit-combobox-list\s*\{[\s\S]*font-size:\s*12px/)
+  assert.match(
+    globalStyles,
+    /\.unit-combobox-manage\s*\{[\s\S]*display:\s*flex[\s\S]*min-height:\s*38px/,
+  )
+  assert.match(globalStyles, /\.unit-combobox-manage:hover\s*\{[\s\S]*color:\s*var\(--accent\)/)
 })
