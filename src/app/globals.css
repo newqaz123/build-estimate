@@ -1994,3 +1994,137 @@
   .est-print-total { display: block !important; margin-top: var(--space-4); padding-top: var(--space-3); border-top: 2px solid var(--fg); text-align: right; font-size: 18px; font-weight: 700; }
   @page { size: A4; margin: 15mm; }
 }
+
+/* Workspace units — unified hover-action chip field.
+   Standard units render as locked chips; custom units reveal rename/delete
+   actions on hover/focus; a trailing dashed chip toggles inline add. */
+.unit-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--border-soft), white 42%);
+}
+.unit-field > .meta { font-size: 12px; padding-inline: 4px; }
+
+.unit-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 0 8px;
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  transition:
+    background var(--motion-fast),
+    border-color var(--motion-fast),
+    box-shadow var(--motion-fast);
+}
+.unit-chip.standard {
+  border-color: transparent;
+  background: color-mix(in oklab, var(--border-soft), white 20%);
+  color: var(--muted-text);
+  cursor: not-allowed;
+}
+.unit-chip.standard svg {
+  width: 11px;
+  height: 11px;
+  color: var(--muted-text);
+  stroke: currentColor;
+}
+.unit-chip.custom { padding-right: 4px; }
+.unit-chip.custom:hover,
+.unit-chip.custom:focus-within {
+  border-color: color-mix(in oklab, var(--accent), var(--border) 55%);
+  box-shadow: 0 1px 2px color-mix(in oklab, var(--accent), transparent 86%);
+}
+
+.chip-actions {
+  display: inline-flex;
+  gap: 1px;
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition:
+    max-width var(--motion-fast) var(--ease-standard),
+    opacity var(--motion-fast) var(--ease-standard);
+}
+.unit-chip.custom:hover .chip-actions,
+.unit-chip.custom:focus-within .chip-actions {
+  max-width: 48px;
+  opacity: 1;
+}
+
+.chip-action {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted-text);
+  padding: 0;
+  cursor: pointer;
+}
+.chip-action:hover { background: var(--border-soft); color: var(--accent); }
+.chip-action.delete:hover { color: var(--danger); }
+.chip-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chip-action svg { width: 13px; height: 13px; stroke: currentColor; }
+
+/* Inline rename / add control rendered in chip flow (input + action buttons). */
+.chip-rename {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 2px 3px 2px 4px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  box-shadow: var(--focus-ring);
+}
+.chip-rename .proto-input {
+  height: 26px;
+  min-width: 92px;
+  border-color: transparent;
+  border-radius: var(--radius-pill);
+  padding: 0 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  box-shadow: none;
+}
+.chip-rename .proto-input:focus-visible {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.add-chip {
+  border: 1px dashed color-mix(in oklab, var(--accent), var(--border) 42%);
+  background: color-mix(in oklab, var(--accent), white 96%);
+  color: var(--accent);
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-weight: 700;
+}
+.add-chip:hover {
+  background: color-mix(in oklab, var(--accent), white 91%);
+  border-color: var(--accent);
+}
+.add-chip svg { width: 13px; height: 13px; stroke: currentColor; }
+
+@media (prefers-reduced-motion: reduce) {
+  .unit-chip,
+  .chip-actions,
+  .add-chip {
+    transition-duration: 0.01ms !important;
+  }
+}
