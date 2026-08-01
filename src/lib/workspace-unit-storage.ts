@@ -103,24 +103,31 @@ export function createWorkspaceUnitCascadeStore(runCascade: CascadeRunner) {
     },
     async rename(oldUnit: string, newUnit: string) {
       return runCascade(async (document) => {
+        // Firestore transactions require ALL reads before ANY writes. Both the
+        // settings read and the BOQ read must therefore complete before the
+        // settings/BOQ writes begin; interleaving them throws a 500 at runtime.
+        const renamed = newUnit.trim()
+        const isNoOp = renamed === oldUnit
+
         const current = fromStoredSettings(
           (await document.readSettings()) as StoredWorkspaceSettings | null,
         )
         const { customUnits } = renameWorkspaceUnit(current.units.customUnits, oldUnit, newUnit)
-        document.writeSettings({ units: { customUnits } })
 
         // A rename to the same canonical value is a no-op success: the
         // customUnits list is already unchanged, so skip the BOQ read+writes
-        // entirely to avoid needlessly bumping each BOQ's `updatedAt`.
-        const renamed = newUnit.trim()
-        const isNoOp = renamed === oldUnit
+        // entirely to avoid needlessly bumping each BOQ's `updatedAt`. This
+        // settings-only read-then-write still satisfies the read-before-write
+        // rule.
         if (isNoOp) {
+          document.writeSettings({ units: { customUnits } })
           return { customUnits, updatedBoqs: 0, updatedItems: 0 }
         }
 
         const boqs = (await document.readAllBoqs()) as Array<{ id: string; data: Boq }>
         let updatedBoqs = 0
         let updatedItems = 0
+        const touchedBoqs: Array<{ id: string; sections: Boq['sections'] }> = []
         for (const { id, data } of boqs) {
           let touched = false
           const sections = data.sections.map((section) => ({
@@ -137,8 +144,13 @@ export function createWorkspaceUnitCascadeStore(runCascade: CascadeRunner) {
           }))
           if (touched) {
             updatedBoqs += 1
-            document.writeBoq(id, { sections, updatedAt: new Date().toISOString() })
+            touchedBoqs.push({ id, sections })
           }
+        }
+        // All reads (settings + BOQs) are complete; now the writes, in order.
+        document.writeSettings({ units: { customUnits } })
+        for (const { id, sections } of touchedBoqs) {
+          document.writeBoq(id, { sections, updatedAt: new Date().toISOString() })
         }
         return { customUnits, updatedBoqs, updatedItems }
       })

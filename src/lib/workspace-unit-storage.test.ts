@@ -72,21 +72,35 @@ interface FakeState {
 }
 
 function fakeRunner(state: FakeState): CascadeRunner {
-  return (work) =>
-    work({
+  // Mirrors Firestore's transaction invariant: all reads must complete before
+  // any write. Once a write begins, further reads throw, so a read-after-write
+  // ordering bug fails the test instead of silently passing in-memory. The flag
+  // resets per `work` callback, i.e. per transaction.
+  return (work) => {
+    let writesStarted = false
+    return work({
       async readSettings() {
+        if (writesStarted) {
+          throw new Error('Firestore ordering violated: readSettings after a write')
+        }
         return state.settings
       },
       writeSettings(patch) {
-        state.settings = { ...(state.settings as object | null ?? {}), ...patch }
+        writesStarted = true
+        state.settings = { ...((state.settings as object | null) ?? {}), ...patch }
       },
       async readAllBoqs() {
+        if (writesStarted) {
+          throw new Error('Firestore ordering violated: readAllBoqs after a write')
+        }
         return Object.entries(state.boqs).map(([id, data]) => ({ id, data }))
       },
       writeBoq(id, patch) {
+        writesStarted = true
         state.boqs[id] = { ...(state.boqs[id] as object), ...patch }
       },
     })
+  }
 }
 
 test('removeWorkspaceUnitAtomically removes the unit from settings only', async () => {
@@ -132,6 +146,36 @@ test('renameWorkspaceUnitAtomically renames in settings and cascades matching pr
   // bundle_child provenance/row left untouched (not a priced item).
   assert.equal(b1.sections[0].items[1].unit, 'pallet')
   assert.equal(b1.sections[0].items[2].unit, 'crate')
+})
+
+test('rename reads all BOQs before any write (Firestore ordering)', async () => {
+  // With the ordering-enforcing fakeRunner, a read-after-write bug throws
+  // instead of silently passing. This asserts a real rename completes without
+  // the ordering throw and still cascades correctly.
+  const state: FakeState = {
+    settings: { units: { customUnits: ['pallet', 'crate'] } },
+    boqs: {
+      b1: {
+        sections: [
+          {
+            header: 'A',
+            items: [
+              { pricingRole: 'standard', unit: 'pallet', desc: 'one' },
+              { pricingRole: 'standard', unit: 'crate', desc: 'two' },
+            ],
+          },
+        ],
+      },
+    },
+  }
+  const store = createWorkspaceUnitCascadeStore(fakeRunner(state))
+  const result = await store.rename('pallet', 'PLT')
+  assert.deepEqual(result.customUnits, ['PLT', 'crate'])
+  assert.equal(result.updatedBoqs, 1)
+  assert.equal(result.updatedItems, 1)
+  const b1 = state.boqs.b1 as { sections: { items: { unit: string }[] }[] }
+  assert.equal(b1.sections[0].items[0].unit, 'PLT')
+  assert.equal(b1.sections[0].items[1].unit, 'crate')
 })
 
 test('rename no-op (same value) short-circuits BOQ read/write and returns zero updates', async () => {
