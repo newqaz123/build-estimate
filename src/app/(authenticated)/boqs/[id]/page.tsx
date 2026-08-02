@@ -80,9 +80,10 @@ import {
 	parseNonNegativeBoqEditValue,
 } from "@/lib/boq-pricing";
 import {
-  boqDetailReturnHref,
-  isBoqReviewMode,
-  safeCompareReturnPath,
+	boqDetailReturnHref,
+	compareBoqHref,
+	isBoqReviewMode,
+	safeCompareReturnPath,
 } from "@/lib/boq-review-route";
 import {
 	buildCanonicalRevisionKey,
@@ -174,11 +175,11 @@ function BoqDetailContent() {
 	const router = useRouter();
 	const searchParams = useSearchParams();
 	const id = params.id as string;
-  const rawReturnTo = searchParams.get("returnTo");
-  const returnTo = safeCompareReturnPath(rawReturnTo);
+	const rawReturnTo = searchParams.get("returnTo");
+	const returnTo = safeCompareReturnPath(rawReturnTo);
 	const legacyReviewMode = isBoqReviewMode(searchParams);
-  const shouldCanonicalizeUrl =
-    legacyReviewMode || (rawReturnTo !== null && returnTo === null);
+	const shouldCanonicalizeUrl =
+		legacyReviewMode || (rawReturnTo !== null && returnTo === null);
 	const [boq, setBoq] = useState<Boq | null>(null);
 	const [loadState, setLoadState] = useState<LoadState>("loading");
 	const fetchControllerRef = useRef<AbortController | null>(null);
@@ -223,9 +224,9 @@ function BoqDetailContent() {
 	}, [id]);
 
 	useEffect(() => {
-    if (!shouldCanonicalizeUrl) return;
-    router.replace(boqDetailReturnHref(id, returnTo), { scroll: false });
-  }, [id, returnTo, router, shouldCanonicalizeUrl]);
+		if (!shouldCanonicalizeUrl) return;
+		router.replace(boqDetailReturnHref(id, returnTo), { scroll: false });
+	}, [id, returnTo, router, shouldCanonicalizeUrl]);
 
 	useEffect(() => {
 		let active = true;
@@ -281,27 +282,27 @@ function BoqDetailContent() {
 				<AlertCircle aria-hidden="true" />
 				<h3>BOQ not found</h3>
 				<p>It may have been removed, or the link may be incorrect.</p>
-        <Link href={returnTo ?? "/boqs"} className="btn btn-secondary">
-          {returnTo ? "Back to comparison" : "Back to BOQs"}
+				<Link href={returnTo ?? "/boqs"} className="btn btn-secondary">
+					{returnTo ? "Back to comparison" : "Back to BOQs"}
 				</Link>
 			</div>
 		);
 	}
 
 	return (
-    <CanonicalBoqWorkspace
-      key={boq.id}
-      boq={boq}
-      onBoqChange={setBoq}
-      backHref={returnTo ?? "/boqs"}
-      backLabel={returnTo ? "Back to comparison" : "Back to BOQs"}
-      onApproved={() => {
-        if (returnTo) {
-          router.replace(returnTo, { scroll: false });
-        }
-      }}
-    />
-  );
+		<CanonicalBoqWorkspace
+			key={boq.id}
+			boq={boq}
+			onBoqChange={setBoq}
+			backHref={returnTo ?? compareBoqHref(id)}
+			backLabel={returnTo ? "Back to comparison" : "Back to Compare"}
+			onApproved={() => {
+				if (returnTo) {
+					router.replace(returnTo, { scroll: false });
+				}
+			}}
+		/>
+	);
 }
 
 type StashedDelete = {
@@ -313,15 +314,15 @@ type StashedDelete = {
 function CanonicalBoqWorkspace({
 	boq,
 	onBoqChange,
-  backHref,
-  backLabel,
-  onApproved,
+	backHref,
+	backLabel,
+	onApproved,
 }: {
 	boq: Boq;
 	onBoqChange: (next: Boq) => void;
-  backHref: string;
-  backLabel: string;
-  onApproved: (approved: Boq) => void;
+	backHref: string;
+	backLabel: string;
+	onApproved: (approved: Boq) => void;
 }) {
 	const [edits, setEdits] = useState<EditsMap>({});
 	const editsRef = useRef<EditsMap>({});
@@ -348,9 +349,9 @@ function CanonicalBoqWorkspace({
 	);
 	const invalidDraftRef = useRef<Set<string>>(new Set());
 	const [customUnits, setCustomUnits] = useState<string[]>([]);
-	const [workspaceUnitsError, setWorkspaceUnitsError] = useState<
-		string | null
-	>(null);
+	const [workspaceUnitsError, setWorkspaceUnitsError] = useState<string | null>(
+		null,
+	);
 	const [pendingDeletes, setPendingDeletes] = useState<StashedDelete[]>([]);
 	const units = useMemo(
 		() => [...STANDARD_UNITS, ...customUnits],
@@ -907,12 +908,12 @@ function CanonicalBoqWorkspace({
 				body: JSON.stringify({ status: "approved" }),
 			});
 			if (!response.ok) {
-        throw new Error(await readError(response, "Failed to approve BOQ"));
-      }
-      const approved = (await response.json()) as Boq;
-      applyMutationBoq(approved);
-      toast.success("BOQ approved and linked to the Standard Catalog");
-      onApproved(approved);
+				throw new Error(await readError(response, "Failed to approve BOQ"));
+			}
+			const approved = (await response.json()) as Boq;
+			applyMutationBoq(approved);
+			toast.success("BOQ approved and linked to the Standard Catalog");
+			onApproved(approved);
 		} catch (error) {
 			toast.error(
 				error instanceof Error ? error.message : "Failed to approve BOQ",
@@ -1041,9 +1042,9 @@ function CanonicalBoqWorkspace({
 					data-od-id="detail-header"
 				>
 					<div className="review-header-title">
-            <Link href={backHref} className="boq-back-link">
-              <ChevronLeft aria-hidden="true" />
-              {backLabel}
+						<Link href={backHref} className="boq-back-link">
+							<ChevronLeft aria-hidden="true" />
+							{backLabel}
 						</Link>
 						<div className="boq-unified-title">
 							<strong>{boq.project || "Untitled BOQ"}</strong>
@@ -1107,7 +1108,7 @@ function CanonicalBoqWorkspace({
 								<Button
 									type="button"
 									size="sm"
-                  aria-busy={approving}
+									aria-busy={approving}
 									onClick={() => void handleApprove()}
 									disabled={
 										mutationBusy ||
@@ -1122,7 +1123,7 @@ function CanonicalBoqWorkspace({
 									) : (
 										<Check aria-hidden="true" />
 									)}
-                  {approving ? "Approving…" : "Approve BOQ"}
+									{approving ? "Approving…" : "Approve BOQ"}
 								</Button>
 							</>
 						) : null}

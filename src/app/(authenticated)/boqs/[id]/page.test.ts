@@ -97,9 +97,16 @@ test("approval exposes progress and disables duplicate mutations", () => {
 });
 
 test("compare-origin Details navigation has a safe manual recovery path", () => {
-  assert.match(source, /backHref=\{returnTo \?\? "\/boqs"\}/);
-  assert.match(source, /returnTo \? "Back to comparison" : "Back to BOQs"/);
+  // The validated returnTo remains the preferred destination; the direct
+  // compare fallback is only used when returnTo is absent.
+  assert.match(source, /returnTo \?\? compareBoqHref\(id\)/);
   assert.match(source, /href=\{backHref\}/);
+});
+
+test("direct BOQ Details exposes a safe Back to Compare fallback", () => {
+  assert.match(source, /compareBoqHref/);
+  assert.match(source, /backHref=\{returnTo \?\? compareBoqHref\(id\)\}/);
+  assert.match(source, /backLabel=\{returnTo \? "Back to comparison" : "Back to Compare"\}/);
 });
 
 test("BOQ Details remains the canonical catalog action workspace", () => {
