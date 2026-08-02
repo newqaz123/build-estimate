@@ -233,7 +233,7 @@ function ComparePageContent() {
       {boqLoadState === "error" ? (
         <div className="proto-empty-state proto-error-state compare-state" role="alert">
           <AlertCircle /><h3>Couldn&apos;t load BOQs</h3><p>Try again in a moment.</p>
-          <button className="btn btn-secondary" onClick={() => void loadBoqs()}>Retry</button>
+          <button className="btn btn-secondary" onClick={() => void loadBoqs(preferredBoqId)}>Retry</button>
         </div>
       ) : null}
       {boqLoadState === "loaded" && boqs.length === 0 ? (

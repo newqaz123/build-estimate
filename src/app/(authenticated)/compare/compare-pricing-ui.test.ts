@@ -142,7 +142,7 @@ test("compare separates BOQ-list and comparison failures", () => {
   assert.match(source, /comparisonLoadState/)
   assert.match(source, /Couldn&apos;t load BOQs/)
   assert.match(source, /Couldn&apos;t load this comparison/)
-  assert.match(source, /loadBoqs\(\)/)
+  assert.match(source, /loadBoqs\(preferredBoqId\)/)
   assert.match(source, /loadComparison\(selectedId\)/)
 })
 
