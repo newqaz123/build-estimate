@@ -101,13 +101,37 @@ test("approval exposes one disabled state and an actionable blocker message", ()
 		"const approvalDisabledReason",
 		"const handleApprove",
 	);
-	assert.match(approval, /mutationBusy/);
-	assert.match(approval, /invalidDraftKeys\.size > 0/);
-	assert.match(approval, /pendingChanges > 0/);
-	assert.match(approval, /verification\.hasBlockingIssues/);
-	assert.match(approval, /catalogReadiness\.blocking > 0/);
-	assert.match(source, /approvalDisabledReason/);
-	assert.match(source, /aria-describedby=\{approvalDisabledReason/);
+	// Reason precedence must mirror guard order: mutationBusy → invalid
+	// drafts → pending changes → verification blockers → catalog readiness
+	// (gated by requireCatalogReadiness).
+	const busyIdx = approval.indexOf("mutationBusy");
+	const invalidIdx = approval.indexOf("invalidDraftKeys.size > 0");
+	const pendingIdx = approval.indexOf("pendingChanges > 0");
+	const verifyIdx = approval.indexOf("verification.hasBlockingIssues");
+	const catalogIdx = approval.indexOf(
+		"requireCatalogReadiness && catalogReadiness.blocking > 0",
+	);
+	assert.ok(busyIdx >= 0, "reason must start from mutationBusy");
+	assert.ok(
+		invalidIdx > busyIdx,
+		"invalid drafts must come after mutationBusy",
+	);
+	assert.ok(
+		pendingIdx > invalidIdx,
+		"pending changes must come after invalid drafts",
+	);
+	assert.ok(
+		verifyIdx > pendingIdx,
+		"verification blockers must come after pending changes",
+	);
+	assert.ok(
+		catalogIdx > verifyIdx,
+		"catalog readiness (gated by requireCatalogReadiness) must come last",
+	);
+	// The button disabled state is the single derived predicate.
+	assert.match(source, /disabled=\{approvalDisabled\}/);
+	// Accessible blocker message wired to the button.
+	assert.match(source, /aria-describedby=\{\s*approvalDisabledReason/);
 	assert.match(source, /data-od-id="approval-blocker"/);
 });
 
@@ -116,8 +140,17 @@ test("manual match always releases its mutation lock", () => {
 		"const reloadAfterManualMatch",
 		"const handleExclude",
 	);
-	assert.match(match, /setMatching\(false\)/);
-	assert.match(match, /finally/);
+	// setMatching(false) must be inside the finally block, not merely
+	// somewhere else in the handler body.
+	const finallyIdx = match.indexOf("finally");
+	const setMatchingFalseIdx = match.indexOf("setMatching(false)");
+	assert.ok(finallyIdx >= 0, "must have a finally block");
+	assert.ok(
+		setMatchingFalseIdx > finallyIdx,
+		"setMatching(false) must be inside the finally block",
+	);
+	// No redirect after matching — the user stays on Details.
+	assert.doesNotMatch(match, /router\.(push|replace)/);
 });
 
 test("compare-origin Details navigation has a safe manual recovery path", () => {

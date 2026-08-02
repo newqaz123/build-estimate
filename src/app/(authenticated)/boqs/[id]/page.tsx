@@ -559,7 +559,7 @@ function CanonicalBoqWorkspace({
 				? "Save pending BOQ changes before approving."
 				: verification.hasBlockingIssues
 					? "Resolve the review blockers below before approving."
-					: catalogReadiness.blocking > 0
+					: requireCatalogReadiness && catalogReadiness.blocking > 0
 						? `Resolve ${catalogReadiness.blocking} catalog line${catalogReadiness.blocking === 1 ? "" : "s"} before approving.`
 						: null;
 	const approvalDisabled = approvalDisabledReason !== null;
@@ -1123,7 +1123,9 @@ function CanonicalBoqWorkspace({
 									type="button"
 									size="sm"
 									aria-busy={approving}
-									aria-describedby={approvalDisabledReason ? "approve-boq-blocker" : undefined}
+									aria-describedby={
+										approvalDisabledReason ? "approve-boq-blocker" : undefined
+									}
 									onClick={() => void handleApprove()}
 									disabled={approvalDisabled}
 								>
