@@ -1,7 +1,10 @@
 import type { Boq, BoqItem } from './boq-schema'
 import { isPricedBoqItem } from './boq-pricing'
 import type { StandardEntry } from './standard-schema'
-import { unitsCompatible } from './standard-matching'
+import {
+  canonicalUnit,
+  unitsCompatible,
+} from './standard-matching'
 
 export interface HistoricalPriceSource {
   boqId: string
@@ -22,6 +25,21 @@ export interface HistoricalPriceSummary {
   average: number
   max: number
   sources: HistoricalPriceSource[]
+}
+
+export type CatalogComponentKey = 'material' | 'labour'
+
+export interface ComponentPriceSummary {
+  unit: string
+  count: number
+  min: number
+  average: number
+  max: number
+}
+
+export interface CatalogComponentPricing {
+  material: Map<string, ComponentPriceSummary>
+  labour: Map<string, ComponentPriceSummary>
 }
 
 function provenanceKey(boqId: string, sectionIndex: number, item: Pick<BoqItem, 'id' | 'code'>): string | null {
@@ -111,5 +129,99 @@ export function buildCatalogHistoricalPricing(
     }
     result.set(standardId, { count: sources.length, min, average: total / sources.length, max, sources })
   }
+  return result
+}
+
+const COMPONENT_KEYS: CatalogComponentKey[] = ['material', 'labour']
+
+function emptyComponentPricing(): CatalogComponentPricing {
+  return {
+    material: new Map(),
+    labour: new Map(),
+  }
+}
+
+function summarizeRates(
+  unit: string,
+  rates: number[],
+): ComponentPriceSummary {
+  return {
+    unit,
+    count: rates.length,
+    min: Math.min(...rates),
+    average: rates.reduce((sum, rate) => sum + rate, 0) / rates.length,
+    max: Math.max(...rates),
+  }
+}
+
+export function buildCatalogComponentPricing(
+  standards: StandardEntry[],
+  boqs: Boq[],
+  unitMap: Record<string, string> = {},
+  options: { excludeBoqId?: string } = {},
+): Map<string, CatalogComponentPricing> {
+  const resolver = createHistoricalStandardResolver(standards)
+  const grouped = new Map<
+    string,
+    Record<CatalogComponentKey, Map<string, number[]>>
+  >()
+
+  for (const boq of boqs) {
+    if (
+      boq.status !== 'approved'
+      || boq.id === options.excludeBoqId
+    ) {
+      continue
+    }
+
+    boq.sections.forEach((section, sectionIndex) => {
+      section.items.forEach((item) => {
+        if (!isPricedBoqItem(item) || item.stdStatus !== 'matched') return
+
+        const standardId = resolver.resolve(boq.id, sectionIndex, item)
+        if (!standardId || !item.sourceCosts) return
+
+        const standardGroups = grouped.get(standardId) ?? {
+          material: new Map<string, number[]>(),
+          labour: new Map<string, number[]>(),
+        }
+
+        for (const key of COMPONENT_KEYS) {
+          const source = item.sourceCosts[key]
+          if (
+            !source.present
+            || source.qty <= 0
+            || !source.unit.trim()
+            || !Number.isFinite(source.rate)
+            || source.rate <= 0
+          ) {
+            continue
+          }
+
+          const unit = canonicalUnit(source.unit, unitMap)
+          const rates = standardGroups[key].get(unit) ?? []
+          rates.push(source.rate)
+          standardGroups[key].set(unit, rates)
+        }
+
+        grouped.set(standardId, standardGroups)
+      })
+    })
+  }
+
+  const result = new Map<string, CatalogComponentPricing>()
+
+  for (const [standardId, groups] of grouped) {
+    const pricing = emptyComponentPricing()
+
+    for (const key of COMPONENT_KEYS) {
+      for (const [unit, rates] of groups[key]) {
+        pricing[key].set(unit, summarizeRates(unit, rates))
+      }
+    }
+
+    result.set(standardId, pricing)
+  }
+
   return result
 }

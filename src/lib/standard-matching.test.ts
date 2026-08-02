@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { normalizeCatalogText, rankCatalogMatches, unitsCompatible } from './standard-matching'
+import {
+  canonicalUnit,
+  normalizeCatalogText,
+  rankCatalogMatches,
+  unitsCompatible,
+} from './standard-matching'
 
 const catalog = [
   {
@@ -94,4 +99,17 @@ test('sorts deterministically by score then description when scores tie', () => 
 
 test('returns an empty list when there are no catalog entries', () => {
   assert.deepEqual(rankCatalogMatches('Anything', 'ton', [], {}), [])
+})
+
+test('canonicalizes component units through the same unitMap used by matching', () => {
+  const unitMap = {
+    pcs: 'piece',
+    'pc': 'piece',
+    db: 'joint',
+  }
+
+  assert.equal(canonicalUnit(' Pcs. ', unitMap), 'piece')
+  assert.equal(canonicalUnit('PC', unitMap), 'piece')
+  assert.equal(canonicalUnit('Db', unitMap), 'joint')
+  assert.equal(canonicalUnit('Lot', unitMap), 'lot')
 })

@@ -3,7 +3,10 @@ import test from 'node:test'
 
 import type { Boq, BoqPricedItem } from './boq-schema'
 import type { StandardEntry } from './standard-schema'
-import { buildCatalogHistoricalPricing } from './catalog-historical-pricing'
+import {
+  buildCatalogComponentPricing,
+  buildCatalogHistoricalPricing,
+} from './catalog-historical-pricing'
 
 const now = '2026-07-18T00:00:00.000Z'
 
@@ -36,6 +39,21 @@ function boq(id: string, status: Boq['status'], boqItem: BoqPricedItem): Boq {
     sections: [{ header: 'Pipework', items: [boqItem] }],
     createdAt: now,
     updatedAt: now,
+  }
+}
+
+function sourceCost(
+  present: boolean,
+  qty: number,
+  unit: string,
+  rate: number,
+) {
+  return {
+    present,
+    qty,
+    unit,
+    rate,
+    total: qty * rate,
   }
 }
 
@@ -106,4 +124,64 @@ test('material and labour units remain independent histories', () => {
 
   assert.equal(pricing.get('std-pipe')?.average, 100)
   assert.equal(pricing.get('std-weld')?.average, 40)
+})
+
+test('groups native material and labour rates by independent canonical units', () => {
+  const priorOne = boq('prior-1', 'approved', item('stub-end-1', 4608, {
+    sourceCosts: {
+      material: sourceCost(true, 8, 'Pcs', 2808),
+      labour: sourceCost(true, 48, 'Db', 300),
+    },
+  }))
+  const priorTwo = boq('prior-2', 'approved', item('stub-end-2', 4500, {
+    sourceCosts: {
+      material: sourceCost(true, 8, 'pc', 2700),
+      labour: sourceCost(true, 48, 'db', 285),
+    },
+  }))
+
+  const pricing = buildCatalogComponentPricing(
+    [standard],
+    [priorOne, priorTwo],
+    { pcs: 'piece', pc: 'piece', db: 'joint' },
+  )
+
+  assert.deepEqual(pricing.get('std-pipe')?.material.get('piece'), {
+    unit: 'piece',
+    count: 2,
+    min: 2700,
+    average: 2754,
+    max: 2808,
+  })
+  assert.deepEqual(pricing.get('std-pipe')?.labour.get('joint'), {
+    unit: 'joint',
+    count: 2,
+    min: 285,
+    average: 292.5,
+    max: 300,
+  })
+})
+
+test('keeps incompatible native component units in separate buckets', () => {
+  const perJoint = boq('joint', 'approved', item('joint-item', 100, {
+    sourceCosts: {
+      material: sourceCost(false, 0, '', 0),
+      labour: sourceCost(true, 12, 'Db', 260),
+    },
+  }))
+  const perLot = boq('lot', 'approved', item('lot-item', 100, {
+    sourceCosts: {
+      material: sourceCost(false, 0, '', 0),
+      labour: sourceCost(true, 1, 'Lot', 1000),
+    },
+  }))
+
+  const pricing = buildCatalogComponentPricing(
+    [standard],
+    [perJoint, perLot],
+  ).get('std-pipe')
+
+  assert.equal(pricing?.labour.get('db')?.average, 260)
+  assert.equal(pricing?.labour.get('lot')?.average, 1000)
+  assert.equal(pricing?.labour.size, 2)
 })

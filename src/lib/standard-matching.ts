@@ -58,16 +58,28 @@ function uniqueNormalized(values: string[] | undefined): string[] {
   return normalized
 }
 
-function resolveUnit(unit: string, unitMap: Record<string, string>): string {
+export function canonicalUnit(
+  unit: string,
+  unitMap: Record<string, string>,
+): string {
   const normalized = normalizeUnitKey(unit)
-  const mapped = unitMap[normalized] ?? unitMap[unit] ?? unitMap[unit.toLowerCase()]
+  const mapped =
+    unitMap[normalized]
+    ?? unitMap[unit]
+    ?? unitMap[unit.toLowerCase()]
+
   return mapped ? normalizeUnitKey(mapped) : normalized
 }
 
-export function unitsCompatible(itemUnit: string, catalogUnit: string, unitMap: Record<string, string>): boolean {
-  const normalizedItemUnit = resolveUnit(itemUnit, unitMap)
-  const normalizedCatalogUnit = resolveUnit(catalogUnit, unitMap)
-  return normalizedItemUnit === normalizedCatalogUnit
+export function unitsCompatible(
+  itemUnit: string,
+  catalogUnit: string,
+  unitMap: Record<string, string>,
+): boolean {
+  return (
+    canonicalUnit(itemUnit, unitMap)
+    === canonicalUnit(catalogUnit, unitMap)
+  )
 }
 
 function tokenOverlapScore(searchTokens: string[], targetTokens: string[]): number {
