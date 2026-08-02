@@ -158,16 +158,16 @@ function renderComponentSubRow(
   if (!component.present) {
     return (
       <tr key={key} className="compare-component-row compare-component-row-missing" data-component={key}>
-        {showLineCells ? <td data-label="BOQ item" className="compare-component-line-cell" rowSpan={groupSize}>{lineDescription(row)}</td> : null}
+        {showLineCells ? <td data-label="BOQ item" className="compare-component-item compare-component-line-cell" rowSpan={groupSize}>{lineDescription(row)}</td> : null}
         <td data-label="Component">
-          <span className="compare-component-tag compare-component-tag-missing">
+          <span className={`compare-component-tag compare-component-tag-${key} compare-component-tag-missing`}>
             {COMPONENT_LABELS[key]}
           </span>
         </td>
         <td data-label="Component data" colSpan={5}>
           — not in source quotation
         </td>
-        {showLineCells ? <td data-label="Action" className="compare-component-action-cell" rowSpan={groupSize}>{matchButton(row, onMatch)}</td> : null}
+        {showLineCells ? <td data-label="Action" className="compare-component-action compare-component-action-cell" rowSpan={groupSize}>{matchButton(row, onMatch)}</td> : null}
       </tr>
     )
   }
@@ -178,11 +178,11 @@ function renderComponentSubRow(
 
   return (
     <tr key={key} className="compare-component-row" data-component={key}>
-      {showLineCells ? <td data-label="BOQ item" className="compare-component-line-cell" rowSpan={groupSize}>{lineDescription(row)}</td> : null}
+      {showLineCells ? <td data-label="BOQ item" className="compare-component-item compare-component-line-cell" rowSpan={groupSize}>{lineDescription(row)}</td> : null}
       <td data-label="Component">
-        <span className="compare-component-tag">{COMPONENT_LABELS[key]}</span>
+        <span className={`compare-component-tag compare-component-tag-${key}`}>{COMPONENT_LABELS[key]}</span>
       </td>
-      <td data-label="Qty" className="num">{qty}</td>
+      <td data-label="Quantity" className="num">{qty}</td>
       <td data-label="Unit">{component.unit}</td>
       <td data-label="BOQ rate" className="num">{currency(rate)}</td>
       {noHistory ? (
@@ -197,7 +197,7 @@ function renderComponentSubRow(
           </td>
         </>
       )}
-      {showLineCells ? <td data-label="Action" className="compare-component-action-cell" rowSpan={groupSize}>{matchButton(row, onMatch)}</td> : null}
+      {showLineCells ? <td data-label="Action" className="compare-component-action compare-component-action-cell" rowSpan={groupSize}>{matchButton(row, onMatch)}</td> : null}
     </tr>
   )
 }
@@ -209,20 +209,20 @@ function renderTotalOnlyRow(
   const lumpSum = row.item.type === 'lump_sum'
   const tag = lumpSum ? 'Lump sum' : 'Combined'
   const tagClass = lumpSum
-    ? 'compare-component-tag compare-component-tag-lump-sum'
+    ? 'compare-component-tag compare-component-tag-lump compare-component-tag-lump-sum'
     : 'compare-component-tag compare-component-tag-combined'
   const noHistory = row.benchmark === null
 
   return (
     <tr className="compare-component-row compare-component-row-total-only">
-      <td data-label="BOQ item" className="compare-component-line-cell">{lineDescription(row)}</td>
+      <td data-label="BOQ item" className="compare-component-item compare-component-line-cell">{lineDescription(row)}</td>
       <td data-label="Component">
         <span className={tagClass}>{tag}</span>
         <small className="compare-component-note">
           No material/labour split in source — compared on total only.
         </small>
       </td>
-      <td data-label="Qty" className="num">{row.item.qty}</td>
+      <td data-label="Quantity" className="num">{row.item.qty}</td>
       <td data-label="Unit">{row.item.unit}</td>
       <td data-label="BOQ rate" className="num">{currency(row.item.rate)}</td>
       {noHistory ? (
@@ -237,7 +237,7 @@ function renderTotalOnlyRow(
           </td>
         </>
       )}
-      <td data-label="Action" className="compare-component-action-cell">{matchButton(row, onMatch)}</td>
+      <td data-label="Action" className="compare-component-action compare-component-action-cell">{matchButton(row, onMatch)}</td>
     </tr>
   )
 }
@@ -250,7 +250,7 @@ function renderRowGroup(
     return (
       <tbody className="compare-component-group compare-component-group-total-only" key={row.key}>
         {renderTotalOnlyRow(row, onMatch)}
-        <tr className="compare-component-line-total" aria-hidden="true">
+        <tr className="compare-component-total-row compare-component-line-total" aria-hidden="true">
           <td data-label="Line total" className="compare-component-line-total-cell num" colSpan={8}>
             Line total {currency(row.item.total)}
           </td>
@@ -271,7 +271,7 @@ function renderRowGroup(
         groupSize,
         onMatch,
       ))}
-      <tr className="compare-component-line-total" aria-hidden="true">
+      <tr className="compare-component-total-row compare-component-line-total" aria-hidden="true">
         <td data-label="Line total" className="compare-component-line-total-cell num" colSpan={8}>
           Line total {currency(row.item.total)}
         </td>
@@ -291,11 +291,11 @@ export function BoqCatalogComponentTable(props: {
       className="data-table-wrap compare-component-table-wrap"
       data-od-id="compare-component-table"
       role="region"
-      aria-label="One BOQ versus the Standard Catalog — horizontally scrollable"
+      aria-label="BOQ material and labour comparison — horizontally scrollable"
       tabIndex={0}
     >
       <div className="table-scroll-hint" aria-hidden="true">Scroll horizontally for component rate benchmark details</div>
-      <table className="data-table compare-component-table" aria-label="One BOQ versus the Standard Catalog">
+      <table className="data-table compare-component-table" aria-label="BOQ material and labour comparison">
         <thead>
           <tr>
             <th>BOQ item</th>

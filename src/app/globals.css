@@ -751,10 +751,204 @@
 .compare-actions svg { width: 12px; height: 12px; }
 .compare-state { min-height: 300px; }
 
+/* Component comparison (material / labour sub-rows) */
+.compare-component-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-brand-sm);
+  background: var(--surface);
+}
+.compare-component-table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+}
+.compare-component-group + .compare-component-group {
+  border-top: 2px solid var(--border);
+}
+.compare-component-item,
+.compare-component-line-cell {
+  min-width: 220px;
+  vertical-align: top;
+}
+.compare-component-line-desc {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.compare-component-line-desc strong {
+  color: var(--fg);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.compare-component-section,
+.compare-component-catalog,
+.compare-component-note,
+.compare-component-benchmark-range {
+  display: block;
+  color: var(--muted-text);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.compare-component-catalog-none {
+  color: color-mix(in oklab, var(--warn), black 35%);
+}
+.compare-component-benchmark {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.compare-component-benchmark strong {
+  color: var(--fg);
+  font-weight: 650;
+}
+.compare-component-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.compare-component-tag-material {
+  color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+}
+.compare-component-tag-labour {
+  color: var(--success);
+  background: color-mix(in oklab, var(--success) 12%, transparent);
+}
+.compare-component-tag-lump,
+.compare-component-tag-lump-sum,
+.compare-component-tag-combined {
+  color: color-mix(in oklab, var(--warn), black 35%);
+  background: color-mix(in oklab, var(--warn) 15%, transparent);
+}
+.compare-component-tag-missing {
+  color: var(--muted-text);
+  background: color-mix(in oklab, var(--muted-text) 10%, transparent);
+}
+.compare-component-variance-above {
+  color: var(--danger);
+  font-weight: 600;
+}
+.compare-component-variance-below {
+  color: var(--success);
+  font-weight: 600;
+}
+.compare-component-variance-total {
+  color: color-mix(in oklab, var(--warn), black 35%);
+  font-weight: 600;
+}
+.compare-component-variance-new,
+.compare-component-no-history {
+  color: var(--muted-text);
+}
+.compare-component-variance-at {
+  color: var(--fg-2);
+  font-weight: 600;
+}
+.compare-component-total-row td,
+.compare-component-line-total td {
+  padding-block: 4px 10px;
+  color: var(--muted-text);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.compare-component-action,
+.compare-component-action-cell {
+  text-align: right;
+  white-space: nowrap;
+  vertical-align: top;
+}
+
 @media (max-width: 920px) {
   .compare-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .compare-summary .stat-card:last-child { grid-column: 1 / -1; }
   .compare-toolbar { align-items: flex-start; flex-direction: column; }
+
+  .compare-component-table-wrap {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  .compare-component-table-wrap .table-scroll-hint { display: none; }
+  .compare-component-table,
+  .compare-component-table tbody,
+  .compare-component-table tr,
+  .compare-component-table td {
+    display: block;
+    width: 100%;
+  }
+  .compare-component-table {
+    min-width: 0;
+  }
+  .compare-component-table thead {
+    display: none;
+  }
+  .compare-component-group {
+    display: block;
+    margin-bottom: var(--space-3);
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-brand-sm);
+    background: var(--surface);
+    box-shadow: var(--elev-raised);
+  }
+  .compare-component-group + .compare-component-group {
+    border-top: 1px solid var(--border);
+  }
+  .compare-component-row {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .compare-component-row > td {
+    display: grid;
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: var(--space-2);
+    min-width: 0;
+    padding: var(--space-3);
+    border-bottom: 1px solid var(--border-soft);
+    text-align: left;
+  }
+  .compare-component-row > td::before {
+    content: attr(data-label);
+    color: var(--muted-text);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .compare-component-item,
+  .compare-component-line-cell,
+  .compare-component-action,
+  .compare-component-action-cell,
+  .compare-component-total-row,
+  .compare-component-line-total {
+    grid-column: 1 / -1;
+  }
+  .compare-component-action,
+  .compare-component-action-cell {
+    text-align: left;
+    white-space: normal;
+  }
+  .compare-component-total-row td,
+  .compare-component-line-total td {
+    display: block;
+    border-bottom: 0;
+    padding: var(--space-2) var(--space-3) var(--space-3);
+  }
+  .compare-component-total-row td::before,
+  .compare-component-line-total td::before {
+    content: none;
+  }
 }
 
 @media (max-width: 560px) {
@@ -763,6 +957,10 @@
   .compare-baseline { width: 100%; align-items: stretch; flex-direction: column; }
   .compare-baseline-select { width: 100%; max-width: none; }
   .compare-legend { line-height: 1.6; }
+
+  .compare-component-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* ─── Collapsible section ─── */

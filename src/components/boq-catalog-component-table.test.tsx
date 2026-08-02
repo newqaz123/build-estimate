@@ -119,6 +119,9 @@ test('renders independent material and labour sub-rows', () => {
   assert.match(html, /฿300/)
   assert.match(html, /14 approved rates/)
   assert.match(html, /Change match/)
+  assert.match(html, /aria-label="BOQ material and labour comparison"/)
+  assert.match(html, /tabindex="0"/)
+  assert.match(html, /data-label="Catalog average"/)
 })
 
 test('renders material and labour as separate grouped sub-rows', () => {
