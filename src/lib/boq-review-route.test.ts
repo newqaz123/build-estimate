@@ -27,6 +27,22 @@ test("compare review URLs preserve opaque BOQ ids through nested encoding", () =
   assert.equal(safeCompareReturnPath(parsed.searchParams.get("returnTo")), compareHref)
 })
 
+test("safe compare returns preserve leading/trailing whitespace in opaque boq ids", () => {
+  const paddedId = " boq "
+  const compareHref = compareBoqHref(paddedId)
+  const reviewHref = boqComparisonReviewHref(paddedId)
+  const parsed = new URL(reviewHref, "https://buildestimate.local")
+
+  assert.equal(compareHref, "/compare?boq=+boq+")
+  assert.equal(parsed.pathname, "/boqs/%20boq%20")
+  assert.equal(parsed.searchParams.get("returnTo"), compareHref)
+  assert.equal(safeCompareReturnPath(parsed.searchParams.get("returnTo")), compareHref)
+
+  for (const value of ["/compare?boq=%20", "/compare?boq=+", "/compare?boq=%20%09%0A"]) {
+    assert.equal(safeCompareReturnPath(value), null)
+  }
+})
+
 test("safe compare returns accept only the compare route and one optional boq id", () => {
   assert.equal(safeCompareReturnPath("/compare"), "/compare")
   assert.equal(

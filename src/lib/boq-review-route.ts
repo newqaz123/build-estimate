@@ -55,8 +55,8 @@ export function safeCompareReturnPath(
     return null
   }
 
-  const boqId = boqValues[0]?.trim()
-  if (!boqId) return null
+  const boqId = boqValues[0]
+  if (!boqId || !boqId.trim()) return null
 
   return compareBoqHref(boqId)
 }
