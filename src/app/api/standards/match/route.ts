@@ -52,8 +52,16 @@ function trimString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-export async function POST(request: NextRequest) {
-  const session = await auth()
+interface StandardsMatchPostDependencies {
+  authenticate(): Promise<{ user?: unknown } | null>
+  runTransaction: typeof runTransaction
+}
+
+async function handleStandardsMatchPost(
+  request: Request,
+  dependencies: StandardsMatchPostDependencies,
+): Promise<Response> {
+  const session = await dependencies.authenticate()
   if (!session?.user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
@@ -71,7 +79,7 @@ export async function POST(request: NextRequest) {
 
     const now = new Date().toISOString()
     const newStandardId = crypto.randomUUID()
-    const result = await runTransaction(async (transaction, db) => {
+    const result = await dependencies.runTransaction(async (transaction, db) => {
       const hasExistingStandard = isExistingStandardPayload(body)
       const hasNewStandard = isNewStandardPayload(body)
       if (hasExistingStandard === hasNewStandard) {
@@ -85,6 +93,10 @@ export async function POST(request: NextRequest) {
       }
 
       const boq = { id: boqSnap.id, ...boqSnap.data() } as Boq
+      if (boq.status === 'approved') {
+        return { error: 'Approved BOQs cannot be edited.' as const, status: 409 }
+      }
+
       const section = boq.sections[sectionIndex]
       if (!section) {
         return { error: 'Section not found' as const, status: 400 }
@@ -217,4 +229,14 @@ export async function POST(request: NextRequest) {
     console.error('Error matching standard:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
+}
+
+export function createStandardsMatchPostHandler(dependencies: StandardsMatchPostDependencies) {
+  return (request: Request) => handleStandardsMatchPost(request, dependencies)
+}
+
+const post = createStandardsMatchPostHandler({ authenticate: auth, runTransaction })
+
+export async function POST(request: NextRequest) {
+  return post(request)
 }

@@ -957,6 +957,7 @@ function CanonicalBoqWorkspace({
 					? error.message
 					: "The catalog match could not be applied",
 			);
+			throw error;
 		} finally {
 			setMatching(false);
 		}

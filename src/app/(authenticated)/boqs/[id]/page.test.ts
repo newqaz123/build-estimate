@@ -135,11 +135,21 @@ test("approval exposes one disabled state and an actionable blocker message", ()
   assert.match(source, /data-od-id="approval-blocker"/);
 });
 
-test("manual match always releases its mutation lock", () => {
+test("manual match reload failures reject while successful reloads stay on Details", () => {
   const match = sourceSection(
     "const reloadAfterManualMatch",
     "const handleExclude",
   );
+  const responseCheck = match.indexOf("if (!response.ok)");
+  const applyReload = match.indexOf("applyMutationBoq");
+  const closeTarget = match.indexOf("setCatalogMatchTarget(null)");
+  const catchBlock = match.indexOf("catch (error)");
+
+  assert.ok(responseCheck >= 0);
+  assert.ok(applyReload > responseCheck);
+  assert.ok(closeTarget > applyReload);
+  assert.ok(catchBlock > closeTarget);
+  assert.match(match.slice(catchBlock), /throw error;/);
   // setMatching(false) must be INSIDE the finally block body. The regex
   // /finally\s*\{[^}]*setMatching\(false\)/ requires that no closing
   // brace appears between "finally {" and the call, so it fails if the
