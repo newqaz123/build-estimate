@@ -551,12 +551,18 @@ def _derive_components(row: dict[str, Any], roles: dict[str, int], desc: str) ->
     warnings: list[dict[str, Any]] = []
     if aggregate is not None and abs(component_sum - aggregate) > RECONCILIATION_TOLERANCE:
         return ([], [_warning(row, "component_total_mismatch", "Material and labour totals do not reconcile to the quoted aggregate.")])
+    total = _finite_float(component_sum)
+    if total is None:
+        return ([], [_warning(
+            row, "numeric_overflow",
+            "Combined component arithmetic exceeds the finite response range.",
+        )])
+
     if material_decimals["qty"] == labour_decimals["qty"] and material["unit"] == labour["unit"]:
-        total = _finite_float(component_sum)
         qty = material["qty"]
         combined_rate = material_decimals["rate"] + labour_decimals["rate"]
         rate = _finite_float(combined_rate)
-        if total is None or rate is None:
+        if rate is None:
             return ([], [_warning(
                 row, "numeric_overflow",
                 "Combined component arithmetic exceeds the finite response range.",
@@ -571,10 +577,40 @@ def _derive_components(row: dict[str, Any], roles: dict[str, int], desc: str) ->
             unit=material["unit"], rate=rate, total=total,
             source_costs={"material": material, "labour": labour}, kind="combined",
         )], warnings)
-    return ([
-        _priced_item(row, ordinal=1, desc=f"{desc} — material", component="material", kind="material", **material),
-        _priced_item(row, ordinal=2, desc=f"{desc} — labour", component="labour", kind="labour", **labour),
-    ], warnings)
+
+    # Different native component units/quantities still form one priced BOQ
+    # line. Comparison reads sourceCosts for each component's own unit/qty;
+    # line unit/qty come from material (item-shaped primary) and rate is the
+    # blended total/qty so qty*rate remains exact for matching/ingestion.
+    primary_decimals = material_decimals
+    primary = material
+    if primary_decimals["qty"] == 0:
+        primary_decimals = labour_decimals
+        primary = labour
+    qty = primary["qty"]
+    unit = primary["unit"]
+    if primary_decimals["qty"] == 0:
+        return ([], [_warning(
+            row, "incomplete_component_evidence",
+            "Paired components have zero quantity and cannot form a priced line.",
+        )])
+    blended_rate = component_sum / primary_decimals["qty"]
+    rate = _finite_float(blended_rate)
+    if rate is None:
+        return ([], [_warning(
+            row, "numeric_overflow",
+            "Combined component arithmetic exceeds the finite response range.",
+        )])
+    if abs(primary_decimals["qty"] * blended_rate - component_sum) > RECONCILIATION_TOLERANCE:
+        return ([], [_warning(
+            row, "component_arithmetic_mismatch",
+            "Blended line rate and total do not reconcile for the primary component quantity.",
+        )])
+    return ([_priced_item(
+        row, ordinal=1, desc=desc, component="combined", qty=qty,
+        unit=unit, rate=rate, total=total,
+        source_costs={"material": material, "labour": labour}, kind="combined",
+    )], warnings)
 
 
 def _derive_row(row: dict[str, Any], continuations: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:

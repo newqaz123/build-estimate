@@ -281,3 +281,93 @@ test('renders absent, no-history, and lump-sum states explicitly', () => {
 
   assertOneMatchPerGroup(html, 2)
 })
+
+test('line-total footer renders material and labour composition percentages', () => {
+  const html = renderTable([row()])
+
+  // 22464 / 36864 ≈ 60.9%, 14400 / 36864 ≈ 39.1%
+  assert.match(html, /Line total ฿36,864/)
+  assert.match(html, /Material 60\.9%/)
+  assert.match(html, /Labour 39\.1%/)
+})
+
+test('line-total footer omits composition percentages when totals are zero or absent', () => {
+  const zeroComponents = row({
+    key: 'zero',
+    item: {
+      ...row().item,
+      total: 0,
+      rate: 0,
+    },
+    components: {
+      material: component({
+        present: true,
+        qty: 0,
+        rate: 0,
+        total: 0,
+        variancePct: null,
+        benchmark: null,
+      }),
+      labour: component({
+        present: false,
+        unit: '',
+        qty: null,
+        rate: null,
+        total: null,
+        basis: 'none',
+        benchmark: null,
+        variancePct: null,
+      }),
+    },
+  })
+
+  const html = renderTable([zeroComponents])
+  assert.match(html, /Line total ฿0/)
+  assert.doesNotMatch(html, /Material \d/)
+  assert.doesNotMatch(html, /Labour \d/)
+})
+
+test('total-only footer keeps line total without invented composition percentages', () => {
+  const lumpSum = row({
+    key: 'lump-footer',
+    item: {
+      ...row().item,
+      desc: 'TOOLS AND CONSUMABLE',
+      type: 'lump_sum',
+      qty: 1,
+      unit: 'Lot',
+      rate: 6000,
+      total: 6000,
+      stdId: undefined,
+      stdStatus: 'unmatched',
+    },
+    candidate: null,
+    components: {
+      material: component({
+        present: false,
+        unit: '',
+        qty: null,
+        rate: null,
+        total: null,
+        basis: 'none',
+        benchmark: null,
+        variancePct: null,
+      }),
+      labour: component({
+        present: false,
+        unit: '',
+        qty: null,
+        rate: null,
+        total: null,
+        basis: 'none',
+        benchmark: null,
+        variancePct: null,
+      }),
+    },
+  })
+
+  const html = renderTable([lumpSum])
+  assert.match(html, /Line total ฿6,000/)
+  assert.doesNotMatch(html, /Material \d/)
+  assert.doesNotMatch(html, /Labour \d/)
+})

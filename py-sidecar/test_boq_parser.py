@@ -1397,6 +1397,25 @@ class ContractV3InvariantTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             DerivedItemV3(**self._item("wrong-component", sourceCosts=costs, costComponent="material"))
 
+    def test_source_costs_allow_different_native_component_units(self):
+        """Different-unit native components stay on one combined item.
+
+        Line unit/qty/rate are a matching primary (material-first blended rate);
+        comparison reads native sourceCosts for each component's own unit/qty.
+        """
+        costs = {
+            "material": {"qty": 3.0, "unit": "Pcs", "rate": 117.0, "total": 351.0},
+            "labour": {"qty": 12.0, "unit": "Db", "rate": 260.0, "total": 3120.0},
+        }
+        item = DerivedItemV3(**self._item(
+            "paired-diff-units",
+            unit="Pcs", qty=3.0, rate=1157.0, total=3471.0,
+            sourceCosts=costs,
+        ))
+        self.assertEqual(item.sourceCosts.material.unit, "Pcs")
+        self.assertEqual(item.sourceCosts.labour.unit, "Db")
+        self.assertEqual(item.total, 3471.0)
+
     def test_priced_item_and_source_cost_arithmetic_is_reconciled(self):
         with self.assertRaises(ValidationError):
             DerivedItemV3(**self._item("bad-arithmetic", qty=2.0, rate=60.0, total=100.0))
@@ -1406,15 +1425,26 @@ class ContractV3InvariantTest(unittest.TestCase):
                 "material": bad_cost,
                 "labour": {"qty": 2.0, "unit": "set", "rate": 30.0, "total": 60.0},
             }))
-        contradictions = [
-            {"material": {"qty": 1.0, "unit": "set", "rate": 40.0, "total": 40.0},
-             "labour": {"qty": 2.0, "unit": "hr", "rate": 30.0, "total": 60.0}},
+        # Same-unit combined rows still require rate/qty identity.
+        same_unit_contradictions = [
             {"material": {"qty": 1.0, "unit": "set", "rate": 40.0, "total": 40.0},
              "labour": {"qty": 1.0, "unit": "set", "rate": 50.0, "total": 50.0}},
+            {"material": {"qty": 2.0, "unit": "set", "rate": 20.0, "total": 40.0},
+             "labour": {"qty": 1.0, "unit": "set", "rate": 60.0, "total": 60.0}},
         ]
-        for costs in contradictions:
+        for costs in same_unit_contradictions:
             with self.subTest(costs=costs), self.assertRaises(ValidationError):
                 DerivedItemV3(**self._item("contradictory", sourceCosts=costs))
+        # Different-unit rows still require component totals to sum to the line total.
+        with self.assertRaises(ValidationError):
+            DerivedItemV3(**self._item(
+                "diff-unit-total-mismatch",
+                unit="Pcs", qty=3.0, rate=1000.0, total=3000.0,
+                sourceCosts={
+                    "material": {"qty": 3.0, "unit": "Pcs", "rate": 117.0, "total": 351.0},
+                    "labour": {"qty": 12.0, "unit": "Db", "rate": 260.0, "total": 3120.0},
+                },
+            ))
 
     def test_response_rejects_reconciliation_contradictions(self):
         contradictions = [
@@ -2658,29 +2688,54 @@ class CompoundDerivationTest(unittest.TestCase):
 
     # ── AYT248 multi-band header regression ──────────────────────────────
 
-    def test_ayt248_multiband_fixture_derives_eighteen_items_summing_to_subtotal(self):
+    def test_ayt248_multiband_fixture_derives_paired_native_components_summing_to_subtotal(self):
         """Golden regression: AYT248-style multi-band material/labour tables
-        with Q'TY spanning two columns must produce 18 priced component items
-        that sum to the 55,000 subtotal."""
+        with Q'TY spanning two columns must produce one priced item per source
+        row (13), pairing different-unit native components onto sourceCosts so
+        /compare can render independent Material/Labour sub-rows. Totals still
+        reconcile to the 55,000 subtotal."""
         fixture = json.loads(
             (Path(__file__).resolve().parent / "fixtures/compound/ayt248-multiband-components.json").read_text()
         )
         original_rows = json.loads(json.dumps(fixture["sourceRows"]))
         result = derive_document(fixture["sourceRows"])
 
-        self.assertEqual(result["totalItems"], 18)
+        items = [item for section in result["sections"] for item in section["items"]]
+        self.assertEqual(result["totalItems"], 13)
+        self.assertEqual(len(items), 13)
         self.assertEqual(result["sourceTotal"], 55000.0)
         self.assertEqual(result["reconciliation"], {
             "itemTotal": 55000.0, "sourceTotal": 55000.0,
             "reconciled": True, "difference": 0.0,
         })
+
+        paired = [item for item in items if item.get("sourceCosts")]
+        self.assertEqual(len(paired), 5)
+        for item in paired:
+            self.assertEqual(item["costComponent"], "combined")
+            material = item["sourceCosts"]["material"]
+            labour = item["sourceCosts"]["labour"]
+            self.assertNotEqual(material["unit"], labour["unit"])
+            self.assertEqual(item["unit"], material["unit"])
+            self.assertEqual(item["qty"], material["qty"])
+            self.assertAlmostEqual(item["total"], material["total"] + labour["total"])
+            self.assertAlmostEqual(item["rate"] * item["qty"], item["total"])
+            self.assertEqual(len(item["sourceRowIds"]), 1)
+
+        item_b = next(item for item in paired if item["desc"] == "Item B")
+        self.assertEqual(item_b["sourceCosts"], {
+            "material": {"qty": 3.0, "unit": "Pcs.", "rate": 117.0, "total": 351.0},
+            "labour": {"qty": 12.0, "unit": "Db.", "rate": 260.0, "total": 3120.0},
+        })
+        self.assertNotEqual(
+            item_b["sourceCosts"]["material"]["qty"],
+            item_b["sourceCosts"]["labour"]["qty"],
+        )
+        self.assertEqual(item_b["sourceRowIds"], ["sr-ayt248-6"])
+
         # The only warnings should be on the amount-in-words/VAT row, not on
         # any priced material/labour row.
-        priced_row_ids = {
-            item["sourceRowIds"][0]
-            for section in result["sections"]
-            for item in section["items"]
-        }
+        priced_row_ids = {item["sourceRowIds"][0] for item in items}
         warned_row_ids = {
             warning.get("sourceRowId")
             for warning in result["warnings"]
@@ -2737,14 +2792,16 @@ class CompoundDerivationTest(unittest.TestCase):
         self.assertEqual(roles["labour_total"], 9)
         # Stale generic qty role must not survive
         self.assertNotIn("qty", roles)
-        # Derivation produces two linked siblings
+        # Derivation produces one paired combined item with native sourceCosts
         result = derive_document(rows)
         items = result["sections"][0]["items"]
-        self.assertEqual(len(items), 2)
-        self.assertEqual(items[0]["costComponent"], "material")
-        self.assertEqual(items[1]["costComponent"], "labour")
-        self.assertEqual(items[0]["total"], 351.0)
-        self.assertEqual(items[1]["total"], 3120.0)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["costComponent"], "combined")
+        self.assertEqual(items[0]["total"], 3471.0)
+        self.assertEqual(items[0]["sourceCosts"], {
+            "material": {"qty": 3.0, "unit": "Pcs.", "rate": 117.0, "total": 351.0},
+            "labour": {"qty": 12.0, "unit": "Db.", "rate": 260.0, "total": 3120.0},
+        })
 
     def test_ayt248_vocabulary_header_detection_does_not_classify_totals_as_headers(self):
         """Rows containing header vocabulary words like TOTAL must still be
@@ -2983,11 +3040,12 @@ class CompoundDerivationTest(unittest.TestCase):
         self.assertEqual(items[0]["desc"], "Widget")
         self.assertEqual(items[0]["total"], 500.0)
 
-    def test_ayt248_end_to_end_docling_table_derives_eighteen_items(self):
+    def test_ayt248_end_to_end_docling_table_derives_paired_component_items(self):
         """End-to-end: a sanitized AYT248-style Docling table through
-        build_source_rows then derive_document must yield exactly 18 priced
-        component items reconciling to 55,000, with the scope row classified
-        as section and no false unsupported_row warnings on priced rows."""
+        build_source_rows then derive_document must yield 13 priced items
+        (paired different-unit components on sourceCosts) reconciling to
+        55,000, with the scope row classified as section and no false
+        unsupported_row warnings on priced rows."""
         cell = LosslessContractV3Test._cell
         cells: list[dict] = []
         # Row 0 — quotation metadata
@@ -3080,18 +3138,24 @@ class CompoundDerivationTest(unittest.TestCase):
                          f"Sub-header misclassified as {rows[2]['classification']}")
         # Derive items
         result = derive_document(rows)
-        self.assertEqual(result["totalItems"], 18)
+        derived = [item for section in result["sections"] for item in section["items"]]
+        self.assertEqual(result["totalItems"], 13)
+        self.assertEqual(len(derived), 13)
         self.assertEqual(result["sourceTotal"], 55000.0)
         self.assertEqual(result["reconciliation"], {
             "itemTotal": 55000.0, "sourceTotal": 55000.0,
             "reconciled": True, "difference": 0.0,
         })
+        paired = [item for item in derived if item.get("sourceCosts")]
+        self.assertEqual(len(paired), 5)
+        for item in paired:
+            material = item["sourceCosts"]["material"]
+            labour = item["sourceCosts"]["labour"]
+            self.assertEqual(item["costComponent"], "combined")
+            self.assertNotEqual(material["unit"], labour["unit"])
+            self.assertAlmostEqual(item["total"], material["total"] + labour["total"])
         # No priced row should carry an unsupported_row warning
-        priced_row_ids = {
-            item["sourceRowIds"][0]
-            for section in result["sections"]
-            for item in section["items"]
-        }
+        priced_row_ids = {item["sourceRowIds"][0] for item in derived}
         warned_row_ids = {
             warning.get("sourceRowId")
             for warning in result["warnings"]

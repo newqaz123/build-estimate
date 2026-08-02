@@ -166,7 +166,37 @@ test("exposes a labour row cost without changing its quantity", () => {
 });
 
 test("reads both parsed component rates from a combined source row", () => {
+	const sameUnit = item({
+		unit: "m2",
+		qty: 18,
+		rate: 1630,
+		total: 29340,
+		sourceCosts: {
+			material: {
+				present: true,
+				qty: 18,
+				unit: "m2",
+				rate: 980,
+				total: 17640,
+			},
+			labour: { present: true, qty: 18, unit: "m2", rate: 650, total: 11700 },
+		},
+	});
+
+	assert.deepEqual(componentCostView(sameUnit), {
+		basis: "rate",
+		material: 980,
+		labour: 650,
+		allocationRequired: false,
+	});
+});
+
+test("reads ฿ totals when combined native component units differ", () => {
 	const source = item({
+		unit: "Pcs",
+		qty: 8,
+		rate: 4608,
+		total: 36864,
 		sourceCosts: {
 			material: {
 				present: true,
@@ -180,9 +210,9 @@ test("reads both parsed component rates from a combined source row", () => {
 	});
 
 	assert.deepEqual(componentCostView(source), {
-		basis: "rate",
-		material: 2808,
-		labour: 300,
+		basis: "total",
+		material: 22464,
+		labour: 14400,
 		allocationRequired: false,
 	});
 });

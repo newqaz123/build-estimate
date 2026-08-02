@@ -23,10 +23,25 @@ export function deriveSourceCostAllocation(item: BoqItem): BoqCostAllocation | u
   }
 
   if (item.type !== 'lump_sum' && item.sourceCosts?.material.present && item.sourceCosts.labour.present) {
+    const { material, labour } = item.sourceCosts
+    // Different native component units cannot be added as rates; keep ฿ totals.
+    if (
+      material.unit !== labour.unit
+      || material.qty !== labour.qty
+      || material.unit !== item.unit
+      || material.qty !== item.qty
+    ) {
+      return {
+        basis: 'total',
+        material: material.total,
+        labour: labour.total,
+        origin: 'source',
+      }
+    }
     return {
       basis: 'rate',
-      material: item.sourceCosts.material.rate,
-      labour: item.sourceCosts.labour.rate,
+      material: material.rate,
+      labour: labour.rate,
       origin: 'source',
     }
   }

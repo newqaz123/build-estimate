@@ -205,6 +205,36 @@ test('requires exact shared component quantities like the Python contract', () =
   assert.throws(() => parseDoclingResult(payload), /share.*quantity/i)
 })
 
+test('allows different-unit native sourceCosts on one combined priced item', () => {
+  const payload = v3Fixture()
+  const combined = (((payload.sections as Array<Record<string, unknown>>)[0].items as Array<Record<string, unknown>>)[3])
+  Object.assign(combined, {
+    unit: 'Pcs',
+    qty: 3,
+    rate: 1157,
+    total: 3471,
+    sourceCosts: {
+      material: { qty: 3, unit: 'Pcs', rate: 117, total: 351 },
+      labour: { qty: 12, unit: 'Db', rate: 260, total: 3120 },
+    },
+  })
+  payload.sourceTotal = 98_671
+  payload.reconciliation = {
+    itemTotal: 98_671,
+    sourceTotal: 98_671,
+    reconciled: true,
+    difference: 0,
+  }
+  const parsed = parseDoclingResult(payload)
+  assert.equal(parsed.contractVersion, 3)
+  if (parsed.contractVersion !== 3) return
+  const item = parsed.sections[0].items[3]
+  assert.ok(item && 'sourceCosts' in item && item.sourceCosts)
+  assert.equal(item.sourceCosts?.material.unit, 'Pcs')
+  assert.equal(item.sourceCosts?.labour.unit, 'Db')
+  assert.equal(item.total, 3471)
+})
+
 test('reconciles with checked decimal accumulation and float round-trip', () => {
   const large = v3Fixture()
   large.sections = [{ header: 'Works', items: [

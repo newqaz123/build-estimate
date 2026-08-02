@@ -2940,144 +2940,144 @@
           "total": 3854.0
         },
         {
-          "id": "di-sr-ayt248-6-material-1",
-          "desc": "Item B — material",
+          "id": "di-sr-ayt248-6-combined-1",
+          "desc": "Item B",
           "pricingRole": "standard",
           "sourceRowIds": [
             "sr-ayt248-6"
           ],
           "entryOrigin": "docling",
-          "costComponent": "material",
+          "costComponent": "combined",
+          "sourceCosts": {
+            "material": {
+              "qty": 3.0,
+              "unit": "Pcs.",
+              "rate": 117.0,
+              "total": 351.0
+            },
+            "labour": {
+              "qty": 12.0,
+              "unit": "Db.",
+              "rate": 260.0,
+              "total": 3120.0
+            }
+          },
           "unit": "Pcs.",
           "qty": 3.0,
-          "rate": 117.0,
-          "total": 351.0
+          "rate": 1157.0,
+          "total": 3471.0
         },
         {
-          "id": "di-sr-ayt248-6-labour-2",
-          "desc": "Item B — labour",
-          "pricingRole": "standard",
-          "sourceRowIds": [
-            "sr-ayt248-6"
-          ],
-          "entryOrigin": "docling",
-          "costComponent": "labour",
-          "unit": "Db.",
-          "qty": 12.0,
-          "rate": 260.0,
-          "total": 3120.0
-        },
-        {
-          "id": "di-sr-ayt248-7-material-1",
-          "desc": "Item C — material",
+          "id": "di-sr-ayt248-7-combined-1",
+          "desc": "Item C",
           "pricingRole": "standard",
           "sourceRowIds": [
             "sr-ayt248-7"
           ],
           "entryOrigin": "docling",
-          "costComponent": "material",
+          "costComponent": "combined",
+          "sourceCosts": {
+            "material": {
+              "qty": 1.0,
+              "unit": "Pc.",
+              "rate": 288.0,
+              "total": 288.0
+            },
+            "labour": {
+              "qty": 6.0,
+              "unit": "Db.",
+              "rate": 260.0,
+              "total": 1560.0
+            }
+          },
           "unit": "Pc.",
           "qty": 1.0,
-          "rate": 288.0,
-          "total": 288.0
+          "rate": 1848.0,
+          "total": 1848.0
         },
         {
-          "id": "di-sr-ayt248-7-labour-2",
-          "desc": "Item C — labour",
-          "pricingRole": "standard",
-          "sourceRowIds": [
-            "sr-ayt248-7"
-          ],
-          "entryOrigin": "docling",
-          "costComponent": "labour",
-          "unit": "Db.",
-          "qty": 6.0,
-          "rate": 260.0,
-          "total": 1560.0
-        },
-        {
-          "id": "di-sr-ayt248-8-material-1",
-          "desc": "Item D — material",
+          "id": "di-sr-ayt248-8-combined-1",
+          "desc": "Item D",
           "pricingRole": "standard",
           "sourceRowIds": [
             "sr-ayt248-8"
           ],
           "entryOrigin": "docling",
-          "costComponent": "material",
+          "costComponent": "combined",
+          "sourceCosts": {
+            "material": {
+              "qty": 1.0,
+              "unit": "Pc.",
+              "rate": 325.0,
+              "total": 325.0
+            },
+            "labour": {
+              "qty": 5.0,
+              "unit": "Db.",
+              "rate": 260.0,
+              "total": 1300.0
+            }
+          },
           "unit": "Pc.",
           "qty": 1.0,
-          "rate": 325.0,
-          "total": 325.0
+          "rate": 1625.0,
+          "total": 1625.0
         },
         {
-          "id": "di-sr-ayt248-8-labour-2",
-          "desc": "Item D — labour",
-          "pricingRole": "standard",
-          "sourceRowIds": [
-            "sr-ayt248-8"
-          ],
-          "entryOrigin": "docling",
-          "costComponent": "labour",
-          "unit": "Db.",
-          "qty": 5.0,
-          "rate": 260.0,
-          "total": 1300.0
-        },
-        {
-          "id": "di-sr-ayt248-9-material-1",
-          "desc": "Item E — material",
+          "id": "di-sr-ayt248-9-combined-1",
+          "desc": "Item E",
           "pricingRole": "standard",
           "sourceRowIds": [
             "sr-ayt248-9"
           ],
           "entryOrigin": "docling",
-          "costComponent": "material",
+          "costComponent": "combined",
+          "sourceCosts": {
+            "material": {
+              "qty": 1.0,
+              "unit": "Pc.",
+              "rate": 15548.0,
+              "total": 15548.0
+            },
+            "labour": {
+              "qty": 1.0,
+              "unit": "Lot",
+              "rate": 1000.0,
+              "total": 1000.0
+            }
+          },
           "unit": "Pc.",
           "qty": 1.0,
-          "rate": 15548.0,
-          "total": 15548.0
+          "rate": 16548.0,
+          "total": 16548.0
         },
         {
-          "id": "di-sr-ayt248-9-labour-2",
-          "desc": "Item E — labour",
-          "pricingRole": "standard",
-          "sourceRowIds": [
-            "sr-ayt248-9"
-          ],
-          "entryOrigin": "docling",
-          "costComponent": "labour",
-          "unit": "Lot",
-          "qty": 1.0,
-          "rate": 1000.0,
-          "total": 1000.0
-        },
-        {
-          "id": "di-sr-ayt248-10-material-1",
-          "desc": "Item F — material",
+          "id": "di-sr-ayt248-10-combined-1",
+          "desc": "Item F",
           "pricingRole": "standard",
           "sourceRowIds": [
             "sr-ayt248-10"
           ],
           "entryOrigin": "docling",
-          "costComponent": "material",
+          "costComponent": "combined",
+          "sourceCosts": {
+            "material": {
+              "qty": 1.0,
+              "unit": "Sets.",
+              "rate": 420.0,
+              "total": 420.0
+            },
+            "labour": {
+              "qty": 1.0,
+              "unit": "Lot",
+              "rate": 1000.0,
+              "total": 1000.0
+            }
+          },
           "unit": "Sets.",
           "qty": 1.0,
-          "rate": 420.0,
-          "total": 420.0
-        },
-        {
-          "id": "di-sr-ayt248-10-labour-2",
-          "desc": "Item F — labour",
-          "pricingRole": "standard",
-          "sourceRowIds": [
-            "sr-ayt248-10"
-          ],
-          "entryOrigin": "docling",
-          "costComponent": "labour",
-          "unit": "Lot",
-          "qty": 1.0,
-          "rate": 1000.0,
-          "total": 1000.0
+          "rate": 1420.0,
+          "total": 1420.0
         },
         {
           "id": "di-sr-ayt248-11-standard-1",

@@ -99,6 +99,33 @@ function isTotalOnlyRow(row: BoqCatalogComparisonRow): boolean {
     || (!row.components.material.present && !row.components.labour.present)
 }
 
+function isFinitePositive(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+}
+
+function compositionPercentage(
+  componentTotal: number | null | undefined,
+  lineTotal: number,
+): number | null {
+  if (!isFinitePositive(componentTotal) || !isFinitePositive(lineTotal)) return null
+  const pct = (componentTotal / lineTotal) * 100
+  return Number.isFinite(pct) ? pct : null
+}
+
+function formatCompositionPct(value: number): string {
+  return `${value.toFixed(1)}%`
+}
+
+function lineTotalFooterLabel(row: BoqCatalogComparisonRow): string {
+  const lineTotal = row.item.total
+  const parts = [`Line total ${currency(lineTotal)}`]
+  const materialPct = compositionPercentage(row.components.material.total, lineTotal)
+  const labourPct = compositionPercentage(row.components.labour.total, lineTotal)
+  if (materialPct !== null) parts.push(`Material ${formatCompositionPct(materialPct)}`)
+  if (labourPct !== null) parts.push(`Labour ${formatCompositionPct(labourPct)}`)
+  return parts.join(' · ')
+}
+
 function benchmarkSummary(benchmark: BenchmarkSummary): ReactNode {
   if (!benchmark) {
     return (
@@ -252,7 +279,7 @@ function renderRowGroup(
         {renderTotalOnlyRow(row, onMatch)}
         <tr className="compare-component-total-row compare-component-line-total" aria-hidden="true">
           <td data-label="Line total" className="compare-component-line-total-cell num" colSpan={8}>
-            Line total {currency(row.item.total)}
+            {lineTotalFooterLabel(row)}
           </td>
         </tr>
       </tbody>
@@ -273,7 +300,7 @@ function renderRowGroup(
       ))}
       <tr className="compare-component-total-row compare-component-line-total" aria-hidden="true">
         <td data-label="Line total" className="compare-component-line-total-cell num" colSpan={8}>
-          Line total {currency(row.item.total)}
+          {lineTotalFooterLabel(row)}
         </td>
       </tr>
     </tbody>

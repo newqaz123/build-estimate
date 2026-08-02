@@ -609,21 +609,29 @@ function parseV3Item(value: unknown, path: string): DerivedItemV3 {
       labour: parseSourceCost(costsInput.labour, `${path}.sourceCosts.labour`),
     }
     if (result.costComponent !== 'combined') invalid(`${path}.sourceCosts`, 'require the combined cost component')
-    if (sourceCosts.material.unit !== sourceCosts.labour.unit || sourceCosts.material.unit !== result.unit) {
-      invalid(`${path}.sourceCosts`, 'share the priced item unit')
-    }
-    if (!numbersExactlyEqual(sourceCosts.material.qty, sourceCosts.labour.qty)
-      || !numbersExactlyEqual(sourceCosts.material.qty, result.qty)) {
-      invalid(`${path}.sourceCosts`, 'share the priced item quantity')
-    }
     if (!absoluteWithinTolerance(subtractDecimals(
-      addDecimals(exactDecimal(sourceCosts.material.rate), exactDecimal(sourceCosts.labour.rate)),
-      exactDecimal(result.rate),
-    )) || !absoluteWithinTolerance(subtractDecimals(
       addDecimals(exactDecimal(sourceCosts.material.total), exactDecimal(sourceCosts.labour.total)),
       exactDecimal(result.total),
     ))) {
-      invalid(`${path}.sourceCosts`, 'have component rates and totals sum to the priced item')
+      invalid(`${path}.sourceCosts`, 'have component totals sum to the priced item')
+    }
+    // Same-unit combined rows keep shared qty/unit/rate identity. Different
+    // native component units stay on one priced line; /compare reads each
+    // component's own unit/qty from sourceCosts.
+    if (sourceCosts.material.unit === sourceCosts.labour.unit) {
+      if (sourceCosts.material.unit !== result.unit) {
+        invalid(`${path}.sourceCosts`, 'share the priced item unit')
+      }
+      if (!numbersExactlyEqual(sourceCosts.material.qty, sourceCosts.labour.qty)
+        || !numbersExactlyEqual(sourceCosts.material.qty, result.qty)) {
+        invalid(`${path}.sourceCosts`, 'share the priced item quantity')
+      }
+      if (!absoluteWithinTolerance(subtractDecimals(
+        addDecimals(exactDecimal(sourceCosts.material.rate), exactDecimal(sourceCosts.labour.rate)),
+        exactDecimal(result.rate),
+      ))) {
+        invalid(`${path}.sourceCosts`, 'have component rates sum to the priced item')
+      }
     }
     result.sourceCosts = sourceCosts
   }

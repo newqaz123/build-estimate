@@ -58,6 +58,37 @@ test('derives a source total allocation for lump-sum component evidence', () => 
   })
 })
 
+test('derives a source total allocation when native component units differ', () => {
+  const allocation = deriveSourceCostAllocation(item({
+    unit: 'Pcs',
+    qty: 3,
+    rate: 1157,
+    total: 3471,
+    sourceCosts: {
+      material: { present: true, qty: 3, unit: 'Pcs', rate: 117, total: 351 },
+      labour: { present: true, qty: 12, unit: 'Db', rate: 260, total: 3120 },
+    },
+  }))
+
+  assert.deepEqual(allocation, {
+    basis: 'total',
+    material: 351,
+    labour: 3120,
+    origin: 'source',
+  })
+  assert.equal(costAllocationReconciles(item({
+    unit: 'Pcs',
+    qty: 3,
+    rate: 1157,
+    total: 3471,
+    costAllocation: allocation,
+    sourceCosts: {
+      material: { present: true, qty: 3, unit: 'Pcs', rate: 117, total: 351 },
+      labour: { present: true, qty: 12, unit: 'Db', rate: 260, total: 3120 },
+    },
+  })), true)
+})
+
 test('derives explicit one-component source rows without inventing a combined split', () => {
   assert.deepEqual(deriveSourceCostAllocation(item({ costComponent: 'material' })), {
     basis: 'rate', material: 100, labour: 0, origin: 'source',
