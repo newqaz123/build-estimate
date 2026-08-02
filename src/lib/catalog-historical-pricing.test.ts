@@ -185,3 +185,111 @@ test('keeps incompatible native component units in separate buckets', () => {
   assert.equal(pricing?.labour.get('lot')?.average, 1000)
   assert.equal(pricing?.labour.size, 2)
 })
+
+test('uses rate-basis allocations as line-unit component history', () => {
+  const allocated = boq('allocated', 'approved', item('allocated-item', 100, {
+    unit: 'm3',
+    qty: 10,
+    total: 1000,
+    sourceCosts: undefined,
+    costAllocation: {
+      basis: 'rate',
+      material: 70,
+      labour: 30,
+      origin: 'manual',
+    },
+  }))
+
+  const pricing = buildCatalogComponentPricing(
+    [{ ...standard, unit: 'm³' }],
+    [allocated],
+    { m3: 'm³' },
+  ).get('std-pipe')
+
+  assert.equal(pricing?.material.get('m³')?.average, 70)
+  assert.equal(pricing?.labour.get('m³')?.average, 30)
+})
+
+test('does not divide rate-basis allocations by item quantity', () => {
+  const allocated = boq('allocated', 'approved', item('allocated-item', 100, {
+    qty: 10,
+    total: 1000,
+    costAllocation: {
+      basis: 'rate',
+      material: 60,
+      labour: 40,
+      origin: 'manual',
+    },
+  }))
+
+  const pricing = buildCatalogComponentPricing(
+    [standard],
+    [allocated],
+  ).get('std-pipe')
+
+  assert.equal(pricing?.material.get('pcs')?.average, 60)
+  assert.equal(pricing?.labour.get('pcs')?.average, 40)
+})
+
+test('native evidence wins and is not duplicated by costAllocation', () => {
+  const native = boq('native', 'approved', item('native-item', 100, {
+    sourceCosts: {
+      material: sourceCost(true, 8, 'Pcs', 2808),
+      labour: sourceCost(true, 48, 'Db', 300),
+    },
+    costAllocation: {
+      basis: 'rate',
+      material: 50,
+      labour: 50,
+      origin: 'source',
+    },
+  }))
+
+  const pricing = buildCatalogComponentPricing(
+    [standard],
+    [native],
+  ).get('std-pipe')
+
+  assert.equal(pricing?.material.get('pcs')?.count, 1)
+  assert.equal(pricing?.material.get('pcs')?.average, 2808)
+  assert.equal(pricing?.labour.get('db')?.average, 300)
+})
+
+test('skips total-basis, zero-quantity, non-finite, and lump-sum fallbacks', () => {
+  const invalid = [
+    item('zero-qty', 100, {
+      qty: 0,
+      costAllocation: {
+        basis: 'rate',
+        material: 60,
+        labour: 40,
+        origin: 'manual',
+      },
+    }),
+    item('non-finite', 100, {
+      costAllocation: {
+        basis: 'rate',
+        material: Number.NaN,
+        labour: 40,
+        origin: 'manual',
+      },
+    }),
+    item('lump', 100, {
+      type: 'lump_sum',
+      costAllocation: {
+        basis: 'total',
+        material: 60,
+        labour: 40,
+        origin: 'manual',
+      },
+    }),
+  ]
+
+  const history = invalid.map((entry, index) =>
+    boq(`invalid-${index}`, 'approved', entry),
+  )
+
+  const pricing = buildCatalogComponentPricing([standard], history)
+
+  assert.equal(pricing.get('std-pipe'), undefined)
+})

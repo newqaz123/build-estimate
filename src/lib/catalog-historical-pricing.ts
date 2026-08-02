@@ -1,5 +1,6 @@
-import type { Boq, BoqItem } from './boq-schema'
+import type { Boq, BoqItem, BoqPricedItem } from './boq-schema'
 import { isPricedBoqItem } from './boq-pricing'
+import { deriveSourceCostAllocation } from './boq-cost-allocation'
 import type { StandardEntry } from './standard-schema'
 import {
   canonicalUnit,
@@ -154,6 +155,55 @@ function summarizeRates(
   }
 }
 
+function hasNativeComponentEvidence(item: BoqPricedItem): boolean {
+  return Boolean(
+    item.sourceCosts?.material.present
+    || item.sourceCosts?.labour.present,
+  )
+}
+
+function derivedComponentRates(
+  item: BoqPricedItem,
+  standard: StandardEntry,
+  unitMap: Record<string, string>,
+): Partial<Record<CatalogComponentKey, {
+  unit: string
+  rate: number
+}>> {
+  if (
+    hasNativeComponentEvidence(item)
+    || item.type === 'lump_sum'
+    || item.qty <= 0
+    || !unitsCompatible(item.unit, standard.unit, unitMap)
+  ) {
+    return {}
+  }
+
+  const allocation = deriveSourceCostAllocation(item)
+  if (!allocation || allocation.basis !== 'rate') return {}
+
+  // A non-finite component signals corrupt allocation data; reject the
+  // whole record so a single bad value cannot seed benchmark history.
+  for (const key of COMPONENT_KEYS) {
+    if (!Number.isFinite(allocation[key])) return {}
+  }
+
+  const unit = canonicalUnit(item.unit, unitMap)
+  const result: Partial<Record<CatalogComponentKey, {
+    unit: string
+    rate: number
+  }>> = {}
+
+  for (const key of COMPONENT_KEYS) {
+    const rate = allocation[key]
+    if (Number.isFinite(rate) && rate > 0) {
+      result[key] = { unit, rate }
+    }
+  }
+
+  return result
+}
+
 export function buildCatalogComponentPricing(
   standards: StandardEntry[],
   boqs: Boq[],
@@ -179,32 +229,51 @@ export function buildCatalogComponentPricing(
         if (!isPricedBoqItem(item) || item.stdStatus !== 'matched') return
 
         const standardId = resolver.resolve(boq.id, sectionIndex, item)
-        if (!standardId || !item.sourceCosts) return
+        if (!standardId) return
+
+        const standard = resolver.byId.get(standardId)
+        if (!standard) return
 
         const standardGroups = grouped.get(standardId) ?? {
           material: new Map<string, number[]>(),
           labour: new Map<string, number[]>(),
         }
 
-        for (const key of COMPONENT_KEYS) {
-          const source = item.sourceCosts[key]
-          if (
-            !source.present
-            || source.qty <= 0
-            || !source.unit.trim()
-            || !Number.isFinite(source.rate)
-            || source.rate <= 0
-          ) {
-            continue
-          }
+        let added = false
 
-          const unit = canonicalUnit(source.unit, unitMap)
-          const rates = standardGroups[key].get(unit) ?? []
-          rates.push(source.rate)
-          standardGroups[key].set(unit, rates)
+        if (hasNativeComponentEvidence(item)) {
+          for (const key of COMPONENT_KEYS) {
+            const source = item.sourceCosts?.[key]
+            if (
+              !source?.present
+              || source.qty <= 0
+              || !source.unit.trim()
+              || !Number.isFinite(source.rate)
+              || source.rate <= 0
+            ) {
+              continue
+            }
+
+            const unit = canonicalUnit(source.unit, unitMap)
+            const rates = standardGroups[key].get(unit) ?? []
+            rates.push(source.rate)
+            standardGroups[key].set(unit, rates)
+            added = true
+          }
+        } else {
+          const derived = derivedComponentRates(item, standard, unitMap)
+          for (const key of COMPONENT_KEYS) {
+            const entry = derived[key]
+            if (!entry) continue
+
+            const rates = standardGroups[key].get(entry.unit) ?? []
+            rates.push(entry.rate)
+            standardGroups[key].set(entry.unit, rates)
+            added = true
+          }
         }
 
-        grouped.set(standardId, standardGroups)
+        if (added) grouped.set(standardId, standardGroups)
       })
     })
   }
