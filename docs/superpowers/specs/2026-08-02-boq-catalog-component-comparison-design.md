@@ -130,7 +130,9 @@ Header/toolbar unchanged (BOQ selector + Upload). The table is rebuilt:
 - **"Match" action** per line remains (opens `CatalogMatchModal`), unchanged.
 - **Responsive (≤390px):** collapse to the card layout already used by `.unified-boq-items-table` mobile rules; component sub-rows stack under the item label.
 
-Real-data reference states (from ETG.2026/AYT074) are captured in the brainstorm mockup at `.superpowers/brainstorm/95770-1785630952/content/compare-real-data-all-cases.html`.
+**Theme:** the app is a LIGHT Airtable-style theme (white surfaces, `#181d26` ink, `#1b61c9` accent, `#e0e2e6` borders). Do NOT render dark.
+
+Real-data reference states (from ETG.2026/AYT074) and the visual source of truth live in the Open Design project **"BuildEstimate Compare Component UI"** (`compare-boq-to-catalog.html` desktop + `compare-boq-to-catalog-mobile.html`), which renders all six cases in the light theme.
 
 ## 8. Edge cases & error handling
 
