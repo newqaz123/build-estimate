@@ -97,9 +97,11 @@ test('component comparison exposes mobile labels and card breakpoints', () => {
     mobile920,
     /\.compare-grid\s+\.compare-component-table-wrap\s*\{[^}]*overflow:\s*visible/,
   )
+  // Require the higher-specificity override (not only bare .compare-grid .compare-component-table).
+  // Allows a comma-grouped rule that also lists the bare selector.
   assert.match(
     mobile920,
-    /\.compare-grid[\s\S]*?\.compare-component-table\s*\{[^}]*min-width:\s*0/,
+    /\.compare-grid\s+\.data-table\.compare-component-table(?:\s*,\s*[^{]+)?\s*\{[^}]*min-width:\s*0/,
   )
   assert.match(
     mobile920,
