@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { BoqPricedItem, BoqSection } from './boq-schema'
+import { costAllocationReconciles } from './boq-cost-allocation'
 import {
   applyValidatedProposal,
   fingerprintCanonicalItem,
+  fingerprintCanonicalSections,
   isHighConfidenceProposal,
   undoAcceptedProposal,
   validateProposal,
   validateProposalBatch,
+  type ProposalCandidateRef,
   type ProposalValidationContext,
 } from './boq-extraction-proposals'
 
@@ -312,6 +315,93 @@ test('separate_components only accepts standard priced children', () => {
   const component = components.proposedItems[0] as unknown as Record<string, unknown>
   component.pricingRole = 'bundle_parent'
   assert.deepEqual(validateProposal(components, context()), { valid: false, code: 'invalid_operation_shape' })
+})
+
+test('accepted insert stores total-basis allocation for different-unit native sourceCosts', () => {
+  const emptySections: BoqSection[] = [{ header: 'Works', items: [] }]
+  const sourceCosts = {
+    material: { qty: 3, unit: 'Pcs', rate: 117, total: 351 },
+    labour: { qty: 12, unit: 'Db', rate: 260, total: 3120 },
+  }
+  const candidate: ProposalCandidateRef = {
+    id: 'cand-diff-units',
+    sectionIndex: 0,
+    sectionHeader: 'Works',
+    sourceOrder: 0,
+    sourceRowIds: ['row-diff'],
+    desc: 'Valve work',
+    pricingRole: 'standard',
+    parentBundleId: null,
+    unit: 'Pcs',
+    qty: 3,
+    rate: 1157,
+    total: 3471,
+    costComponent: 'combined',
+    sourceCosts,
+    optional: false,
+    excludedFromTotal: false,
+    exclusionReason: null,
+  }
+  const proposedItem = {
+    id: candidate.id,
+    desc: candidate.desc,
+    pricingRole: 'standard' as const,
+    parentBundleId: null,
+    sourceRowIds: ['row-diff'],
+    entryOrigin: 'ai_accepted' as const,
+    optional: false,
+    excludedFromTotal: false,
+    exclusionReason: null,
+    unit: 'Pcs',
+    qty: 3,
+    rate: 1157,
+    total: 3471,
+    costComponent: 'combined' as const,
+    sourceCosts,
+  }
+  const ctx = context({
+    sections: emptySections,
+    sourceRows: [{ id: 'row-diff' }, { id: 'row-combined' }, { id: 'row-extra' }],
+    sourceEvidence: {
+      'row-diff': { quotedTotal: 3471 },
+      'row-combined': { quotedTotal: 100 },
+      'row-extra': { quotedTotal: 20 },
+    },
+    candidateItems: new Map([[candidate.id, candidate]]),
+  })
+  const validated = validateProposal({
+    id: 'insert-diff-units',
+    extractionRunId: 'run-1',
+    operation: 'insert_missing_item',
+    sourceRowIds: ['row-diff'],
+    targetItemIds: [],
+    candidateItemIds: [candidate.id],
+    affectedItemFingerprints: {},
+    confidence: 0.95,
+    explanation: 'Missing different-unit combined row.',
+    proposedItems: [proposedItem],
+    baseSectionsFingerprint: fingerprintCanonicalSections(emptySections),
+    destinationSectionIndex: 0,
+    destinationItemIndex: 0,
+    candidateSourceOrder: 0,
+  }, ctx)
+  assert.equal(validated.valid, true)
+  if (!validated.valid) return
+
+  const accepted = applyValidatedProposal(emptySections, validated.proposal)
+  assert.equal(accepted.sections[0].items.length, 1)
+  const inserted = accepted.sections[0].items[0] as BoqPricedItem
+  assert.deepEqual(inserted.sourceCosts, {
+    material: { ...sourceCosts.material, present: true },
+    labour: { ...sourceCosts.labour, present: true },
+  })
+  assert.deepEqual(inserted.costAllocation, {
+    basis: 'total',
+    material: 351,
+    labour: 3120,
+    origin: 'source',
+  })
+  assert.equal(costAllocationReconciles(inserted), true)
 })
 
 test('source-backed metadata is restricted to its canonical operation shape', () => {

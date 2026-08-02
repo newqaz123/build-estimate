@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { deriveSourceCostAllocation } from './boq-cost-allocation'
 import { BOQ_RECONCILIATION_TOLERANCE, type BoqSourceRowV3 } from './boq-extraction-schema'
 import { stableCanonicalJson } from './boq-extraction-run'
 import type { BoqItem, BoqPricedItem, BoqSection, BoqSourceRef } from './boq-schema'
@@ -949,18 +950,18 @@ function toCanonicalItem(item: ProposedExtractionItem, operation: ProposalOperat
       costAllocation: { basis: 'rate' as const, material: 0, labour: item.rate, origin: 'source' as const },
     } : {}),
     ...((operation === 'insert_missing_item' || operation === 'replace_item') && item.sourceCosts ? {
+      // Normalize native sourceCosts first; allocation is derived below so
+      // same-unit rows keep rate basis and different-unit rows use totals.
       sourceCosts: {
         material: { ...item.sourceCosts.material, present: true },
         labour: { ...item.sourceCosts.labour, present: true },
       },
-      costAllocation: {
-        basis: 'rate' as const,
-        material: item.sourceCosts.material.rate,
-        labour: item.sourceCosts.labour.rate,
-        origin: 'source' as const,
-      },
     } : {}),
     stdStatus: item.excludedFromTotal === true ? 'excluded' : 'unmatched',
+  }
+  if ((operation === 'insert_missing_item' || operation === 'replace_item') && priced.sourceCosts) {
+    const allocation = deriveSourceCostAllocation(priced)
+    if (allocation) return { ...priced, costAllocation: allocation }
   }
   return priced
 }
