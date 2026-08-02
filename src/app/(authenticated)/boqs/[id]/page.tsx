@@ -549,6 +549,20 @@ function CanonicalBoqWorkspace({
 	const editsCount = Object.keys(edits).length;
 	const metadataEditCount = Object.keys(metadataEdits).length;
 	const pendingChanges = editsCount + metadataEditCount;
+	const approvalDisabledReason = mutationBusy
+		? approving
+			? "Approving BOQ…"
+			: "Finish the current BOQ update before approving."
+		: invalidDraftKeys.size > 0
+			? "Fix invalid component costs before approving."
+			: pendingChanges > 0
+				? "Save pending BOQ changes before approving."
+				: verification.hasBlockingIssues
+					? "Resolve the review blockers below before approving."
+					: catalogReadiness.blocking > 0
+						? `Resolve ${catalogReadiness.blocking} catalog line${catalogReadiness.blocking === 1 ? "" : "s"} before approving.`
+						: null;
+	const approvalDisabled = approvalDisabledReason !== null;
 	const hasSource = boq.sourceAvailable ?? Boolean(boq.sourceFileName);
 
 	const handleCatalogBoqChange = useCallback(
@@ -1109,14 +1123,9 @@ function CanonicalBoqWorkspace({
 									type="button"
 									size="sm"
 									aria-busy={approving}
+									aria-describedby={approvalDisabledReason ? "approve-boq-blocker" : undefined}
 									onClick={() => void handleApprove()}
-									disabled={
-										mutationBusy ||
-										invalidDraftKeys.size > 0 ||
-										pendingChanges > 0 ||
-										verification.hasBlockingIssues ||
-										(requireCatalogReadiness && catalogReadiness.blocking > 0)
-									}
+									disabled={approvalDisabled}
 								>
 									{approving ? (
 										<Loader2 className="animate-spin" />
@@ -1125,6 +1134,16 @@ function CanonicalBoqWorkspace({
 									)}
 									{approving ? "Approving…" : "Approve BOQ"}
 								</Button>
+								{approvalDisabledReason ? (
+									<span
+										id="approve-boq-blocker"
+										data-od-id="approval-blocker"
+										className="text-xs text-muted-foreground"
+										role="status"
+									>
+										{approvalDisabledReason}
+									</span>
+								) : null}
 							</>
 						) : null}
 						<details className="boq-overflow-menu">
