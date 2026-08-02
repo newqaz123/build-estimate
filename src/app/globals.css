@@ -873,6 +873,19 @@
   .compare-summary .stat-card:last-child { grid-column: 1 / -1; }
   .compare-toolbar { align-items: flex-start; flex-direction: column; }
 
+  /* Beat .compare-grid overflow:hidden + .compare-grid .data-table min-width:940px */
+  .compare-grid:has(.compare-component-table-wrap),
+  .compare-grid:has(.compare-component-table) {
+    overflow: visible;
+  }
+  .compare-grid .compare-component-table-wrap {
+    overflow: visible;
+  }
+  .compare-grid .data-table.compare-component-table,
+  .compare-grid .compare-component-table {
+    min-width: 0;
+  }
+
   .compare-component-table-wrap {
     overflow: visible;
     border: 0;

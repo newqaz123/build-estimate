@@ -83,6 +83,37 @@ function row(
   }
 }
 
+function renderTable(rows: BoqCatalogComparisonRow[]): string {
+  return renderToStaticMarkup(createElement(
+    BoqCatalogComponentTable,
+    {
+      rows,
+      onMatch: () => undefined,
+    },
+  ))
+}
+
+function matchControlCount(html: string): number {
+  return (html.match(/data-od-id="compare-component-match"/g) ?? []).length
+}
+
+function groupBodies(html: string): string[] {
+  return html.match(/<tbody\b[^>]*class="[^"]*compare-component-group[^"]*"[^>]*>[\s\S]*?<\/tbody>/g) ?? []
+}
+
+function assertOneMatchPerGroup(html: string, expectedGroups: number) {
+  const groups = groupBodies(html)
+  assert.equal(groups.length, expectedGroups, `expected ${expectedGroups} component groups`)
+  assert.equal(matchControlCount(html), expectedGroups, 'one Match control per BOQ line group')
+  for (const [index, body] of groups.entries()) {
+    assert.equal(
+      matchControlCount(body),
+      1,
+      `group ${index} must render exactly one Match/Change match control`,
+    )
+  }
+}
+
 test('summary weights component variance by benchmark cost exposure', () => {
   const summary = summarizeComponentComparison([row()], 36864)
 
@@ -100,13 +131,7 @@ test('summary weights component variance by benchmark cost exposure', () => {
 })
 
 test('renders independent material and labour sub-rows', () => {
-  const html = renderToStaticMarkup(createElement(
-    BoqCatalogComponentTable,
-    {
-      rows: [row()],
-      onMatch: () => undefined,
-    },
-  ))
+  const html = renderTable([row()])
 
   assert.match(html, /STUB-END 6B BS4/)
   assert.match(html, /Material/)
@@ -122,16 +147,15 @@ test('renders independent material and labour sub-rows', () => {
   assert.match(html, /aria-label="BOQ material and labour comparison"/)
   assert.match(html, /tabindex="0"/)
   assert.match(html, /data-label="Catalog average"/)
+  assert.match(html, /data-label="Quantity"/)
+  assert.match(html, /data-label="Variance"/)
+  assert.match(html, /data-label="BOQ item"/)
+  assert.match(html, /data-label="Action"/)
+  assertOneMatchPerGroup(html, 1)
 })
 
 test('renders material and labour as separate grouped sub-rows', () => {
-  const html = renderToStaticMarkup(createElement(
-    BoqCatalogComponentTable,
-    {
-      rows: [row()],
-      onMatch: () => undefined,
-    },
-  ))
+  const html = renderTable([row()])
 
   assert.match(html, /<tr[^>]*data-component="material"/)
   assert.match(html, /<tr[^>]*data-component="labour"/)
@@ -146,6 +170,16 @@ test('renders material and labour as separate grouped sub-rows', () => {
   assert.match(labourRow[0], /Db/)
   assert.match(labourRow[0], /฿300/)
   assert.doesNotMatch(labourRow[0], /Pcs/)
+
+  assert.match(materialRow[0], /data-label="Component"/)
+  assert.match(materialRow[0], /data-label="Quantity"/)
+  assert.match(materialRow[0], /data-label="Catalog average"/)
+  assert.match(materialRow[0], /data-label="Variance"/)
+  assert.match(labourRow[0], /data-label="Component"/)
+  assert.match(labourRow[0], /data-label="Quantity"/)
+  assert.doesNotMatch(labourRow[0], /data-label="BOQ item"/)
+  assert.doesNotMatch(labourRow[0], /data-label="Action"/)
+  assertOneMatchPerGroup(html, 1)
 })
 
 test('renders absent, no-history, and lump-sum states explicitly', () => {
@@ -176,7 +210,10 @@ test('renders absent, no-history, and lump-sum states explicitly', () => {
       unit: 'Lot',
       rate: 6000,
       total: 6000,
+      stdId: undefined,
+      stdStatus: 'unmatched',
     },
+    candidate: null,
     benchmark: {
       count: 9,
       min: 5000,
@@ -208,16 +245,39 @@ test('renders absent, no-history, and lump-sum states explicitly', () => {
     },
   })
 
-  const html = renderToStaticMarkup(createElement(
-    BoqCatalogComponentTable,
-    {
-      rows: [materialOnly, lumpSum],
-      onMatch: () => undefined,
-    },
-  ))
+  const html = renderTable([materialOnly, lumpSum])
 
   assert.match(html, /not in source quotation/)
   assert.match(html, /No prior approved rates/)
   assert.match(html, /Lump sum/)
   assert.match(html, /compared on total only/)
+
+  const groups = groupBodies(html)
+  assert.equal(groups.length, 2)
+
+  const missingGroup = groups.find((body) => /not in source quotation/.test(body))
+  const lumpGroup = groups.find((body) => /Lump sum/.test(body))
+  assert.ok(missingGroup, 'missing/no-history group present')
+  assert.ok(lumpGroup, 'lump-sum group present')
+
+  assert.match(missingGroup!, /data-label="BOQ item"/)
+  assert.match(missingGroup!, /data-label="Component"/)
+  assert.match(missingGroup!, /data-label="Component data"/)
+  assert.match(missingGroup!, /data-label="Catalog average · Variance"/)
+  assert.match(missingGroup!, /data-label="Quantity"/)
+  assert.match(missingGroup!, /data-label="Action"/)
+  assert.match(missingGroup!, /data-label="Line total"/)
+
+  assert.match(lumpGroup!, /data-label="BOQ item"/)
+  assert.match(lumpGroup!, /data-label="Component"/)
+  assert.match(lumpGroup!, /data-label="Quantity"/)
+  assert.match(lumpGroup!, /data-label="Unit"/)
+  assert.match(lumpGroup!, /data-label="BOQ rate"/)
+  assert.match(lumpGroup!, /data-label="Catalog average"/)
+  assert.match(lumpGroup!, /data-label="Variance"/)
+  assert.match(lumpGroup!, /data-label="Action"/)
+  assert.match(lumpGroup!, /data-label="Line total"/)
+  assert.match(lumpGroup!, />Match</)
+
+  assertOneMatchPerGroup(html, 2)
 })
