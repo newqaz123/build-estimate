@@ -71,6 +71,8 @@ function deriveTargetComponents(item: BoqPricedItem): ComponentComparisonMap {
     labour: absentComponent(),
   }
 
+  if (item.type === 'lump_sum' || item.qty <= 0) return components
+
   const hasNativeEvidence = Boolean(
     item.sourceCosts?.material.present
     || item.sourceCosts?.labour.present,
@@ -103,8 +105,6 @@ function deriveTargetComponents(item: BoqPricedItem): ComponentComparisonMap {
 
     return components
   }
-
-  if (item.type === 'lump_sum' || item.qty <= 0) return components
 
   const allocation = deriveSourceCostAllocation(item)
   if (!allocation || allocation.basis !== 'rate') return components

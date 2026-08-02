@@ -226,6 +226,48 @@ test('keeps lump-sum lines total-only and preserves legacy benchmarking', () => 
   assert.equal(row.benchmark?.average, 5800)
 })
 
+test('forces lump-sum rows all-absent even when native sourceCosts are present', () => {
+  const target = boq('target', 6000, 'std-1')
+  target.sections[0].items[0] = {
+    ...(target.sections[0].items[0] as BoqPricedItem),
+    type: 'lump_sum',
+    unit: 'Lot',
+    qty: 1,
+    rate: 6000,
+    total: 6000,
+    costComponent: 'lump_sum',
+    sourceCosts: {
+      material: nativeCost(true, 8, 'Pcs', 2808),
+      labour: nativeCost(true, 48, 'Db', 300),
+    },
+  }
+
+  const row = compareBoqToCatalog(target, [standard], [target]).rows[0]
+
+  assert.equal(row.components.material.present, false)
+  assert.equal(row.components.labour.present, false)
+})
+
+test('forces non-positive-qty rows all-absent even when native sourceCosts are present', () => {
+  const target = boq('target', 0, 'std-1')
+  target.sections[0].items[0] = {
+    ...(target.sections[0].items[0] as BoqPricedItem),
+    unit: 'Lot',
+    qty: 0,
+    rate: 0,
+    total: 0,
+    sourceCosts: {
+      material: nativeCost(true, 8, 'Pcs', 2808),
+      labour: nativeCost(true, 48, 'Db', 300),
+    },
+  }
+
+  const row = compareBoqToCatalog(target, [standard], [target]).rows[0]
+
+  assert.equal(row.components.material.present, false)
+  assert.equal(row.components.labour.present, false)
+})
+
 test('returns a component with null benchmark when its unit has no history', () => {
   const target = boq('target', 275, 'std-1')
   target.sections[0].items[0] = {
