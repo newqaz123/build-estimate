@@ -226,7 +226,12 @@ export function buildCatalogComponentPricing(
 
     boq.sections.forEach((section, sectionIndex) => {
       section.items.forEach((item) => {
-        if (!isPricedBoqItem(item) || item.stdStatus !== 'matched') return
+        if (!isPricedBoqItem(item)
+          || item.stdStatus !== 'matched'
+          || item.type === 'lump_sum'
+        ) {
+          return
+        }
 
         const standardId = resolver.resolve(boq.id, sectionIndex, item)
         if (!standardId) return

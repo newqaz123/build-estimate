@@ -293,3 +293,64 @@ test('skips total-basis, zero-quantity, non-finite, and lump-sum fallbacks', () 
 
   assert.equal(pricing.get('std-pipe'), undefined)
 })
+
+test('excludes total-basis allocations from component history', () => {
+  const totalAllocated = boq('total-alloc', 'approved', item('total-alloc-item', 100, {
+    costAllocation: {
+      basis: 'total',
+      material: 60,
+      labour: 40,
+      origin: 'manual',
+    },
+  }))
+
+  const pricing = buildCatalogComponentPricing([standard], [totalAllocated])
+
+  assert.equal(pricing.get('std-pipe'), undefined)
+})
+
+test('excludes lump_sum items with rate-basis allocations from component history', () => {
+  const lumpRate = boq('lump-rate', 'approved', item('lump-rate-item', 100, {
+    type: 'lump_sum',
+    costAllocation: {
+      basis: 'rate',
+      material: 60,
+      labour: 40,
+      origin: 'manual',
+    },
+  }))
+
+  const pricing = buildCatalogComponentPricing([standard], [lumpRate])
+
+  assert.equal(pricing.get('std-pipe'), undefined)
+})
+
+test('excludes lump_sum items even when native sourceCosts are present', () => {
+  const lumpNative = boq('lump-native', 'approved', item('lump-native-item', 1000, {
+    type: 'lump_sum',
+    sourceCosts: {
+      material: sourceCost(true, 8, 'Pcs', 2808),
+      labour: sourceCost(true, 48, 'Db', 300),
+    },
+  }))
+
+  const pricing = buildCatalogComponentPricing([standard], [lumpNative])
+
+  assert.equal(pricing.get('std-pipe'), undefined)
+})
+
+test('zero-valued allocation component is filtered rather than seeded as a bucket', () => {
+  const zeroMaterial = boq('zero-mat', 'approved', item('zero-mat-item', 100, {
+    costAllocation: {
+      basis: 'rate',
+      material: 0,
+      labour: 40,
+      origin: 'manual',
+    },
+  }))
+
+  const pricing = buildCatalogComponentPricing([standard], [zeroMaterial]).get('std-pipe')
+
+  assert.equal(pricing?.material.get('pcs'), undefined)
+  assert.equal(pricing?.labour.get('pcs')?.average, 40)
+})
