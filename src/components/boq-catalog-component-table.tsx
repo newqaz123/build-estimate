@@ -158,7 +158,7 @@ function renderComponentSubRow(
   if (!component.present) {
     return (
       <tr key={key} className="compare-component-row compare-component-row-missing" data-component={key}>
-        {showLineCells ? <td className="compare-component-line-cell" rowSpan={groupSize}>{lineDescription(row)}</td> : null}
+        {showLineCells ? <td data-label="BOQ item" className="compare-component-line-cell" rowSpan={groupSize}>{lineDescription(row)}</td> : null}
         <td data-label="Component">
           <span className="compare-component-tag compare-component-tag-missing">
             {COMPONENT_LABELS[key]}
@@ -167,7 +167,7 @@ function renderComponentSubRow(
         <td data-label="Component data" colSpan={5}>
           — not in source quotation
         </td>
-        {showLineCells ? <td className="compare-component-action-cell" rowSpan={groupSize}>{matchButton(row, onMatch)}</td> : null}
+        {showLineCells ? <td data-label="Action" className="compare-component-action-cell" rowSpan={groupSize}>{matchButton(row, onMatch)}</td> : null}
       </tr>
     )
   }
@@ -178,7 +178,7 @@ function renderComponentSubRow(
 
   return (
     <tr key={key} className="compare-component-row" data-component={key}>
-      {showLineCells ? <td className="compare-component-line-cell" rowSpan={groupSize}>{lineDescription(row)}</td> : null}
+      {showLineCells ? <td data-label="BOQ item" className="compare-component-line-cell" rowSpan={groupSize}>{lineDescription(row)}</td> : null}
       <td data-label="Component">
         <span className="compare-component-tag">{COMPONENT_LABELS[key]}</span>
       </td>
@@ -197,7 +197,7 @@ function renderComponentSubRow(
           </td>
         </>
       )}
-      {showLineCells ? <td className="compare-component-action-cell" rowSpan={groupSize}>{matchButton(row, onMatch)}</td> : null}
+      {showLineCells ? <td data-label="Action" className="compare-component-action-cell" rowSpan={groupSize}>{matchButton(row, onMatch)}</td> : null}
     </tr>
   )
 }
@@ -215,7 +215,7 @@ function renderTotalOnlyRow(
 
   return (
     <tr className="compare-component-row compare-component-row-total-only">
-      <td className="compare-component-line-cell">{lineDescription(row)}</td>
+      <td data-label="BOQ item" className="compare-component-line-cell">{lineDescription(row)}</td>
       <td data-label="Component">
         <span className={tagClass}>{tag}</span>
         <small className="compare-component-note">
@@ -237,7 +237,7 @@ function renderTotalOnlyRow(
           </td>
         </>
       )}
-      <td className="compare-component-action-cell">{matchButton(row, onMatch)}</td>
+      <td data-label="Action" className="compare-component-action-cell">{matchButton(row, onMatch)}</td>
     </tr>
   )
 }
@@ -250,6 +250,11 @@ function renderRowGroup(
     return (
       <tbody className="compare-component-group compare-component-group-total-only" key={row.key}>
         {renderTotalOnlyRow(row, onMatch)}
+        <tr className="compare-component-line-total" aria-hidden="true">
+          <td data-label="Line total" className="compare-component-line-total-cell num" colSpan={8}>
+            Line total {currency(row.item.total)}
+          </td>
+        </tr>
       </tbody>
     )
   }
@@ -283,7 +288,7 @@ export function BoqCatalogComponentTable(props: {
 
   return (
     <div
-      className="compare-component-table-wrap"
+      className="data-table-wrap compare-component-table-wrap"
       data-od-id="compare-component-table"
       role="region"
       aria-label="One BOQ versus the Standard Catalog — horizontally scrollable"

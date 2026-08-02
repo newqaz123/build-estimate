@@ -121,6 +121,30 @@ test('renders independent material and labour sub-rows', () => {
   assert.match(html, /Change match/)
 })
 
+test('renders material and labour as separate grouped sub-rows', () => {
+  const html = renderToStaticMarkup(createElement(
+    BoqCatalogComponentTable,
+    {
+      rows: [row()],
+      onMatch: () => undefined,
+    },
+  ))
+
+  assert.match(html, /<tr[^>]*data-component="material"/)
+  assert.match(html, /<tr[^>]*data-component="labour"/)
+
+  const materialRow = html.match(/<tr[^>]*data-component="material"[^>]*>[\s\S]*?<\/tr>/)
+  const labourRow = html.match(/<tr[^>]*data-component="labour"[^>]*>[\s\S]*?<\/tr>/)
+  assert.ok(materialRow, 'material sub-row exists')
+  assert.ok(labourRow, 'labour sub-row exists')
+  assert.match(materialRow[0], /Pcs/)
+  assert.match(materialRow[0], /฿2,808/)
+  assert.doesNotMatch(materialRow[0], /Db/)
+  assert.match(labourRow[0], /Db/)
+  assert.match(labourRow[0], /฿300/)
+  assert.doesNotMatch(labourRow[0], /Pcs/)
+})
+
 test('renders absent, no-history, and lump-sum states explicitly', () => {
   const materialOnly = row({
     key: 'material-only',
