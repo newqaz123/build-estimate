@@ -126,3 +126,46 @@ test('component comparison exposes mobile labels and card breakpoints', () => {
     /\.compare-component-row\s*\{[^}]*grid-template-columns:\s*minmax\(\s*0\s*,\s*1fr\s*\)/,
   )
 })
+
+test("unapproved BOQs use canonical Details navigation instead of ReviewPanel", () => {
+  assert.match(source, /useSearchParams/)
+  assert.match(source, /boqComparisonReviewHref/)
+  assert.match(source, /resolveCompareBoqId/)
+  assert.match(source, /router\.push\(boqComparisonReviewHref\(boq\.id\)\)/)
+  assert.match(source, /href=\{boqComparisonReviewHref\(selected\.id\)\}/)
+  assert.doesNotMatch(source, /ReviewPanel/)
+  assert.doesNotMatch(source, /setReviewBoq|reviewBoq/)
+})
+
+test("compare separates BOQ-list and comparison failures", () => {
+  assert.match(source, /boqLoadState/)
+  assert.match(source, /comparisonLoadState/)
+  assert.match(source, /Couldn&apos;t load BOQs/)
+  assert.match(source, /Couldn&apos;t load this comparison/)
+  assert.match(source, /loadBoqs\(\)/)
+  assert.match(source, /loadComparison\(selectedId\)/)
+})
+
+test("compare cancels stale comparison work and suppresses false refresh success", () => {
+  assert.match(source, /comparisonRequestRef/)
+  assert.match(source, /new AbortController\(\)/)
+  assert.match(source, /controller\.signal\.aborted/)
+  assert.match(source, /comparisonRequestRef\.current !== controller/)
+  assert.match(source, /if \(await loadComparison\(selected\.id\)\)/)
+})
+
+test("compare keeps matching actions on BOQ Details only", () => {
+  assert.doesNotMatch(source, />AI suggest</)
+  assert.doesNotMatch(source, />Dismiss</)
+  assert.doesNotMatch(source, /Create and link item/)
+  assert.match(source, /BoqCatalogComponentTable/)
+  assert.match(source, /CatalogMatchModal/)
+})
+
+test("the preparation action remains usable on narrow screens", () => {
+  assert.match(
+    source,
+    /data-od-id="compare-review-match"[^>]*className="[^"]*w-full[^"]*sm:w-auto/,
+  )
+  assert.match(source, /flex flex-wrap items-start justify-between/)
+})

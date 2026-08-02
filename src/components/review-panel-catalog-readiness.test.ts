@@ -4,7 +4,6 @@ import { readFileSync } from 'node:fs'
 
 const reviewSource = readFileSync(new URL('./review-panel.tsx', import.meta.url), 'utf8')
 const standardizationSource = readFileSync(new URL('./standardization-review.tsx', import.meta.url), 'utf8')
-const compareSource = readFileSync(new URL('../app/(authenticated)/compare/page.tsx', import.meta.url), 'utf8')
 
 test('compare review keeps catalog resolution inside the side-by-side panel', () => {
   assert.match(reviewSource, /requireCatalogReadiness\?: boolean/)
@@ -13,5 +12,4 @@ test('compare review keeps catalog resolution inside the side-by-side panel', ()
   assert.match(reviewSource, /catalogReadiness\.blocking > 0/)
   assert.match(standardizationSource, /onMatchRequest/)
   assert.match(standardizationSource, /onExcludeRequest/)
-  assert.match(compareSource, /requireCatalogReadiness/)
 })
