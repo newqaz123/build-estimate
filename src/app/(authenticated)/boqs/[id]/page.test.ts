@@ -140,13 +140,13 @@ test("manual match always releases its mutation lock", () => {
 		"const reloadAfterManualMatch",
 		"const handleExclude",
 	);
-	// setMatching(false) must be inside the finally block, not merely
-	// somewhere else in the handler body.
-	const finallyIdx = match.indexOf("finally");
-	const setMatchingFalseIdx = match.indexOf("setMatching(false)");
-	assert.ok(finallyIdx >= 0, "must have a finally block");
-	assert.ok(
-		setMatchingFalseIdx > finallyIdx,
+	// setMatching(false) must be INSIDE the finally block body. The regex
+	// /finally\s*\{[^}]*setMatching\(false\)/ requires that no closing
+	// brace appears between "finally {" and the call, so it fails if the
+	// call were moved after the finally block closes.
+	assert.match(
+		match,
+		/finally\s*\{[^}]*setMatching\(false\)/,
 		"setMatching(false) must be inside the finally block",
 	);
 	// No redirect after matching — the user stays on Details.
