@@ -27,7 +27,7 @@ Implement per-component material/labour catalog comparison on `/compare`, preser
 
 ## Tasks
 
-### 1. **Canonical units and native component pricing**
+### Task 1: Canonical units and native component pricing
 
 Add a public unit canonicalization helper and aggregate native `sourceCosts.material` / `sourceCosts.labour` rates independently by standard, component, and canonical unit.
 
@@ -396,7 +396,7 @@ git commit -m "feat(compare): aggregate native component pricing"
 
 ---
 
-### 2. **Derived line-unit component fallback**
+### Task 2: Derived line-unit component fallback
 
 Extend component history to use rate-basis `costAllocation` when no native `sourceCosts` component is present.
 
@@ -620,7 +620,7 @@ git commit -m "feat(compare): derive component history from allocations"
 
 ---
 
-### 3. **Extend BOQ comparison rows with the full component matrix**
+### Task 3: Extend BOQ comparison rows with the full component matrix
 
 Add stable material/labour comparison records to every priced row and attach matching component-unit benchmark buckets.
 
@@ -1032,7 +1032,7 @@ git commit -m "feat(compare): compare material and labour rates"
 
 ---
 
-### 4. **Testable comparison API response**
+### Task 4: Testable comparison API response
 
 Extract a dependency-injected handler and prove the HTTP response exposes component data without weakening authentication or error handling.
 
@@ -1343,7 +1343,7 @@ git commit -m "refactor(compare): expose testable comparison API"
 
 ---
 
-### 5. **Desktop comparison UI and summary band**
+### Task 5: Desktop comparison UI and summary band
 
 Create a focused table component for Option A, preserve matching actions, and replace the old summary with component-aware totals.
 
@@ -1796,7 +1796,7 @@ git commit -m "feat(compare): render material and labour benchmarks"
 
 ---
 
-### 6. **Responsive styling, accessibility, and final visual verification**
+### Task 6: Responsive styling, accessibility, and final visual verification
 
 Apply Open Design visual tokens, collapse grouped rows into cards at mobile widths, and complete regression and browser verification.
 
