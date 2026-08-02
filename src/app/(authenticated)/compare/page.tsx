@@ -4,19 +4,25 @@ import { useCallback, useEffect, useState } from "react"
 import { AlertCircle, ArrowLeftRight, Upload } from "lucide-react"
 import { toast } from "sonner"
 
+import { BoqCatalogComponentTable, summarizeComponentComparison } from "@/components/boq-catalog-component-table"
 import { CatalogMatchModal } from "@/components/catalog-match-modal"
 import { ProtoBadge } from "@/components/proto-badge"
-import { ProtoDataTable } from "@/components/proto-data-table"
 import { ReviewPanel } from "@/components/review-panel"
 import { UploadModal } from "@/components/upload-modal"
 import type { Boq } from "@/lib/boq-schema"
-import { formatHistoricalVariance, type BoqCatalogComparisonRow } from "@/lib/boq-catalog-comparison"
+import type { BoqCatalogComparisonRow } from "@/lib/boq-catalog-comparison"
 import { getBoqCatalogReadiness } from "@/lib/boq-catalog-readiness"
 
 type ComparisonResponse = { boqId: string; rows: BoqCatalogComparisonRow[] }
 
 function currency(value: number) {
   return `฿${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+}
+
+function formatVariance(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "—"
+  const sign = value > 0 ? "+" : ""
+  return `${sign}${value.toFixed(1)}%`
 }
 
 export default function ComparePage() {
@@ -69,8 +75,7 @@ export default function ComparePage() {
   }, [loadComparison, selected, selectedId])
 
   const rows = comparison?.rows ?? []
-  const matched = rows.filter((row) => row.candidate).length
-  const benchmarked = rows.filter((row) => row.benchmark).length
+  const comparisonSummary = summarizeComponentComparison(rows, selected?.grandTotal ?? 0)
   const selectedReadiness = selected ? getBoqCatalogReadiness(selected) : null
 
   const handleUploadComplete = (boq: Boq) => {
@@ -84,9 +89,10 @@ export default function ComparePage() {
       <section className="compare-summary-section">
         <p className="compare-intro">Upload or select one BOQ, then compare each parsed line against the Standard Catalog and historical rates from other matched BOQs.</p>
         <div className="compare-summary">
-          <div className="proto-card stat-card"><div className="stat-value num">1</div><div className="stat-label">BOQ selected</div></div>
-          <div className="proto-card stat-card"><div className="stat-value num">{matched}/{rows.length}</div><div className="stat-label">Catalog candidates</div></div>
-          <div className="proto-card stat-card"><div className="stat-value num">{benchmarked}</div><div className="stat-label">Historical benchmarks</div></div>
+          <div className="proto-card stat-card"><div className="stat-value num">{formatVariance(comparisonSummary.materialVariancePct)}</div><div className="stat-label">Material rate vs catalog</div></div>
+          <div className="proto-card stat-card"><div className="stat-value num">{formatVariance(comparisonSummary.labourVariancePct)}</div><div className="stat-label">Labour rate vs catalog</div></div>
+          <div className="proto-card stat-card"><div className="stat-value num">{comparisonSummary.componentLines}/{comparisonSummary.totalLines}</div><div className="stat-label">Lines with component data</div></div>
+          <div className="proto-card stat-card"><div className="stat-value num">{currency(comparisonSummary.boqTotal)}</div><div className="stat-label">BOQ total</div></div>
         </div>
       </section>
 
@@ -134,29 +140,10 @@ export default function ComparePage() {
 
       {!loading && !loadError && rows.length > 0 ? (
         <div className="compare-grid">
-          <ProtoDataTable
-            ariaLabel="One BOQ versus the Standard Catalog"
-            dataOdId="compare-table"
-            scrollHint="Scroll horizontally for rate benchmark details"
-            headers={[
-              { label: "BOQ item" }, { label: "Unit" }, { label: "BOQ rate", className: "num-col" },
-              { label: "Catalog item" }, { label: "Match" }, { label: "Approved historical average", className: "num-col" },
-              { label: "Compared with average" }, { label: "Action", className: "text-right" },
-            ]}
-          >
-            {rows.map((row) => (
-              <tr key={row.key}>
-                <td><strong>{row.item.desc}</strong><small className="block text-muted-foreground">{row.section}</small></td>
-                <td>{row.item.unit}</td>
-                <td className="num-col">{currency(row.item.rate)}</td>
-                <td>{row.candidate ? <><strong>{row.candidate.description}</strong><small className="block text-muted-foreground">{row.candidate.unit}</small></> : <span className="text-muted-foreground">No safe candidate</span>}</td>
-                <td>{row.candidate ? <span className="capitalize">{row.candidate.matchReason}</span> : "—"}</td>
-                <td className="num-col">{row.benchmark ? <><strong>{currency(row.benchmark.average)}</strong><small className="block text-muted-foreground">{currency(row.benchmark.min)}–{currency(row.benchmark.max)} · {row.benchmark.count} approved {row.benchmark.count === 1 ? "rate" : "rates"}</small></> : <span className="text-muted-foreground">No prior approved history</span>}</td>
-                <td className={row.variancePct != null && Math.abs(row.variancePct) > 10 ? "font-medium text-destructive" : ""}>{row.variancePct === null ? <span className="text-muted-foreground">Not enough history to compare</span> : formatHistoricalVariance(row.variancePct)}</td>
-                <td className="text-right"><button className="btn btn-ghost btn-xs" onClick={() => setMatchTarget(row)}>{row.item.stdId ? "Change match" : "Match"}</button></td>
-              </tr>
-            ))}
-          </ProtoDataTable>
+          <BoqCatalogComponentTable
+            rows={rows}
+            onMatch={setMatchTarget}
+          />
         </div>
       ) : null}
 
