@@ -29,6 +29,27 @@ test('compare page is a Comparison Inbox with workspace navigation', () => {
   assert.doesNotMatch(source, /selected\.status !== "approved"/)
 })
 
+test('clean draft is not classified as review issue from status alone', () => {
+  // Issue state must come from canonical catalog/local blockers, not draft status.
+  assert.match(source, /getBoqCatalogReadiness/)
+  assert.match(source, /verifyBoqLocally/)
+  assert.match(source, /hasBlockingIssues/)
+  assert.match(
+    source,
+    /function boqNeedsReview\([\s\S]*?getBoqCatalogReadiness\([\s\S]*?\.blocking[\s\S]*?verifyBoqLocally\([\s\S]*?hasBlockingIssues/,
+  )
+  assert.doesNotMatch(
+    source,
+    /function boqNeedsReview\([\s\S]*?status\s*!==\s*["']approved["']/
+  )
+  assert.doesNotMatch(source, /!selectedIsApproved/)
+  assert.doesNotMatch(source, /selected\.status\s*!==\s*["']approved["']/)
+  assert.doesNotMatch(source, /boq\.status\s*!==\s*["']approved["']/)
+  // Draft/finalized status remains a badge concern only.
+  assert.match(source, /ProtoBadge\s+status=\{boq\.status\}/)
+  assert.match(source, /ProtoBadge\s+status=\{selected\.status\}/)
+})
+
 test('compare inbox KPI strip is inbox-level, not selected-comparison cards', () => {
   assert.match(
     source,

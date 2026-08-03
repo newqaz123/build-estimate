@@ -11,6 +11,7 @@ import { UploadModal } from "@/components/upload-modal"
 import type { Boq } from "@/lib/boq-schema"
 import type { BoqCatalogComparisonRow } from "@/lib/boq-catalog-comparison"
 import { getBoqCatalogReadiness } from "@/lib/boq-catalog-readiness"
+import { verifyBoqLocally } from "@/lib/boq-ingestion"
 import { resolveCompareBoqId } from "@/lib/compare-boq-selection"
 import { boqWorkspaceHref, compareBoqHref } from "@/lib/boq-review-route"
 
@@ -30,7 +31,11 @@ function formatVariance(value: number | null): string {
 }
 
 function boqNeedsReview(boq: Boq): boolean {
-  return boq.status !== "approved" || getBoqCatalogReadiness(boq).blocking > 0
+  // Canonical blockers only — draft/finalized status is shown via ProtoBadge.
+  return (
+    getBoqCatalogReadiness(boq).blocking > 0
+    || verifyBoqLocally(boq).hasBlockingIssues
+  )
 }
 
 export default function ComparePage() {
@@ -196,11 +201,7 @@ function ComparePageContent() {
   const rows = comparison?.rows ?? []
   const comparisonSummary = summarizeComponentComparison(rows, selected?.grandTotal ?? 0)
   const selectedReadiness = selected ? getBoqCatalogReadiness(selected) : null
-  const selectedIsApproved = selected?.status === "approved"
-  const hasReviewIssues = Boolean(
-    selected
-    && (!selectedIsApproved || (selectedReadiness?.blocking ?? 0) > 0),
-  )
+  const hasReviewIssues = Boolean(selected && boqNeedsReview(selected))
   const inboxNeedsReview = boqs.reduce(
     (count, boq) => count + (boqNeedsReview(boq) ? 1 : 0),
     0,

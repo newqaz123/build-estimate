@@ -172,3 +172,33 @@ test("comparison panel does not own workspace tabpanel id or role", () => {
   assert.doesNotMatch(html, /\srole="tabpanel"/);
   assert.doesNotMatch(html, /aria-labelledby="boq-compare-tab"/);
 });
+
+test("loaded empty comparison shows actionable guidance instead of zero metrics", () => {
+  const html = renderPanel({
+    state: { status: "loaded", rows: [] },
+  });
+
+  assert.match(html, /data-od-id="boq-compare-empty"/);
+  assert.match(html, /saved parsed priced items/i);
+  assert.match(html, /Open Review Extraction/);
+  assert.doesNotMatch(html, /data-od-id="boq-compare-summary"/);
+  assert.doesNotMatch(html, /data-od-id="compare-component-table"/);
+  assert.doesNotMatch(html, /0 \/ 0/);
+});
+
+test("error state with retained rows keeps retry alert plus previous summary and table", () => {
+  const html = renderPanel({
+    state: {
+      status: "error",
+      rows: [row()],
+      message: "Network failed",
+    },
+  });
+
+  assert.match(html, /data-od-id="boq-compare-error"/);
+  assert.match(html, /Retry comparison/);
+  assert.match(html, /Network failed/);
+  assert.match(html, /data-od-id="boq-compare-summary"/);
+  assert.match(html, /Material vs catalog/);
+  assert.match(html, /STUB-END 6B BS4/);
+});

@@ -70,7 +70,11 @@ export function BoqCatalogComparisonPanel({
   const summary = summarizeComponentComparison(rows, boq.grandTotal);
   const isLoading = state.status === "loading" || state.status === "idle";
   const isError = state.status === "error";
-  const showTable = state.status === "loaded" || rows.length > 0;
+  const hasRows = rows.length > 0;
+  const showLoadedEmpty = state.status === "loaded" && !hasRows;
+  // Keep prior summary/table visible when a refresh fails with retained rows.
+  const showSummary = !isLoading && hasRows;
+  const showTable = !isLoading && hasRows;
 
   return (
     <section
@@ -136,7 +140,28 @@ export function BoqCatalogComparisonPanel({
         </div>
       ) : null}
 
-      {state.status === "loaded" || (showTable && !isLoading && !isError) ? (
+      {showLoadedEmpty ? (
+        <div
+          className="proto-empty-state boq-compare-state"
+          data-od-id="boq-compare-empty"
+        >
+          <h3>No priced items to compare</h3>
+          <p>
+            Saved parsed priced items are required before catalog comparison can
+            run. Open Review Extraction to finish parsing and save a draft.
+          </p>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={onOpenReview}
+            data-od-id="boq-compare-empty-open-review"
+          >
+            Open Review Extraction
+          </button>
+        </div>
+      ) : null}
+
+      {showSummary ? (
         <div
           className="boq-compare-summary"
           data-od-id="boq-compare-summary"
@@ -162,9 +187,7 @@ export function BoqCatalogComparisonPanel({
         </div>
       ) : null}
 
-      {showTable && !isLoading ? (
-        <BoqCatalogComponentTable rows={rows} />
-      ) : null}
+      {showTable ? <BoqCatalogComponentTable rows={rows} /> : null}
     </section>
   );
 }
