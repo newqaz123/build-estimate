@@ -5,8 +5,10 @@ import {
   boqDetailHref,
   boqDetailReturnHref,
   boqReviewHref,
+  boqWorkspaceHref,
   compareBoqHref,
   isBoqReviewMode,
+  safeBoqWorkspaceView,
   safeCompareReturnPath,
 } from "./boq-review-route"
 
@@ -87,4 +89,22 @@ test("only legacy mode=review links request one-time canonicalization", () => {
   assert.equal(isBoqReviewMode(new URLSearchParams("mode=review")), true)
   assert.equal(isBoqReviewMode(new URLSearchParams("mode=Review")), false)
   assert.equal(isBoqReviewMode(new URLSearchParams("review=true")), false)
+})
+
+test("workspace view accepts only review and compare", () => {
+  assert.equal(safeBoqWorkspaceView("review"), "review")
+  assert.equal(safeBoqWorkspaceView("compare"), "compare")
+  assert.equal(safeBoqWorkspaceView("javascript:alert(1)"), "review")
+  assert.equal(safeBoqWorkspaceView(null), "review")
+})
+
+test("workspace href preserves only a validated compare return path", () => {
+  assert.equal(
+    boqWorkspaceHref("boq/id ?#", "compare", "/compare?boq=boq%2Fid+%3F%23"),
+    "/boqs/boq%2Fid%20%3F%23?view=compare&returnTo=%2Fcompare%3Fboq%3Dboq%252Fid%2B%253F%2523",
+  )
+  assert.equal(
+    boqWorkspaceHref("opaque", "review", "https://evil.example/compare"),
+    "/boqs/opaque?view=review",
+  )
 })

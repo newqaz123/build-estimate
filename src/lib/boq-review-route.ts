@@ -81,3 +81,22 @@ export function isBoqReviewMode(
 ): boolean {
   return searchParams.get("mode") === "review"
 }
+
+export type BoqWorkspaceView = "review" | "compare"
+
+export function safeBoqWorkspaceView(
+  value: string | null | undefined,
+): BoqWorkspaceView {
+  return value === "compare" ? "compare" : "review"
+}
+
+export function boqWorkspaceHref(
+  id: string,
+  view: BoqWorkspaceView,
+  returnTo?: string | null,
+): string {
+  const query = new URLSearchParams({ view })
+  const safeReturnTo = safeCompareReturnPath(returnTo)
+  if (safeReturnTo) query.set("returnTo", safeReturnTo)
+  return `${boqDetailHref(id)}?${query.toString()}`
+}
