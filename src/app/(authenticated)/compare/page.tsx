@@ -4,17 +4,15 @@ import { Suspense, useCallback, useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { AlertCircle, ArrowLeftRight, Upload } from "lucide-react"
-import { toast } from "sonner"
 
-import { BoqCatalogComponentTable, summarizeComponentComparison } from "@/components/boq-catalog-component-table"
-import { CatalogMatchModal } from "@/components/catalog-match-modal"
+import { summarizeComponentComparison } from "@/components/boq-catalog-component-table"
 import { ProtoBadge } from "@/components/proto-badge"
 import { UploadModal } from "@/components/upload-modal"
 import type { Boq } from "@/lib/boq-schema"
 import type { BoqCatalogComparisonRow } from "@/lib/boq-catalog-comparison"
 import { getBoqCatalogReadiness } from "@/lib/boq-catalog-readiness"
 import { resolveCompareBoqId } from "@/lib/compare-boq-selection"
-import { boqComparisonReviewHref } from "@/lib/boq-review-route"
+import { boqWorkspaceHref, compareBoqHref } from "@/lib/boq-review-route"
 
 type ComparisonResponse = { boqId: string; rows: BoqCatalogComparisonRow[] }
 
@@ -62,7 +60,6 @@ function ComparePageContent() {
   const [boqLoadState, setBoqLoadState] = useState<BoqLoadState>("loading")
   const [comparisonLoadState, setComparisonLoadState] = useState<ComparisonLoadState>("idle")
   const [uploadOpen, setUploadOpen] = useState(false)
-  const [matchTarget, setMatchTarget] = useState<BoqCatalogComparisonRow | null>(null)
   const boqRequestRef = useRef<AbortController | null>(null)
   const comparisonRequestRef = useRef<AbortController | null>(null)
 
@@ -171,11 +168,7 @@ function ComparePageContent() {
   )
 
   useEffect(() => {
-    if (
-      boqLoadState !== "loaded"
-      || !selected
-      || selected.status !== "approved"
-    ) {
+    if (boqLoadState !== "loaded" || !selected) {
       comparisonRequestRef.current?.abort()
       return
     }
@@ -195,35 +188,57 @@ function ComparePageContent() {
 
   const handleUploadComplete = (boq: Boq) => {
     setUploadOpen(false)
-    router.push(boqComparisonReviewHref(boq.id))
+    router.push(
+      boqWorkspaceHref(boq.id, "review", compareBoqHref(boq.id))
+    )
   }
 
   const rows = comparison?.rows ?? []
   const comparisonSummary = summarizeComponentComparison(rows, selected?.grandTotal ?? 0)
   const selectedReadiness = selected ? getBoqCatalogReadiness(selected) : null
+  const selectedIsApproved = selected?.status === "approved"
+  const hasReviewIssues = Boolean(
+    selected
+    && (!selectedIsApproved || (selectedReadiness?.blocking ?? 0) > 0),
+  )
 
   return (
     <div className="compare-page" data-od-id="compare-page">
       <section className="compare-summary-section">
-        <p className="compare-intro">Upload or select one BOQ, then compare each parsed line against the Standard Catalog and historical rates from other matched BOQs.</p>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h1 className="font-heading text-xl font-medium">Comparison Inbox</h1>
+            <p className="compare-intro">
+              One vendor BOQ at a time. Select a recent parse for a provisional snapshot, then open the full comparison in the BOQ workspace.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm w-full sm:w-auto"
+            onClick={() => setUploadOpen(true)}
+          >
+            <Upload className="w-4 h-4" /> Upload BOQ
+          </button>
+        </div>
         <div className="compare-summary">
-          <div className="proto-card stat-card"><div className="stat-value num">{formatVariance(comparisonSummary.materialVariancePct)}</div><div className="stat-label">Material rate vs catalog</div></div>
-          <div className="proto-card stat-card"><div className="stat-value num">{formatVariance(comparisonSummary.labourVariancePct)}</div><div className="stat-label">Labour rate vs catalog</div></div>
-          <div className="proto-card stat-card"><div className="stat-value num">{comparisonSummary.componentLines}/{comparisonSummary.totalLines}</div><div className="stat-label">Lines with component data</div></div>
-          <div className="proto-card stat-card"><div className="stat-value num">{currency(comparisonSummary.boqTotal)}</div><div className="stat-label">BOQ total</div></div>
+          <div className="proto-card stat-card">
+            <div className="stat-value num">{formatVariance(comparisonSummary.materialVariancePct)}</div>
+            <div className="stat-label">Material rate vs catalog</div>
+          </div>
+          <div className="proto-card stat-card">
+            <div className="stat-value num">{formatVariance(comparisonSummary.labourVariancePct)}</div>
+            <div className="stat-label">Labour rate vs catalog</div>
+          </div>
+          <div className="proto-card stat-card">
+            <div className="stat-value num">{comparisonSummary.componentLines}/{comparisonSummary.totalLines}</div>
+            <div className="stat-label">Lines with component data</div>
+          </div>
+          <div className="proto-card stat-card">
+            <div className="stat-value num">{currency(comparisonSummary.boqTotal)}</div>
+            <div className="stat-label">BOQ total</div>
+          </div>
         </div>
       </section>
-
-      <div className="proto-toolbar compare-toolbar">
-        <div className="proto-toolbar-left compare-baseline">
-          <label htmlFor="compare-boq" className="compare-control-label">BOQ:</label>
-          <select id="compare-boq" className="input compare-baseline-select" value={selectedId} onChange={(event) => handleSelectionChange(event.target.value)}>
-            {boqs.map((boq) => <option key={boq.id} value={boq.id}>{boq.project} — {boq.vendor}</option>)}
-          </select>
-          {selected ? <ProtoBadge status={selected.status} /> : null}
-        </div>
-        <button type="button" className="btn btn-primary btn-sm" onClick={() => setUploadOpen(true)}><Upload className="w-4 h-4" /> Upload BOQ to compare</button>
-      </div>
 
       {boqLoadState === "loading" ? (
         <div className="proto-loading-state compare-state" role="status">
@@ -237,71 +252,156 @@ function ComparePageContent() {
         </div>
       ) : null}
       {boqLoadState === "loaded" && boqs.length === 0 ? (
-        <div className="proto-empty-state compare-state"><ArrowLeftRight /><h3>No BOQ selected</h3><p>Upload a BOQ PDF to parse, review, and compare it with the catalog.</p><button className="btn btn-primary" onClick={() => setUploadOpen(true)}>Upload BOQ</button></div>
+        <div className="proto-empty-state compare-state">
+          <ArrowLeftRight />
+          <h3>No BOQ selected</h3>
+          <p>Upload a BOQ PDF to parse, review, and compare it with the catalog.</p>
+          <button className="btn btn-primary" onClick={() => setUploadOpen(true)}>Upload BOQ</button>
+        </div>
       ) : null}
 
-      {boqLoadState === "loaded" && selected && selected.status !== "approved" ? (
-        <div className="proto-card my-4 border-accent/25 bg-accent/5 p-5" data-od-id="compare-preparation">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-[0.08em] text-accent">Prepare before comparison</p>
-              <h2 className="mt-1 font-heading text-lg font-medium">Resolve catalog lines while checking the source PDF</h2>
-              <p className="mt-1 max-w-2xl text-sm text-muted-foreground">Every priced line must be matched, created, or excluded with a reason before this BOQ can be approved and compared.</p>
+      {boqLoadState === "loaded" && boqs.length > 0 ? (
+        <div className="compare-inbox" data-od-id="compare-inbox">
+          <div className="proto-card p-4">
+            <div className="mb-3 flex items-baseline justify-between gap-3">
+              <h2 className="font-heading text-base font-medium">Recent BOQs</h2>
+              <span className="text-xs text-muted-foreground">{boqs.length} total</span>
             </div>
-            <Link
-              data-od-id="compare-review-match"
-              href={boqComparisonReviewHref(selected.id)}
-              className="btn btn-primary w-full sm:w-auto"
-            >
-              Review, match & approve
-            </Link>
+            <div className="compare-inbox-list" role="list">
+              {boqs.map((boq) => {
+                const readiness = getBoqCatalogReadiness(boq)
+                const isSelected = selected?.id === boq.id
+                return (
+                  <button
+                    key={boq.id}
+                    type="button"
+                    role="listitem"
+                    className={isSelected ? "is-selected" : undefined}
+                    aria-pressed={isSelected}
+                    onClick={() => handleSelectionChange(boq.id)}
+                  >
+                    <strong>{boq.project || "Untitled BOQ"}</strong>
+                    <span>{boq.vendor}</span>
+                    <ProtoBadge status={boq.status} />
+                    <span>{readiness.blocking} unmatched</span>
+                  </button>
+                )
+              })}
+            </div>
           </div>
-          <div className="mt-4 flex items-center gap-3 text-sm">
-            <strong className="font-mono text-base">{selectedReadiness?.resolved ?? 0}/{selectedReadiness?.total ?? 0}</strong>
-            <span>catalog-ready lines</span>
-            {(selectedReadiness?.blocking ?? 0) > 0 ? <span className="text-muted-foreground">· {selectedReadiness?.blocking} still need action</span> : <span className="text-[#006400]">· Ready to approve</span>}
-          </div>
-        </div>
-      ) : null}
 
-      {boqLoadState === "loaded" && selected && selected.status === "approved" && comparisonLoadState === "loading" ? (
-        <div className="proto-loading-state compare-state" role="status">
-          <div><span className="proto-spinner" aria-hidden="true" /> Comparing BOQ to catalog…</div>
-        </div>
-      ) : null}
-      {boqLoadState === "loaded" && selected && selected.status === "approved" && comparisonLoadState === "error" ? (
-        <div className="proto-empty-state proto-error-state compare-state" role="alert">
-          <AlertCircle /><h3>Couldn&apos;t load this comparison</h3><p>Your BOQ has not been changed.</p>
-          <button className="btn btn-secondary" onClick={() => void loadComparison(selectedId)}>Retry</button>
-        </div>
-      ) : null}
-      {boqLoadState === "loaded" && selected && selected.status === "approved" && rows.length > 0 ? (
-        <div className="compare-grid">
-          <BoqCatalogComponentTable
-            rows={rows}
-            onMatch={setMatchTarget}
-          />
+          <div className="proto-card p-4" data-od-id="compare-selected-snapshot">
+            {selected ? (
+              <>
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                      Selected snapshot
+                    </p>
+                    <h2 className="mt-1 font-heading text-lg font-medium">
+                      {selected.project || "Untitled BOQ"}
+                    </h2>
+                    <p className="mt-1 text-sm text-muted-foreground">{selected.vendor}</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <ProtoBadge status={selected.status} />
+                      <span className="text-sm text-muted-foreground">
+                        {selectedReadiness?.blocking ?? 0} unmatched
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                    <Link
+                      data-od-id="compare-open-comparison"
+                      href={boqWorkspaceHref(
+                        selected.id,
+                        "compare",
+                        compareBoqHref(selected.id),
+                      )}
+                      className="btn btn-primary w-full sm:w-auto"
+                    >
+                      Open comparison
+                    </Link>
+                    {hasReviewIssues ? (
+                      <Link
+                        data-od-id="compare-review-issues"
+                        href={boqWorkspaceHref(
+                          selected.id,
+                          "review",
+                          compareBoqHref(selected.id),
+                        )}
+                        className="btn btn-secondary w-full sm:w-auto"
+                      >
+                        Review issues
+                      </Link>
+                    ) : null}
+                  </div>
+                </div>
+
+                {comparisonLoadState === "loading" ? (
+                  <div className="proto-loading-state compare-state mt-4" role="status">
+                    <div>
+                      <span className="proto-spinner" aria-hidden="true" />
+                      Loading provisional comparison…
+                    </div>
+                  </div>
+                ) : null}
+                {comparisonLoadState === "error" ? (
+                  <div className="proto-empty-state proto-error-state compare-state mt-4" role="alert">
+                    <AlertCircle />
+                    <h3>Couldn&apos;t load this comparison</h3>
+                    <p>Your BOQ has not been changed.</p>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => void loadComparison(selectedId)}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : null}
+                {comparisonLoadState === "loaded" ? (
+                  <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+                    <div>
+                      <span className="text-muted-foreground">Material vs catalog</span>
+                      <div className="font-mono text-base num">
+                        {formatVariance(comparisonSummary.materialVariancePct)}
+                      </div>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Labour vs catalog</span>
+                      <div className="font-mono text-base num">
+                        {formatVariance(comparisonSummary.labourVariancePct)}
+                      </div>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Component lines</span>
+                      <div className="font-mono text-base num">
+                        {comparisonSummary.componentLines}/{comparisonSummary.totalLines}
+                      </div>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Catalog-ready</span>
+                      <div className="font-mono text-base num">
+                        {selectedReadiness?.resolved ?? 0}/{selectedReadiness?.total ?? 0}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+                <p className="mt-4 text-xs text-muted-foreground">
+                  Full comparison stays in the BOQ workspace. This inbox is read-only triage.
+                </p>
+              </>
+            ) : (
+              <div className="proto-empty-state compare-state">
+                <ArrowLeftRight />
+                <h3>Select a BOQ</h3>
+                <p>Choose a recent BOQ to see its provisional comparison snapshot.</p>
+              </div>
+            )}
+          </div>
         </div>
       ) : null}
 
       <UploadModal open={uploadOpen} onOpenChange={setUploadOpen} onUploadComplete={handleUploadComplete} />
-      {matchTarget && selected ? (
-        <CatalogMatchModal
-          itemDesc={matchTarget.item.desc}
-          itemUnit={matchTarget.item.unit}
-          itemCode={matchTarget.item.code}
-          sourceProject={selected.project}
-          sourceVendor={selected.vendor}
-          matchContext={{ boqId: selected.id, sectionIndex: matchTarget.sectionIndex, ...matchTarget.identity }}
-          onClose={() => setMatchTarget(null)}
-          onMatch={async () => {
-            setMatchTarget(null)
-            if (await loadComparison(selected.id)) {
-              toast.success("Comparison refreshed")
-            }
-          }}
-        />
-      ) : null}
     </div>
   )
 }

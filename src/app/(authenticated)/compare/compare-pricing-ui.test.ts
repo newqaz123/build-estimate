@@ -67,14 +67,21 @@ function requireMediaBlock(
   return block!
 }
 
-test('compare renders component summary and delegates grouped rows', () => {
+test('compare page is a Comparison Inbox with workspace navigation', () => {
+  assert.match(source, /Comparison Inbox/)
+  assert.match(source, /Open comparison/)
+  assert.match(source, /Review issues/)
+  assert.match(source, /boqWorkspaceHref\([^,]+,\s*"compare"/)
+  assert.match(source, /boqWorkspaceHref\([^,]+,\s*"review"/)
+  assert.match(source, /summarizeComponentComparison/)
   assert.match(source, /Material rate vs catalog/)
   assert.match(source, /Labour rate vs catalog/)
   assert.match(source, /Lines with component data/)
   assert.match(source, /BOQ total/)
-  assert.match(source, /BoqCatalogComponentTable/)
-  assert.match(source, /onMatch=\{setMatchTarget\}/)
-  assert.match(source, /Review, match & approve/)
+  assert.doesNotMatch(source, /BoqCatalogComponentTable/)
+  assert.doesNotMatch(source, /CatalogMatchModal/)
+  assert.doesNotMatch(source, /Review, match & approve/)
+  assert.doesNotMatch(source, /selected\.status !== "approved"/)
 })
 
 test('component comparison exposes mobile labels and card breakpoints', () => {
@@ -127,12 +134,16 @@ test('component comparison exposes mobile labels and card breakpoints', () => {
   )
 })
 
-test("unapproved BOQs use canonical Details navigation instead of ReviewPanel", () => {
+test("compare uses workspace hrefs and resolveCompareBoqId without ReviewPanel", () => {
   assert.match(source, /useSearchParams/)
-  assert.match(source, /boqComparisonReviewHref/)
   assert.match(source, /resolveCompareBoqId/)
-  assert.match(source, /router\.push\(boqComparisonReviewHref\(boq\.id\)\)/)
-  assert.match(source, /href=\{boqComparisonReviewHref\(selected\.id\)\}/)
+  assert.match(source, /boqWorkspaceHref/)
+  assert.match(source, /compareBoqHref/)
+  assert.match(
+    source,
+    /router\.push\(\s*boqWorkspaceHref\(boq\.id,\s*"review",\s*compareBoqHref\(boq\.id\)\)\s*\)/,
+  )
+  assert.doesNotMatch(source, /boqComparisonReviewHref/)
   assert.doesNotMatch(source, /ReviewPanel/)
   assert.doesNotMatch(source, /setReviewBoq|reviewBoq/)
 })
@@ -146,26 +157,32 @@ test("compare separates BOQ-list and comparison failures", () => {
   assert.match(source, /loadComparison\(selectedId\)/)
 })
 
-test("compare cancels stale comparison work and suppresses false refresh success", () => {
+test("compare cancels stale comparison work", () => {
   assert.match(source, /comparisonRequestRef/)
   assert.match(source, /new AbortController\(\)/)
   assert.match(source, /controller\.signal\.aborted/)
   assert.match(source, /comparisonRequestRef\.current !== controller/)
-  assert.match(source, /if \(await loadComparison\(selected\.id\)\)/)
+  assert.match(source, /comparisonRequestRef\.current\?\.abort\(\)/)
 })
 
-test("compare keeps matching actions on BOQ Details only", () => {
+test("compare keeps matching ownership off the inbox", () => {
   assert.doesNotMatch(source, />AI suggest</)
   assert.doesNotMatch(source, />Dismiss</)
   assert.doesNotMatch(source, /Create and link item/)
-  assert.match(source, /BoqCatalogComponentTable/)
-  assert.match(source, /CatalogMatchModal/)
+  assert.doesNotMatch(source, /BoqCatalogComponentTable/)
+  assert.doesNotMatch(source, /CatalogMatchModal/)
+  assert.doesNotMatch(source, /matchTarget/)
+  assert.doesNotMatch(source, /onMatch/)
 })
 
-test("the preparation action remains usable on narrow screens", () => {
+test("inbox workspace actions remain usable on narrow screens", () => {
   assert.match(
     source,
-    /data-od-id="compare-review-match"[^>]*className="[^"]*w-full[^"]*sm:w-auto/,
+    /data-od-id="compare-open-comparison"[^>]*className="[^"]*w-full[^"]*sm:w-auto/,
+  )
+  assert.match(
+    source,
+    /data-od-id="compare-review-issues"[^>]*className="[^"]*w-full[^"]*sm:w-auto/,
   )
   assert.match(source, /flex flex-wrap items-start justify-between/)
 })
