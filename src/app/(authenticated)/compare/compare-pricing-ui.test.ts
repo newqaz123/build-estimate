@@ -74,14 +74,41 @@ test('compare page is a Comparison Inbox with workspace navigation', () => {
   assert.match(source, /boqWorkspaceHref\([^,]+,\s*"compare"/)
   assert.match(source, /boqWorkspaceHref\([^,]+,\s*"review"/)
   assert.match(source, /summarizeComponentComparison/)
-  assert.match(source, /Material rate vs catalog/)
-  assert.match(source, /Labour rate vs catalog/)
-  assert.match(source, /Lines with component data/)
-  assert.match(source, /BOQ total/)
+  assert.match(source, /Needs review/)
+  assert.match(source, /Unmatched lines/)
+  assert.match(source, /Provisional material/)
+  assert.match(source, /Recent BOQs/)
+  assert.doesNotMatch(source, /Material rate vs catalog/)
+  assert.doesNotMatch(source, /Labour rate vs catalog/)
+  assert.doesNotMatch(source, /Lines with component data/)
+  assert.doesNotMatch(source, /BOQ total/)
   assert.doesNotMatch(source, /BoqCatalogComponentTable/)
   assert.doesNotMatch(source, /CatalogMatchModal/)
   assert.doesNotMatch(source, /Review, match & approve/)
   assert.doesNotMatch(source, /selected\.status !== "approved"/)
+})
+
+test('compare inbox KPI strip is inbox-level, not selected-comparison cards', () => {
+  assert.match(
+    source,
+    /className="compare-summary"[\s\S]*Needs review[\s\S]*Unmatched lines[\s\S]*Provisional material[\s\S]*Recent BOQs/,
+  )
+  assert.match(source, /inboxNeedsReview|needsReviewCount/)
+  assert.match(source, /inboxUnmatchedLines|unmatchedLines/)
+  assert.match(source, /Provisional material/)
+  assert.doesNotMatch(
+    source,
+    /className="compare-summary"[\s\S]*Material rate vs catalog/,
+  )
+})
+
+test('BOQ selection controls keep native button semantics and selected state', () => {
+  assert.doesNotMatch(source, /<button\b[^>]*\brole="listitem"/)
+  assert.match(source, /aria-pressed=\{isSelected\}/)
+  assert.match(
+    source,
+    /(?:role="listitem"[\s\S]*?<button\b|<li\b[^>]*>[\s\S]*?<button\b)/,
+  )
 })
 
 test('component comparison exposes mobile labels and card breakpoints', () => {

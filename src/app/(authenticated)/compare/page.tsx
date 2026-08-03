@@ -23,14 +23,14 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError"
 }
 
-function currency(value: number) {
-  return `฿${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-}
-
 function formatVariance(value: number | null): string {
   if (value === null || !Number.isFinite(value)) return "—"
   const sign = value > 0 ? "+" : ""
   return `${sign}${value.toFixed(1)}%`
+}
+
+function boqNeedsReview(boq: Boq): boolean {
+  return boq.status !== "approved" || getBoqCatalogReadiness(boq).blocking > 0
 }
 
 export default function ComparePage() {
@@ -201,6 +201,17 @@ function ComparePageContent() {
     selected
     && (!selectedIsApproved || (selectedReadiness?.blocking ?? 0) > 0),
   )
+  const inboxNeedsReview = boqs.reduce(
+    (count, boq) => count + (boqNeedsReview(boq) ? 1 : 0),
+    0,
+  )
+  const inboxUnmatchedLines = boqs.reduce(
+    (sum, boq) => sum + getBoqCatalogReadiness(boq).blocking,
+    0,
+  )
+  const provisionalMaterialVariance = comparisonLoadState === "loaded"
+    ? comparisonSummary.materialVariancePct
+    : null
 
   return (
     <div className="compare-page" data-od-id="compare-page">
@@ -222,20 +233,20 @@ function ComparePageContent() {
         </div>
         <div className="compare-summary">
           <div className="proto-card stat-card">
-            <div className="stat-value num">{formatVariance(comparisonSummary.materialVariancePct)}</div>
-            <div className="stat-label">Material rate vs catalog</div>
+            <div className="stat-value num">{inboxNeedsReview}</div>
+            <div className="stat-label">Needs review</div>
           </div>
           <div className="proto-card stat-card">
-            <div className="stat-value num">{formatVariance(comparisonSummary.labourVariancePct)}</div>
-            <div className="stat-label">Labour rate vs catalog</div>
+            <div className="stat-value num">{inboxUnmatchedLines}</div>
+            <div className="stat-label">Unmatched lines</div>
           </div>
           <div className="proto-card stat-card">
-            <div className="stat-value num">{comparisonSummary.componentLines}/{comparisonSummary.totalLines}</div>
-            <div className="stat-label">Lines with component data</div>
+            <div className="stat-value num">{formatVariance(provisionalMaterialVariance)}</div>
+            <div className="stat-label">Provisional material</div>
           </div>
           <div className="proto-card stat-card">
-            <div className="stat-value num">{currency(comparisonSummary.boqTotal)}</div>
-            <div className="stat-label">BOQ total</div>
+            <div className="stat-value num">{boqs.length}</div>
+            <div className="stat-label">Recent BOQs</div>
           </div>
         </div>
       </section>
@@ -267,27 +278,27 @@ function ComparePageContent() {
               <h2 className="font-heading text-base font-medium">Recent BOQs</h2>
               <span className="text-xs text-muted-foreground">{boqs.length} total</span>
             </div>
-            <div className="compare-inbox-list" role="list">
+            <ul className="compare-inbox-list" role="list">
               {boqs.map((boq) => {
                 const readiness = getBoqCatalogReadiness(boq)
                 const isSelected = selected?.id === boq.id
                 return (
-                  <button
-                    key={boq.id}
-                    type="button"
-                    role="listitem"
-                    className={isSelected ? "is-selected" : undefined}
-                    aria-pressed={isSelected}
-                    onClick={() => handleSelectionChange(boq.id)}
-                  >
-                    <strong>{boq.project || "Untitled BOQ"}</strong>
-                    <span>{boq.vendor}</span>
-                    <ProtoBadge status={boq.status} />
-                    <span>{readiness.blocking} unmatched</span>
-                  </button>
+                  <li key={boq.id} role="listitem">
+                    <button
+                      type="button"
+                      className={isSelected ? "is-selected" : undefined}
+                      aria-pressed={isSelected}
+                      onClick={() => handleSelectionChange(boq.id)}
+                    >
+                      <strong>{boq.project || "Untitled BOQ"}</strong>
+                      <span>{boq.vendor}</span>
+                      <ProtoBadge status={boq.status} />
+                      <span>{readiness.blocking} unmatched</span>
+                    </button>
+                  </li>
                 )
               })}
-            </div>
+            </ul>
           </div>
 
           <div className="proto-card p-4" data-od-id="compare-selected-snapshot">
