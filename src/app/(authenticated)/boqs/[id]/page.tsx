@@ -28,6 +28,11 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import {
+  BoqCatalogComparisonPanel,
+  type BoqComparisonPanelState,
+} from "@/components/boq-catalog-comparison-panel";
+import { BoqWorkspaceTabs } from "@/components/boq-workspace-tabs";
 import { CatalogMatchModal } from "@/components/catalog-match-modal";
 import { ExtractionReview } from "@/components/extraction-review";
 import { ExtractionWarnings } from "@/components/extraction-warnings";
@@ -79,11 +84,14 @@ import {
 	isPricedBoqItem,
 	parseNonNegativeBoqEditValue,
 } from "@/lib/boq-pricing";
+import type { BoqCatalogComparisonRow } from "@/lib/boq-catalog-comparison";
 import {
-  boqDetailReturnHref,
+  boqWorkspaceHref,
   compareBoqHref,
   isBoqReviewMode,
+  safeBoqWorkspaceView,
   safeCompareReturnPath,
+  type BoqWorkspaceView,
 } from "@/lib/boq-review-route";
 import {
 	buildCanonicalRevisionKey,
@@ -175,14 +183,25 @@ function BoqDetailContent() {
 	const router = useRouter();
 	const searchParams = useSearchParams();
 	const id = params.id as string;
+  const rawView = searchParams.get("view");
+  const view = safeBoqWorkspaceView(rawView);
   const rawReturnTo = searchParams.get("returnTo");
   const returnTo = safeCompareReturnPath(rawReturnTo);
 	const legacyReviewMode = isBoqReviewMode(searchParams);
   const shouldCanonicalizeUrl =
-    legacyReviewMode || (rawReturnTo !== null && returnTo === null);
+    legacyReviewMode ||
+    (rawReturnTo !== null && returnTo === null) ||
+    (rawView !== null && rawView !== view);
 	const [boq, setBoq] = useState<Boq | null>(null);
 	const [loadState, setLoadState] = useState<LoadState>("loading");
 	const fetchControllerRef = useRef<AbortController | null>(null);
+
+  const handleViewChange = useCallback(
+    (nextView: BoqWorkspaceView) => {
+      router.replace(boqWorkspaceHref(id, nextView, returnTo), { scroll: false });
+    },
+    [id, returnTo, router],
+  );
 
 	const fetchBoq = useCallback(async () => {
 		fetchControllerRef.current?.abort();
@@ -225,8 +244,8 @@ function BoqDetailContent() {
 
 	useEffect(() => {
     if (!shouldCanonicalizeUrl) return;
-    router.replace(boqDetailReturnHref(id, returnTo), { scroll: false });
-  }, [id, returnTo, router, shouldCanonicalizeUrl]);
+    router.replace(boqWorkspaceHref(id, view, returnTo), { scroll: false });
+  }, [id, returnTo, router, shouldCanonicalizeUrl, view]);
 
 	useEffect(() => {
 		let active = true;
@@ -296,11 +315,8 @@ function BoqDetailContent() {
       onBoqChange={setBoq}
       backHref={returnTo ?? compareBoqHref(id)}
       backLabel={returnTo ? "Back to comparison" : "Back to Compare"}
-      onApproved={() => {
-        if (returnTo) {
-          router.replace(returnTo, { scroll: false });
-        }
-      }}
+      view={view}
+      onViewChange={handleViewChange}
     />
   );
 }
@@ -316,13 +332,15 @@ function CanonicalBoqWorkspace({
 	onBoqChange,
   backHref,
   backLabel,
-  onApproved,
+  view,
+  onViewChange,
 }: {
 	boq: Boq;
 	onBoqChange: (next: Boq) => void;
   backHref: string;
   backLabel: string;
-  onApproved: (approved: Boq) => void;
+  view: BoqWorkspaceView;
+  onViewChange: (nextView: BoqWorkspaceView) => void;
 }) {
 	const [edits, setEdits] = useState<EditsMap>({});
 	const editsRef = useRef<EditsMap>({});
@@ -353,6 +371,15 @@ function CanonicalBoqWorkspace({
 		string | null
 	>(null);
 	const [pendingDeletes, setPendingDeletes] = useState<StashedDelete[]>([]);
+  const [comparisonState, setComparisonState] =
+    useState<BoqComparisonPanelState>({
+      status: "idle",
+      rows: [],
+    });
+  const [comparisonRevisionKey, setComparisonRevisionKey] = useState<
+    string | null
+  >(null);
+  const comparisonRequestRef = useRef<AbortController | null>(null);
 	const units = useMemo(
 		() => [...STANDARD_UNITS, ...customUnits],
 		[customUnits],
@@ -389,6 +416,83 @@ function CanonicalBoqWorkspace({
 		() => buildCanonicalRevisionKey(boq),
 		[boq],
 	);
+
+  const loadComparison = useCallback(async () => {
+    comparisonRequestRef.current?.abort();
+    const controller = new AbortController();
+    comparisonRequestRef.current = controller;
+
+    setComparisonState((prev) => ({
+      status: "loading",
+      rows: prev.rows,
+    }));
+
+    try {
+      const response = await fetch(
+        `/api/boqs/${encodeURIComponent(boq.id)}/comparison`,
+        { signal: controller.signal },
+      );
+      if (!response.ok) {
+        throw new Error(
+          await readError(response, "Comparison could not be loaded"),
+        );
+      }
+
+      const next = (await response.json()) as {
+        boqId?: string;
+        rows?: BoqCatalogComparisonRow[];
+      };
+      if (
+        controller.signal.aborted ||
+        comparisonRequestRef.current !== controller
+      ) {
+        return;
+      }
+
+      setComparisonState({
+        status: "loaded",
+        rows: Array.isArray(next.rows) ? next.rows : [],
+      });
+      setComparisonRevisionKey(canonicalRevisionKey);
+    } catch (error) {
+      if (
+        controller.signal.aborted ||
+        comparisonRequestRef.current !== controller ||
+        (error instanceof DOMException && error.name === "AbortError") ||
+        (error instanceof Error && error.name === "AbortError")
+      ) {
+        return;
+      }
+
+      setComparisonState((prev) => ({
+        status: "error",
+        rows: prev.rows,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Comparison could not be loaded",
+      }));
+    }
+  }, [boq.id, canonicalRevisionKey]);
+
+  useEffect(() => {
+    if (view !== "compare") return;
+    if (comparisonRevisionKey === canonicalRevisionKey) return;
+
+    void Promise.resolve().then(() => {
+      void loadComparison();
+    });
+
+    return () => {
+      comparisonRequestRef.current?.abort();
+    };
+  }, [view, canonicalRevisionKey, comparisonRevisionKey, loadComparison]);
+
+  useEffect(() => {
+    return () => {
+      comparisonRequestRef.current?.abort();
+    };
+  }, [boq.id]);
 
 	const replaceEdits = useCallback((next: EditsMap) => {
 		editsRef.current = next;
@@ -927,7 +1031,6 @@ function CanonicalBoqWorkspace({
       const approved = (await response.json()) as Boq;
       applyMutationBoq(approved);
       toast.success("BOQ approved and linked to the Standard Catalog");
-      onApproved(approved);
 		} catch (error) {
 			toast.error(
 				error instanceof Error ? error.message : "Failed to approve BOQ",
@@ -1185,6 +1288,13 @@ function CanonicalBoqWorkspace({
 					</div>
 				</header>
 
+        <BoqWorkspaceTabs
+          view={view}
+          reviewIssueCount={blockingIssues.length}
+          unmatchedCount={catalogReadiness.blocking}
+          onViewChange={onViewChange}
+        />
+
 				<ReviewWorkspace
 					hasSource={hasSource}
 					sourceFileName={boq.sourceFileName || "source.pdf"}
@@ -1200,6 +1310,12 @@ function CanonicalBoqWorkspace({
 						) : null
 					}
 				>
+          <div
+            id="boq-review-panel"
+            role="tabpanel"
+            aria-labelledby="boq-review-tab"
+            hidden={view !== "review"}
+          >
 					<div
 						className="boq-items-mode"
 						id="boq-items-panel"
@@ -1409,6 +1525,25 @@ function CanonicalBoqWorkspace({
 							}
 						/>
 					</div>
+          </div>
+          <div
+            id="boq-compare-panel"
+            role="tabpanel"
+            aria-labelledby="boq-compare-tab"
+            hidden={view !== "compare"}
+          >
+            <BoqCatalogComparisonPanel
+              boq={boq}
+              state={comparisonState}
+              hasUnsavedChanges={
+                pendingChanges > 0 || invalidDraftKeys.size > 0
+              }
+              onRetry={() => {
+                void loadComparison();
+              }}
+              onOpenReview={() => onViewChange("review")}
+            />
+          </div>
 				</ReviewWorkspace>
 			</div>
 

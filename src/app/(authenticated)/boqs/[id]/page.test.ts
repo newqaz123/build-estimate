@@ -52,23 +52,59 @@ test("loads workspace custom units and persists added units through the settings
 test("validates compare returnTo and preserves it while removing legacy mode", () => {
   assert.match(source, /safeCompareReturnPath/);
   assert.match(source, /searchParams\.get\("returnTo"\)/);
-  assert.match(source, /boqDetailReturnHref\(id,\s*returnTo\)/);
-  assert.match(source, /router\.replace\(returnTo/);
+  assert.match(source, /searchParams\.get\("view"\)/);
+  assert.match(source, /safeBoqWorkspaceView/);
+  assert.match(source, /router\.replace\(boqWorkspaceHref/);
 });
 
-test("approval redirects only from the successful response branch", () => {
+test("workspace exposes URL-addressable Review and Compare tabs", () => {
+  assert.match(source, /BoqWorkspaceTabs/);
+  assert.match(source, /BoqCatalogComparisonPanel/);
+  assert.match(source, /\/comparison/);
+  assert.match(source, /id="boq-review-panel"/);
+  assert.match(source, /id="boq-compare-panel"/);
+});
+
+test("compare panel is read-only and keeps catalog mutations in Review", () => {
+  const comparePanel = sourceSection(
+    'id="boq-compare-panel"',
+    "</ReviewWorkspace>",
+  );
+  assert.doesNotMatch(comparePanel, /CatalogMatchModal/);
+  assert.doesNotMatch(comparePanel, /\bonMatch\b/);
+  assert.doesNotMatch(comparePanel, /onFindMatch/);
+  assert.doesNotMatch(comparePanel, /onExclude/);
+  assert.doesNotMatch(comparePanel, /onAiSuggest/);
+  assert.doesNotMatch(comparePanel, /onDismissSuggestion/);
+  assert.match(source, /CatalogMatchModal/);
+  assert.match(source, /onFindMatch=/);
+});
+
+test("comparison refresh is revision-aware and reflects unsaved edits", () => {
+  assert.match(source, /comparisonRevisionKey/);
+  assert.match(source, /canonicalRevisionKey/);
+  assert.match(
+    source,
+    /hasUnsavedChanges=\{\s*pendingChanges > 0 \|\| invalidDraftKeys\.size > 0\s*\}/,
+  );
+  assert.match(source, /comparisonRequestRef/);
+  assert.match(source, /comparisonRequestRef\.current\?\.abort\(\)/);
+});
+
+test("approval finalizes in place without redirect", () => {
   const approval = sourceSection(
     "const handleApprove",
     "const reloadAfterManualMatch",
   );
   const responseCheck = approval.indexOf("if (!response.ok)");
-  const approvedCallback = approval.indexOf("onApproved(approved)");
   const catchBlock = approval.indexOf("catch (error)");
 
   assert.ok(responseCheck >= 0);
-  assert.ok(approvedCallback > responseCheck);
-  assert.ok(catchBlock > approvedCallback);
-  assert.doesNotMatch(approval.slice(catchBlock), /onApproved/);
+  assert.ok(catchBlock > responseCheck);
+  const approvalSuccessBranch = approval.slice(responseCheck, catchBlock);
+  assert.doesNotMatch(approvalSuccessBranch, /router\.(push|replace)/);
+  assert.match(approvalSuccessBranch, /applyMutationBoq\(approved\)/);
+  assert.doesNotMatch(approval, /onApproved/);
 });
 
 test("every existing approval blocker remains before the approval request", () => {
