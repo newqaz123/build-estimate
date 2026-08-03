@@ -268,12 +268,12 @@ Desktop preserves the current 50/50-style review workspace proportions unless ex
 Mobile:
 
 - primary tabs remain visible and horizontally safe;
-- one panel is shown at a time using the existing `PDF / Data` control pattern;
-- Review Extraction uses the existing mobile behavior;
-- Compare Catalog uses yesterday’s stacked component cards;
+- Review Extraction keeps the existing responsive PDF/data behavior unchanged;
+- no new PDF/Data switch is added to the reviewed extraction surface;
+- Compare Catalog uses yesterday’s stacked component cards beneath the existing responsive PDF pane;
 - summary metrics use a two-column grid;
 - no matching mutation controls appear in Compare cards;
-- tab selection and PDF/Data selection are keyboard and screen-reader accessible.
+- tab selection remains keyboard and screen-reader accessible.
 
 ## 13. Accessibility
 
