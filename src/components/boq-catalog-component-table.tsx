@@ -143,22 +143,6 @@ function benchmarkSummary(benchmark: BenchmarkSummary): ReactNode {
   )
 }
 
-function matchButton(
-  row: BoqCatalogComparisonRow,
-  onMatch: (row: BoqCatalogComparisonRow) => void,
-) {
-  return (
-    <button
-      type="button"
-      className="btn btn-ghost btn-xs"
-      data-od-id="compare-component-match"
-      onClick={() => onMatch(row)}
-    >
-      {row.item.stdId ? 'Change match' : 'Match'}
-    </button>
-  )
-}
-
 function lineDescription(row: BoqCatalogComparisonRow): ReactNode {
   return (
     <div className="compare-component-line-desc">
@@ -178,7 +162,6 @@ function renderComponentSubRow(
   key: ComponentKey,
   showLineCells: boolean,
   groupSize: number,
-  onMatch: (row: BoqCatalogComparisonRow) => void,
 ): ReactNode {
   const component = row.components[key]
 
@@ -194,7 +177,6 @@ function renderComponentSubRow(
         <td data-label="Component data" colSpan={5}>
           — not in source quotation
         </td>
-        {showLineCells ? <td data-label="Action" className="compare-component-action compare-component-action-cell" rowSpan={groupSize}>{matchButton(row, onMatch)}</td> : null}
       </tr>
     )
   }
@@ -224,15 +206,11 @@ function renderComponentSubRow(
           </td>
         </>
       )}
-      {showLineCells ? <td data-label="Action" className="compare-component-action compare-component-action-cell" rowSpan={groupSize}>{matchButton(row, onMatch)}</td> : null}
     </tr>
   )
 }
 
-function renderTotalOnlyRow(
-  row: BoqCatalogComparisonRow,
-  onMatch: (row: BoqCatalogComparisonRow) => void,
-): ReactNode {
+function renderTotalOnlyRow(row: BoqCatalogComparisonRow): ReactNode {
   const lumpSum = row.item.type === 'lump_sum'
   const tag = lumpSum ? 'Lump sum' : 'Combined'
   const tagClass = lumpSum
@@ -264,21 +242,17 @@ function renderTotalOnlyRow(
           </td>
         </>
       )}
-      <td data-label="Action" className="compare-component-action compare-component-action-cell">{matchButton(row, onMatch)}</td>
     </tr>
   )
 }
 
-function renderRowGroup(
-  row: BoqCatalogComparisonRow,
-  onMatch: (row: BoqCatalogComparisonRow) => void,
-): ReactNode {
+function renderRowGroup(row: BoqCatalogComparisonRow): ReactNode {
   if (isTotalOnlyRow(row)) {
     return (
       <tbody className="compare-component-group compare-component-group-total-only" key={row.key}>
-        {renderTotalOnlyRow(row, onMatch)}
+        {renderTotalOnlyRow(row)}
         <tr className="compare-component-total-row compare-component-line-total" aria-hidden="true">
-          <td data-label="Line total" className="compare-component-line-total-cell num" colSpan={8}>
+          <td data-label="Line total" className="compare-component-line-total-cell num" colSpan={7}>
             {lineTotalFooterLabel(row)}
           </td>
         </tr>
@@ -296,10 +270,9 @@ function renderRowGroup(
         key,
         index === 0,
         groupSize,
-        onMatch,
       ))}
       <tr className="compare-component-total-row compare-component-line-total" aria-hidden="true">
-        <td data-label="Line total" className="compare-component-line-total-cell num" colSpan={8}>
+        <td data-label="Line total" className="compare-component-line-total-cell num" colSpan={7}>
           {lineTotalFooterLabel(row)}
         </td>
       </tr>
@@ -309,9 +282,8 @@ function renderRowGroup(
 
 export function BoqCatalogComponentTable(props: {
   rows: BoqCatalogComparisonRow[]
-  onMatch: (row: BoqCatalogComparisonRow) => void
 }): ReactNode {
-  const { rows, onMatch } = props
+  const { rows } = props
 
   return (
     <div
@@ -332,10 +304,9 @@ export function BoqCatalogComponentTable(props: {
             <th className="num-col">BOQ rate</th>
             <th className="num-col">Catalog average</th>
             <th>Variance</th>
-            <th className="text-right">Action</th>
           </tr>
         </thead>
-        {rows.map((row) => renderRowGroup(row, onMatch))}
+        {rows.map((row) => renderRowGroup(row))}
       </table>
     </div>
   )

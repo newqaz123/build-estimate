@@ -84,34 +84,20 @@ function row(
 }
 
 function renderTable(rows: BoqCatalogComparisonRow[]): string {
-  return renderToStaticMarkup(createElement(
-    BoqCatalogComponentTable,
-    {
-      rows,
-      onMatch: () => undefined,
-    },
-  ))
-}
-
-function matchControlCount(html: string): number {
-  return (html.match(/data-od-id="compare-component-match"/g) ?? []).length
+  return renderToStaticMarkup(
+    createElement(BoqCatalogComponentTable, { rows }),
+  )
 }
 
 function groupBodies(html: string): string[] {
   return html.match(/<tbody\b[^>]*class="[^"]*compare-component-group[^"]*"[^>]*>[\s\S]*?<\/tbody>/g) ?? []
 }
 
-function assertOneMatchPerGroup(html: string, expectedGroups: number) {
-  const groups = groupBodies(html)
-  assert.equal(groups.length, expectedGroups, `expected ${expectedGroups} component groups`)
-  assert.equal(matchControlCount(html), expectedGroups, 'one Match control per BOQ line group')
-  for (const [index, body] of groups.entries()) {
-    assert.equal(
-      matchControlCount(body),
-      1,
-      `group ${index} must render exactly one Match/Change match control`,
-    )
-  }
+function assertReadOnly(html: string) {
+  assert.doesNotMatch(html, /compare-component-match/)
+  assert.doesNotMatch(html, /Change match|>Match</)
+  assert.doesNotMatch(html, /data-label="Action"/)
+  assert.doesNotMatch(html, /<th[^>]*>Action<\/th>/)
 }
 
 test('summary weights component variance by benchmark cost exposure', () => {
@@ -130,6 +116,14 @@ test('summary weights component variance by benchmark cost exposure', () => {
   assert.equal(summary.boqTotal, 36864)
 })
 
+test('comparison table is read-only', () => {
+  const html = renderTable([row()])
+  assertReadOnly(html)
+  assert.match(html, /Material/)
+  assert.match(html, /Labour/)
+  assert.match(html, /Line total ฿36,864/)
+})
+
 test('renders independent material and labour sub-rows', () => {
   const html = renderTable([row()])
 
@@ -143,15 +137,13 @@ test('renders independent material and labour sub-rows', () => {
   assert.match(html, /Db/)
   assert.match(html, /฿300/)
   assert.match(html, /14 approved rates/)
-  assert.match(html, /Change match/)
   assert.match(html, /aria-label="BOQ material and labour comparison"/)
   assert.match(html, /tabindex="0"/)
   assert.match(html, /data-label="Catalog average"/)
   assert.match(html, /data-label="Quantity"/)
   assert.match(html, /data-label="Variance"/)
   assert.match(html, /data-label="BOQ item"/)
-  assert.match(html, /data-label="Action"/)
-  assertOneMatchPerGroup(html, 1)
+  assertReadOnly(html)
 })
 
 test('renders material and labour as separate grouped sub-rows', () => {
@@ -179,7 +171,11 @@ test('renders material and labour as separate grouped sub-rows', () => {
   assert.match(labourRow[0], /data-label="Quantity"/)
   assert.doesNotMatch(labourRow[0], /data-label="BOQ item"/)
   assert.doesNotMatch(labourRow[0], /data-label="Action"/)
-  assertOneMatchPerGroup(html, 1)
+  assertReadOnly(html)
+
+  // Line-total footer spans seven columns (no Action column)
+  assert.match(html, /colSpan="7"|colspan="7"/)
+  assert.doesNotMatch(html, /colSpan="8"|colspan="8"/)
 })
 
 test('renders absent, no-history, and lump-sum states explicitly', () => {
@@ -251,6 +247,7 @@ test('renders absent, no-history, and lump-sum states explicitly', () => {
   assert.match(html, /No prior approved rates/)
   assert.match(html, /Lump sum/)
   assert.match(html, /compared on total only/)
+  assertReadOnly(html)
 
   const groups = groupBodies(html)
   assert.equal(groups.length, 2)
@@ -265,8 +262,8 @@ test('renders absent, no-history, and lump-sum states explicitly', () => {
   assert.match(missingGroup!, /data-label="Component data"/)
   assert.match(missingGroup!, /data-label="Catalog average · Variance"/)
   assert.match(missingGroup!, /data-label="Quantity"/)
-  assert.match(missingGroup!, /data-label="Action"/)
   assert.match(missingGroup!, /data-label="Line total"/)
+  assert.doesNotMatch(missingGroup!, /data-label="Action"/)
 
   assert.match(lumpGroup!, /data-label="BOQ item"/)
   assert.match(lumpGroup!, /data-label="Component"/)
@@ -275,11 +272,9 @@ test('renders absent, no-history, and lump-sum states explicitly', () => {
   assert.match(lumpGroup!, /data-label="BOQ rate"/)
   assert.match(lumpGroup!, /data-label="Catalog average"/)
   assert.match(lumpGroup!, /data-label="Variance"/)
-  assert.match(lumpGroup!, /data-label="Action"/)
   assert.match(lumpGroup!, /data-label="Line total"/)
-  assert.match(lumpGroup!, />Match</)
-
-  assertOneMatchPerGroup(html, 2)
+  assert.doesNotMatch(lumpGroup!, /data-label="Action"/)
+  assert.doesNotMatch(lumpGroup!, />Match</)
 })
 
 test('line-total footer renders material and labour composition percentages', () => {
@@ -370,4 +365,5 @@ test('total-only footer keeps line total without invented composition percentage
   assert.match(html, /Line total ฿6,000/)
   assert.doesNotMatch(html, /Material \d/)
   assert.doesNotMatch(html, /Labour \d/)
+  assertReadOnly(html)
 })
