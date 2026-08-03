@@ -160,3 +160,15 @@ test("comparison panel presents provisional, finalized, stale, and error states"
   assert.doesNotMatch(draftHtml, /Match|Create|Exclude|Dismiss|AI/);
   assert.doesNotMatch(draftHtml, /Parse.*Review.*Compare.*Finalize/);
 });
+
+test("comparison panel does not own workspace tabpanel id or role", () => {
+  const html = renderPanel({
+    state: { status: "loaded", rows: [row()] },
+  });
+
+  assert.match(html, /class="boq-catalog-comparison-panel"/);
+  assert.match(html, /data-od-id="boq-catalog-comparison-panel"/);
+  assert.doesNotMatch(html, /\sid="boq-compare-panel"/);
+  assert.doesNotMatch(html, /\srole="tabpanel"/);
+  assert.doesNotMatch(html, /aria-labelledby="boq-compare-tab"/);
+});

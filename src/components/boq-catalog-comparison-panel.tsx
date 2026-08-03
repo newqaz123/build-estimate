@@ -76,9 +76,6 @@ export function BoqCatalogComparisonPanel({
     <section
       className="boq-catalog-comparison-panel"
       data-od-id="boq-catalog-comparison-panel"
-      id="boq-compare-panel"
-      role="tabpanel"
-      aria-labelledby="boq-compare-tab"
     >
       <div className="boq-compare-panel-head">
         <div className="boq-compare-panel-title">
