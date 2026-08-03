@@ -4,25 +4,82 @@ import { readFileSync } from 'node:fs'
 
 const source = readFileSync(new URL('./catalog-match-modal.tsx', import.meta.url), 'utf8')
 
+/** Extract `const name = async (...) => { ... }` body via brace balance (format-tolerant). */
+function extractAsyncConstHandler(src: string, name: string): string {
+  const startRe = new RegExp(
+    String.raw`const\s+${name}\s*=\s*async\s*\([^)]*\)\s*=>\s*\{`,
+  )
+  const startMatch = startRe.exec(src)
+  assert.ok(startMatch, `${name} async handler must exist`)
+  const openBrace = startMatch.index + startMatch[0].length - 1
+  let depth = 0
+  let end = -1
+  for (let i = openBrace; i < src.length; i++) {
+    const ch = src[i]
+    if (ch === '{') depth++
+    else if (ch === '}') {
+      depth--
+      if (depth === 0) {
+        end = i
+        break
+      }
+    }
+  }
+  assert.ok(end > openBrace, `${name} body must close`)
+  return src.slice(startMatch.index, end + 1)
+}
+
 test('catalog matching keeps one search control and switches the footer for create mode', () => {
   assert.equal((source.match(/data-od-id="catalog-match-search"/g) ?? []).length, 1)
   assert.doesNotMatch(source, /catalog-match-search-existing|Search existing items/)
-  assert.match(source, /newItemOpen \? "Create and link item" : "Confirm match"/)
-  assert.match(source, /newItemOpen \? "Back to matches" : "Cancel"/)
+
+  // Footer labels switch on create mode; tolerate multiline ternary formatting.
+  assert.match(
+    source,
+    /primaryActionLabel\s*=\s*newItemOpen\s*\?\s*"Create and link item"\s*:\s*"Confirm match"/,
+  )
+  assert.match(
+    source,
+    /secondaryActionLabel\s*=\s*newItemOpen\s*\?\s*"Back to matches"\s*:\s*"Cancel"/,
+  )
+  // Labels must be rendered in the footer (not dead assignments).
+  assert.match(source, /\{secondaryActionLabel\}/)
+  assert.match(
+    source,
+    /\{applying\s*\?[\s\S]*?:\s*primaryActionLabel\}/,
+  )
 })
 
 test('catalog matching closes only after the caller reload promise resolves', () => {
-  for (const sectionStart of ['const handleApply', 'const handleCreateNew']) {
-    const start = source.indexOf(sectionStart)
-    const end = source.indexOf('\n  }', start)
-    assert.ok(start >= 0 && end > start)
-    const section = source.slice(start, end)
-    const matchIndex = section.indexOf('await onMatch')
-    const closeIndex = section.indexOf('setOpen(false)')
-    const catchIndex = section.indexOf('catch (')
+  for (const fnName of ['handleApply', 'handleCreateNew'] as const) {
+    const section = extractAsyncConstHandler(source, fnName)
 
-    assert.ok(matchIndex >= 0, `${sectionStart} must await onMatch`)
-    assert.ok(closeIndex > matchIndex, `${sectionStart} must close only after onMatch resolves`)
-    assert.ok(catchIndex > closeIndex, `${sectionStart} must retain the modal when onMatch rejects`)
+    const awaitPositions: number[] = []
+    const awaitRe = /await\s+onMatch\s*\(/g
+    let match: RegExpExecArray | null
+    while ((match = awaitRe.exec(section)) !== null) {
+      awaitPositions.push(match.index)
+    }
+    assert.ok(
+      awaitPositions.length >= 1,
+      `${fnName} must await onMatch (caller reload promise)`,
+    )
+
+    const closeIndex = section.search(/setOpen\s*\(\s*false\s*\)/)
+    assert.ok(closeIndex >= 0, `${fnName} must call setOpen(false)`)
+
+    const catchIndex = section.search(/catch\s*\(/)
+    assert.ok(catchIndex >= 0, `${fnName} must have a catch path`)
+
+    for (const matchIndex of awaitPositions) {
+      assert.ok(
+        matchIndex < closeIndex,
+        `${fnName} must close only after onMatch resolves`,
+      )
+    }
+    assert.ok(
+      closeIndex < catchIndex,
+      `${fnName} must retain the modal when onMatch rejects (close before catch)`,
+    )
   }
 })
