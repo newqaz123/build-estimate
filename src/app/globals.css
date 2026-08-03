@@ -1015,7 +1015,8 @@
 .compare-inbox-row,
 .compare-inbox-list > li > button {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto auto;
+  /* project | vendor | status badge | unmatched count */
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.9fr) auto auto;
   gap: var(--space-3);
   align-items: center;
   width: 100%;

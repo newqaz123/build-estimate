@@ -66,6 +66,24 @@ test('comparison workspace styles cover Direction A tabs, inbox, and panel hooks
   )
 })
 
+test('compare inbox rows use a stable four-column desktop grid', () => {
+  // Markup children: project, vendor, status badge, unmatched count.
+  // Reject the prior three-track desktop rule that forced the fourth child to wrap.
+  assert.doesNotMatch(
+    styles,
+    /\.compare-inbox-(?:row|list\s*>\s*li\s*>\s*button)[^{]*\{[^}]*grid-template-columns:\s*minmax\(\s*220px\s*,\s*1fr\s*\)\s+auto\s+auto\s*;/,
+  )
+  assert.doesNotMatch(
+    styles,
+    /grid-template-columns:\s*minmax\(\s*220px\s*,\s*1fr\s*\)\s+auto\s+auto\s*;/,
+  )
+  // Desktop: project + vendor flexible tracks, badge + count auto tracks.
+  assert.match(
+    styles,
+    /\.compare-inbox-row\s*,\s*\.compare-inbox-list\s*>\s*li\s*>\s*button\s*\{[^}]*grid-template-columns:\s*minmax\(\s*0\s*,\s*1\.2fr\s*\)\s+minmax\(\s*0\s*,\s*0\.9fr\s*\)\s+auto\s+auto\s*;/,
+  )
+})
+
 test("compare uses workspace hrefs and resolveCompareBoqId without ReviewPanel", () => {
   assert.match(source, /useSearchParams/)
   assert.match(source, /resolveCompareBoqId/)
