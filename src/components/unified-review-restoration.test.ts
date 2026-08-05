@@ -22,7 +22,7 @@ test("upload opens the unified BOQ detail and matching workspace", () => {
 	assert.match(detailSource, /<ReviewWorkspace/);
 	assert.match(detailSource, /<UnifiedBoqItemsTable/);
 	assert.match(detailSource, /<PdfReviewViewer/);
-	assert.match(detailSource, /Extraction review/);
+	assert.match(detailSource, /Extraction Suggestions/);
 	assert.match(detailSource, /<ExtractionReview/);
 	assert.doesNotMatch(detailSource, /<ReviewPanel/);
 });
