@@ -19,8 +19,9 @@ test("workspace tabs expose accessible review/compare tab semantics", () => {
   assert.match(html, /role="tab"/);
   assert.match(html, /aria-selected="true"/);
   assert.match(html, /aria-controls="boq-review-panel"/);
-  assert.match(html, /Review Extraction/);
+  assert.match(html, /Edit &amp; Verify/);
   assert.match(html, /Compare Catalog/);
+  assert.doesNotMatch(html, /Review Extraction/);
   assert.match(html, />3</);
   assert.match(html, />5</);
   assert.doesNotMatch(html, /Parse.*Review.*Compare.*Finalize/);

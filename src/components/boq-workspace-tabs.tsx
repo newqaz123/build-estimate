@@ -31,7 +31,7 @@ export function BoqWorkspaceTabs({
         }
         onClick={() => onViewChange("review")}
       >
-        Review Extraction
+        Edit & Verify
         {reviewIssueCount > 0 ? <span>{reviewIssueCount}</span> : null}
       </button>
       <button
