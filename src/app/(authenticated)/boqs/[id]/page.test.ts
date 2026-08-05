@@ -199,20 +199,21 @@ test("manual match reload failures reject while successful reloads stay on Detai
   assert.doesNotMatch(match, /router\.(push|replace)/);
 });
 
-test("compare-origin Details navigation has a safe manual recovery path", () => {
-  // The validated returnTo remains the preferred destination; the direct
-  // compare fallback is only used when returnTo is absent.
-  assert.match(source, /returnTo \?\? compareBoqHref\(id\)/);
-  assert.match(source, /href=\{backHref\}/);
-});
+test("workspace command bar embeds the view switch without redundant compare navigation", () => {
+  const headerStart = source.indexOf('className="review-header boq-unified-header"');
+  const headerEnd = source.indexOf("</header>", headerStart);
+  const header = source.slice(headerStart, headerEnd);
 
-test("direct BOQ Details exposes a safe Back to Compare fallback", () => {
-  assert.match(source, /compareBoqHref/);
-  assert.match(source, /backHref=\{returnTo \?\? compareBoqHref\(id\)\}/);
-  assert.match(
-    source,
-    /backLabel=\{returnTo \? "Back to comparison" : "Back to Compare"\}/,
-  );
+  assert.ok(headerStart >= 0);
+  assert.ok(headerEnd > headerStart);
+  assert.match(header, /<BoqWorkspaceTabs/);
+  assert.match(header, /Extraction Suggestions/);
+  assert.match(header, /BOQ Items/);
+  assert.doesNotMatch(header, /boq-back-link/);
+  assert.doesNotMatch(header, /Back to Compare|Back to comparison/);
+  assert.match(source, /safeCompareReturnPath\(rawReturnTo\)/);
+  assert.match(source, /boqWorkspaceHref\(id, nextView, returnTo\)/);
+  assert.match(source, /href=\{returnTo \?\? "\/boqs"\}/);
 });
 
 test("BOQ Details remains the canonical catalog action workspace", () => {

@@ -13,7 +13,6 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
 	AlertCircle,
 	Check,
-	ChevronLeft,
 	FileDown,
 	FileSearch,
 	Loader2,
@@ -87,7 +86,6 @@ import {
 import type { BoqCatalogComparisonRow } from "@/lib/boq-catalog-comparison";
 import {
   boqWorkspaceHref,
-  compareBoqHref,
   isBoqReviewMode,
   safeBoqWorkspaceView,
   safeCompareReturnPath,
@@ -313,8 +311,6 @@ function BoqDetailContent() {
       key={boq.id}
       boq={boq}
       onBoqChange={setBoq}
-      backHref={returnTo ?? compareBoqHref(id)}
-      backLabel={returnTo ? "Back to comparison" : "Back to Compare"}
       view={view}
       onViewChange={handleViewChange}
     />
@@ -330,15 +326,11 @@ type StashedDelete = {
 function CanonicalBoqWorkspace({
 	boq,
 	onBoqChange,
-  backHref,
-  backLabel,
   view,
   onViewChange,
 }: {
 	boq: Boq;
 	onBoqChange: (next: Boq) => void;
-  backHref: string;
-  backLabel: string;
   view: BoqWorkspaceView;
   onViewChange: (nextView: BoqWorkspaceView) => void;
 }) {
@@ -1160,10 +1152,6 @@ function CanonicalBoqWorkspace({
 					data-od-id="detail-header"
 				>
 					<div className="review-header-title">
-            <Link href={backHref} className="boq-back-link">
-              <ChevronLeft aria-hidden="true" />
-              {backLabel}
-						</Link>
 						<div className="boq-unified-title">
 							<strong>{boq.project || "Untitled BOQ"}</strong>
 							<span>{boq.vendor}</span>
@@ -1177,6 +1165,12 @@ function CanonicalBoqWorkspace({
 						) : null}
 					</div>
 					<div className="review-header-actions boq-unified-actions">
+						<BoqWorkspaceTabs
+							view={view}
+							reviewIssueCount={blockingIssues.length}
+							unmatchedCount={catalogReadiness.blocking}
+							onViewChange={onViewChange}
+						/>
 						{hasSource || boq.activeExtractionRunId ? (
 							<Button
 								type="button"
@@ -1197,12 +1191,12 @@ function CanonicalBoqWorkspace({
 								{rightPaneMode === "items" ? (
 									<>
 										<Sparkles aria-hidden="true" />
-										Extraction review
+										Extraction Suggestions
 									</>
 								) : (
 									<>
 										<FileSearch aria-hidden="true" />
-										BOQ items
+										BOQ Items
 									</>
 								)}
 							</Button>
@@ -1287,13 +1281,6 @@ function CanonicalBoqWorkspace({
 						</details>
 					</div>
 				</header>
-
-        <BoqWorkspaceTabs
-          view={view}
-          reviewIssueCount={blockingIssues.length}
-          unmatchedCount={catalogReadiness.blocking}
-          onViewChange={onViewChange}
-        />
 
 				<ReviewWorkspace
 					hasSource={hasSource}
