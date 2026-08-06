@@ -1171,7 +1171,7 @@ function CanonicalBoqWorkspace({
 							unmatchedCount={catalogReadiness.blocking}
 							onViewChange={onViewChange}
 						/>
-						{hasSource || boq.activeExtractionRunId ? (
+						{view === "review" && (hasSource || boq.activeExtractionRunId) ? (
 							<Button
 								type="button"
 								variant="outline"

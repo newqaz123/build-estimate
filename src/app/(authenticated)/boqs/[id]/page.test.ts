@@ -216,6 +216,17 @@ test("workspace command bar embeds the view switch without redundant compare nav
   assert.match(source, /href=\{returnTo \?\? "\/boqs"\}/);
 });
 
+test("comparison view hides the edit-only extraction pane toggle", () => {
+  const headerStart = source.indexOf('className="review-header boq-unified-header"');
+  const headerEnd = source.indexOf("</header>", headerStart);
+  const header = source.slice(headerStart, headerEnd);
+
+  assert.match(
+    header,
+    /view === "review"\s*&&\s*\(hasSource \|\| boq\.activeExtractionRunId\)/,
+  );
+});
+
 test("BOQ Details remains the canonical catalog action workspace", () => {
   assert.match(source, /onAiSuggest=/);
   assert.match(source, /onDismissSuggestion=/);
