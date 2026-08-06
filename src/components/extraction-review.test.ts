@@ -312,8 +312,8 @@ test("needs_human_review proposals expose Review & add but never render Accept",
 	assert.match(source, /setEditingProposalId/);
 	assert.match(source, /editingProposalId/);
 	assert.match(source, /SourceBackedItemEditor/);
-	// The Accept gate stays strict: needs_human_review never appears in the accept branch.
-	assert.match(source, /humanReview && proposal\.reviewDraft && !readOnly/);
+	// The Review & add gate is now driven by the shared eligibility predicate.
+	assert.match(source, /humanReview && canReviewAndAdd/);
 	// The mutation posts editable values only to the source-item route.
 	assert.match(source, /\/add-source-item/);
 	// The payload comes from the editor's validated builder; only the route + body shape live here.
@@ -325,6 +325,37 @@ test("needs_human_review proposals expose Review & add but never render Accept",
 		source,
 		/proposalCanBeAccepted\(proposal\) && humanReview/,
 	);
+});
+
+test("Task 3: manual add is gated by proposalCanBeReviewedAndAdded and seeded with selected source rows", () => {
+	const source = readFileSync(componentUrl, "utf8");
+	// The component imports and calls the shared eligibility predicate instead
+	// of re-checking raw proposal shape inline.
+	assert.match(source, /proposalCanBeReviewedAndAdded/);
+	assert.match(source, /canReviewAndAdd/);
+	// Bound the proposal footer + editor mount so unrelated reviewDraft reads
+	// (ProposedStructure, the editor's own draft usage) stay out of the assertion.
+	const footerStart = source.indexOf("extraction-proposal-footer");
+	const footerSection = source.slice(
+		footerStart,
+		source.indexOf("</article>", footerStart),
+	);
+	// The "Review & add" button and the SourceBackedItemEditor mount are both
+	// driven by canReviewAndAdd rather than a raw proposal.reviewDraft gate.
+	assert.match(footerSection, /isIncomplete && humanReview && canReviewAndAdd/);
+	assert.match(
+		footerSection,
+		/editingProposalId === proposal\.id && humanReview && canReviewAndAdd/,
+	);
+	assert.doesNotMatch(footerSection, /proposal\.reviewDraft && !readOnly/);
+	// The selected source rows are passed into the editor so evidence-only
+	// (no-draft) edits still seed a default destination section.
+	assert.match(footerSection, /sourceRows=\{sourceRows\}/);
+	// The mutation still flows through the source-item endpoint via the existing
+	// submit handler; only the route + body shape live in this component.
+	assert.match(footerSection, /submitSourceBackedItem\(proposal, payload\)/);
+	// Automatic acceptance stays disabled for human-review proposals.
+	assert.match(footerSection, /Needs human review · acceptance disabled/);
 });
 
 test("Task 8: reject confirmation flow shows dialog before posting to endpoint", () => {

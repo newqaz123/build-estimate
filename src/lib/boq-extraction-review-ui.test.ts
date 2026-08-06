@@ -4,6 +4,7 @@ import {
   extractionReviewOutcomeMessage,
   extractionReviewOutcomeTitle,
   proposalCanBeAccepted,
+  proposalCanBeReviewedAndAdded,
   selectReviewTab,
   proposalIsHighConfidence,
   rejectionLabelGroups,
@@ -13,6 +14,7 @@ import {
 } from './boq-extraction-review-ui'
 import type { ExtractionReviewResponse } from './boq-extraction-ai-review'
 import { PROPOSAL_VALIDATION_FAILURE_CODES, type ProposalValidationFailureCode, type ProposalValidationSummary, type ValidatedProposal } from './boq-extraction-proposals'
+import type { SourceBackedReviewDraft } from './boq-extraction-cell-mapping'
 
 type ReviewableProposalFixture = Omit<ValidatedProposal, 'evidenceValid' | 'reconciled' | 'stale'> & {
   evidenceValid: boolean
@@ -51,6 +53,39 @@ test('human-review suggestions are surfaced but cannot be accepted as automatic 
   assert.equal(proposalCanBeAccepted(proposal({ operation: 'keep' })), false)
   assert.equal(proposalCanBeAccepted(proposal({ operation: 'separate_components' })), false)
   assert.equal(proposalCanBeAccepted(proposal({ stale: true })), false)
+})
+
+test('manual add is available for a pending no-target human-review proposal without a draft', () => {
+  assert.equal(proposalCanBeReviewedAndAdded(proposal({
+    operation: 'needs_human_review',
+    targetItemIds: [],
+    reviewDraft: undefined,
+    stale: false,
+  }), undefined, false), true)
+})
+
+test('manual add rejects target-based, stale, terminal, and read-only proposals', () => {
+  const base = proposal({ operation: 'needs_human_review', targetItemIds: [], reviewDraft: undefined })
+  assert.equal(proposalCanBeReviewedAndAdded({ ...base, targetItemIds: ['item-1'] }, undefined, false), false)
+  assert.equal(proposalCanBeReviewedAndAdded({ ...base, stale: true }, undefined, false), false)
+  assert.equal(proposalCanBeReviewedAndAdded(base, 'skipped', false), false)
+  assert.equal(proposalCanBeReviewedAndAdded(base, undefined, true), false)
+})
+
+test('manual add stays available for a needs_human_review proposal that already carries a non-stale review draft', () => {
+  const reviewDraft: SourceBackedReviewDraft = {
+    mapping: { sourceRowIds: ['row-1'] },
+    resolvedValues: {},
+    missingFields: [],
+    sourceRowIds: ['row-1'],
+    sourceRefs: [{ page: 1, table: 1, row: 1 }],
+    section: null,
+  }
+  assert.equal(proposalCanBeReviewedAndAdded(
+    proposal({ operation: 'needs_human_review', targetItemIds: [], reviewDraft, stale: false }),
+    undefined,
+    false,
+  ), true)
 })
 
 test('review presenter exposes the two durable tabs without changing acceptance gates', () => {

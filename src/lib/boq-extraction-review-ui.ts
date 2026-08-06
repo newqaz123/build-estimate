@@ -29,6 +29,41 @@ export function proposalCanBeAccepted(proposal: ReviewableProposal): boolean {
   )
 }
 
+/** Lifecycle statuses recorded after a reviewer resolves a proposal. Used to keep
+ *  manual add gated to proposals that are still pending (no recorded outcome). */
+type ProposalReviewLifecycleStatus = 'accepted' | 'rejected' | 'skipped' | 'superseded' | 'undone'
+
+/** Minimal proposal surface the manual-add gate validates. Only the fields the
+ *  predicate reads are required so the component can pass its in-flight shapes
+ *  without constructing the full server proposal. */
+type ReviewAddProposal = Pick<
+  ValidatedProposal,
+  'operation' | 'reviewDraft' | 'sourceRowIds' | 'targetItemIds' | 'stale'
+>
+
+/** Eligibility for the source-backed "Review & add" flow.
+ *
+ *  Only `needs_human_review` proposals qualify, and only while they are still
+ *  pending (no recorded lifecycle status) and not read-only or stale. A proposal
+ *  carrying a server-mapped `reviewDraft` stays eligible under its existing
+ *  no-target shape. A no-draft proposal is eligible only when it is evidence-only
+ *  (zero targets and at least one backing source row) so the editor always has
+ *  provenance to seed the manual entry.
+ *
+ *  This never broadens automatic **Accept**, which stays governed exclusively by
+ *  `proposalCanBeAccepted` (and returns false for `needs_human_review`). */
+export function proposalCanBeReviewedAndAdded(
+  proposal: ReviewAddProposal,
+  status: ProposalReviewLifecycleStatus | undefined,
+  readOnly: boolean,
+): boolean {
+  if (readOnly || status !== undefined || proposal.stale === true) return false
+  if (proposal.reviewDraft) return proposal.operation === 'needs_human_review'
+  return proposal.operation === 'needs_human_review'
+    && proposal.targetItemIds.length === 0
+    && proposal.sourceRowIds.length > 0
+}
+
 export function sourceReferenceLabel(reference: { sourceRowId?: string; page: number; table: number; row: number }): string {
   return `p. ${reference.page} · table ${reference.table} · row ${reference.row}`
 }

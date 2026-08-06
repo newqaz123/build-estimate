@@ -40,7 +40,7 @@ import {
   type ExtractionProposalAction,
   type ExtractionReviewFilter,
 } from "@/lib/boq-extraction-review-state"
-import { extractionReviewOutcomeMessage, extractionReviewOutcomeTitle, proposalCanBeAccepted, proposalIsHighConfidence, rejectionLabelGroups, selectExtractionReviewOutcome, selectExtractionReviewProgress, sourceReferenceLabel } from "@/lib/boq-extraction-review-ui"
+import { extractionReviewOutcomeMessage, extractionReviewOutcomeTitle, proposalCanBeAccepted, proposalCanBeReviewedAndAdded, proposalIsHighConfidence, rejectionLabelGroups, selectExtractionReviewOutcome, selectExtractionReviewProgress, sourceReferenceLabel } from "@/lib/boq-extraction-review-ui"
 import { isReviewActionableOperation, type ValidatedProposal } from "@/lib/boq-extraction-proposals"
 import type { Boq } from "@/lib/boq-schema"
 import { safeReviewReturnPath } from "@/lib/auth-return-url"
@@ -588,6 +588,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
               const action = actions[proposal.id]
               const sourceRows = review.sourceRows.filter((row) => proposal.sourceRowIds.includes(row.sourceRowId))
               const canAccept = proposalCanBeAccepted(proposal) && !status
+              const canReviewAndAdd = proposalCanBeReviewedAndAdded(proposal, status, readOnly)
               const humanReview = proposal.operation === "needs_human_review"
               const isIncomplete = humanReview && !canAccept
               const nonActionable = !isReviewActionableOperation(proposal.operation)
@@ -614,17 +615,18 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
                       {!status ? <>
                         {isComplete && canAccept ? <Button type="button" size="sm" onClick={() => void executeAction(proposal, "accept")} disabled={readOnly || Boolean(mutationBlockedReason) || Boolean(action)}>Accept{action === "accepting" ? <Loader2 className="animate-spin" /> : <Check aria-hidden="true" />}</Button> : null}
                         {isComplete ? <Button type="button" variant="ghost" size="sm" onClick={() => handleReject(proposal)} disabled={readOnly || Boolean(action)}>Reject{action === "rejecting" ? <Loader2 className="animate-spin" /> : <X aria-hidden="true" />}</Button> : null}
-                        {isIncomplete && humanReview && proposal.reviewDraft && !readOnly ? (
+                        {isIncomplete && humanReview && canReviewAndAdd ? (
                           <Button type="button" variant="outline" size="sm" onClick={() => { setEditingProposalId(proposal.id); setSourceBackedError(null) }} disabled={Boolean(action)}>Review &amp; add</Button>
                         ) : null}
                         {isIncomplete ? <Button type="button" variant="ghost" size="sm" onClick={() => void executeAction(proposal, "skip")} disabled={readOnly || Boolean(action)}>Skip{action === "skipping" ? <Loader2 className="animate-spin" /> : null}</Button> : null}
                       </> : status !== "accepted" ? <span className="extraction-action-status">{status === "rejected" ? "Rejected" : status === "skipped" ? "Skipped" : "Undone"}</span> : null}
                     </div>
                   </div>
-                  {editingProposalId === proposal.id && humanReview && proposal.reviewDraft && !readOnly ? (
+                  {editingProposalId === proposal.id && humanReview && canReviewAndAdd ? (
                     <SourceBackedItemEditor
                       boq={boq}
                       proposal={proposal}
+                      sourceRows={sourceRows}
                       busy={action === "adding"}
                       serverError={sourceBackedError}
                       onCancel={() => { setEditingProposalId(null); setSourceBackedError(null) }}
