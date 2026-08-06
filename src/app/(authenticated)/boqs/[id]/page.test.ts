@@ -169,6 +169,14 @@ test("approval exposes one disabled state and an actionable blocker message", ()
   // Accessible blocker message wired to the button.
   assert.match(source, /aria-describedby=\{\s*approvalDisabledReason/);
   assert.match(source, /data-od-id="approval-blocker"/);
+  // When the document total mismatches, the specific message wins over the
+  // generic verification fallback.
+  assert.match(source, /documentTotalMismatchMessage/);
+  assert.match(source, /issue\.code === "document_total_mismatch"/);
+  assert.match(
+    source,
+    /documentMismatchReason \?\? "Resolve the review blockers below before approving\."/,
+  );
 });
 
 test("manual match reload failures reject while successful reloads stay on Details", () => {

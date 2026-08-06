@@ -15,6 +15,32 @@ export interface BoqMutationReconciliation {
 	edits: BoqDetailEdits;
 }
 
+const DOCUMENT_TOTAL_TOLERANCE = 0.01;
+
+function formatBaht(value: number): string {
+	return `฿${value.toLocaleString("en-US", {
+		minimumFractionDigits: 2,
+		maximumFractionDigits: 2,
+	})}`;
+}
+
+export function documentTotalMismatchMessage(
+	sourceTotal: number | undefined,
+	itemTotal: number,
+): string | null {
+	if (
+		sourceTotal === undefined ||
+		!Number.isFinite(sourceTotal) ||
+		!Number.isFinite(itemTotal)
+	)
+		return null;
+	const difference = Math.abs(sourceTotal - itemTotal);
+	if (difference <= DOCUMENT_TOTAL_TOLERANCE) return null;
+	return `Source total ${formatBaht(sourceTotal)}; BOQ items ${formatBaht(
+		itemTotal,
+	)}; difference ${formatBaht(difference)}.`;
+}
+
 function matchedStandardizationChanged(
 	previous: Boq["sections"][number]["items"][number],
 	incoming: Boq["sections"][number]["items"][number],

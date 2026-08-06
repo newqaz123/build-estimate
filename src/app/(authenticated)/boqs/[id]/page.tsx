@@ -74,6 +74,7 @@ import {
 	deriveSourceCostAllocation,
 } from "@/lib/boq-cost-allocation";
 import {
+	documentTotalMismatchMessage,
 	reconcileBoqMutation,
 	type BoqDetailEdits,
 } from "@/lib/boq-detail-state";
@@ -645,6 +646,11 @@ function CanonicalBoqWorkspace({
 	const editsCount = Object.keys(edits).length;
 	const metadataEditCount = Object.keys(metadataEdits).length;
 	const pendingChanges = editsCount + metadataEditCount;
+	const documentMismatchReason = verification.issues.some(
+		(issue) => issue.code === "document_total_mismatch",
+	)
+		? documentTotalMismatchMessage(displayBoq.sourceTotal, grandTotal)
+		: null;
 	const approvalDisabledReason = mutationBusy
 		? approving
 			? "Approving BOQ…"
@@ -654,7 +660,7 @@ function CanonicalBoqWorkspace({
 			: pendingChanges > 0
 				? "Save pending BOQ changes before approving."
 				: verification.hasBlockingIssues
-					? "Resolve the review blockers below before approving."
+					? documentMismatchReason ?? "Resolve the review blockers below before approving."
 					: requireCatalogReadiness && catalogReadiness.blocking > 0
 						? `Resolve ${catalogReadiness.blocking} catalog line${catalogReadiness.blocking === 1 ? "" : "s"} before approving.`
 						: null;

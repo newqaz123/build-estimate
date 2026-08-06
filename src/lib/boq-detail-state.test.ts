@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { reconcileBoqMutation } from "./boq-detail-state";
+import {
+	documentTotalMismatchMessage,
+	reconcileBoqMutation,
+} from "./boq-detail-state";
 import { isPricedBoqItem } from "./boq-pricing";
 import type { Boq, BoqPricedItem } from "./boq-schema";
 
@@ -142,4 +145,20 @@ test("changing an existing manual match clears stale canonical edits but retains
 	});
 
 	assert.deepEqual(result.edits["0-0"], { labourCost: 25 });
+});
+
+test("documentTotalMismatchMessage reports source, BOQ, and absolute difference", () => {
+	assert.equal(
+		documentTotalMismatchMessage(478000, 80584),
+		"Source total ฿478,000.00; BOQ items ฿80,584.00; difference ฿397,416.00.",
+	);
+});
+
+test("documentTotalMismatchMessage returns null without a meaningful mismatch", () => {
+	assert.equal(documentTotalMismatchMessage(undefined, 80584), null);
+	assert.equal(documentTotalMismatchMessage(100, 100.009), null);
+	assert.equal(
+		documentTotalMismatchMessage(80, 100),
+		"Source total ฿80.00; BOQ items ฿100.00; difference ฿20.00.",
+	);
 });
