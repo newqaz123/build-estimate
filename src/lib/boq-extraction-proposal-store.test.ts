@@ -585,6 +585,31 @@ function reviewDraftHarness() {
   return { ...fixture, proposal, userValues }
 }
 
+function evidenceOnlyReviewHarness() {
+  const fixture = mappedStoreHarness()
+  const prepared = prepareProviderProposalV2({
+    id: 'proposal-evidence-only',
+    operation: 'needs_human_review',
+    sourceRowIds: ['mapped-row'],
+    targetItemIds: [],
+    candidateItemIds: [],
+    confidence: 0.72,
+    explanation: 'The source row is relevant, but its component columns remain ambiguous.',
+  }, fixture.context)
+  if (!prepared.ok) throw new Error('evidence-only proposal preparation failed')
+  const proposal = {
+    ...prepared.proposal,
+    evidenceValid: true as const,
+    reconciled: true as const,
+    stale: false,
+  }
+  const userValues = parseSourceBackedItemRequest({
+    sectionIndex: 0,
+    item: { desc: 'Valve installation', unit: 'Lot', qty: 1, materialCost: 3000, labourCost: 3000 },
+  })
+  return { ...fixture, proposal, userValues }
+}
+
 test('addSourceItem writes a user-origin item with source provenance, audit, and accepted lifecycle', async () => {
   const fixture = reviewDraftHarness()
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
@@ -662,7 +687,7 @@ test('addSourceItem rejects approved BOQs, missing drafts, stale evidence, and m
   runRecord.deterministicSections.checksum = savedChecksum
 })
 
-test('addSourceItem rejects proposals without a source-backed review draft', async () => {
+test('addSourceItem rejects target and non-human operations without a source-backed review draft', async () => {
   const fixture = harness()
   const userValues = parseSourceBackedItemRequest({
     sectionIndex: 0,
@@ -708,6 +733,93 @@ test('addSourceItem conflicts with a prior skipped audit until reopened', async 
   const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
   assert.equal(result.status, 409)
   assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+  assert.equal((await fixture.store.reopen('boq-1', 'run-1', fixture.proposal.id, 'user-1')).status, 200)
+  const reopened = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  assert.equal(reopened.status, 200)
+})
+
+test('addSourceItem adds a user item from immutable evidence when a no-target human-review proposal has no draft', async () => {
+  const fixture = evidenceOnlyReviewHarness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+
+  const result = await fixture.store.addSourceItem(
+    'boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7',
+  )
+
+  assert.equal(result.status, 200)
+  const stored = fixture.db.docs.get('boqs/boq-1') as unknown as Boq
+  const added = stored.sections[0].items.at(-1) as BoqPricedItem
+  assert.equal(added.entryOrigin, 'user')
+  assert.deepEqual(added.sourceRowIds, ['mapped-row'])
+  assert.deepEqual(added.sourceRef, { page: 9, table: 1, row: 1 })
+  assert.equal(added.rate, 6000)
+  assert.equal(added.total, 6000)
+
+  const audit = fixture.db.docs.get(`${fixture.runPath}/proposalAudits/${fixture.proposal.id}`)!
+  assert.equal(audit.status, 'accepted')
+  assert.equal(audit.reviewDraft, undefined)
+  assert.deepEqual(audit.proposedItems, [])
+})
+
+test('retrying an accepted evidence-only proposal returns idempotent without a second item', async () => {
+  const fixture = evidenceOnlyReviewHarness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  const first = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  assert.equal(first.status, 200)
+  if (first.status !== 200) return
+  const firstBoq = first.body.boq as Boq
+  const firstItemCount = firstBoq.sections[0].items.length
+
+  const retry = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  assert.equal(retry.status, 200)
+  assert.deepEqual((retry.body as { boq: Boq }).boq, firstBoq)
+  assert.equal((retry.body as { idempotent?: boolean }).idempotent, true)
+  const stored = fixture.db.docs.get('boqs/boq-1') as unknown as Boq
+  assert.equal(stored.sections[0].items.length, firstItemCount)
+})
+
+test('addSourceItem conflicts when a no-draft human-review proposal targets an existing item', async () => {
+  const fixture = evidenceOnlyReviewHarness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  const stored = fixture.db.docs.get(`${fixture.runPath}/proposals/${fixture.proposal.id}`)! as {
+    proposal: { targetItemIds: string[]; affectedItemFingerprints: Record<string, string> }
+  }
+  const target = (fixture.db.docs.get('boqs/boq-1') as unknown as Boq).sections
+    .flatMap((section) => section.items).find((item) => item.id)!
+  stored.proposal.targetItemIds = [target.id!]
+  stored.proposal.affectedItemFingerprints = { [target.id!]: fingerprintCanonicalItem(target) }
+
+  const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
+  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  assert.equal(result.status, 409)
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+})
+
+test('addSourceItem rejects an evidence-only proposal after the canonical BOQ sections change', async () => {
+  const fixture = evidenceOnlyReviewHarness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  const boq = fixture.db.docs.get('boqs/boq-1')! as unknown as Boq
+  boq.sections[0]!.items[0]!.desc = 'Editor changed the canonical section'
+  const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
+  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  assert.equal(result.status, 409)
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+})
+
+test('evidence-only manual inserts remain blocked for approved BOQs and a terminal skipped lifecycle', async () => {
+  const fixture = evidenceOnlyReviewHarness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+
+  fixture.db.docs.get('boqs/boq-1')!.status = 'approved'
+  const approvedBefore = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
+  assert.equal((await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')).status, 409)
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), approvedBefore)
+  fixture.db.docs.get('boqs/boq-1')!.status = 'draft'
+
+  assert.equal((await fixture.store.skip('boq-1', 'run-1', fixture.proposal.id, 'user-1')).status, 200)
+  const skippedBefore = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
+  assert.equal((await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')).status, 409)
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), skippedBefore)
   assert.equal((await fixture.store.reopen('boq-1', 'run-1', fixture.proposal.id, 'user-1')).status, 200)
   const reopened = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
   assert.equal(reopened.status, 200)

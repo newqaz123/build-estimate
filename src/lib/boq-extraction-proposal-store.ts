@@ -1145,33 +1145,52 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
           if (storedStatus === 'rejected' || storedStatus === 'skipped' || storedStatus === 'undone') {
             return { status: 409, body: { error: storedStatus === 'rejected' || storedStatus === 'skipped' ? 'proposal_rejected' : 'Proposal is not pending' } }
           }
-          if (!proposal.reviewDraft) {
-            return { status: 409, body: { error: 'Proposal is not a source-backed review draft' } }
+          if (proposal.stale === true
+            || proposal.baseSectionsFingerprint !== fingerprintCanonicalSections(boq.sections)) {
+            return { status: 409, body: { error: 'Canonical BOQ changed; recheck the proposal' } }
           }
           const targetItems = new Map(boq.sections.flatMap((section) => section.items)
             .flatMap((item) => item.id ? [[item.id, item] as const] : []))
-          const reconstruction = reconstructSourceMappedItem({
-            mapping: proposal.reviewDraft.mapping,
-            targetItemIds: proposal.targetItemIds,
-            sourceRows: immutable.sourceRows,
-            allowedSourceRowIds: new Set(proposal.sourceRowIds),
-            sections: boq.sections,
-            targetItems,
-          })
-          if (reconstruction.kind === 'invalid') {
-            return { status: 400, body: { error: reconstruction.code } }
+          let validatedSourceMapping: ValidatedSourceMapping
+          if (proposal.reviewDraft) {
+            const reconstruction = reconstructSourceMappedItem({
+              mapping: proposal.reviewDraft.mapping,
+              targetItemIds: proposal.targetItemIds,
+              sourceRows: immutable.sourceRows,
+              allowedSourceRowIds: new Set(proposal.sourceRowIds),
+              sections: boq.sections,
+              targetItems,
+            })
+            if (reconstruction.kind === 'invalid') {
+              return { status: 400, body: { error: reconstruction.code } }
+            }
+            if (reconstruction.kind === 'candidate') {
+              return { status: 409, body: { error: 'Proposal already resolves to a complete mapping' } }
+            }
+            const draft = reconstruction.draft
+            validatedSourceMapping = {
+              sourceRowId: draft.sourceRowIds[0] ?? '',
+              sourceRowIds: [...draft.sourceRowIds],
+              ...(draft.sourceRefs[0] ? { sourceRef: { ...draft.sourceRefs[0] } } : {}),
+            }
+            const sourceCosts = sourceCostsFromResolvedValues(draft.resolvedValues)
+            if (sourceCosts) validatedSourceMapping.sourceCosts = sourceCosts
+          } else {
+            if (proposal.operation !== 'needs_human_review' || proposal.targetItemIds.length !== 0) {
+              return { status: 409, body: { error: 'Proposal is not eligible for manual insertion' } }
+            }
+            const rowsById = new Map(immutable.sourceRows.map((row) => [row.id, row]))
+            const sourceRows = proposal.sourceRowIds.map((id) => rowsById.get(id))
+            if (sourceRows.length === 0 || sourceRows.some((row) => row === undefined)) {
+              return { status: 409, body: { error: 'Extraction evidence changed; recheck the proposal' } }
+            }
+            const first = sourceRows[0]!
+            validatedSourceMapping = {
+              sourceRowId: first.id,
+              sourceRowIds: [...proposal.sourceRowIds],
+              sourceRef: { page: first.page, table: first.table, row: first.row },
+            }
           }
-          if (reconstruction.kind === 'candidate') {
-            return { status: 409, body: { error: 'Proposal already resolves to a complete mapping' } }
-          }
-          const draft = reconstruction.draft
-          const validatedSourceMapping: ValidatedSourceMapping = {
-            sourceRowId: draft.sourceRowIds[0] ?? '',
-            sourceRowIds: [...draft.sourceRowIds],
-            ...(draft.sourceRefs[0] ? { sourceRef: { ...draft.sourceRefs[0] } } : {}),
-          }
-          const sourceCosts = sourceCostsFromResolvedValues(draft.resolvedValues)
-          if (sourceCosts) validatedSourceMapping.sourceCosts = sourceCosts
           const itemId = `user-${randomUUID()}`
           let result: { boq: Boq; item: BoqPricedItem }
           try {
