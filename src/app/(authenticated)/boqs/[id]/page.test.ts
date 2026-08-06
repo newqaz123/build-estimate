@@ -175,7 +175,7 @@ test("approval exposes one disabled state and an actionable blocker message", ()
   assert.match(source, /issue\.code === "document_total_mismatch"/);
   assert.match(
     source,
-    /documentMismatchReason \?\? "Resolve the review blockers below before approving\."/,
+    /documentMismatchReason\s*\?\?\s*"Resolve the review blockers below before approving\."/,
   );
 });
 
