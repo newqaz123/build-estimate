@@ -7,8 +7,10 @@ import {
   SourceBackedItemEditor,
   buildSourceBackedItemPayload,
   computeSourceBackedLiveTotal,
+  defaultSourceBackedSectionIndex,
   deriveInitialSourceBackedForm,
   validateSourceBackedForm,
+  type SourceBackedEditorSourceRow,
   type SourceBackedEditableFields,
 } from './source-backed-item-editor'
 import type { Boq, BoqSection } from '@/lib/boq-schema'
@@ -129,6 +131,26 @@ test('deriveInitialSourceBackedForm exposes a single-rate path when only generic
   assert.equal(values.labourCost, 0)
 })
 
+test('evidence-only initialization leaves every priced field blank and manual', () => {
+  const values = deriveInitialSourceBackedForm(undefined)
+  assert.equal(values.desc, '')
+  assert.equal(values.unit, '')
+  assert.equal(Number.isNaN(values.qty), true)
+  assert.equal(Number.isNaN(values.materialCost), true)
+  assert.equal(Number.isNaN(values.labourCost), true)
+  assert.equal(values.isSingleRate, false)
+  assert.deepEqual(values.missingFields, [
+    'description', 'unit', 'quantity', 'materialRate', 'labourRate', 'amount',
+  ])
+})
+
+test('evidence-only editor defaults to the source section and otherwise the first BOQ section', () => {
+  const sections = boq().sections
+  assert.equal(defaultSourceBackedSectionIndex(undefined, [{ section: 'Finishing' }], sections), 1)
+  assert.equal(defaultSourceBackedSectionIndex(undefined, [{ section: 'Unknown' }], sections), 0)
+  assert.equal(defaultSourceBackedSectionIndex(draft({ section: null }), [], sections), null)
+})
+
 test('computeSourceBackedLiveTotal multiplies qty by combined material + labour rates', () => {
   assert.equal(computeSourceBackedLiveTotal({ qty: 18, materialCost: 980, labourCost: 650 }), 29340)
   assert.equal(computeSourceBackedLiveTotal({ qty: 12, materialCost: 320, labourCost: 0 }), 3840)
@@ -211,6 +233,39 @@ test('editor renders a destination-section select for unfamiliar layouts and blo
   assert.match(html, /Finishing/)
   // Save remains disabled until the user picks a section.
   assert.match(html, /disabled/)
+})
+
+test('evidence-only editor renders blank manual fields, a section select, and a disabled save', () => {
+  const sourceRows: SourceBackedEditorSourceRow[] = [{ section: 'Finishing' }]
+  const { html } = render({
+    proposal: proposal({ reviewDraft: undefined }),
+    sourceRows,
+  })
+  // The editor heading renders.
+  assert.match(html, /Correct editable values before adding this row to the BOQ/)
+  // The old no-draft alert is gone.
+  assert.doesNotMatch(html, /This proposal has no source-backed review draft/)
+  // Every editable input is blank.
+  const blankInputs: Array<{ name: string; re: RegExp }> = [
+    { name: 'desc', re: /<input[^>]*name="desc"[^>]*>/ },
+    { name: 'unit', re: /<input[^>]*name="unit"[^>]*>/ },
+    { name: 'qty', re: /<input[^>]*name="qty"[^>]*>/ },
+    { name: 'materialCost', re: /<input[^>]*name="materialCost"[^>]*>/ },
+    { name: 'labourCost', re: /<input[^>]*name="labourCost"[^>]*>/ },
+  ]
+  for (const { name, re } of blankInputs) {
+    const match = html.match(re)
+    assert.ok(match, `expected ${name} input to render`)
+    assert.match(match[0], /value=""/, `expected ${name} to be blank`)
+  }
+  // Save stays disabled until the form holds valid values.
+  assert.match(html, /disabled/)
+  // Destination section options render.
+  assert.match(html, /Destination section/)
+  assert.match(html, /Substructure/)
+  assert.match(html, /Finishing/)
+  // No blank field carries a Source badge — every value is manual.
+  assert.doesNotMatch(html, /Source/)
 })
 
 test('editor disables Save when numeric inputs become invalid', () => {

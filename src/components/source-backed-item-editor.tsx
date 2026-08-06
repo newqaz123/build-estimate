@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState } from "react"
-import { Loader2, TriangleAlert } from "lucide-react"
+import { Loader2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -82,8 +82,24 @@ function hasCentsPrecision(value: number): boolean {
 
 /** Pre-fills editable values from server-resolved source cells. Component
  *  prices (materialRate/labourRate) win when present; otherwise we collapse to
- *  a single-rate path so the request shape stays consistent. */
-export function deriveInitialSourceBackedForm(draft: SourceBackedReviewDraft): SourceBackedFieldValues {
+ *  a single-rate path so the request shape stays consistent. When no draft is
+ *  supplied (evidence-only manual review), every priced field is left blank so
+ *  the user supplies all values manually. */
+export function deriveInitialSourceBackedForm(
+  draft?: SourceBackedReviewDraft,
+): SourceBackedFieldValues {
+  if (!draft) {
+    return {
+      desc: '',
+      unit: '',
+      qty: EMPTY_NUMERIC,
+      materialCost: EMPTY_NUMERIC,
+      labourCost: EMPTY_NUMERIC,
+      isSingleRate: false,
+      singleRate: null,
+      missingFields: ['description', 'unit', 'quantity', 'materialRate', 'labourRate', 'amount'],
+    }
+  }
   const resolved = draft.resolvedValues
   const hasComponentPrices = resolved.materialRate !== undefined || resolved.labourRate !== undefined
   const hasGenericPrice = resolved.rate !== undefined || resolved.total !== undefined
@@ -108,6 +124,46 @@ export function deriveInitialSourceBackedForm(draft: SourceBackedReviewDraft): S
     singleRate,
     missingFields: [...draft.missingFields],
   }
+}
+
+function normalizeSectionHeader(header: string): string {
+  return header.trim().toLowerCase()
+}
+
+/** Narrows the server-side extraction review row to just the slice the editor
+ *  needs to pick a default destination section. Defined locally so the editor
+ *  never imports the server-side AI review module; `ExtractionReview` passes
+ *  full review rows that structurally satisfy this contract. */
+export interface SourceBackedEditorSourceRow {
+  section: string | null
+}
+
+/** Chooses the destination section index for a source-backed edit.
+ *
+ *  - A mapped draft with a section keeps its declared index.
+ *  - A mapped draft with `section: null` returns `null` so the explicit user
+ *    selection is preserved.
+ *  - With no draft (evidence-only manual review), the first non-empty source
+ *    row section is matched case-insensitively against the BOQ headers.
+ *  - When nothing matches, the first BOQ section is chosen, or `null` when the
+ *    BOQ has no sections. */
+export function defaultSourceBackedSectionIndex(
+  draft: SourceBackedReviewDraft | undefined,
+  sourceRows: readonly SourceBackedEditorSourceRow[],
+  sections: readonly Pick<Boq["sections"][number], "header">[],
+): number | null {
+  if (draft) {
+    return draft.section === null ? null : draft.section.index
+  }
+  const sourceSection = sourceRows
+    .map((row) => row.section)
+    .find((section): section is string => typeof section === "string" && section.trim() !== "")
+  if (sourceSection !== undefined) {
+    const needle = normalizeSectionHeader(sourceSection)
+    const matched = sections.findIndex((section) => normalizeSectionHeader(section.header) === needle)
+    if (matched !== -1) return matched
+  }
+  return sections.length > 0 ? 0 : null
 }
 
 /** Returns the live qty × (material + labour) total, or null when any input
@@ -157,6 +213,11 @@ interface SourceBackedItemEditorProps {
   onCancel: () => void
   busy?: boolean
   serverError?: string | null
+  /** Source rows backing this proposal. Used only to pick a default
+   *  destination section for evidence-only (no-draft) edits; mapped drafts keep
+   *  their own section. Structurally narrowed so the editor never imports the
+   *  server-side AI review module. */
+  sourceRows?: readonly SourceBackedEditorSourceRow[]
 }
 
 function formatNumber(value: number): string {
@@ -180,31 +241,30 @@ function FieldBadge({ source, missingLabel }: { source: boolean; missingLabel?: 
   return <span className="source-backed-field-badge is-manual">Manual</span>
 }
 
-export function SourceBackedItemEditor({ boq, proposal, onSubmit, onCancel, busy = false, serverError = null }: SourceBackedItemEditorProps) {
-  const draft = proposal.reviewDraft ?? null
-  const initial = useMemo(() => draft ? deriveInitialSourceBackedForm(draft) : null, [draft])
-  const [values, setValues] = useState<SourceBackedFieldValues | null>(initial)
-  const [sectionIndex, setSectionIndex] = useState<number | null>(draft?.section?.index ?? null)
-  const [submitTouched, setSubmitTouched] = useState(false)
+const EMPTY_SOURCE_ROWS: readonly SourceBackedEditorSourceRow[] = []
 
-  if (!draft || !values) {
-    return (
-      <div className="source-backed-item-editor is-empty" role="alert">
-        <TriangleAlert aria-hidden="true" />
-        <span>This proposal has no source-backed review draft.</span>
-      </div>
-    )
-  }
+export function SourceBackedItemEditor({ boq, proposal, onSubmit, onCancel, busy = false, serverError = null, sourceRows }: SourceBackedItemEditorProps) {
+  const draft = proposal.reviewDraft ?? null
+  const initial = useMemo(() => deriveInitialSourceBackedForm(draft ?? undefined), [draft])
+  const [values, setValues] = useState<SourceBackedFieldValues>(initial)
+  const [sectionIndex, setSectionIndex] = useState<number | null>(
+    defaultSourceBackedSectionIndex(draft ?? undefined, sourceRows ?? EMPTY_SOURCE_ROWS, boq.sections),
+  )
+  const [submitTouched, setSubmitTouched] = useState(false)
 
   const validation = validateSourceBackedForm(values)
   const liveTotal = computeSourceBackedLiveTotal(values)
-  const needsSectionSelect = draft.section === null
+  const needsSectionSelect = !draft || draft.section === null
   const sectionMissing = needsSectionSelect && sectionIndex === null
   const formInvalid = !validation.valid || sectionMissing
   const showErrors = submitTouched
 
   const fieldIsMissing = (field: SourceReviewMissingField) => values.missingFields.includes(field)
-  const sourceBadgeFor = (field: SourceReviewMissingField) => !fieldIsMissing(field)
+  const sourceBadgeFor = (field: SourceReviewMissingField) => Boolean(draft) && !fieldIsMissing(field)
+  // Only a mapped draft carries resolved source cells, so "missing from source"
+  // badges are meaningful there. Evidence-only edits are entirely manual.
+  const missingLabelFor = (field: SourceReviewMissingField): string | undefined =>
+    Boolean(draft) && fieldIsMissing(field) ? MISSING_LABEL[field] : undefined
 
   const handleSubmit = async () => {
     setSubmitTouched(true)
@@ -263,7 +323,7 @@ export function SourceBackedItemEditor({ boq, proposal, onSubmit, onCancel, busy
             aria-invalid={Boolean(descError) || undefined}
             onChange={(event) => updateValue("desc", (event.target as HTMLInputElement).value)}
           />
-          <FieldBadge source={sourceBadgeFor("description")} missingLabel={fieldIsMissing("description") ? MISSING_LABEL.description : undefined} />
+          <FieldBadge source={sourceBadgeFor("description")} missingLabel={missingLabelFor("description")} />
           {descError ? <small className="source-backed-field-error" role="alert">{descError}</small> : null}
         </div>
 
@@ -276,7 +336,7 @@ export function SourceBackedItemEditor({ boq, proposal, onSubmit, onCancel, busy
             aria-invalid={Boolean(unitError) || undefined}
             onChange={(event) => updateValue("unit", (event.target as HTMLInputElement).value)}
           />
-          <FieldBadge source={sourceBadgeFor("unit")} missingLabel={fieldIsMissing("unit") ? MISSING_LABEL.unit : undefined} />
+          <FieldBadge source={sourceBadgeFor("unit")} missingLabel={missingLabelFor("unit")} />
           {unitError ? <small className="source-backed-field-error" role="alert">{unitError}</small> : null}
         </div>
 
@@ -293,7 +353,7 @@ export function SourceBackedItemEditor({ boq, proposal, onSubmit, onCancel, busy
             aria-invalid={Boolean(qtyError) || undefined}
             onChange={(event) => updateValue("qty", parseNumberInput((event.target as HTMLInputElement).value))}
           />
-          <FieldBadge source={sourceBadgeFor("quantity")} missingLabel={fieldIsMissing("quantity") ? MISSING_LABEL.quantity : undefined} />
+          <FieldBadge source={sourceBadgeFor("quantity")} missingLabel={missingLabelFor("quantity")} />
           {qtyError ? <small className="source-backed-field-error" role="alert">{qtyError}</small> : null}
         </div>
 
@@ -332,7 +392,7 @@ export function SourceBackedItemEditor({ boq, proposal, onSubmit, onCancel, busy
                 aria-invalid={Boolean(materialError) || undefined}
                 onChange={(event) => updateValue("materialCost", parseNumberInput((event.target as HTMLInputElement).value))}
               />
-              <FieldBadge source={sourceBadgeFor("materialRate")} missingLabel={fieldIsMissing("materialRate") ? MISSING_LABEL.materialRate : undefined} />
+              <FieldBadge source={sourceBadgeFor("materialRate")} missingLabel={missingLabelFor("materialRate")} />
               {materialError ? <small className="source-backed-field-error" role="alert">{materialError}</small> : null}
             </div>
 
@@ -349,7 +409,7 @@ export function SourceBackedItemEditor({ boq, proposal, onSubmit, onCancel, busy
                 aria-invalid={Boolean(labourError) || undefined}
                 onChange={(event) => updateValue("labourCost", parseNumberInput((event.target as HTMLInputElement).value))}
               />
-              <FieldBadge source={sourceBadgeFor("labourRate")} missingLabel={fieldIsMissing("labourRate") ? MISSING_LABEL.labourRate : undefined} />
+              <FieldBadge source={sourceBadgeFor("labourRate")} missingLabel={missingLabelFor("labourRate")} />
               {labourError ? <small className="source-backed-field-error" role="alert">{labourError}</small> : null}
             </div>
           </>
@@ -377,7 +437,7 @@ export function SourceBackedItemEditor({ boq, proposal, onSubmit, onCancel, busy
           </div>
         ) : (
           <p className="source-backed-section-resolved">
-            Destination: <strong>{boq.sections[sectionIndex ?? 0]?.header ?? draft.section?.header ?? "Unknown section"}</strong>
+            Destination: <strong>{boq.sections[sectionIndex ?? 0]?.header ?? draft?.section?.header ?? "Unknown section"}</strong>
           </p>
         )}
 
