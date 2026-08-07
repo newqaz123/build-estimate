@@ -358,6 +358,63 @@ test("Task 3: manual add is gated by proposalCanBeReviewedAndAdded and seeded wi
 	assert.match(footerSection, /Needs human review · acceptance disabled/);
 });
 
+test("Task 4: proposalManualAddMode routes multi-row no-draft proposals to the batch editor and one-row/draft proposals to the single editor", () => {
+	const source = readFileSync(componentUrl, "utf8");
+	// The shared mode selector is imported and called per proposal.
+	assert.match(source, /proposalManualAddMode/);
+	assert.match(source, /const manualAddMode/);
+	// Both editors are imported; the batch editor and its payload type join the
+	// existing single editor import.
+	assert.match(source, /EvidenceOnlyBatchItemEditor/);
+	assert.match(source, /EvidenceOnlyBatchPayload/);
+	assert.match(source, /SourceBackedItemEditor/);
+});
+
+test("Task 4: the batch editor mounts only for batch mode and receives selected source rows", () => {
+	const source = readFileSync(componentUrl, "utf8");
+	const footerStart = source.indexOf("extraction-proposal-footer");
+	const footerSection = source.slice(
+		footerStart,
+		source.indexOf("</article>", footerStart),
+	);
+	// The batch editor is mounted conditionally on manualAddMode === "batch".
+	assert.match(
+		footerSection,
+		/manualAddMode === "batch"[\s\S]*EvidenceOnlyBatchItemEditor/,
+	);
+	// Both editors appear within the same conditional mount; the single editor
+	// is the fallback for non-batch (single) mode.
+	assert.match(footerSection, /EvidenceOnlyBatchItemEditor/);
+	assert.match(footerSection, /SourceBackedItemEditor/);
+	// The batch editor receives the selected source rows.
+	assert.match(
+		footerSection,
+		/EvidenceOnlyBatchItemEditor[\s\S]*sourceRows=\{sourceRows\}/,
+	);
+});
+
+test("Task 4: submitSourceBackedItem accepts the single/batch payload union and POSTs either wire shape unchanged", () => {
+	const source = readFileSync(componentUrl, "utf8");
+	// The submit handler type now accepts either payload shape.
+	assert.match(
+		source,
+		/submitSourceBackedItem[\s\S]*?SourceBackedItemPayload \| EvidenceOnlyBatchPayload/,
+	);
+	// The single endpoint and body are unchanged — the payload is posted as-is.
+	assert.match(source, /\/add-source-item/);
+	assert.match(source, /body: JSON\.stringify\(payload\)/);
+	// Both editors route through the same submit handler.
+	assert.match(
+		source,
+		/submitSourceBackedItem\(proposal, payload\)/,
+	);
+	// The batch editor's onSubmit passes the batch payload unchanged.
+	assert.match(
+		source,
+		/EvidenceOnlyBatchItemEditor[\s\S]*?onSubmit=\{\(payload\) => submitSourceBackedItem\(proposal, payload\)\}/,
+	);
+});
+
 test("Task 8: reject confirmation flow shows dialog before posting to endpoint", () => {
 	const source = readFileSync(componentUrl, "utf8");
 	// Reject opens a confirmation dialog with specific wording

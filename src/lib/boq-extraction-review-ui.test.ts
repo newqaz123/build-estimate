@@ -5,6 +5,7 @@ import {
   extractionReviewOutcomeTitle,
   proposalCanBeAccepted,
   proposalCanBeReviewedAndAdded,
+  proposalManualAddMode,
   selectReviewTab,
   proposalIsHighConfidence,
   rejectionLabelGroups,
@@ -86,6 +87,49 @@ test('manual add stays available for a needs_human_review proposal that already 
     undefined,
     false,
   ), true)
+})
+
+test('proposalManualAddMode selects the single editor for mapped-draft and one-row no-draft proposals', () => {
+  const reviewDraft: SourceBackedReviewDraft = {
+    mapping: { sourceRowIds: ['row-1'] },
+    resolvedValues: {},
+    missingFields: [],
+    sourceRowIds: ['row-1'],
+    sourceRefs: [{ page: 1, table: 1, row: 1 }],
+    section: null,
+  }
+  // mapped draft → single (regardless of row count)
+  assert.equal(proposalManualAddMode(
+    proposal({ operation: 'needs_human_review', targetItemIds: [], reviewDraft, sourceRowIds: ['row-1', 'row-2'], stale: false }),
+  ), 'single')
+  // no-draft one row → single
+  assert.equal(proposalManualAddMode(
+    proposal({ operation: 'needs_human_review', targetItemIds: [], reviewDraft: undefined, sourceRowIds: ['row-1'], stale: false }),
+  ), 'single')
+})
+
+test('proposalManualAddMode selects the batch editor for no-draft multi-row proposals', () => {
+  assert.equal(proposalManualAddMode(
+    proposal({ operation: 'needs_human_review', targetItemIds: [], reviewDraft: undefined, sourceRowIds: ['row-1', 'row-2'], stale: false }),
+  ), 'batch')
+  assert.equal(proposalManualAddMode(
+    proposal({ operation: 'needs_human_review', targetItemIds: [], reviewDraft: undefined, sourceRowIds: ['row-1', 'row-2', 'row-3'], stale: false }),
+  ), 'batch')
+})
+
+test('proposalManualAddMode returns null for non-human-review, empty-row, or target-bearing no-draft proposals', () => {
+  // non-human-review operation → null
+  assert.equal(proposalManualAddMode(
+    proposal({ operation: 'insert_missing_item', targetItemIds: [], reviewDraft: undefined, sourceRowIds: ['row-1'] }),
+  ), null)
+  // empty source rows → null
+  assert.equal(proposalManualAddMode(
+    proposal({ operation: 'needs_human_review', targetItemIds: [], reviewDraft: undefined, sourceRowIds: [] }),
+  ), null)
+  // no-draft with targets → null (not evidence-only)
+  assert.equal(proposalManualAddMode(
+    proposal({ operation: 'needs_human_review', targetItemIds: ['item-1'], reviewDraft: undefined, sourceRowIds: ['row-1'] }),
+  ), null)
 })
 
 test('review presenter exposes the two durable tabs without changing acceptance gates', () => {

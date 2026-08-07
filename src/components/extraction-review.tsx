@@ -24,6 +24,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { SourceBackedItemEditor, type SourceBackedItemPayload } from "@/components/source-backed-item-editor"
+import { EvidenceOnlyBatchItemEditor, type EvidenceOnlyBatchPayload } from "@/components/evidence-only-batch-item-editor"
 import type { ExtractionReviewSourceRow } from "@/lib/boq-extraction-ai-review"
 import {
   acceptAllValidatedProposalIds,
@@ -40,7 +41,7 @@ import {
   type ExtractionProposalAction,
   type ExtractionReviewFilter,
 } from "@/lib/boq-extraction-review-state"
-import { extractionReviewOutcomeMessage, extractionReviewOutcomeTitle, proposalCanBeAccepted, proposalCanBeReviewedAndAdded, proposalIsHighConfidence, rejectionLabelGroups, selectExtractionReviewOutcome, selectExtractionReviewProgress, sourceReferenceLabel } from "@/lib/boq-extraction-review-ui"
+import { extractionReviewOutcomeMessage, extractionReviewOutcomeTitle, proposalCanBeAccepted, proposalCanBeReviewedAndAdded, proposalIsHighConfidence, proposalManualAddMode, rejectionLabelGroups, selectExtractionReviewOutcome, selectExtractionReviewProgress, sourceReferenceLabel } from "@/lib/boq-extraction-review-ui"
 import { isReviewActionableOperation, type ValidatedProposal } from "@/lib/boq-extraction-proposals"
 import type { Boq } from "@/lib/boq-schema"
 import { safeReviewReturnPath } from "@/lib/auth-return-url"
@@ -387,7 +388,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
     await executeAction(proposal, "reject")
   }, [executeAction])
 
-  const submitSourceBackedItem = useCallback(async (proposal: ValidatedProposal, payload: SourceBackedItemPayload) => {
+  const submitSourceBackedItem = useCallback(async (proposal: ValidatedProposal, payload: SourceBackedItemPayload | EvidenceOnlyBatchPayload) => {
     if (!extractionRunId || readOnly) return { ok: false as const, error: "This BOQ is read-only." }
     if (mutationBlockedReason) {
       setSourceBackedError(mutationBlockedReason)
@@ -590,6 +591,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
               const canAccept = proposalCanBeAccepted(proposal) && !status
               const canReviewAndAdd = proposalCanBeReviewedAndAdded(proposal, status, readOnly)
               const humanReview = proposal.operation === "needs_human_review"
+              const manualAddMode = canReviewAndAdd ? proposalManualAddMode(proposal) : null
               const isIncomplete = humanReview && !canAccept
               const nonActionable = !isReviewActionableOperation(proposal.operation)
               const expanded = state.expandedProposalIds[proposal.id] !== false
@@ -623,15 +625,27 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
                     </div>
                   </div>
                   {editingProposalId === proposal.id && humanReview && canReviewAndAdd ? (
-                    <SourceBackedItemEditor
-                      boq={boq}
-                      proposal={proposal}
-                      sourceRows={sourceRows}
-                      busy={action === "adding"}
-                      serverError={sourceBackedError}
-                      onCancel={() => { setEditingProposalId(null); setSourceBackedError(null) }}
-                      onSubmit={(payload) => submitSourceBackedItem(proposal, payload)}
-                    />
+                    manualAddMode === "batch" ? (
+                      <EvidenceOnlyBatchItemEditor
+                        boq={boq}
+                        proposal={proposal}
+                        sourceRows={sourceRows}
+                        busy={action === "adding"}
+                        serverError={sourceBackedError}
+                        onCancel={() => { setEditingProposalId(null); setSourceBackedError(null) }}
+                        onSubmit={(payload) => submitSourceBackedItem(proposal, payload)}
+                      />
+                    ) : (
+                      <SourceBackedItemEditor
+                        boq={boq}
+                        proposal={proposal}
+                        sourceRows={sourceRows}
+                        busy={action === "adding"}
+                        serverError={sourceBackedError}
+                        onCancel={() => { setEditingProposalId(null); setSourceBackedError(null) }}
+                        onSubmit={(payload) => submitSourceBackedItem(proposal, payload)}
+                      />
+                    )
                   ) : null}
                 </article>
               )

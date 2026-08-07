@@ -44,11 +44,10 @@ type ReviewAddProposal = Pick<
 /** Eligibility for the source-backed "Review & add" flow.
  *
  *  Only `needs_human_review` proposals qualify, and only while they are still
- *  pending (no recorded lifecycle status) and not read-only or stale. A proposal
- *  carrying a server-mapped `reviewDraft` stays eligible under its existing
- *  no-target shape. A no-draft proposal is eligible only when it is evidence-only
- *  (zero targets and at least one backing source row) so the editor always has
- *  provenance to seed the manual entry.
+ *  pending (no recorded lifecycle status) and not read-only or stale. Structural
+ *  eligibility is delegated to `proposalManualAddMode`, which returns `null`
+ *  for non-eligible shapes. A non-null mode means the proposal is eligible for
+ *  manual add.
  *
  *  This never broadens automatic **Accept**, which stays governed exclusively by
  *  `proposalCanBeAccepted` (and returns false for `needs_human_review`). */
@@ -58,10 +57,29 @@ export function proposalCanBeReviewedAndAdded(
   readOnly: boolean,
 ): boolean {
   if (readOnly || status !== undefined || proposal.stale === true) return false
-  if (proposal.reviewDraft) return proposal.operation === 'needs_human_review'
-  return proposal.operation === 'needs_human_review'
-    && proposal.targetItemIds.length === 0
-    && proposal.sourceRowIds.length > 0
+  return proposalManualAddMode(proposal) !== null
+}
+
+/** Selects the manual-add editor mode for a `needs_human_review` proposal.
+ *
+ *  - A proposal carrying a server-mapped `reviewDraft` stays on the single
+ *    `SourceBackedItemEditor` regardless of its row count.
+ *  - A no-draft proposal is evidence-only (zero targets and at least one backing
+ *    source row); a single backing row uses the single editor and multiple
+ *    backing rows use the batch editor.
+ *  - Non-human-review operations, empty source rows, and no-draft proposals with
+ *    existing targets are not eligible and return `null`.
+ *
+ *  This is the single source of truth for single-vs-batch mount selection and
+ *  for structural eligibility; `proposalCanBeReviewedAndAdded` derives from it. */
+export function proposalManualAddMode(
+  proposal: ReviewAddProposal,
+): 'single' | 'batch' | null {
+  if (proposal.operation !== 'needs_human_review') return null
+  if (proposal.sourceRowIds.length === 0) return null
+  if (proposal.reviewDraft) return 'single'
+  if (proposal.targetItemIds.length > 0) return null
+  return proposal.sourceRowIds.length > 1 ? 'batch' : 'single'
 }
 
 export function sourceReferenceLabel(reference: { sourceRowId?: string; page: number; table: number; row: number }): string {
