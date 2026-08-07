@@ -14,7 +14,7 @@ import { createFirestoreExtractionProposalStore } from './boq-extraction-proposa
 import { createFirestoreExtractionStore } from './boq-extraction-storage'
 import { buildExtractionCandidates } from './boq-extraction-evidence'
 import { prepareProviderProposalV2 } from './boq-extraction-proposal-contract'
-import { parseSourceBackedItemRequest } from './boq-user-entry'
+import { parseSourceBackedItemRequest, parseSourceBackedManualAddRequest, type SourceBackedItemRequest, type SourceBackedManualAddRequest } from './boq-user-entry'
 import { v3Fixture } from './boq-extraction-test-fixtures'
 import type { Boq, BoqPricedItem, BoqSection } from './boq-schema'
 import type { BoqSourceRowV3 } from './boq-extraction-schema'
@@ -610,12 +610,58 @@ function evidenceOnlyReviewHarness() {
   return { ...fixture, proposal, userValues }
 }
 
+function single(value: SourceBackedItemRequest): SourceBackedManualAddRequest {
+  return { mode: 'single', value }
+}
+
+function multiRowEvidenceHarness() {
+  const fixture = harness()
+  const boq = fixture.db.docs.get('boqs/boq-1')! as unknown as Boq
+  const sectionHeader = boq.sections[0].header
+  const makeRow = (id: string, tableRow: number): BoqSourceRowV3 => ({
+    id, page: 9, table: 1, row: tableRow, section: sectionHeader, headers: [],
+    rawCells: [
+      { column: 1, rawText: `${id} desc`, lines: [`${id} desc`], rowSpan: 1, columnSpan: 1, startRowOffset: 0, endRowOffset: 1, startColumnOffset: 1, endColumnOffset: 2, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+      { column: 2, rawText: 'pcs', lines: ['pcs'], rowSpan: 1, columnSpan: 1, startRowOffset: 0, endRowOffset: 1, startColumnOffset: 2, endColumnOffset: 3, columnHeader: false, rowHeader: false, rowSection: false, carried: false },
+    ],
+    rawText: `${id} | pcs`, classification: 'unknown', confidence: 0.72, warnings: [],
+  })
+  const row1 = makeRow('mapped-row', 1)
+  const row2 = makeRow('mapped-row-2', 2)
+  const sourceRows = [...fixture.sourceRows, row1, row2]
+  const run = { ...fixture.run, sourceRowCount: sourceRows.length, sourceRowChecksum: checksumSourceRows(sourceRows) }
+  const runRecord = fixture.db.docs.get(fixture.runPath)!
+  runRecord.sourceRowCount = run.sourceRowCount
+  runRecord.sourceRowChecksum = run.sourceRowChecksum
+  runRecord.identityFingerprint = extractionRunIdentityFingerprint(run)
+  fixture.db.docs.set(`${fixture.runPath}/sourceRows/${row1.id}`, { ...row1, fingerprint: stableSourceRowFingerprint(row1) })
+  fixture.db.docs.set(`${fixture.runPath}/sourceRows/${row2.id}`, { ...row2, fingerprint: stableSourceRowFingerprint(row2) })
+  const targetItems = new Map(boq.sections.flatMap((section) => section.items)
+    .flatMap((entry) => entry.id ? [[entry.id, entry] as const] : []))
+  const context = {
+    extractionRunId: run.id, sections: boq.sections, targetItems,
+    candidateItems: buildExtractionCandidates(run, sourceRows), sourceRows, allowedSourceRowIds: new Set([row1.id, row2.id]),
+  }
+  const prepared = prepareProviderProposalV2({
+    id: 'proposal-multi-row',
+    operation: 'needs_human_review',
+    sourceRowIds: ['mapped-row', 'mapped-row-2'],
+    targetItemIds: [],
+    candidateItemIds: [],
+    confidence: 0.72,
+    explanation: 'Multiple source rows need manual review with no automatic correction.',
+  }, context)
+  if (!prepared.ok) throw new Error('multi-row proposal preparation failed')
+  const proposal = { ...prepared.proposal, evidenceValid: true as const, reconciled: true as const, stale: false }
+  return { ...fixture, boq, run, sourceRows, proposal }
+}
+
 test('addSourceItem writes a user-origin item with source provenance, audit, and accepted lifecycle', async () => {
   const fixture = reviewDraftHarness()
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
   const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
 
-  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, single(fixture.userValues), 'user-7')
   assert.equal(result.status, 200)
   if (result.status !== 200) return
 
@@ -651,14 +697,14 @@ test('addSourceItem writes a user-origin item with source provenance, audit, and
 test('addSourceItem is idempotent when retried with the same accepted proposal', async () => {
   const fixture = reviewDraftHarness()
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
-  const first = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  const first = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, single(fixture.userValues), 'user-7')
   assert.equal(first.status, 200)
   const firstBoq = (first.body as { boq: Boq }).boq
 
   const edited = fixture.db.docs.get('boqs/boq-1')!
   ;(edited as { project: string }).project = 'User-edited project'
   ;(edited as { updatedAt: string }).updatedAt = '2026-07-20T12:01:00.000Z'
-  const retry = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  const retry = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, single(fixture.userValues), 'user-7')
   assert.equal(retry.status, 200)
   assert.deepEqual((retry.body as { boq: Boq }).boq, firstBoq)
   assert.equal((retry.body as { idempotent?: boolean }).idempotent, true)
@@ -671,18 +717,18 @@ test('addSourceItem rejects approved BOQs, missing drafts, stale evidence, and m
 
   fixture.db.docs.get('boqs/boq-1')!.status = 'approved'
   const approvedBefore = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
-  const approved = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  const approved = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, single(fixture.userValues), 'user-7')
   assert.equal(approved.status, 409)
   assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), approvedBefore)
   fixture.db.docs.get('boqs/boq-1')!.status = 'draft'
 
-  const missing = await fixture.store.addSourceItem('boq-1', 'run-1', 'no-such-proposal', fixture.userValues, 'user-7')
+  const missing = await fixture.store.addSourceItem('boq-1', 'run-1', 'no-such-proposal', single(fixture.userValues), 'user-7')
   assert.equal(missing.status, 404)
 
   const runRecord = fixture.db.docs.get(fixture.runPath)! as { deterministicSections: { checksum: string } }
   const savedChecksum = runRecord.deterministicSections.checksum
   runRecord.deterministicSections.checksum = 'sha256:changed'
-  const stale = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  const stale = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, single(fixture.userValues), 'user-7')
   assert.equal(stale.status, 409)
   runRecord.deterministicSections.checksum = savedChecksum
 })
@@ -695,7 +741,7 @@ test('addSourceItem rejects target and non-human operations without a source-bac
   })
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
   const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
-  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, userValues, 'user-7')
+  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, single(userValues), 'user-7')
   assert.equal(result.status, 409)
   assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
 })
@@ -707,14 +753,14 @@ test('addSourceItem rejects invalid section destinations and bad arithmetic as 4
 
   const badSection = await fixture.store.addSourceItem(
     'boq-1', 'run-1', fixture.proposal.id,
-    { ...fixture.userValues, sectionIndex: 99 },
+    single({ ...fixture.userValues, sectionIndex: 99 }),
     'user-7',
   )
   assert.equal(badSection.status, 400)
 
   const badCosts = await fixture.store.addSourceItem(
     'boq-1', 'run-1', fixture.proposal.id,
-    { ...fixture.userValues, materialCost: Number.NaN },
+    single({ ...fixture.userValues, materialCost: Number.NaN }),
     'user-7',
   )
   assert.equal(badCosts.status, 400)
@@ -730,11 +776,11 @@ test('addSourceItem conflicts with a prior skipped audit until reopened', async 
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
   await fixture.store.skip('boq-1', 'run-1', fixture.proposal.id, 'user-1')
   const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
-  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, single(fixture.userValues), 'user-7')
   assert.equal(result.status, 409)
   assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
   assert.equal((await fixture.store.reopen('boq-1', 'run-1', fixture.proposal.id, 'user-1')).status, 200)
-  const reopened = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  const reopened = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, single(fixture.userValues), 'user-7')
   assert.equal(reopened.status, 200)
 })
 
@@ -743,7 +789,7 @@ test('addSourceItem adds a user item from immutable evidence when a no-target hu
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
 
   const result = await fixture.store.addSourceItem(
-    'boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7',
+    'boq-1', 'run-1', fixture.proposal.id, single(fixture.userValues), 'user-7',
   )
 
   assert.equal(result.status, 200)
@@ -764,13 +810,13 @@ test('addSourceItem adds a user item from immutable evidence when a no-target hu
 test('retrying an accepted evidence-only proposal returns idempotent without a second item', async () => {
   const fixture = evidenceOnlyReviewHarness()
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
-  const first = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  const first = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, single(fixture.userValues), 'user-7')
   assert.equal(first.status, 200)
   if (first.status !== 200) return
   const firstBoq = first.body.boq as Boq
   const firstItemCount = firstBoq.sections[0].items.length
 
-  const retry = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  const retry = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, single(fixture.userValues), 'user-7')
   assert.equal(retry.status, 200)
   assert.deepEqual((retry.body as { boq: Boq }).boq, firstBoq)
   assert.equal((retry.body as { idempotent?: boolean }).idempotent, true)
@@ -790,7 +836,7 @@ test('addSourceItem conflicts when a no-draft human-review proposal targets an e
   stored.proposal.affectedItemFingerprints = { [target.id!]: fingerprintCanonicalItem(target) }
 
   const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
-  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, single(fixture.userValues), 'user-7')
   assert.equal(result.status, 409)
   assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
 })
@@ -801,7 +847,7 @@ test('addSourceItem rejects an evidence-only proposal after the canonical BOQ se
   const boq = fixture.db.docs.get('boqs/boq-1')! as unknown as Boq
   boq.sections[0]!.items[0]!.desc = 'Editor changed the canonical section'
   const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
-  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, single(fixture.userValues), 'user-7')
   assert.equal(result.status, 409)
   assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
 })
@@ -812,17 +858,190 @@ test('evidence-only manual inserts remain blocked for approved BOQs and a termin
 
   fixture.db.docs.get('boqs/boq-1')!.status = 'approved'
   const approvedBefore = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
-  assert.equal((await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')).status, 409)
+  assert.equal((await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, single(fixture.userValues), 'user-7')).status, 409)
   assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), approvedBefore)
   fixture.db.docs.get('boqs/boq-1')!.status = 'draft'
 
   assert.equal((await fixture.store.skip('boq-1', 'run-1', fixture.proposal.id, 'user-1')).status, 200)
   const skippedBefore = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
-  assert.equal((await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')).status, 409)
+  assert.equal((await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, single(fixture.userValues), 'user-7')).status, 409)
   assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), skippedBefore)
   assert.equal((await fixture.store.reopen('boq-1', 'run-1', fixture.proposal.id, 'user-1')).status, 200)
-  const reopened = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, fixture.userValues, 'user-7')
+  const reopened = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, single(fixture.userValues), 'user-7')
   assert.equal(reopened.status, 200)
+})
+
+test('addSourceItem creates one item per source row in proposal order for a multi-row batch', async () => {
+  const fixture = multiRowEvidenceHarness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!) as unknown as Boq
+
+  const batchRequest = parseSourceBackedManualAddRequest({
+    items: [
+      { sourceRowId: 'mapped-row-2', sectionIndex: 0, item: { desc: 'Expense', unit: 'Lot', qty: 1, materialCost: 61616, labourCost: 0 } },
+      { sourceRowId: 'mapped-row', sectionIndex: 0, item: { desc: 'Tooling', unit: 'Lot', qty: 1, materialCost: 6000, labourCost: 0 } },
+    ],
+  })
+  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, batchRequest, 'user-7')
+  assert.equal(result.status, 200)
+  if (result.status !== 200) return
+
+  const stored = fixture.db.docs.get('boqs/boq-1') as unknown as Boq
+  const previous = before.sections[0].items.length
+  const first = stored.sections[0].items[previous] as BoqPricedItem
+  const second = stored.sections[0].items[previous + 1] as BoqPricedItem
+
+  assert.equal(first.entryOrigin, 'user')
+  assert.equal(first.sourceRowId, 'mapped-row')
+  assert.deepEqual(first.sourceRowIds, ['mapped-row'])
+  assert.deepEqual(first.sourceRef, { page: 9, table: 1, row: 1 })
+  assert.equal(first.desc, 'Tooling')
+  assert.equal(first.total, 6000)
+
+  assert.equal(second.entryOrigin, 'user')
+  assert.equal(second.sourceRowId, 'mapped-row-2')
+  assert.deepEqual(second.sourceRowIds, ['mapped-row-2'])
+  assert.deepEqual(second.sourceRef, { page: 9, table: 1, row: 2 })
+  assert.equal(second.desc, 'Expense')
+  assert.equal(second.total, 61616)
+
+  assert.equal(stored.totalItems, before.totalItems + 2)
+  assert.equal(stored.grandTotal, before.grandTotal + 67_616)
+
+  const proposalRecord = fixture.db.docs.get(`${fixture.runPath}/proposals/${fixture.proposal.id}`)!
+  assert.equal(proposalRecord.lifecycleStatus, 'accepted')
+
+  const audit = fixture.db.docs.get(`${fixture.runPath}/proposalAudits/${fixture.proposal.id}`)!
+  assert.equal(audit.status, 'accepted')
+  assert.equal(audit.actorId, 'user-7')
+  assert.ok(audit.beforeSections && audit.afterSections, 'audit records before/after sections')
+  assert.ok(audit.resultBoq, 'audit pins the exact accepted BOQ')
+})
+
+test('retrying an accepted multi-row proposal returns idempotent without duplicates', async () => {
+  const fixture = multiRowEvidenceHarness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  const batchRequest = parseSourceBackedManualAddRequest({
+    items: [
+      { sourceRowId: 'mapped-row', sectionIndex: 0, item: { desc: 'Tooling', unit: 'Lot', qty: 1, materialCost: 6000, labourCost: 0 } },
+      { sourceRowId: 'mapped-row-2', sectionIndex: 0, item: { desc: 'Expense', unit: 'Lot', qty: 1, materialCost: 61616, labourCost: 0 } },
+    ],
+  })
+  const first = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, batchRequest, 'user-7')
+  assert.equal(first.status, 200)
+  if (first.status !== 200) return
+  const firstBoq = first.body.boq as Boq
+  const firstItemCount = firstBoq.sections[0].items.length
+
+  const retry = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, batchRequest, 'user-7')
+  assert.equal(retry.status, 200)
+  assert.deepEqual((retry.body as { boq: Boq }).boq, firstBoq)
+  assert.equal((retry.body as { idempotent?: boolean }).idempotent, true)
+  const stored = fixture.db.docs.get('boqs/boq-1') as unknown as Boq
+  assert.equal(stored.sections[0].items.length, firstItemCount)
+})
+
+test('addSourceItem rejects a single request for a multi-row proposal with batch_required', async () => {
+  const fixture = multiRowEvidenceHarness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
+  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, single(parseSourceBackedItemRequest({ sectionIndex: 0, item: { desc: 'Tooling', unit: 'Lot', qty: 1, materialCost: 6000, labourCost: 0 } })), 'user-7')
+  assert.equal(result.status, 409)
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+})
+
+test('addSourceItem rejects a batch request for a one-row proposal with single_required', async () => {
+  const fixture = evidenceOnlyReviewHarness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
+  const batchRequest = parseSourceBackedManualAddRequest({
+    items: [
+      { sourceRowId: 'mapped-row', sectionIndex: 0, item: { desc: 'Valve', unit: 'Lot', qty: 1, materialCost: 3000, labourCost: 3000 } },
+    ],
+  })
+  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, batchRequest, 'user-7')
+  assert.equal(result.status, 409)
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+})
+
+test('addSourceItem rejects a batch for a mapped review-draft proposal with single_required', async () => {
+  const fixture = reviewDraftHarness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
+  const batchRequest = parseSourceBackedManualAddRequest({
+    items: [
+      { sourceRowId: 'mapped-row', sectionIndex: 0, item: { desc: 'Wall', unit: 'pcs', qty: 2, materialCost: 50, labourCost: 50 } },
+    ],
+  })
+  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, batchRequest, 'user-7')
+  assert.equal(result.status, 409)
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+})
+
+test('addSourceItem rejects a batch with wrong source-row set and mutates nothing', async () => {
+  const fixture = multiRowEvidenceHarness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+
+  const extraRow = parseSourceBackedManualAddRequest({
+    items: [
+      { sourceRowId: 'mapped-row', sectionIndex: 0, item: { desc: 'A', unit: 'Lot', qty: 1, materialCost: 1, labourCost: 0 } },
+      { sourceRowId: 'unknown-row', sectionIndex: 0, item: { desc: 'B', unit: 'Lot', qty: 1, materialCost: 2, labourCost: 0 } },
+    ],
+  })
+  const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
+  assert.equal((await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, extraRow, 'user-7')).status, 409)
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+
+  const missingRow = parseSourceBackedManualAddRequest({
+    items: [
+      { sourceRowId: 'mapped-row', sectionIndex: 0, item: { desc: 'A', unit: 'Lot', qty: 1, materialCost: 1, labourCost: 0 } },
+    ],
+  })
+  assert.equal((await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, missingRow, 'user-7')).status, 409)
+  assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
+})
+
+test('addSourceItem rolls back the whole batch when a later entry is invalid and leaves lifecycle pending', async () => {
+  const fixture = multiRowEvidenceHarness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!) as unknown as Boq
+
+  const badBatch = parseSourceBackedManualAddRequest({
+    items: [
+      { sourceRowId: 'mapped-row', sectionIndex: 0, item: { desc: 'Tooling', unit: 'Lot', qty: 1, materialCost: 6000, labourCost: 0 } },
+      { sourceRowId: 'mapped-row-2', sectionIndex: 99, item: { desc: 'Expense', unit: 'Lot', qty: 1, materialCost: 61616, labourCost: 0 } },
+    ],
+  })
+  const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, badBatch, 'user-7')
+  assert.equal(result.status, 400)
+
+  const stored = fixture.db.docs.get('boqs/boq-1') as unknown as Boq
+  assert.equal(stored.sections[0].items.length, before.sections[0].items.length)
+  assert.equal(stored.grandTotal, before.grandTotal)
+
+  const proposalRecord = fixture.db.docs.get(`${fixture.runPath}/proposals/${fixture.proposal.id}`)!
+  assert.notEqual(proposalRecord.lifecycleStatus, 'accepted')
+  assert.equal(fixture.db.docs.has(`${fixture.runPath}/proposalAudits/${fixture.proposal.id}`), false)
+})
+
+test('multi-row batches remain blocked for approved BOQs and a terminal skipped lifecycle', async () => {
+  const fixture = multiRowEvidenceHarness()
+  await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
+  const batchRequest = parseSourceBackedManualAddRequest({
+    items: [
+      { sourceRowId: 'mapped-row', sectionIndex: 0, item: { desc: 'Tooling', unit: 'Lot', qty: 1, materialCost: 6000, labourCost: 0 } },
+      { sourceRowId: 'mapped-row-2', sectionIndex: 0, item: { desc: 'Expense', unit: 'Lot', qty: 1, materialCost: 61616, labourCost: 0 } },
+    ],
+  })
+
+  fixture.db.docs.get('boqs/boq-1')!.status = 'approved'
+  assert.equal((await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, batchRequest, 'user-7')).status, 409)
+  fixture.db.docs.get('boqs/boq-1')!.status = 'draft'
+
+  assert.equal((await fixture.store.skip('boq-1', 'run-1', fixture.proposal.id, 'user-1')).status, 200)
+  assert.equal((await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, batchRequest, 'user-7')).status, 409)
+  assert.equal((await fixture.store.reopen('boq-1', 'run-1', fixture.proposal.id, 'user-1')).status, 200)
+  assert.equal((await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, batchRequest, 'user-7')).status, 200)
 })
 
 test('store reload and acceptance reject mapped provenance with an unused declared row', async () => {

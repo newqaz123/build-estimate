@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Firestore } from 'firebase-admin/firestore'
-import type { Boq, BoqPricedItem, BoqSection, BoqSourceCosts } from './boq-schema'
+import type { Boq, BoqSection, BoqSourceCosts } from './boq-schema'
 import { extractionRunPath, sourceRowPath, createFirestoreExtractionStore } from './boq-extraction-storage'
 import { checksumSourceRows, extractionRunIdentityFingerprint, fingerprintParserConfig, stableCanonicalJson, type BoqExtractionRun } from './boq-extraction-run'
 import type { BoqSourceRowV3 } from './boq-extraction-schema'
@@ -19,7 +19,7 @@ import {
   type ExtractionProposalReopenEvent,
   type ExtractionProposalUndoEvent,
 } from './boq-extraction-acceptance'
-import { addSourceBackedBoqItem, MissingBoqItemError, type SourceBackedItemRequest, type ValidatedSourceMapping } from './boq-user-entry'
+import { addSourceBackedBoqItem, MissingBoqItemError, type SourceBackedManualAddRequest, type ValidatedSourceMapping } from './boq-user-entry'
 
 export type ProposalStoreResponse =
   | { status: 200; body: Record<string, unknown> }
@@ -1096,7 +1096,7 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
       boqId: string,
       runId: string,
       proposalId: string,
-      request: SourceBackedItemRequest,
+      request: SourceBackedManualAddRequest,
       actorId: string,
     ): Promise<ProposalStoreResponse> {
       let immutable: Awaited<ReturnType<typeof loadImmutable>>
@@ -1151,66 +1151,95 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
           }
           const targetItems = new Map(boq.sections.flatMap((section) => section.items)
             .flatMap((item) => item.id ? [[item.id, item] as const] : []))
-          let validatedSourceMapping: ValidatedSourceMapping
-          if (proposal.reviewDraft) {
-            const reconstruction = reconstructSourceMappedItem({
-              mapping: proposal.reviewDraft.mapping,
-              targetItemIds: proposal.targetItemIds,
-              sourceRows: immutable.sourceRows,
-              allowedSourceRowIds: new Set(proposal.sourceRowIds),
-              sections: boq.sections,
-              targetItems,
-            })
-            if (reconstruction.kind === 'invalid') {
-              return { status: 400, body: { error: reconstruction.code } }
-            }
-            if (reconstruction.kind === 'candidate') {
-              return { status: 409, body: { error: 'Proposal already resolves to a complete mapping' } }
-            }
-            const draft = reconstruction.draft
-            validatedSourceMapping = {
-              sourceRowId: draft.sourceRowIds[0] ?? '',
-              sourceRowIds: [...draft.sourceRowIds],
-              ...(draft.sourceRefs[0] ? { sourceRef: { ...draft.sourceRefs[0] } } : {}),
-            }
-            const sourceCosts = sourceCostsFromResolvedValues(draft.resolvedValues)
-            if (sourceCosts) validatedSourceMapping.sourceCosts = sourceCosts
-          } else {
-            if (proposal.operation !== 'needs_human_review' || proposal.targetItemIds.length !== 0) {
-              return { status: 409, body: { error: 'Proposal is not eligible for manual insertion' } }
-            }
-            const rowsById = new Map(immutable.sourceRows.map((row) => [row.id, row]))
-            const sourceRows = proposal.sourceRowIds.map((id) => rowsById.get(id))
-            if (sourceRows.length === 0 || sourceRows.some((row) => row === undefined)) {
-              return { status: 409, body: { error: 'Extraction evidence changed; recheck the proposal' } }
-            }
-            const first = sourceRows[0]!
-            validatedSourceMapping = {
-              sourceRowId: first.id,
-              sourceRowIds: [...proposal.sourceRowIds],
-              sourceRef: { page: first.page, table: first.table, row: first.row },
-            }
-          }
-          const itemId = `user-${randomUUID()}`
-          let result: { boq: Boq; item: BoqPricedItem }
+          let updatedBoq: Boq
           try {
-            result = addSourceBackedBoqItem({ boq, validatedSourceMapping, userValues: request, itemId })
+            if (proposal.reviewDraft) {
+              if (request.mode !== 'single') return { status: 409, body: { error: 'single_required' } }
+              const reconstruction = reconstructSourceMappedItem({
+                mapping: proposal.reviewDraft.mapping,
+                targetItemIds: proposal.targetItemIds,
+                sourceRows: immutable.sourceRows,
+                allowedSourceRowIds: new Set(proposal.sourceRowIds),
+                sections: boq.sections,
+                targetItems,
+              })
+              if (reconstruction.kind === 'invalid') {
+                return { status: 400, body: { error: reconstruction.code } }
+              }
+              if (reconstruction.kind === 'candidate') {
+                return { status: 409, body: { error: 'Proposal already resolves to a complete mapping' } }
+              }
+              const draft = reconstruction.draft
+              const validatedSourceMapping: ValidatedSourceMapping = {
+                sourceRowId: draft.sourceRowIds[0] ?? '',
+                sourceRowIds: [...draft.sourceRowIds],
+                ...(draft.sourceRefs[0] ? { sourceRef: { ...draft.sourceRefs[0] } } : {}),
+              }
+              const sourceCosts = sourceCostsFromResolvedValues(draft.resolvedValues)
+              if (sourceCosts) validatedSourceMapping.sourceCosts = sourceCosts
+              const result = addSourceBackedBoqItem({ boq, validatedSourceMapping, userValues: request.value, itemId: `user-${randomUUID()}` })
+              updatedBoq = result.boq
+            } else if (proposal.operation === 'needs_human_review' && proposal.targetItemIds.length === 0 && proposal.sourceRowIds.length > 1) {
+              if (request.mode !== 'batch') return { status: 409, body: { error: 'batch_required' } }
+              const proposalRowIds = new Set(proposal.sourceRowIds)
+              const requestRowIds = new Set(request.items.map((item) => item.sourceRowId))
+              if (requestRowIds.size !== proposalRowIds.size || [...requestRowIds].some((id) => !proposalRowIds.has(id))) {
+                return { status: 409, body: { error: 'Batch must cover exactly the proposal source rows.' } }
+              }
+              const rowsById = new Map(immutable.sourceRows.map((row) => [row.id, row]))
+              const entriesByRowId = new Map(request.items.map((item) => [item.sourceRowId, item]))
+              updatedBoq = boq
+              for (const rowId of proposal.sourceRowIds) {
+                const row = rowsById.get(rowId)
+                if (!row) return { status: 409, body: { error: 'Extraction evidence changed; recheck the proposal' } }
+                const entry = entriesByRowId.get(rowId)!
+                const result = addSourceBackedBoqItem({
+                  boq: updatedBoq,
+                  validatedSourceMapping: {
+                    sourceRowId: row.id,
+                    sourceRowIds: [row.id],
+                    sourceRef: { page: row.page, table: row.table, row: row.row },
+                  },
+                  userValues: entry,
+                  itemId: `user-${randomUUID()}`,
+                })
+                updatedBoq = result.boq
+              }
+            } else {
+              if (proposal.operation !== 'needs_human_review' || proposal.targetItemIds.length !== 0) {
+                return { status: 409, body: { error: 'Proposal is not eligible for manual insertion' } }
+              }
+              if (request.mode !== 'single') return { status: 409, body: { error: 'single_required' } }
+              const rowsById = new Map(immutable.sourceRows.map((row) => [row.id, row]))
+              const sourceRows = proposal.sourceRowIds.map((id) => rowsById.get(id))
+              if (sourceRows.length === 0 || sourceRows.some((row) => row === undefined)) {
+                return { status: 409, body: { error: 'Extraction evidence changed; recheck the proposal' } }
+              }
+              const first = sourceRows[0]!
+              const validatedSourceMapping: ValidatedSourceMapping = {
+                sourceRowId: first.id,
+                sourceRowIds: [...proposal.sourceRowIds],
+                sourceRef: { page: first.page, table: first.table, row: first.row },
+              }
+              const result = addSourceBackedBoqItem({ boq, validatedSourceMapping, userValues: request.value, itemId: `user-${randomUUID()}` })
+              updatedBoq = result.boq
+            }
           } catch (error) {
             if (error instanceof MissingBoqItemError) return { status: 400, body: { error: error.message } }
             throw error
           }
           const actionTimestamp = now().toISOString()
-          const updatedBoq = { ...result.boq, updatedAt: actionTimestamp }
+          const finalBoq = { ...updatedBoq, updatedAt: actionTimestamp }
           const audit = buildSourceItemAudit({
-            proposal, beforeSections: boq.sections, afterSections: updatedBoq.sections,
+            proposal, beforeSections: boq.sections, afterSections: finalBoq.sections,
             actorId, now: actionTimestamp, sourceRows: immutable.sourceRows,
           })
-          const acceptedAudit = { ...audit, resultBoq: structuredClone(updatedBoq) }
+          const acceptedAudit = { ...audit, resultBoq: structuredClone(finalBoq) }
           transaction.update(boqRef, {
-            sections: updatedBoq.sections,
-            totalItems: updatedBoq.totalItems,
-            grandTotal: updatedBoq.grandTotal,
-            stdStatus: updatedBoq.stdStatus,
+            sections: finalBoq.sections,
+            totalItems: finalBoq.totalItems,
+            grandTotal: finalBoq.grandTotal,
+            stdStatus: finalBoq.stdStatus,
             updatedAt: actionTimestamp,
           })
           const sequence = lifecycle.sequence + 1
@@ -1218,7 +1247,7 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
           transaction.update(proposalRef, { lifecycleStatus: 'accepted', lifecycleRevision: sequence, updatedAt: actionTimestamp })
           const actionRef = lifecycle.events.length === 0 ? db.doc(auditPath(boqId, runId, proposalId)) : auditRef.collection('events').doc(`${sequence}-accepted`)
           transaction.create(actionRef, sequencedAudit)
-          return { status: 200, body: { status: 'accepted', boq: updatedBoq, audit: sequencedAudit } }
+          return { status: 200, body: { status: 'accepted', boq: finalBoq, audit: sequencedAudit } }
         })
       } catch {
         return { status: 500, body: { error: 'Source-backed item could not be added' } }
