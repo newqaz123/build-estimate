@@ -1689,6 +1689,41 @@
 .source-backed-live-total { color: var(--fg-2); font-size: 12px; font-variant-numeric: tabular-nums; }
 .source-backed-server-error { padding: var(--space-2); border-radius: var(--radius-brand-sm); background: color-mix(in oklab, var(--destructive) 10%, transparent); color: var(--destructive); font-size: 11px; }
 .source-backed-item-editor-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
+
+/* Evidence-only decision batch editor — multi-row human review. Clear row
+   borders and restrained spacing (no gradients), distinct advisory badges,
+   visible radio focus, and a responsive grid that stacks under 640px. */
+.evidence-only-batch-item-editor { display: grid; gap: var(--space-3); margin-top: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-brand-sm); background: color-mix(in oklab, var(--muted) 18%, var(--surface)); min-width: 0; }
+.evidence-only-batch-heading { display: grid; gap: 2px; }
+.evidence-only-batch-heading strong { font-size: 13px; }
+.evidence-only-batch-heading span { color: var(--muted-text); font-size: 11px; }
+.evidence-only-batch-row { display: grid; gap: var(--space-2); min-width: 0; margin: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.evidence-only-batch-row > legend { padding: 0 var(--space-1); color: var(--fg-2); font-size: 11px; font-weight: 650; }
+/* Advisory badges stay restrained and visually distinct from human selections
+   (a faint neutral fill, never the accent a selected radio/field uses). */
+.evidence-only-batch-suggestion, .evidence-only-batch-suggestion-unavailable { display: inline-flex; align-items: center; gap: 4px; align-self: start; max-width: 100%; padding: 2px 8px; border-radius: var(--radius-pill); background: color-mix(in oklab, var(--muted) 30%, transparent); color: var(--muted-text); font-size: 10px; font-weight: 600; }
+.evidence-only-batch-decision { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
+.evidence-only-batch-decision input[type="radio"] { width: 16px; height: 16px; flex: 0 0 auto; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.evidence-only-batch-decision input[type="radio"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.evidence-only-batch-decision label { color: var(--fg-2); font-size: 12px; cursor: pointer; }
+.evidence-only-batch-field { display: grid; gap: 4px; min-width: 0; }
+.evidence-only-batch-field label { color: var(--muted-text); font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+/* Every control is constrained to its container so a long description or note
+   never forces page-level horizontal overflow. */
+.evidence-only-batch-field input, .evidence-only-batch-field select, .evidence-only-batch-field textarea { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; }
+.evidence-only-batch-field textarea { resize: vertical; min-height: 56px; }
+.evidence-only-batch-field-error { color: var(--destructive); font-size: 10px; }
+.evidence-only-batch-live-total { color: var(--fg-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+.evidence-only-batch-server-error { padding: var(--space-2); border-radius: var(--radius-sm); background: color-mix(in oklab, var(--destructive) 10%, transparent); color: var(--destructive); font-size: 11px; }
+.evidence-only-batch-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
+@media (max-width: 639px) {
+  .evidence-only-batch-row { padding: var(--space-2); }
+  /* Add fields fill the row and the decision/actions stack full-width below 640px. */
+  .evidence-only-batch-decision { flex-direction: column; align-items: stretch; gap: var(--space-1); }
+  .evidence-only-batch-decision label { display: flex; align-items: center; gap: var(--space-1); }
+  .evidence-only-batch-actions { flex-direction: column-reverse; align-items: stretch; }
+  .evidence-only-batch-actions button { width: 100%; }
+}
 .review-items-table { width: 100%; min-width: 650px; font-size: 12px; }
 .review-items-table th { padding: var(--space-2); border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--muted) 50%, transparent); font-weight: 500; text-align: left; }
 .review-items-table td { padding: var(--space-1); border-bottom: 1px solid var(--border); vertical-align: top; }

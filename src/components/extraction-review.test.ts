@@ -366,7 +366,8 @@ test("Task 4: proposalManualAddMode routes multi-row no-draft proposals to the b
 	// Both editors are imported; the batch editor and its payload type join the
 	// existing single editor import.
 	assert.match(source, /EvidenceOnlyBatchItemEditor/);
-	assert.match(source, /EvidenceOnlyBatchPayload/);
+	assert.match(source, /EvidenceOnlyDecisionBatchPayload/);
+	assert.doesNotMatch(source, /EvidenceOnlyBatchPayload/);
 	assert.match(source, /SourceBackedItemEditor/);
 });
 
@@ -398,7 +399,7 @@ test("Task 4: submitSourceBackedItem accepts the single/batch payload union and 
 	// The submit handler type now accepts either payload shape.
 	assert.match(
 		source,
-		/submitSourceBackedItem[\s\S]*?SourceBackedItemPayload \| EvidenceOnlyBatchPayload/,
+		/submitSourceBackedItem[\s\S]*?SourceBackedItemPayload \| EvidenceOnlyDecisionBatchPayload/,
 	);
 	// The single endpoint and body are unchanged — the payload is posted as-is.
 	assert.match(source, /\/add-source-item/);
@@ -571,4 +572,68 @@ test("Task 9: session-expired recovery detects 401 and shows sign-in link", () =
 	);
 	// accept-batch should check for 401
 	assert.match(source, /acceptAll[\s\S]*?response\.status === 401/);
+});
+
+test("Task 5: extraction-review imports the canonical decision-batch payload type and drops the obsolete alias/items contract", () => {
+	const source = readFileSync(componentUrl, "utf8");
+	// The canonical payload type is imported from the state module.
+	assert.match(source, /EvidenceOnlyDecisionBatchPayload/);
+	assert.match(
+		source,
+		/from ["']@\/components\/evidence-only-batch-item-editor-state["']/,
+	);
+	// The obsolete EvidenceOnlyBatchPayload alias is gone from the component.
+	assert.doesNotMatch(source, /EvidenceOnlyBatchPayload/);
+	// The obsolete { items: [...] } wire contract is absent.
+	assert.doesNotMatch(source, /\{\s*items:\s*\[/);
+});
+
+test("Task 5: submitSourceBackedItem posts the union payload to one endpoint with no duplicated request logic", () => {
+	const source = readFileSync(componentUrl, "utf8");
+	// The submit handler accepts the widened union.
+	assert.match(
+		source,
+		/submitSourceBackedItem[\s\S]*?SourceBackedItemPayload \| EvidenceOnlyDecisionBatchPayload/,
+	);
+	// Exactly one add-source-item fetch path — both editors route through it.
+	assert.equal((source.match(/\/add-source-item/g) ?? []).length, 1);
+	assert.match(source, /body: JSON\.stringify\(payload\)/);
+	// The batch editor and the single editor both pass the payload through the
+	// same submit handler unchanged.
+	assert.match(
+		source,
+		/EvidenceOnlyBatchItemEditor[\s\S]*?onSubmit=\{\(payload\) => submitSourceBackedItem\(proposal, payload\)\}/,
+	);
+	assert.match(
+		source,
+		/SourceBackedItemEditor[\s\S]*?onSubmit=\{\(payload\) => submitSourceBackedItem\(proposal, payload\)\}/,
+	);
+	// One Review & add affordance and a single editor-mount id remain.
+	assert.equal((source.match(/Review &amp; add|Review & add/g) ?? []).length, 1);
+	assert.match(source, /editingProposalId/);
+	// Automatic Accept stays suppressed for needs_human_review proposals.
+	assert.doesNotMatch(
+		source,
+		/proposalCanBeAccepted\(proposal\) && humanReview/,
+	);
+	// Skip and the read-only contract remain in place.
+	assert.match(source, /executeAction\(proposal, "skip"\)/);
+	assert.match(source, /readOnly/);
+});
+
+test("Task 5: a failed add-source-item submit leaves the editor mounted with its human decisions intact", () => {
+	const source = readFileSync(componentUrl, "utf8");
+	// Scope to the submitSourceBackedItem definition body.
+	const submitStart = source.indexOf("submitSourceBackedItem");
+	const submitEnd = source.indexOf("const bulkProposalIds", submitStart);
+	const submitSection = source.slice(submitStart, submitEnd);
+	// The success branch unmounts the editor after the server confirms the add.
+	assert.match(submitSection, /setEditingProposalId\(null\)/);
+	// The error/catch branch surfaces the server error but never unmounts the
+	// editor, so the in-memory human decisions survive a failed submit.
+	const catchStart = submitSection.lastIndexOf("catch");
+	const catchSection = submitSection.slice(catchStart);
+	assert.doesNotMatch(catchSection, /setEditingProposalId/);
+	assert.match(catchSection, /proposal_action_failed/);
+	assert.match(catchSection, /setSourceBackedError/);
 });

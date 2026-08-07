@@ -24,7 +24,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { SourceBackedItemEditor, type SourceBackedItemPayload } from "@/components/source-backed-item-editor"
-import { EvidenceOnlyBatchItemEditor, type EvidenceOnlyBatchPayload } from "@/components/evidence-only-batch-item-editor"
+import { EvidenceOnlyBatchItemEditor } from "@/components/evidence-only-batch-item-editor"
+import type { EvidenceOnlyDecisionBatchPayload } from "@/components/evidence-only-batch-item-editor-state"
 import type { ExtractionReviewSourceRow } from "@/lib/boq-extraction-ai-review"
 import {
   acceptAllValidatedProposalIds,
@@ -388,7 +389,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
     await executeAction(proposal, "reject")
   }, [executeAction])
 
-  const submitSourceBackedItem = useCallback(async (proposal: ValidatedProposal, payload: SourceBackedItemPayload | EvidenceOnlyBatchPayload) => {
+  const submitSourceBackedItem = useCallback(async (proposal: ValidatedProposal, payload: SourceBackedItemPayload | EvidenceOnlyDecisionBatchPayload) => {
     if (!extractionRunId || readOnly) return { ok: false as const, error: "This BOQ is read-only." }
     if (mutationBlockedReason) {
       setSourceBackedError(mutationBlockedReason)
