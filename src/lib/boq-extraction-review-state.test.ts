@@ -455,3 +455,37 @@ test("normalizeExtractionReviewResponse rejects proposals that pair reviewDraft 
     null,
   )
 })
+
+test("normalizeExtractionReviewResponse preserves valid source-row suggestions and rejects malformed stored suggestions", () => {
+  const suggestionRow = { ...sourceRow, sourceRowId: "sr-1" }
+  const responseWithSuggestions: ExtractionReviewResponse = {
+    mode: "ai", aiStatus: "completed", message: "Ready",
+    sourceRowIds: ["sr-1"], remainingCandidateRowIds: [],
+    sourceRefs: [{ sourceRowId: "sr-1", page: 2, table: 1, row: 4 }],
+    sourceRows: [suggestionRow],
+    proposals: [{
+      id: "prop-1", extractionRunId: "run-1", operation: "needs_human_review",
+      sourceRowIds: ["sr-1"], targetItemIds: [], affectedItemFingerprints: {},
+      confidence: 0.4, explanation: "Ambiguous", proposedItems: [],
+      evidenceValid: true, reconciled: true, stale: false,
+      sourceRowSuggestions: [
+        { sourceRowId: "sr-1", suggestedAction: "add", reasonCode: "missing_priced_item", reason: "Missing line", confidence: 0.9 },
+      ],
+    }],
+    rejectedProposals: [],
+  }
+  const normalized = normalizeExtractionReviewResponse(responseWithSuggestions)
+  assert.ok(normalized)
+  assert.equal(normalized?.proposals[0]?.sourceRowSuggestions?.[0]?.sourceRowId, "sr-1")
+
+  const responseWithMalformedStoredSuggestions: ExtractionReviewResponse = {
+    ...responseWithSuggestions,
+    proposals: [{
+      ...responseWithSuggestions.proposals[0],
+      sourceRowSuggestions: [
+        { sourceRowId: "sr-1", suggestedAction: "add", reasonCode: "missing_priced_item", reason: "Missing", confidence: 1.5 },
+      ],
+    }],
+  }
+  assert.equal(normalizeExtractionReviewResponse(responseWithMalformedStoredSuggestions), null)
+})

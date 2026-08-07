@@ -8,7 +8,7 @@ import {
   reconstructSourceMappedItem,
   type ProviderCandidateRef,
 } from './boq-extraction-proposal-contract'
-import { fingerprintCanonicalItem, validateProposal, type ProposalValidationContext } from './boq-extraction-proposals'
+import { fingerprintCanonicalItem, validateProposal, SOURCE_ROW_DISPOSITION_REASON_CODES, type ProposalValidationContext } from './boq-extraction-proposals'
 import { stableCanonicalJson } from './boq-extraction-run'
 import type { BoqItem, BoqSection } from './boq-schema'
 import type { BoqSourceRowV3 } from './boq-extraction-schema'
@@ -759,4 +759,83 @@ test('v2 contract asks only for source-backed add, replace, remove or human-revi
   assert.match(instructions, /Return cell coordinates only\. Never return source values\./)
   assert.doesNotMatch(instructions, /All values come from the provided candidateItems/)
   assert.match(instructions, /immutable deterministic candidates or mapped source cells/)
+})
+
+test('v2 needs_human_review normalizes a complete source-row suggestion block into proposal order', () => {
+  const prepared = prepareProviderProposalV2({
+    id: 'mixed-review', operation: 'needs_human_review',
+    sourceRowIds: ['sr-1', 'sr-2'], targetItemIds: [], candidateItemIds: [],
+    confidence: 0.9, explanation: 'Bundle needs manual review.',
+    sourceRowSuggestions: [
+      { sourceRowId: 'sr-2', suggestedAction: 'ignore', reasonCode: 'summary_or_tax', reason: 'Subtotal', confidence: 0.99 },
+      { sourceRowId: 'sr-1', suggestedAction: 'add', reasonCode: 'missing_priced_item', reason: 'Missing line', confidence: 0.91 },
+    ],
+  }, v2Context)
+  assert.equal(prepared.ok, true)
+  if (!prepared.ok) return
+  assert.deepEqual(
+    prepared.proposal.sourceRowSuggestions?.map((entry) => entry.sourceRowId),
+    ['sr-1', 'sr-2'],
+  )
+})
+
+test('v2 needs_human_review omits malformed advisory suggestions while the proposal remains ok', () => {
+  const incomplete = prepareProviderProposalV2({
+    id: 'incomplete-suggestions', operation: 'needs_human_review',
+    sourceRowIds: ['sr-1', 'sr-2'], targetItemIds: [], candidateItemIds: [],
+    confidence: 0.9, explanation: 'Bundle.',
+    sourceRowSuggestions: [
+      { sourceRowId: 'sr-1', suggestedAction: 'add', reasonCode: 'missing_priced_item', reason: 'Missing', confidence: 0.9 },
+    ],
+  }, v2Context)
+  assert.equal(incomplete.ok, true)
+  if (!incomplete.ok) return
+  assert.equal(incomplete.proposal.sourceRowSuggestions, undefined)
+
+  const badConfidence = prepareProviderProposalV2({
+    id: 'bad-confidence', operation: 'needs_human_review',
+    sourceRowIds: ['sr-1'], targetItemIds: [], candidateItemIds: [],
+    confidence: 0.9, explanation: 'Bundle.',
+    sourceRowSuggestions: [
+      { sourceRowId: 'sr-1', suggestedAction: 'add', reasonCode: 'missing_priced_item', reason: 'Missing', confidence: 1.5 },
+    ],
+  }, v2Context)
+  assert.equal(badConfidence.ok, true)
+  if (!badConfidence.ok) return
+  assert.equal(badConfidence.proposal.sourceRowSuggestions, undefined)
+})
+
+test('v2 advisory suggestions on non-human-review operations fail preparation', () => {
+  const suggestion = [
+    { sourceRowId: 'sr-1', suggestedAction: 'add', reasonCode: 'missing_priced_item', reason: 'Missing', confidence: 0.9 },
+  ]
+  assert.equal(prepareProviderProposalV2({
+    id: 'advisory-insert', operation: 'insert_missing_item',
+    sourceRowIds: ['sr-1'], targetItemIds: [], candidateItemIds: ['candidate-1'],
+    confidence: 0.9, explanation: 'Bad.', sourceRowSuggestions: suggestion,
+  }, v2Context).ok, false)
+  assert.equal(prepareProviderProposalV2({
+    id: 'advisory-replace', operation: 'replace_item',
+    sourceRowIds: ['sr-1'], targetItemIds: ['target-1'], candidateItemIds: ['candidate-1'],
+    confidence: 0.9, explanation: 'Bad.', sourceRowSuggestions: suggestion,
+  }, v2Context).ok, false)
+  assert.equal(prepareProviderProposalV2({
+    id: 'advisory-remove', operation: 'remove_spurious_item',
+    sourceRowIds: ['sr-1'], targetItemIds: ['target-1'], candidateItemIds: [],
+    confidence: 0.9, explanation: 'Bad.', sourceRowSuggestions: suggestion,
+  }, v2Context).ok, false)
+  assert.equal(prepareProviderProposalV2({
+    ...mappedDecision, sourceRowSuggestions: suggestion,
+  }, mappedContext).ok, false)
+})
+
+test('v2 contract advisory instructions request one entry per source row and forbid item values', () => {
+  const instructions = providerContractInstructionsV2()
+  assert.match(instructions, /sourceRowSuggestions/)
+  assert.match(instructions, /one advisory entry per sourceRowId/i)
+  for (const code of SOURCE_ROW_DISPOSITION_REASON_CODES) {
+    assert.match(instructions, new RegExp(code))
+  }
+  assert.match(instructions, /non-binding/i)
+  assert.match(instructions, /descriptions, units, quantities, rates, totals, section choices, source mappings, or preselected human decisions/i)
 })

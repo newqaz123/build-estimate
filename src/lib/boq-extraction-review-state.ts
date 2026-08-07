@@ -1,5 +1,5 @@
 import type { ExtractionReviewResponse } from "./boq-extraction-ai-review"
-import { isReviewActionableOperation, normalizeValidationSummary, type ProposalOperation, type ValidatedProposal } from "./boq-extraction-proposals"
+import { isReviewActionableOperation, normalizeSourceRowDispositionSuggestions, normalizeValidationSummary, type ProposalOperation, type ValidatedProposal } from "./boq-extraction-proposals"
 
 export type ExtractionProposalStatus = "accepted" | "rejected" | "skipped" | "superseded" | "undone"
 export type ExtractionProposalStatusMap = Record<string, ExtractionProposalStatus | undefined>
@@ -423,6 +423,8 @@ function validProposalShape(value: unknown): boolean {
     if (!validSourceCellMappingShape(value.sourceCellMapping, value.sourceRowIds)) return false
     if (!validMappedCandidateShape(value.mappedCandidate, value.sourceRowIds)) return false
   }
+  if (value.sourceRowSuggestions !== undefined
+    && normalizeSourceRowDispositionSuggestions(value.sourceRowSuggestions, value.sourceRowIds) === null) return false
   return true
 }
 

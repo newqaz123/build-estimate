@@ -7,9 +7,12 @@ import {
   fingerprintCanonicalItem,
   fingerprintCanonicalSections,
   isHighConfidenceProposal,
+  isStructurallyValidExtractionProposal,
+  normalizeSourceRowDispositionSuggestions,
   undoAcceptedProposal,
   validateProposal,
   validateProposalBatch,
+  SOURCE_ROW_DISPOSITION_REASON_CODES,
   type ProposalCandidateRef,
   type ProposalValidationContext,
 } from './boq-extraction-proposals'
@@ -402,6 +405,77 @@ test('accepted insert stores total-basis allocation for different-unit native so
     origin: 'source',
   })
   assert.equal(costAllocationReconciles(inserted), true)
+})
+
+test('normalizes a complete source-row disposition suggestion set into proposal order', () => {
+  assert.deepEqual(
+    normalizeSourceRowDispositionSuggestions([
+      { sourceRowId: 'sr-2', suggestedAction: 'ignore', reasonCode: 'summary_or_tax', reason: 'Subtotal', confidence: 0.99 },
+      { sourceRowId: 'sr-1', suggestedAction: 'add', reasonCode: 'missing_priced_item', reason: 'Missing line', confidence: 0.91 },
+    ], ['sr-1', 'sr-2'])?.map((entry) => entry.sourceRowId),
+    ['sr-1', 'sr-2'],
+  )
+})
+
+test('rejects malformed source-row disposition suggestion sets', () => {
+  const entry = (overrides: Record<string, unknown> = {}) => ({
+    sourceRowId: 'sr-1', suggestedAction: 'add', reasonCode: 'missing_priced_item',
+    reason: 'Missing line', confidence: 0.9, ...overrides,
+  })
+  const ids = ['sr-1']
+  assert.equal(normalizeSourceRowDispositionSuggestions({}, ids), null)
+  assert.equal(normalizeSourceRowDispositionSuggestions([], ids), null)
+  assert.equal(normalizeSourceRowDispositionSuggestions([entry(), entry({ reason: 'Dup' })], ids), null)
+  assert.equal(normalizeSourceRowDispositionSuggestions([entry(), entry({ sourceRowId: 'sr-2', reason: 'Extra' })], ids), null)
+  assert.equal(normalizeSourceRowDispositionSuggestions([entry({ sourceRowId: 'sr-unknown' })], ids), null)
+  assert.equal(normalizeSourceRowDispositionSuggestions([entry({ suggestedAction: 'delete' })], ids), null)
+  assert.equal(normalizeSourceRowDispositionSuggestions([entry({ reasonCode: 'invented' })], ids), null)
+  assert.equal(normalizeSourceRowDispositionSuggestions([entry({ reason: '   ' })], ids), null)
+  assert.equal(normalizeSourceRowDispositionSuggestions([entry({ reason: 'x'.repeat(501) })], ids), null)
+  assert.equal(normalizeSourceRowDispositionSuggestions([entry({ confidence: -0.1 })], ids), null)
+  assert.equal(normalizeSourceRowDispositionSuggestions([entry({ confidence: 1.1 })], ids), null)
+  assert.equal(normalizeSourceRowDispositionSuggestions([entry({ extra: 'bad' })], ids), null)
+  assert.equal(normalizeSourceRowDispositionSuggestions([entry({ sourceRowId: 5 })], ids), null)
+})
+
+test('source-row disposition reason codes are the closed advisory set', () => {
+  assert.deepEqual([...SOURCE_ROW_DISPOSITION_REASON_CODES], [
+    'missing_priced_item', 'already_represented', 'summary_or_tax', 'unsupported_content', 'uncertain',
+  ])
+})
+
+test('a stored proposal with valid source-row suggestions is structurally valid', () => {
+  const human = {
+    id: 'human-suggestions', extractionRunId: 'run-1', operation: 'needs_human_review',
+    sourceRowIds: ['row-combined', 'row-extra'], targetItemIds: [], affectedItemFingerprints: {},
+    confidence: 0.8, explanation: 'Mixed rows need manual review.', proposedItems: [],
+    sourceRowSuggestions: [
+      { sourceRowId: 'row-combined', suggestedAction: 'add', reasonCode: 'missing_priced_item', reason: 'Missing line', confidence: 0.9 },
+      { sourceRowId: 'row-extra', suggestedAction: 'ignore', reasonCode: 'summary_or_tax', reason: 'Subtotal', confidence: 0.95 },
+    ],
+  }
+  assert.equal(isStructurallyValidExtractionProposal(human), true)
+})
+
+test('a stored proposal with malformed source-row suggestions is rejected', () => {
+  const human = {
+    id: 'human-bad-suggestions', extractionRunId: 'run-1', operation: 'needs_human_review',
+    sourceRowIds: ['row-combined', 'row-extra'], targetItemIds: [], affectedItemFingerprints: {},
+    confidence: 0.8, explanation: 'Mixed rows need manual review.', proposedItems: [],
+    sourceRowSuggestions: [
+      { sourceRowId: 'row-combined', suggestedAction: 'add', reasonCode: 'missing_priced_item', reason: 'Missing line', confidence: 0.9 },
+    ],
+  }
+  assert.equal(isStructurallyValidExtractionProposal(human), false)
+})
+
+test('a stored proposal without source-row suggestions remains structurally valid', () => {
+  const human = {
+    id: 'human-no-suggestions', extractionRunId: 'run-1', operation: 'needs_human_review',
+    sourceRowIds: ['row-combined'], targetItemIds: [], affectedItemFingerprints: {},
+    confidence: 0.8, explanation: 'Ambiguous row.', proposedItems: [],
+  }
+  assert.equal(isStructurallyValidExtractionProposal(human), true)
 })
 
 test('source-backed metadata is restricted to its canonical operation shape', () => {

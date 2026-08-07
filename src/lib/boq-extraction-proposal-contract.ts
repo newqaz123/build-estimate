@@ -1,6 +1,7 @@
 import {
   fingerprintCanonicalItem,
   fingerprintCanonicalSections,
+  normalizeSourceRowDispositionSuggestions,
   PROPOSAL_OPERATIONS,
   type ExtractionProposal,
   type ProposalOperation,
@@ -218,7 +219,7 @@ export function providerContractInstructions(): string {
 // packet; the server expands those references into full proposedItems.
 
 const V2_PROPOSAL_KEYS = new Set([
-  'id', 'operation', 'sourceRowIds', 'targetItemIds', 'candidateItemIds', 'confidence', 'explanation', 'cellMapping',
+  'id', 'operation', 'sourceRowIds', 'targetItemIds', 'candidateItemIds', 'confidence', 'explanation', 'cellMapping', 'sourceRowSuggestions',
 ])
 
 const SOURCE_CELL_MAPPING_KEYS = new Set([
@@ -515,6 +516,9 @@ export function prepareProviderProposalV2(
     || !finiteNumber(value.confidence)
     || value.confidence < 0 || value.confidence > 1 || !nonBlankString(value.explanation)) return { ok: false }
 
+  // Advisory suggestions are non-binding metadata for human-review decisions only.
+  if ('sourceRowSuggestions' in value && value.operation !== 'needs_human_review') return { ok: false }
+
   if (value.operation === 'map_source_item') {
     if ('candidateItemIds' in value || !context.sourceRows || !context.allowedSourceRowIds) return { ok: false }
     const mapping = parseSourceCellMapping(value.cellMapping)
@@ -576,6 +580,13 @@ export function prepareProviderProposalV2(
   if (operation === 'remove_spurious_item' && (targetItemIds.length === 0 || candidateItemIds.length !== 0)) return { ok: false }
   if (operation === 'needs_human_review' && candidateItemIds.length !== 0) return { ok: false }
   if (targetItemIds.some((id) => !context.targetItems.has(id))) return { ok: false }
+
+  // Attach advisory suggestions only when the complete, valid block normalizes.
+  // Malformed or incomplete advisory metadata is omitted, not rejected, so an
+  // otherwise valid human-review decision remains available.
+  const normalizedSuggestions = operation === 'needs_human_review' && 'sourceRowSuggestions' in value
+    ? normalizeSourceRowDispositionSuggestions(value.sourceRowSuggestions, sourceRowIds)
+    : null
 
   const candidates = candidateItemIds.map((id) => context.candidateItems.get(id))
   if (candidates.some((candidate) => !candidate)) return { ok: false }
@@ -644,6 +655,7 @@ export function prepareProviderProposalV2(
     confidence: value.confidence as number,
     explanation: value.explanation as string,
     proposedItems,
+    ...(normalizedSuggestions ? { sourceRowSuggestions: normalizedSuggestions } : {}),
   }
   return { ok: true, proposal }
 }
@@ -677,6 +689,11 @@ export function providerContractInstructionsV2(): string {
     '    Set targetItemIds to the spurious item(s), candidateItemIds to [].',
     '  needs_human_review: A source row needs manual attention and no safe automatic correction exists.',
     '    Set candidateItemIds to []. Bundle rows without an actionable candidate must use this decision.',
+    '    Include sourceRowSuggestions: exactly one advisory entry per sourceRowId in this decision.',
+    '    Each entry has EXACTLY: sourceRowId, suggestedAction ("add"|"ignore"), reasonCode, reason, confidence.',
+    '    reasonCode must be one of: "missing_priced_item" | "already_represented" | "summary_or_tax" | "unsupported_content" | "uncertain".',
+    '    The sourceRowSuggestions block is non-binding advisory metadata only.',
+    '    NEVER include descriptions, units, quantities, rates, totals, section choices, source mappings, or preselected human decisions in sourceRowSuggestions.',
     '  map_source_item: A priced source row has no deterministic candidate. Return cell coordinates only. Never return source values.',
     '    Use only cellRefs on reviewSelected sourceRows; context-only rows are not addressable.',
     '',

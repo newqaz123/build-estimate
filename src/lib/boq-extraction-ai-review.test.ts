@@ -607,3 +607,59 @@ test('target-item-state-only source drafts remain human_review_required', async 
   if (result.status !== 200) return
   assert.equal(result.body.aiStatus, 'human_review_required')
 })
+
+test('provider source-row suggestions are normalized into proposal order on a human-review proposal', async () => {
+  const multiCandidateRun = {
+    ...run,
+    reviewTargeting: { candidateRowIds: ['row-compound', 'row-clear'], candidateCount: 2, unreconciled: false },
+  }
+  let prompt = ''
+  const result = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+    getContext: async () => ({ boq, run: multiCandidateRun, sourceRows: rows }),
+    callProvider: async (messages, provider, model) => {
+      prompt = messages[1].content
+      return { content: JSON.stringify({ proposals: [{
+        id: 'mixed-review', operation: 'needs_human_review',
+        sourceRowIds: ['row-compound', 'row-clear'], targetItemIds: [], candidateItemIds: [],
+        confidence: 0.9, explanation: 'Bundle needs manual review.',
+        sourceRowSuggestions: [
+          { sourceRowId: 'row-clear', suggestedAction: 'ignore', reasonCode: 'already_represented', reason: 'Matches existing item', confidence: 0.92 },
+          { sourceRowId: 'row-compound', suggestedAction: 'add', reasonCode: 'missing_priced_item', reason: 'Missing line', confidence: 0.88 },
+        ],
+      }] }), provider, model }
+    },
+  }))
+  assert.equal(result.status, 200)
+  if (result.status !== 200) return
+  assert.equal(result.body.proposals.length, 1)
+  assert.deepEqual(
+    result.body.proposals[0]?.sourceRowSuggestions?.map((entry) => entry.sourceRowId),
+    ['row-compound', 'row-clear'],
+  )
+  // Full-document messages still include all Docling source rows and current BOQ targets.
+  assert.match(prompt, /row-compound/)
+  assert.match(prompt, /row-clear/)
+  assert.match(prompt, /currentTargetItems/)
+})
+
+test('malformed provider advisory suggestions are omitted while the human-review proposal remains available', async () => {
+  const multiCandidateRun = {
+    ...run,
+    reviewTargeting: { candidateRowIds: ['row-compound', 'row-clear'], candidateCount: 2, unreconciled: false },
+  }
+  const result = await executeExtractionReview({}, 'boq-1', 'run-1', deps({
+    getContext: async () => ({ boq, run: multiCandidateRun, sourceRows: rows }),
+    callProvider: async (_messages, provider, model) => ({ content: JSON.stringify({ proposals: [{
+      id: 'mixed-review', operation: 'needs_human_review',
+      sourceRowIds: ['row-compound', 'row-clear'], targetItemIds: [], candidateItemIds: [],
+      confidence: 0.9, explanation: 'Bundle needs manual review.',
+      sourceRowSuggestions: [
+        { sourceRowId: 'row-compound', suggestedAction: 'add', reasonCode: 'missing_priced_item', reason: 'Missing line', confidence: 0.88 },
+      ],
+    }] }), provider, model }),
+  }))
+  assert.equal(result.status, 200)
+  if (result.status !== 200) return
+  assert.equal(result.body.proposals.length, 1)
+  assert.equal(result.body.proposals[0]?.sourceRowSuggestions, undefined)
+})

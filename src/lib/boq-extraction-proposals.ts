@@ -101,6 +101,41 @@ export function normalizeValidationSummary(value: unknown): ProposalValidationSu
   return { validatedProposalCount: validated, rejectedProposalCount: rejected, ...(codeSum > 0 ? { rejectionCounts } : {}) }
 }
 
+const SOURCE_ROW_SUGGESTION_KEYS = new Set(['sourceRowId', 'suggestedAction', 'reasonCode', 'reason', 'confidence'])
+
+/** Normalizes non-binding AI per-row disposition advice into a complete,
+ *  unique, exact, proposal-ordered set. Returns null for any incomplete,
+ *  duplicate, extra, unknown, or field-invalid advisory block so the caller can
+ *  omit it without rejecting an otherwise valid human-review proposal. */
+export function normalizeSourceRowDispositionSuggestions(
+  value: unknown,
+  sourceRowIds: readonly string[],
+): SourceRowDispositionSuggestion[] | null {
+  if (!Array.isArray(value) || value.length !== sourceRowIds.length) return null
+  const byId = new Map<string, SourceRowDispositionSuggestion>()
+  for (const entry of value) {
+    if (!isRecord(entry) || !exactKeys(entry, SOURCE_ROW_SUGGESTION_KEYS)) return null
+    if (!nonBlankString(entry.sourceRowId)) return null
+    if (entry.suggestedAction !== 'add' && entry.suggestedAction !== 'ignore') return null
+    if (!SOURCE_ROW_DISPOSITION_REASON_CODES.includes(entry.reasonCode as SourceRowDispositionReasonCode)) return null
+    if (!nonBlankString(entry.reason) || entry.reason.length > 500) return null
+    if (typeof entry.confidence !== 'number' || !Number.isFinite(entry.confidence)
+      || entry.confidence < 0 || entry.confidence > 1) return null
+    if (byId.has(entry.sourceRowId)) return null
+    byId.set(entry.sourceRowId, {
+      sourceRowId: entry.sourceRowId,
+      suggestedAction: entry.suggestedAction,
+      reasonCode: entry.reasonCode as SourceRowDispositionReasonCode,
+      reason: entry.reason,
+      confidence: entry.confidence,
+    })
+  }
+  if (byId.size !== sourceRowIds.length) return null
+  return sourceRowIds.every((id) => byId.has(id))
+    ? sourceRowIds.map((id) => byId.get(id)!)
+    : null
+}
+
 export interface ProposalSourceComponentEvidence {
   qty: number
   unit: string
@@ -150,6 +185,27 @@ export interface ProposalBundleChild {
 
 export type ProposedExtractionItem = ProposalPricedItem | ProposalBundleChild
 
+/** Non-binding AI advice for a single source row in a human-review proposal.
+ *  Advisory only — never a preselected human decision and never a source of
+ *  description, unit, quantity, rate, total, section, or mapping values. */
+export const SOURCE_ROW_DISPOSITION_REASON_CODES = [
+  'missing_priced_item',
+  'already_represented',
+  'summary_or_tax',
+  'unsupported_content',
+  'uncertain',
+] as const
+
+export type SourceRowDispositionReasonCode = typeof SOURCE_ROW_DISPOSITION_REASON_CODES[number]
+
+export interface SourceRowDispositionSuggestion {
+  sourceRowId: string
+  suggestedAction: 'add' | 'ignore'
+  reasonCode: SourceRowDispositionReasonCode
+  reason: string
+  confidence: number
+}
+
 export interface ExtractionProposal {
   id: string
   extractionRunId: string
@@ -173,6 +229,8 @@ export interface ExtractionProposal {
   mappedCandidate?: ExtractionCandidateItem
   /** Source-backed partial resolution for a non-actionable human-review decision. */
   reviewDraft?: SourceBackedReviewDraft
+  /** Non-binding AI per-row disposition advice for a needs_human_review proposal. */
+  sourceRowSuggestions?: SourceRowDispositionSuggestion[]
 }
 
 /** Server-owned immutable candidate used to validate expanded v2 decisions. */
@@ -324,6 +382,7 @@ const STORED_PROPOSAL_KEYS = new Set([
   'destinationSectionIndex', 'destinationItemIndex', 'candidateSourceOrder',
   'sourceRowIds', 'targetItemIds', 'affectedItemFingerprints', 'confidence',
   'explanation', 'proposedItems', 'sourceCellMapping', 'mappedCandidate', 'reviewDraft',
+  'sourceRowSuggestions',
   'evidenceValid', 'reconciled', 'stale',
 ])
 
@@ -419,6 +478,8 @@ export function isStructurallyValidExtractionProposal(value: unknown): value is 
     if (index !== undefined && (!Number.isInteger(index) || index < 0)) return false
   }
   if (!proposal.proposedItems.every((item) => validProposedItem(item, proposal.sourceRowIds))) return false
+  if (proposal.sourceRowSuggestions !== undefined
+    && normalizeSourceRowDispositionSuggestions(proposal.sourceRowSuggestions, proposal.sourceRowIds) === null) return false
   return validateSourceBackedMetadata(proposal) === null
 }
 
