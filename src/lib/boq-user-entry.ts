@@ -56,23 +56,38 @@ export interface SourceBackedItemRequest {
   labourCost: number
 }
 
-/** A single source-backed entry inside a batch manual-add request. Carries the
- *  client-selected source row alongside the editable user values for that row. */
-export interface SourceBackedBatchEntryRequest extends SourceBackedItemRequest {
+/** An add decision inside a multi-row decision-batch request. */
+export interface SourceRowAddDecisionRequest {
   sourceRowId: string
+  action: "add"
+  item: SourceBackedItemRequest
 }
 
-/** Closed single/batch request union. The server resolves provenance per row
- *  from immutable evidence; the client supplies only editable values. */
+/** An ignore decision inside a multi-row decision-batch request. The optional
+ *  note is reviewer-authored audit text only. */
+export interface SourceRowIgnoreDecisionRequest {
+  sourceRowId: string
+  action: "ignore"
+  note?: string
+}
+
+/** Closed union of per-source-row human decisions. */
+export type SourceRowDecisionRequest = SourceRowAddDecisionRequest | SourceRowIgnoreDecisionRequest
+
+/** Closed single/decision-batch request union. The server resolves provenance
+ *  per row from immutable evidence; the client supplies only editable values
+ *  and explicit per-row Add/Do-not-add choices. */
 export type SourceBackedManualAddRequest =
   | { mode: "single"; value: SourceBackedItemRequest }
-  | { mode: "batch"; items: SourceBackedBatchEntryRequest[] }
+  | { mode: "decision_batch"; decisions: SourceRowDecisionRequest[] }
 
 const SOURCE_ITEM_KEYS = new Set(["desc", "unit", "qty", "materialCost", "labourCost"])
 const SOURCE_REQUEST_KEYS = new Set(["sectionIndex", "item"])
-const BATCH_ENTRY_KEYS = new Set(["sourceRowId", "sectionIndex", "item"])
-const BATCH_REQUEST_KEYS = new Set(["items"])
+const ADD_DECISION_KEYS = new Set(["sourceRowId", "action", "sectionIndex", "item"])
+const IGNORE_DECISION_KEYS = new Set(["sourceRowId", "action", "note"])
+const DECISION_BATCH_KEYS = new Set(["decisions"])
 const MAX_BATCH_ENTRIES = 100
+const MAX_NOTE_LENGTH = 500
 const COMPONENT_FIELDS: ReadonlyArray<keyof Pick<SourceBackedItemRequest, "materialCost" | "labourCost">> = ["materialCost", "labourCost"]
 
 function requireFiniteNonNegative(field: string, value: unknown): number {
@@ -121,28 +136,34 @@ export function parseSourceBackedItemRequest(value: unknown): SourceBackedItemRe
   return { sectionIndex: Number(value.sectionIndex), desc: desc.trim(), unit: unit.trim(), qty, materialCost, labourCost }
 }
 
-/** Parse a closed single/batch manual-add request. A top-level own `items` key
- *  selects batch shape; every other object is parsed as the existing single
- *  shape. Batch entries reuse `parseSourceBackedItemRequest` for their
- *  `sectionIndex`/`item` validation and are flattened before being returned. */
+/** Parse a closed single/decision-batch manual-add request. A top-level own
+ *  `decisions` key selects the decision-batch shape; every other object is
+ *  parsed as the existing single shape. Decision entries reuse
+ *  `parseSourceBackedItemRequest` for add-action validation and trim optional
+ *  ignore notes. */
 export function parseSourceBackedManualAddRequest(value: unknown): SourceBackedManualAddRequest {
   if (!isRecord(value)) throw new MissingBoqItemError("Request body must be an object.")
-  if (Object.prototype.hasOwnProperty.call(value, "items")) {
+  if (Object.prototype.hasOwnProperty.call(value, "decisions")) {
     for (const key of Object.keys(value)) {
-      if (!BATCH_REQUEST_KEYS.has(key)) throw new MissingBoqItemError(`Unexpected request field: ${key}.`)
+      if (!DECISION_BATCH_KEYS.has(key)) throw new MissingBoqItemError(`Unexpected request field: ${key}.`)
     }
-    const items = value.items
-    if (!Array.isArray(items)) throw new MissingBoqItemError("items must be an array.")
-    if (items.length === 0) throw new MissingBoqItemError("items must not be empty.")
-    if (items.length > MAX_BATCH_ENTRIES) {
-      throw new MissingBoqItemError(`items must not contain more than ${MAX_BATCH_ENTRIES} entries.`)
+    const decisions = value.decisions
+    if (!Array.isArray(decisions)) throw new MissingBoqItemError("decisions must be an array.")
+    if (decisions.length === 0) throw new MissingBoqItemError("decisions must not be empty.")
+    if (decisions.length > MAX_BATCH_ENTRIES) {
+      throw new MissingBoqItemError(`decisions must not contain more than ${MAX_BATCH_ENTRIES} entries.`)
     }
     const seenRowIds = new Set<string>()
-    const entries: SourceBackedBatchEntryRequest[] = []
-    for (const entry of items) {
-      if (!isRecord(entry)) throw new MissingBoqItemError("Each batch entry must be an object.")
+    const entries: SourceRowDecisionRequest[] = []
+    for (const entry of decisions) {
+      if (!isRecord(entry)) throw new MissingBoqItemError("Each decision entry must be an object.")
+      const action = entry.action
+      if (action !== "add" && action !== "ignore") {
+        throw new MissingBoqItemError("action must be 'add' or 'ignore'.")
+      }
       for (const key of Object.keys(entry)) {
-        if (!BATCH_ENTRY_KEYS.has(key)) throw new MissingBoqItemError(`Unexpected batch entry field: ${key}.`)
+        const allowed = action === "add" ? ADD_DECISION_KEYS : IGNORE_DECISION_KEYS
+        if (!allowed.has(key)) throw new MissingBoqItemError(`Unexpected decision field: ${key}.`)
       }
       const sourceRowId = entry.sourceRowId
       if (typeof sourceRowId !== "string" || !sourceRowId.trim()) {
@@ -152,10 +173,22 @@ export function parseSourceBackedManualAddRequest(value: unknown): SourceBackedM
         throw new MissingBoqItemError("sourceRowId values must be unique.")
       }
       seenRowIds.add(sourceRowId)
-      const itemValues = parseSourceBackedItemRequest({ sectionIndex: entry.sectionIndex, item: entry.item })
-      entries.push({ sourceRowId, ...itemValues })
+      if (action === "add") {
+        const itemValues = parseSourceBackedItemRequest({ sectionIndex: entry.sectionIndex, item: entry.item })
+        entries.push({ sourceRowId, action: "add", item: itemValues })
+      } else {
+        const noteValue = entry.note
+        if (noteValue !== undefined) {
+          if (typeof noteValue !== "string") throw new MissingBoqItemError("note must be a string.")
+          if (noteValue.trim().length > MAX_NOTE_LENGTH) {
+            throw new MissingBoqItemError(`note must not exceed ${MAX_NOTE_LENGTH} characters.`)
+          }
+        }
+        const trimmed = typeof noteValue === "string" ? noteValue.trim() : ""
+        entries.push(trimmed ? { sourceRowId, action: "ignore", note: trimmed } : { sourceRowId, action: "ignore" })
+      }
     }
-    return { mode: "batch", items: entries }
+    return { mode: "decision_batch", decisions: entries }
   }
   return { mode: "single", value: parseSourceBackedItemRequest(value) }
 }

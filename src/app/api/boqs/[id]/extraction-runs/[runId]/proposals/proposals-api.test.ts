@@ -125,14 +125,14 @@ test('addSourceItem rejects malformed bodies and invalid path ids before delegat
   assert.equal((await action.addSourceItem(request(sourceItemBody), badPath)).status, 400)
 })
 
-const batchSourceItemBody = {
-  items: [
-    { sourceRowId: 'row-1', sectionIndex: 0, item: { desc: 'Tooling', unit: 'Lot', qty: 1, materialCost: 6000, labourCost: 0 } },
-    { sourceRowId: 'row-2', sectionIndex: 0, item: { desc: 'Expense', unit: 'Lot', qty: 1, materialCost: 61616, labourCost: 0 } },
+const decisionBatchSourceItemBody = {
+  decisions: [
+    { sourceRowId: 'row-1', action: 'add', sectionIndex: 0, item: { desc: 'Tooling', unit: 'Lot', qty: 1, materialCost: 6000, labourCost: 0 } },
+    { sourceRowId: 'row-2', action: 'ignore', note: 'Summary' },
   ],
 }
 
-test('addSourceItem forwards a parsed batch request to the dependency unchanged', async () => {
+test('addSourceItem forwards a parsed decision-batch request to the dependency unchanged', async () => {
   const calls: Array<{ boqId: string; runId: string; proposalId: string; request: SourceBackedManualAddRequest; actorId: string }> = []
   const action = handlers({
     addSourceItem: async (boqId, runId, proposalId, requestBody, actorId) => {
@@ -140,30 +140,29 @@ test('addSourceItem forwards a parsed batch request to the dependency unchanged'
       return { status: 200, body: { status: 'accepted' } }
     },
   })
-  const response = await action.addSourceItem(request(batchSourceItemBody), context)
+  const response = await action.addSourceItem(request(decisionBatchSourceItemBody), context)
   assert.equal(response.status, 200)
-  assert.deepEqual(calls, [{
-    boqId: 'boq-1', runId: 'run-1', proposalId: 'proposal-1', actorId: 'user-1',
-    request: {
-      mode: 'batch',
-      items: [
-        { sourceRowId: 'row-1', sectionIndex: 0, desc: 'Tooling', unit: 'Lot', qty: 1, materialCost: 6000, labourCost: 0 },
-        { sourceRowId: 'row-2', sectionIndex: 0, desc: 'Expense', unit: 'Lot', qty: 1, materialCost: 61616, labourCost: 0 },
-      ],
-    },
-  }])
+  if (response.status !== 200) return
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0]!.request.mode, 'decision_batch')
+  if (calls[0]!.request.mode !== 'decision_batch') return
+  assert.equal(calls[0]!.request.decisions.length, 2)
+  assert.equal(calls[0]!.request.decisions[0]!.action, 'add')
+  assert.equal(calls[0]!.request.decisions[1]!.action, 'ignore')
 })
 
-test('addSourceItem rejects malformed or duplicate batch bodies without calling the dependency', async () => {
+test('addSourceItem rejects malformed or duplicate decision bodies without calling the dependency', async () => {
   const action = handlers({
     addSourceItem: async () => { throw new Error('dependency must not be called for malformed input') },
   })
-  assert.equal((await action.addSourceItem(request({ items: [] }), context)).status, 400)
-  assert.equal((await action.addSourceItem(request({ items: [
-    { sourceRowId: 'row-1', sectionIndex: 0, item: { desc: 'A', unit: 'Lot', qty: 1, materialCost: 1, labourCost: 0 } },
-    { sourceRowId: 'row-1', sectionIndex: 0, item: { desc: 'B', unit: 'Lot', qty: 1, materialCost: 2, labourCost: 0 } },
+  assert.equal((await action.addSourceItem(request({ decisions: [] }), context)).status, 400)
+  assert.equal((await action.addSourceItem(request({ decisions: [
+    { sourceRowId: 'row-1', action: 'add', sectionIndex: 0, item: { desc: 'A', unit: 'Lot', qty: 1, materialCost: 1, labourCost: 0 } },
+    { sourceRowId: 'row-1', action: 'ignore' },
   ] }), context)).status, 400)
-  assert.equal((await action.addSourceItem(request({ items: [
-    { sourceRowId: 'row-1', sectionIndex: 0, item: { desc: '', unit: 'Lot', qty: 1, materialCost: 1, labourCost: 0 } },
+  assert.equal((await action.addSourceItem(request({ decisions: [
+    { sourceRowId: 'row-1', action: 'add', sectionIndex: 0, item: { desc: '', unit: 'Lot', qty: 1, materialCost: 1, labourCost: 0 } },
   ] }), context)).status, 400)
+  // Obsolete { items } shape falls into the single parser and fails.
+  assert.equal((await action.addSourceItem(request({ items: [{ sourceRowId: 'row-1', sectionIndex: 0, item: { desc: 'A', unit: 'Lot', qty: 1, materialCost: 1, labourCost: 0 } }] }), context)).status, 400)
 })

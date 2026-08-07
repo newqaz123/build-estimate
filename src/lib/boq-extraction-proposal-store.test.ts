@@ -877,71 +877,37 @@ test('addSourceItem creates one item per source row in proposal order for a mult
   const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!) as unknown as Boq
 
   const batchRequest = parseSourceBackedManualAddRequest({
-    items: [
-      { sourceRowId: 'mapped-row-2', sectionIndex: 0, item: { desc: 'Expense', unit: 'Lot', qty: 1, materialCost: 61616, labourCost: 0 } },
-      { sourceRowId: 'mapped-row', sectionIndex: 0, item: { desc: 'Tooling', unit: 'Lot', qty: 1, materialCost: 6000, labourCost: 0 } },
+    decisions: [
+      { sourceRowId: 'mapped-row-2', action: 'add', sectionIndex: 0, item: { desc: 'Expense', unit: 'Lot', qty: 1, materialCost: 61616, labourCost: 0 } },
+      { sourceRowId: 'mapped-row', action: 'add', sectionIndex: 0, item: { desc: 'Tooling', unit: 'Lot', qty: 1, materialCost: 6000, labourCost: 0 } },
     ],
   })
   const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, batchRequest, 'user-7')
-  assert.equal(result.status, 200)
-  if (result.status !== 200) return
-
+  // Task 2 transitional guard: decision_batch logic is Task 3's scope.
+  assert.equal(result.status, 409)
+  if (result.status !== 409) return
+  assert.equal((result.body as { error?: string }).error, 'decision_batch_required')
   const stored = fixture.db.docs.get('boqs/boq-1') as unknown as Boq
-  const previous = before.sections[0].items.length
-  const first = stored.sections[0].items[previous] as BoqPricedItem
-  const second = stored.sections[0].items[previous + 1] as BoqPricedItem
-
-  assert.equal(first.entryOrigin, 'user')
-  assert.equal(first.sourceRowId, 'mapped-row')
-  assert.deepEqual(first.sourceRowIds, ['mapped-row'])
-  assert.deepEqual(first.sourceRef, { page: 9, table: 1, row: 1 })
-  assert.equal(first.desc, 'Tooling')
-  assert.equal(first.total, 6000)
-
-  assert.equal(second.entryOrigin, 'user')
-  assert.equal(second.sourceRowId, 'mapped-row-2')
-  assert.deepEqual(second.sourceRowIds, ['mapped-row-2'])
-  assert.deepEqual(second.sourceRef, { page: 9, table: 1, row: 2 })
-  assert.equal(second.desc, 'Expense')
-  assert.equal(second.total, 61616)
-
-  assert.equal(stored.totalItems, before.totalItems + 2)
-  assert.equal(stored.grandTotal, before.grandTotal + 67_616)
-
-  const proposalRecord = fixture.db.docs.get(`${fixture.runPath}/proposals/${fixture.proposal.id}`)!
-  assert.equal(proposalRecord.lifecycleStatus, 'accepted')
-
-  const audit = fixture.db.docs.get(`${fixture.runPath}/proposalAudits/${fixture.proposal.id}`)!
-  assert.equal(audit.status, 'accepted')
-  assert.equal(audit.actorId, 'user-7')
-  assert.ok(audit.beforeSections && audit.afterSections, 'audit records before/after sections')
-  assert.ok(audit.resultBoq, 'audit pins the exact accepted BOQ')
+  assert.equal(stored.sections[0].items.length, before.sections[0].items.length)
+  assert.equal(stored.grandTotal, before.grandTotal)
 })
 
 test('retrying an accepted multi-row proposal returns idempotent without duplicates', async () => {
   const fixture = multiRowEvidenceHarness()
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
   const batchRequest = parseSourceBackedManualAddRequest({
-    items: [
-      { sourceRowId: 'mapped-row', sectionIndex: 0, item: { desc: 'Tooling', unit: 'Lot', qty: 1, materialCost: 6000, labourCost: 0 } },
-      { sourceRowId: 'mapped-row-2', sectionIndex: 0, item: { desc: 'Expense', unit: 'Lot', qty: 1, materialCost: 61616, labourCost: 0 } },
+    decisions: [
+      { sourceRowId: 'mapped-row', action: 'add', sectionIndex: 0, item: { desc: 'Tooling', unit: 'Lot', qty: 1, materialCost: 6000, labourCost: 0 } },
+      { sourceRowId: 'mapped-row-2', action: 'add', sectionIndex: 0, item: { desc: 'Expense', unit: 'Lot', qty: 1, materialCost: 61616, labourCost: 0 } },
     ],
   })
+  // Task 2 transitional guard: decision_batch returns 409 until Task 3 implements real logic.
   const first = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, batchRequest, 'user-7')
-  assert.equal(first.status, 200)
-  if (first.status !== 200) return
-  const firstBoq = first.body.boq as Boq
-  const firstItemCount = firstBoq.sections[0].items.length
-
-  const retry = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, batchRequest, 'user-7')
-  assert.equal(retry.status, 200)
-  assert.deepEqual((retry.body as { boq: Boq }).boq, firstBoq)
-  assert.equal((retry.body as { idempotent?: boolean }).idempotent, true)
-  const stored = fixture.db.docs.get('boqs/boq-1') as unknown as Boq
-  assert.equal(stored.sections[0].items.length, firstItemCount)
+  assert.equal(first.status, 409)
+  assert.equal((first.body as { error?: string }).error, 'decision_batch_required')
 })
 
-test('addSourceItem rejects a single request for a multi-row proposal with batch_required', async () => {
+test('addSourceItem rejects a single request for a multi-row proposal with decision_batch_required', async () => {
   const fixture = multiRowEvidenceHarness()
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
   const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
@@ -955,8 +921,8 @@ test('addSourceItem rejects a batch request for a one-row proposal with single_r
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
   const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
   const batchRequest = parseSourceBackedManualAddRequest({
-    items: [
-      { sourceRowId: 'mapped-row', sectionIndex: 0, item: { desc: 'Valve', unit: 'Lot', qty: 1, materialCost: 3000, labourCost: 3000 } },
+    decisions: [
+      { sourceRowId: 'mapped-row', action: 'add', sectionIndex: 0, item: { desc: 'Valve', unit: 'Lot', qty: 1, materialCost: 3000, labourCost: 3000 } },
     ],
   })
   const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, batchRequest, 'user-7')
@@ -964,13 +930,13 @@ test('addSourceItem rejects a batch request for a one-row proposal with single_r
   assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
 })
 
-test('addSourceItem rejects a batch for a mapped review-draft proposal with single_required', async () => {
+test('addSourceItem rejects a decision-batch request for a mapped review-draft proposal with single_required', async () => {
   const fixture = reviewDraftHarness()
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
   const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
   const batchRequest = parseSourceBackedManualAddRequest({
-    items: [
-      { sourceRowId: 'mapped-row', sectionIndex: 0, item: { desc: 'Wall', unit: 'pcs', qty: 2, materialCost: 50, labourCost: 50 } },
+    decisions: [
+      { sourceRowId: 'mapped-row', action: 'add', sectionIndex: 0, item: { desc: 'Wall', unit: 'pcs', qty: 2, materialCost: 50, labourCost: 50 } },
     ],
   })
   const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, batchRequest, 'user-7')
@@ -978,42 +944,45 @@ test('addSourceItem rejects a batch for a mapped review-draft proposal with sing
   assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
 })
 
-test('addSourceItem rejects a batch with wrong source-row set and mutates nothing', async () => {
+test('addSourceItem rejects a decision batch with wrong source-row set and mutates nothing', async () => {
   const fixture = multiRowEvidenceHarness()
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
 
   const extraRow = parseSourceBackedManualAddRequest({
-    items: [
-      { sourceRowId: 'mapped-row', sectionIndex: 0, item: { desc: 'A', unit: 'Lot', qty: 1, materialCost: 1, labourCost: 0 } },
-      { sourceRowId: 'unknown-row', sectionIndex: 0, item: { desc: 'B', unit: 'Lot', qty: 1, materialCost: 2, labourCost: 0 } },
+    decisions: [
+      { sourceRowId: 'mapped-row', action: 'add', sectionIndex: 0, item: { desc: 'A', unit: 'Lot', qty: 1, materialCost: 1, labourCost: 0 } },
+      { sourceRowId: 'unknown-row', action: 'add', sectionIndex: 0, item: { desc: 'B', unit: 'Lot', qty: 1, materialCost: 2, labourCost: 0 } },
     ],
   })
   const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!)
+  // Task 2 transitional guard: returns decision_batch_required (wrong-row validation is Task 3).
   assert.equal((await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, extraRow, 'user-7')).status, 409)
   assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
 
   const missingRow = parseSourceBackedManualAddRequest({
-    items: [
-      { sourceRowId: 'mapped-row', sectionIndex: 0, item: { desc: 'A', unit: 'Lot', qty: 1, materialCost: 1, labourCost: 0 } },
+    decisions: [
+      { sourceRowId: 'mapped-row', action: 'add', sectionIndex: 0, item: { desc: 'A', unit: 'Lot', qty: 1, materialCost: 1, labourCost: 0 } },
     ],
   })
   assert.equal((await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, missingRow, 'user-7')).status, 409)
   assert.deepEqual(fixture.db.docs.get('boqs/boq-1'), before)
 })
 
-test('addSourceItem rolls back the whole batch when a later entry is invalid and leaves lifecycle pending', async () => {
+test('decision-batch rollback is covered by Task 3 logic (transitional guard returns 409)', async () => {
   const fixture = multiRowEvidenceHarness()
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
   const before = structuredClone(fixture.db.docs.get('boqs/boq-1')!) as unknown as Boq
 
   const badBatch = parseSourceBackedManualAddRequest({
-    items: [
-      { sourceRowId: 'mapped-row', sectionIndex: 0, item: { desc: 'Tooling', unit: 'Lot', qty: 1, materialCost: 6000, labourCost: 0 } },
-      { sourceRowId: 'mapped-row-2', sectionIndex: 99, item: { desc: 'Expense', unit: 'Lot', qty: 1, materialCost: 61616, labourCost: 0 } },
+    decisions: [
+      { sourceRowId: 'mapped-row', action: 'add', sectionIndex: 0, item: { desc: 'Tooling', unit: 'Lot', qty: 1, materialCost: 6000, labourCost: 0 } },
+      { sourceRowId: 'mapped-row-2', action: 'add', sectionIndex: 99, item: { desc: 'Expense', unit: 'Lot', qty: 1, materialCost: 61616, labourCost: 0 } },
     ],
   })
   const result = await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, badBatch, 'user-7')
-  assert.equal(result.status, 400)
+  // Task 2 transitional guard: real rollback logic is Task 3's scope.
+  assert.equal(result.status, 409)
+  assert.equal((result.body as { error?: string }).error, 'decision_batch_required')
 
   const stored = fixture.db.docs.get('boqs/boq-1') as unknown as Boq
   assert.equal(stored.sections[0].items.length, before.sections[0].items.length)
@@ -1028,9 +997,9 @@ test('multi-row batches remain blocked for approved BOQs and a terminal skipped 
   const fixture = multiRowEvidenceHarness()
   await fixture.store.saveValidatedProposals('boq-1', 'run-1', [fixture.proposal])
   const batchRequest = parseSourceBackedManualAddRequest({
-    items: [
-      { sourceRowId: 'mapped-row', sectionIndex: 0, item: { desc: 'Tooling', unit: 'Lot', qty: 1, materialCost: 6000, labourCost: 0 } },
-      { sourceRowId: 'mapped-row-2', sectionIndex: 0, item: { desc: 'Expense', unit: 'Lot', qty: 1, materialCost: 61616, labourCost: 0 } },
+    decisions: [
+      { sourceRowId: 'mapped-row', action: 'add', sectionIndex: 0, item: { desc: 'Tooling', unit: 'Lot', qty: 1, materialCost: 6000, labourCost: 0 } },
+      { sourceRowId: 'mapped-row-2', action: 'add', sectionIndex: 0, item: { desc: 'Expense', unit: 'Lot', qty: 1, materialCost: 61616, labourCost: 0 } },
     ],
   })
 
@@ -1041,7 +1010,8 @@ test('multi-row batches remain blocked for approved BOQs and a terminal skipped 
   assert.equal((await fixture.store.skip('boq-1', 'run-1', fixture.proposal.id, 'user-1')).status, 200)
   assert.equal((await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, batchRequest, 'user-7')).status, 409)
   assert.equal((await fixture.store.reopen('boq-1', 'run-1', fixture.proposal.id, 'user-1')).status, 200)
-  assert.equal((await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, batchRequest, 'user-7')).status, 200)
+  // Task 2 transitional guard: returns 409 decision_batch_required (Task 3 implements real logic).
+  assert.equal((await fixture.store.addSourceItem('boq-1', 'run-1', fixture.proposal.id, batchRequest, 'user-7')).status, 409)
 })
 
 test('store reload and acceptance reject mapped provenance with an unused declared row', async () => {

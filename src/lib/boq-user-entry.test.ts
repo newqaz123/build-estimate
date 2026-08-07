@@ -174,11 +174,17 @@ const manualSingleBody = {
   item: { desc: "Tooling", unit: "Lot", qty: 1, materialCost: 6000, labourCost: 0 },
 }
 
-const manualBatchBody = {
-  items: [
-    { sourceRowId: "row-1", sectionIndex: 0, item: { desc: "Tooling", unit: "Lot", qty: 1, materialCost: 6000, labourCost: 0 } },
-    { sourceRowId: "row-2", sectionIndex: 0, item: { desc: "Expense", unit: "Lot", qty: 1, materialCost: 61616, labourCost: 0 } },
-  ],
+const validAddDecision = {
+  sourceRowId: "row-1",
+  action: "add",
+  sectionIndex: 0,
+  item: { desc: "Tooling", unit: "Lot", qty: 1, materialCost: 6000, labourCost: 0 },
+}
+
+const validIgnoreDecision = {
+  sourceRowId: "row-2",
+  action: "ignore",
+  note: "Already represented",
 }
 
 test("parseSourceBackedManualAddRequest parses a single source-backed request", () => {
@@ -188,14 +194,59 @@ test("parseSourceBackedManualAddRequest parses a single source-backed request", 
   })
 })
 
-test("parseSourceBackedManualAddRequest parses a batch source-backed request", () => {
-  assert.deepEqual(parseSourceBackedManualAddRequest(manualBatchBody), {
-    mode: "batch",
-    items: [
-      { sourceRowId: "row-1", sectionIndex: 0, desc: "Tooling", unit: "Lot", qty: 1, materialCost: 6000, labourCost: 0 },
-      { sourceRowId: "row-2", sectionIndex: 0, desc: "Expense", unit: "Lot", qty: 1, materialCost: 61616, labourCost: 0 },
-    ],
+test("parseSourceBackedManualAddRequest parses a mixed decision-batch request", () => {
+  const result = parseSourceBackedManualAddRequest({ decisions: [validAddDecision, validIgnoreDecision] })
+  assert.equal(result.mode, "decision_batch")
+  if (result.mode !== "decision_batch") return
+  assert.equal(result.decisions.length, 2)
+  assert.deepEqual(result.decisions[0], {
+    sourceRowId: "row-1",
+    action: "add",
+    item: { sectionIndex: 0, desc: "Tooling", unit: "Lot", qty: 1, materialCost: 6000, labourCost: 0 },
   })
+  assert.deepEqual(result.decisions[1], { sourceRowId: "row-2", action: "ignore", note: "Already represented" })
+})
+
+test("parseSourceBackedManualAddRequest parses an add-only decision batch", () => {
+  const result = parseSourceBackedManualAddRequest({ decisions: [
+    { ...validAddDecision, sourceRowId: "row-a" },
+    { ...validAddDecision, sourceRowId: "row-b" },
+  ] })
+  assert.equal(result.mode, "decision_batch")
+  if (result.mode !== "decision_batch") return
+  assert.equal(result.decisions.every((d) => d.action === "add"), true)
+})
+
+test("parseSourceBackedManualAddRequest parses an ignore-only decision batch and omits blank notes", () => {
+  const result = parseSourceBackedManualAddRequest({ decisions: [
+    { sourceRowId: "row-a", action: "ignore", note: "   " },
+    { sourceRowId: "row-b", action: "ignore" },
+  ] })
+  assert.equal(result.mode, "decision_batch")
+  if (result.mode !== "decision_batch") return
+  assert.equal(result.decisions.length, 2)
+  for (const decision of result.decisions) {
+    if (decision.action === "ignore") assert.equal("note" in decision && decision.note !== undefined ? false : true, true)
+  }
+})
+
+test("parseSourceBackedManualAddRequest trims ignore notes", () => {
+  const result = parseSourceBackedManualAddRequest({ decisions: [
+    { sourceRowId: "row-1", action: "ignore", note: "  Already represented  " },
+  ] })
+  assert.equal(result.mode, "decision_batch")
+  if (result.mode !== "decision_batch" || result.decisions[0]?.action !== "ignore") return
+  assert.equal(result.decisions[0].note, "Already represented")
+})
+
+test("parseSourceBackedManualAddRequest preserves client order in decision batches", () => {
+  const result = parseSourceBackedManualAddRequest({ decisions: [
+    { ...validAddDecision, sourceRowId: "z-row" },
+    { ...validAddDecision, sourceRowId: "a-row" },
+  ] })
+  assert.equal(result.mode, "decision_batch")
+  if (result.mode !== "decision_batch") return
+  assert.equal(result.decisions[0]?.sourceRowId ?? result.decisions[0], "z-row")
 })
 
 test("parseSourceBackedManualAddRequest rejects malformed single payloads via the single parser", () => {
@@ -205,49 +256,95 @@ test("parseSourceBackedManualAddRequest rejects malformed single payloads via th
   assert.throws(() => parseSourceBackedManualAddRequest("not-an-object"), MissingBoqItemError)
 })
 
-test("parseSourceBackedManualAddRequest rejects malformed batch payloads", () => {
-  assert.throws(() => parseSourceBackedManualAddRequest({ ...manualBatchBody, extra: "unknown" }), MissingBoqItemError)
-  assert.throws(() => parseSourceBackedManualAddRequest({ items: [] }), MissingBoqItemError)
-  assert.throws(() => parseSourceBackedManualAddRequest({ items: "not-an-array" }), MissingBoqItemError)
-  assert.throws(() => parseSourceBackedManualAddRequest({ items: null }), MissingBoqItemError)
-  assert.throws(() => parseSourceBackedManualAddRequest({ items: undefined }), MissingBoqItemError)
+test("parseSourceBackedManualAddRequest rejects the obsolete items batch shape", () => {
+  assert.throws(() => parseSourceBackedManualAddRequest({ items: [validAddDecision] }), MissingBoqItemError)
 })
 
-test("parseSourceBackedManualAddRequest rejects duplicate and blank sourceRowId values", () => {
-  assert.throws(() => parseSourceBackedManualAddRequest({ items: [
-    { sourceRowId: "row-1", sectionIndex: 0, item: manualSingleBody.item },
-    { sourceRowId: "row-1", sectionIndex: 0, item: manualSingleBody.item },
+test("parseSourceBackedManualAddRequest rejects malformed decision-batch payloads", () => {
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: [] }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: "not-an-array" }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: null }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: undefined }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: [], extra: "unknown" }), MissingBoqItemError)
+})
+
+test("parseSourceBackedManualAddRequest rejects duplicate and blank sourceRowId in decisions", () => {
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: [
+    { ...validAddDecision, sourceRowId: "row-1" },
+    { ...validAddDecision, sourceRowId: "row-1" },
   ] }), MissingBoqItemError)
-  assert.throws(() => parseSourceBackedManualAddRequest({ items: [
-    { sourceRowId: "  ", sectionIndex: 0, item: manualSingleBody.item },
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: [
+    { sourceRowId: "  ", action: "ignore" },
   ] }), MissingBoqItemError)
-  assert.throws(() => parseSourceBackedManualAddRequest({ items: [
-    { sourceRowId: 5, sectionIndex: 0, item: manualSingleBody.item },
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: [
+    { sourceRowId: 5, action: "ignore" },
   ] }), MissingBoqItemError)
 })
 
-test("parseSourceBackedManualAddRequest rejects unknown batch entry keys and malformed entry values", () => {
-  assert.throws(() => parseSourceBackedManualAddRequest({ items: [
-    { sourceRowId: "row-1", sectionIndex: 0, item: manualSingleBody.item, extra: "unknown" },
+test("parseSourceBackedManualAddRequest rejects invalid action discriminators", () => {
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: [
+    { sourceRowId: "row-1", action: "delete" },
   ] }), MissingBoqItemError)
-  assert.throws(() => parseSourceBackedManualAddRequest({ items: [
-    { sectionIndex: 0, item: manualSingleBody.item },
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: [
+    { sourceRowId: "row-1", action: null },
   ] }), MissingBoqItemError)
-  assert.throws(() => parseSourceBackedManualAddRequest({ items: [
-    { sourceRowId: "row-1", sectionIndex: 0, item: { ...manualSingleBody.item, desc: "" } },
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: [
+    { sourceRowId: "row-1" },
   ] }), MissingBoqItemError)
-  assert.throws(() => parseSourceBackedManualAddRequest({ items: [
+})
+
+test("parseSourceBackedManualAddRequest rejects add decisions missing sectionIndex or item", () => {
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: [
+    { sourceRowId: "row-1", action: "add", item: validAddDecision.item },
+  ] }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: [
+    { sourceRowId: "row-1", action: "add", sectionIndex: 0 },
+  ] }), MissingBoqItemError)
+})
+
+test("parseSourceBackedManualAddRequest rejects add decisions carrying a note", () => {
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: [
+    { ...validAddDecision, note: "should not be here" },
+  ] }), MissingBoqItemError)
+})
+
+test("parseSourceBackedManualAddRequest rejects ignore decisions carrying sectionIndex or item", () => {
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: [
+    { sourceRowId: "row-1", action: "ignore", sectionIndex: 0 },
+  ] }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: [
+    { sourceRowId: "row-1", action: "ignore", item: validAddDecision.item },
+  ] }), MissingBoqItemError)
+})
+
+test("parseSourceBackedManualAddRequest rejects non-string and overlong notes", () => {
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: [
+    { sourceRowId: "row-1", action: "ignore", note: 42 },
+  ] }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: [
+    { sourceRowId: "row-1", action: "ignore", note: "x".repeat(501) },
+  ] }), MissingBoqItemError)
+  assert.doesNotThrow(() => parseSourceBackedManualAddRequest({ decisions: [
+    { sourceRowId: "row-1", action: "ignore", note: "x".repeat(500) },
+  ] }))
+})
+
+test("parseSourceBackedManualAddRequest rejects unknown decision entry keys", () => {
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: [
+    { ...validAddDecision, extra: "unknown" },
+  ] }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: [
     "not-an-object",
   ] }), MissingBoqItemError)
 })
 
-test("parseSourceBackedManualAddRequest rejects batches larger than 100 entries", () => {
+test("parseSourceBackedManualAddRequest rejects decision batches larger than 100 entries", () => {
   const tooMany = Array.from({ length: 101 }, (_, index) => ({
-    sourceRowId: `row-${index}`, sectionIndex: 0, item: manualSingleBody.item,
+    sourceRowId: `row-${index}`, action: "ignore" as const,
   }))
-  assert.throws(() => parseSourceBackedManualAddRequest({ items: tooMany }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest({ decisions: tooMany }), MissingBoqItemError)
   const atLimit = Array.from({ length: 100 }, (_, index) => ({
-    sourceRowId: `row-${index}`, sectionIndex: 0, item: manualSingleBody.item,
+    sourceRowId: `row-${index}`, action: "ignore" as const,
   }))
-  assert.doesNotThrow(() => parseSourceBackedManualAddRequest({ items: atLimit }))
+  assert.doesNotThrow(() => parseSourceBackedManualAddRequest({ decisions: atLimit }))
 })

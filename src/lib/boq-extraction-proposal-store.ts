@@ -1151,7 +1151,7 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
           }
           const targetItems = new Map(boq.sections.flatMap((section) => section.items)
             .flatMap((item) => item.id ? [[item.id, item] as const] : []))
-          let updatedBoq: Boq
+          let updatedBoq: Boq = boq
           try {
             if (proposal.reviewDraft) {
               if (request.mode !== 'single') return { status: 409, body: { error: 'single_required' } }
@@ -1180,31 +1180,8 @@ export function createFirestoreExtractionProposalStore(db: Firestore, now: () =>
               const result = addSourceBackedBoqItem({ boq, validatedSourceMapping, userValues: request.value, itemId: `user-${randomUUID()}` })
               updatedBoq = result.boq
             } else if (proposal.operation === 'needs_human_review' && proposal.targetItemIds.length === 0 && proposal.sourceRowIds.length > 1) {
-              if (request.mode !== 'batch') return { status: 409, body: { error: 'batch_required' } }
-              const proposalRowIds = new Set(proposal.sourceRowIds)
-              const requestRowIds = new Set(request.items.map((item) => item.sourceRowId))
-              if (requestRowIds.size !== proposalRowIds.size || [...requestRowIds].some((id) => !proposalRowIds.has(id))) {
-                return { status: 409, body: { error: 'Batch must cover exactly the proposal source rows.' } }
-              }
-              const rowsById = new Map(immutable.sourceRows.map((row) => [row.id, row]))
-              const entriesByRowId = new Map(request.items.map((item) => [item.sourceRowId, item]))
-              updatedBoq = boq
-              for (const rowId of proposal.sourceRowIds) {
-                const row = rowsById.get(rowId)
-                if (!row) return { status: 409, body: { error: 'Extraction evidence changed; recheck the proposal' } }
-                const entry = entriesByRowId.get(rowId)!
-                const result = addSourceBackedBoqItem({
-                  boq: updatedBoq,
-                  validatedSourceMapping: {
-                    sourceRowId: row.id,
-                    sourceRowIds: [row.id],
-                    sourceRef: { page: row.page, table: row.table, row: row.row },
-                  },
-                  userValues: entry,
-                  itemId: `user-${randomUUID()}`,
-                })
-                updatedBoq = result.boq
-              }
+              // Task 2 transitional guard: decision-batch logic is Task 3's scope.
+              return { status: 409, body: { error: 'decision_batch_required' } }
             } else {
               if (proposal.operation !== 'needs_human_review' || proposal.targetItemIds.length !== 0) {
                 return { status: 409, body: { error: 'Proposal is not eligible for manual insertion' } }
