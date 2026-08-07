@@ -21,8 +21,10 @@ This design supersedes the all-rows-must-create-items rule in `2026-08-06-multi-
 - Every proposal source row starts **Undecided**.
 - The reviewer explicitly chooses **Add to BOQ** or **Do not add** for every row.
 - **Do not add** supports an optional free-text note; no reason is required.
-- No parser classification, warning, provider explanation, raw text, or duplicate heuristic preselects a decision.
-- The complete ordered decision set is submitted atomically.
+- The existing AI extraction review checks the complete Docling result against the current BOQ and may attach a non-binding per-row **Add** or **Do not add** suggestion.
+- AI suggestions never preselect a human decision and never supply persisted item values.
+- No parser classification, warning, provider explanation, raw text, duplicate heuristic, or AI suggestion preselects a decision.
+- The complete ordered human decision set is submitted atomically.
 - The proposal becomes accepted after every row has a persisted decision, even when no rows are added.
 - Proposal-level **Skip** remains the incomplete/exception outcome.
 - Automatic **Accept** remains disabled for `needs_human_review`.
@@ -42,11 +44,38 @@ The server would remove totals, unsupported rows, or detected duplicates. This i
 
 The review system would split addable and non-addable rows into separate provider proposals. This creates cleaner proposal shapes but adds provider, lifecycle, migration, and cross-proposal consistency complexity without removing the need for human judgment.
 
+## AI advisory suggestions
+
+The existing full-document AI extraction review runs after Docling parsing and receives the complete parsed evidence plus the current canonical BOQ. It continues to decide which rows require human review. For every source row grouped into a mixed `needs_human_review` proposal, the provider is instructed to return a disposition suggestion:
+
+```ts
+type SourceRowDispositionSuggestion = {
+  sourceRowId: string
+  suggestedAction: "add" | "ignore"
+  reasonCode:
+    | "missing_priced_item"
+    | "already_represented"
+    | "summary_or_tax"
+    | "unsupported_content"
+    | "uncertain"
+  reason: string
+  confidence: number
+}
+```
+
+The advisory contract contains no description, unit, quantity, rate, total, section, source mapping, or other value that could become BOQ data. `reason` is display-only provider narrative. `confidence` is finite and bounded from 0 to 1.
+
+`ValidatedProposal` may carry an optional `sourceRowSuggestions` array. When present, it must contain one valid suggestion for every `proposal.sourceRowId`, with no duplicates, extras, or unknown IDs, and is normalized into proposal order. Advisory parsing is isolated from the core proposal decision: an absent, malformed, incomplete, or unknown-row suggestion block is discarded while the valid human-review proposal remains available. The UI then reports that AI suggestions are unavailable and keeps every row **Undecided**.
+
+Suggestions are stored as provider-owned proposal metadata and copied to the acceptance audit separately from reviewer-authored `sourceRowDecisions`. The server never converts a suggestion into a human decision. Existing stored proposals require no migration; they remain manually reviewable, and a user may use the existing recheck flow to request fresh suggestions.
+
 ## Editor design
 
 `EvidenceOnlyBatchItemEditor` keeps one compact panel per `proposal.sourceRowIds` entry in proposal order.
 
-Each panel initially shows two unselected choices:
+Each panel shows an advisory badge when available—**AI suggests Add** or **AI suggests Do not add**—plus its reason and confidence. Missing advisory data is shown as **AI suggestion unavailable** without blocking review.
+
+Regardless of the suggestion, each panel initially shows two unselected human choices:
 
 - **Add to BOQ**
 - **Do not add**
@@ -142,7 +171,7 @@ Accepted retries return the original accepted result without creating duplicate 
 
 ## Audit contract
 
-`ExtractionProposalAudit` gains an optional ordered field so legacy audits remain readable:
+`ExtractionProposalAudit` gains optional AI-advisory and ordered human-decision fields so legacy audits remain readable:
 
 ```ts
 type SourceRowAuditDecision =
@@ -157,10 +186,11 @@ type SourceRowAuditDecision =
       note?: string
     }
 
+sourceRowSuggestions?: SourceRowDispositionSuggestion[]
 sourceRowDecisions?: SourceRowAuditDecision[]
 ```
 
-New decision-batch audits always include the field in proposal order. Added decisions bind each immutable source row to the resulting BOQ item ID. Ignored decisions preserve the optional trimmed reviewer note. Proposal-level `sourceRowIds` and `sourceRefs` still cover the complete reviewed proposal.
+When a proposal carried complete validated AI suggestions, the decision-batch audit copies them unchanged so the advisory recommendation remains distinct from the final human choice. New decision-batch audits always include `sourceRowDecisions` in proposal order. Added decisions bind each immutable source row to the resulting BOQ item ID. Ignored decisions preserve the optional trimmed reviewer note. Proposal-level `sourceRowIds` and `sourceRefs` still cover the complete reviewed proposal.
 
 Audit readers accept older records without `sourceRowDecisions`. New audit construction and validation require a complete, unique, exact decision set for this manual decision-batch path.
 
@@ -199,6 +229,11 @@ The five additions total **฿397,416**, bringing the BOQ to **฿478,000** and 
 
 Test-first coverage must include:
 
+- provider instructions requesting one advisory disposition per mixed-proposal row without requesting item values;
+- accepting and proposal-ordering a complete valid suggestion set;
+- discarding absent, malformed, incomplete, duplicate, or unknown-row advisory blocks without blocking the core human-review proposal;
+- displaying non-binding AI suggestion, reason, and confidence while all human controls remain undecided;
+- proving suggestions never enter the submitted decision payload or item values;
 - parsing valid mixed, add-only, and ignore-only decision batches;
 - rejecting old implicit add-all batches, unknown keys, invalid actions, duplicates, missing/extra rows, malformed items, and invalid notes;
 - exact proposal-row-set validation and proposal-order normalization;
@@ -212,7 +247,8 @@ Test-first coverage must include:
 - editor initial undecided state, action switching, blank/manual add forms, optional notes, per-row validation, live totals, and dynamic action copy;
 - automatic **Accept** remaining absent;
 - desktop and mobile layout without page-level overflow;
-- corrected affected-BOQ browser QA with ten explicit decisions, one submission, exact total **฿478,000**, accepted history, reload idempotency, and catalog blockers/**Exclude** controls;
+- corrected affected-BOQ browser QA showing advisory suggestions when a fresh recheck provides them, while remaining usable without them;
+- ten explicit human decisions, one submission, exact total **฿478,000**, accepted history, reload idempotency, and catalog blockers/**Exclude** controls;
 - approval never being triggered automatically.
 
 ## Rollout
