@@ -7,6 +7,7 @@ import {
   MissingBoqItemError,
   parseMissingBoqItemRequest,
   parseSourceBackedItemRequest,
+  parseSourceBackedManualAddRequest,
   type ValidatedSourceMapping,
 } from "./boq-user-entry"
 
@@ -166,4 +167,87 @@ test("addSourceBackedBoqItem rejects non-finite component values that escape the
     }),
     MissingBoqItemError,
   )
+})
+
+const manualSingleBody = {
+  sectionIndex: 0,
+  item: { desc: "Tooling", unit: "Lot", qty: 1, materialCost: 6000, labourCost: 0 },
+}
+
+const manualBatchBody = {
+  items: [
+    { sourceRowId: "row-1", sectionIndex: 0, item: { desc: "Tooling", unit: "Lot", qty: 1, materialCost: 6000, labourCost: 0 } },
+    { sourceRowId: "row-2", sectionIndex: 0, item: { desc: "Expense", unit: "Lot", qty: 1, materialCost: 61616, labourCost: 0 } },
+  ],
+}
+
+test("parseSourceBackedManualAddRequest parses a single source-backed request", () => {
+  assert.deepEqual(parseSourceBackedManualAddRequest(manualSingleBody), {
+    mode: "single",
+    value: { sectionIndex: 0, desc: "Tooling", unit: "Lot", qty: 1, materialCost: 6000, labourCost: 0 },
+  })
+})
+
+test("parseSourceBackedManualAddRequest parses a batch source-backed request", () => {
+  assert.deepEqual(parseSourceBackedManualAddRequest(manualBatchBody), {
+    mode: "batch",
+    items: [
+      { sourceRowId: "row-1", sectionIndex: 0, desc: "Tooling", unit: "Lot", qty: 1, materialCost: 6000, labourCost: 0 },
+      { sourceRowId: "row-2", sectionIndex: 0, desc: "Expense", unit: "Lot", qty: 1, materialCost: 61616, labourCost: 0 },
+    ],
+  })
+})
+
+test("parseSourceBackedManualAddRequest rejects malformed single payloads via the single parser", () => {
+  assert.throws(() => parseSourceBackedManualAddRequest({ ...manualSingleBody, extra: "unknown" }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest({ sectionIndex: -1, item: manualSingleBody.item }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest(null), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest("not-an-object"), MissingBoqItemError)
+})
+
+test("parseSourceBackedManualAddRequest rejects malformed batch payloads", () => {
+  assert.throws(() => parseSourceBackedManualAddRequest({ ...manualBatchBody, extra: "unknown" }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest({ items: [] }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest({ items: "not-an-array" }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest({ items: null }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest({ items: undefined }), MissingBoqItemError)
+})
+
+test("parseSourceBackedManualAddRequest rejects duplicate and blank sourceRowId values", () => {
+  assert.throws(() => parseSourceBackedManualAddRequest({ items: [
+    { sourceRowId: "row-1", sectionIndex: 0, item: manualSingleBody.item },
+    { sourceRowId: "row-1", sectionIndex: 0, item: manualSingleBody.item },
+  ] }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest({ items: [
+    { sourceRowId: "  ", sectionIndex: 0, item: manualSingleBody.item },
+  ] }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest({ items: [
+    { sourceRowId: 5, sectionIndex: 0, item: manualSingleBody.item },
+  ] }), MissingBoqItemError)
+})
+
+test("parseSourceBackedManualAddRequest rejects unknown batch entry keys and malformed entry values", () => {
+  assert.throws(() => parseSourceBackedManualAddRequest({ items: [
+    { sourceRowId: "row-1", sectionIndex: 0, item: manualSingleBody.item, extra: "unknown" },
+  ] }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest({ items: [
+    { sectionIndex: 0, item: manualSingleBody.item },
+  ] }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest({ items: [
+    { sourceRowId: "row-1", sectionIndex: 0, item: { ...manualSingleBody.item, desc: "" } },
+  ] }), MissingBoqItemError)
+  assert.throws(() => parseSourceBackedManualAddRequest({ items: [
+    "not-an-object",
+  ] }), MissingBoqItemError)
+})
+
+test("parseSourceBackedManualAddRequest rejects batches larger than 100 entries", () => {
+  const tooMany = Array.from({ length: 101 }, (_, index) => ({
+    sourceRowId: `row-${index}`, sectionIndex: 0, item: manualSingleBody.item,
+  }))
+  assert.throws(() => parseSourceBackedManualAddRequest({ items: tooMany }), MissingBoqItemError)
+  const atLimit = Array.from({ length: 100 }, (_, index) => ({
+    sourceRowId: `row-${index}`, sectionIndex: 0, item: manualSingleBody.item,
+  }))
+  assert.doesNotThrow(() => parseSourceBackedManualAddRequest({ items: atLimit }))
 })

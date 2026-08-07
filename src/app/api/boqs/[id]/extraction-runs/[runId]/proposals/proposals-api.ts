@@ -1,5 +1,5 @@
 import type { ExtractionProposalAudit } from '@/lib/boq-extraction-acceptance'
-import { MissingBoqItemError, parseSourceBackedItemRequest, type SourceBackedItemRequest } from '@/lib/boq-user-entry'
+import { MissingBoqItemError, parseSourceBackedManualAddRequest, type SourceBackedManualAddRequest } from '@/lib/boq-user-entry'
 
 export type ExtractionProposalActionContext = { params: Promise<{ id: string; runId: string; proposalId: string }> }
 export type ExtractionProposalBatchContext = { params: Promise<{ id: string; runId: string }> }
@@ -16,7 +16,7 @@ export interface ExtractionProposalActionDependencies {
   skip(boqId: string, runId: string, proposalId: string, actorId: string): Promise<ProposalActionResult>
   reopen(boqId: string, runId: string, proposalId: string, actorId: string): Promise<ProposalActionResult>
   undo(boqId: string, runId: string, proposalId: string, actorId: string): Promise<ProposalActionResult>
-  addSourceItem(boqId: string, runId: string, proposalId: string, request: SourceBackedItemRequest, actorId: string): Promise<ProposalActionResult>
+  addSourceItem(boqId: string, runId: string, proposalId: string, request: SourceBackedManualAddRequest, actorId: string): Promise<ProposalActionResult>
 }
 
 function validPathId(value: string): boolean {
@@ -115,9 +115,9 @@ export function createExtractionProposalActionHandlers(dependencies: ExtractionP
     } catch {
       return Response.json({ error: 'Request body must be valid JSON.' }, { status: 400 })
     }
-    let parsed: SourceBackedItemRequest
+    let parsed: SourceBackedManualAddRequest
     try {
-      parsed = parseSourceBackedItemRequest(body)
+      parsed = parseSourceBackedManualAddRequest(body)
     } catch (error) {
       if (error instanceof MissingBoqItemError) return Response.json({ error: error.message }, { status: 400 })
       throw error

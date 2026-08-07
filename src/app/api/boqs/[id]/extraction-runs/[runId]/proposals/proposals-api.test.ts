@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { ExtractionProposal } from '@/lib/boq-extraction-proposals'
-import type { SourceBackedItemRequest } from '@/lib/boq-user-entry'
+import type { SourceBackedManualAddRequest } from '@/lib/boq-user-entry'
 import { createExtractionProposalActionHandlers, type ExtractionProposalActionDependencies } from './proposals-api'
 
 const proposal = { id: 'proposal-1' } as ExtractionProposal
@@ -86,7 +86,7 @@ const sourceItemBody = {
 }
 
 test('addSourceItem authenticates before body parsing and forwards opaque path ids', async () => {
-  const calls: Array<{ boqId: string; runId: string; proposalId: string; request: SourceBackedItemRequest; actorId: string }> = []
+  const calls: Array<{ boqId: string; runId: string; proposalId: string; request: SourceBackedManualAddRequest; actorId: string }> = []
   let authCalls = 0
   const action = handlers({
     authenticate: async () => { authCalls += 1; return { user: { id: 'user-1' } } },
@@ -101,7 +101,8 @@ test('addSourceItem authenticates before body parsing and forwards opaque path i
   assert.deepEqual(calls, [{
     boqId: 'boq-1', runId: 'run-1', proposalId: 'proposal-1', actorId: 'user-1',
     request: {
-      sectionIndex: 0, desc: 'Wall installation', unit: 'm2', qty: 18, materialCost: 980, labourCost: 650,
+      mode: 'single',
+      value: { sectionIndex: 0, desc: 'Wall installation', unit: 'm2', qty: 18, materialCost: 980, labourCost: 650 },
     },
   }])
 
@@ -122,4 +123,47 @@ test('addSourceItem rejects malformed bodies and invalid path ids before delegat
 
   const badPath = { params: Promise.resolve({ id: 'boq-1', runId: 'run-1', proposalId: 'has/slash' }) }
   assert.equal((await action.addSourceItem(request(sourceItemBody), badPath)).status, 400)
+})
+
+const batchSourceItemBody = {
+  items: [
+    { sourceRowId: 'row-1', sectionIndex: 0, item: { desc: 'Tooling', unit: 'Lot', qty: 1, materialCost: 6000, labourCost: 0 } },
+    { sourceRowId: 'row-2', sectionIndex: 0, item: { desc: 'Expense', unit: 'Lot', qty: 1, materialCost: 61616, labourCost: 0 } },
+  ],
+}
+
+test('addSourceItem forwards a parsed batch request to the dependency unchanged', async () => {
+  const calls: Array<{ boqId: string; runId: string; proposalId: string; request: SourceBackedManualAddRequest; actorId: string }> = []
+  const action = handlers({
+    addSourceItem: async (boqId, runId, proposalId, requestBody, actorId) => {
+      calls.push({ boqId, runId, proposalId, request: requestBody, actorId })
+      return { status: 200, body: { status: 'accepted' } }
+    },
+  })
+  const response = await action.addSourceItem(request(batchSourceItemBody), context)
+  assert.equal(response.status, 200)
+  assert.deepEqual(calls, [{
+    boqId: 'boq-1', runId: 'run-1', proposalId: 'proposal-1', actorId: 'user-1',
+    request: {
+      mode: 'batch',
+      items: [
+        { sourceRowId: 'row-1', sectionIndex: 0, desc: 'Tooling', unit: 'Lot', qty: 1, materialCost: 6000, labourCost: 0 },
+        { sourceRowId: 'row-2', sectionIndex: 0, desc: 'Expense', unit: 'Lot', qty: 1, materialCost: 61616, labourCost: 0 },
+      ],
+    },
+  }])
+})
+
+test('addSourceItem rejects malformed or duplicate batch bodies without calling the dependency', async () => {
+  const action = handlers({
+    addSourceItem: async () => { throw new Error('dependency must not be called for malformed input') },
+  })
+  assert.equal((await action.addSourceItem(request({ items: [] }), context)).status, 400)
+  assert.equal((await action.addSourceItem(request({ items: [
+    { sourceRowId: 'row-1', sectionIndex: 0, item: { desc: 'A', unit: 'Lot', qty: 1, materialCost: 1, labourCost: 0 } },
+    { sourceRowId: 'row-1', sectionIndex: 0, item: { desc: 'B', unit: 'Lot', qty: 1, materialCost: 2, labourCost: 0 } },
+  ] }), context)).status, 400)
+  assert.equal((await action.addSourceItem(request({ items: [
+    { sourceRowId: 'row-1', sectionIndex: 0, item: { desc: '', unit: 'Lot', qty: 1, materialCost: 1, labourCost: 0 } },
+  ] }), context)).status, 400)
 })

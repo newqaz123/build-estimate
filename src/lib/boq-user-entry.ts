@@ -56,8 +56,23 @@ export interface SourceBackedItemRequest {
   labourCost: number
 }
 
+/** A single source-backed entry inside a batch manual-add request. Carries the
+ *  client-selected source row alongside the editable user values for that row. */
+export interface SourceBackedBatchEntryRequest extends SourceBackedItemRequest {
+  sourceRowId: string
+}
+
+/** Closed single/batch request union. The server resolves provenance per row
+ *  from immutable evidence; the client supplies only editable values. */
+export type SourceBackedManualAddRequest =
+  | { mode: "single"; value: SourceBackedItemRequest }
+  | { mode: "batch"; items: SourceBackedBatchEntryRequest[] }
+
 const SOURCE_ITEM_KEYS = new Set(["desc", "unit", "qty", "materialCost", "labourCost"])
 const SOURCE_REQUEST_KEYS = new Set(["sectionIndex", "item"])
+const BATCH_ENTRY_KEYS = new Set(["sourceRowId", "sectionIndex", "item"])
+const BATCH_REQUEST_KEYS = new Set(["items"])
+const MAX_BATCH_ENTRIES = 100
 const COMPONENT_FIELDS: ReadonlyArray<keyof Pick<SourceBackedItemRequest, "materialCost" | "labourCost">> = ["materialCost", "labourCost"]
 
 function requireFiniteNonNegative(field: string, value: unknown): number {
@@ -104,6 +119,45 @@ export function parseSourceBackedItemRequest(value: unknown): SourceBackedItemRe
     requireCentsPrecision(field, field === "materialCost" ? materialCost : labourCost)
   }
   return { sectionIndex: Number(value.sectionIndex), desc: desc.trim(), unit: unit.trim(), qty, materialCost, labourCost }
+}
+
+/** Parse a closed single/batch manual-add request. A top-level own `items` key
+ *  selects batch shape; every other object is parsed as the existing single
+ *  shape. Batch entries reuse `parseSourceBackedItemRequest` for their
+ *  `sectionIndex`/`item` validation and are flattened before being returned. */
+export function parseSourceBackedManualAddRequest(value: unknown): SourceBackedManualAddRequest {
+  if (!isRecord(value)) throw new MissingBoqItemError("Request body must be an object.")
+  if (Object.prototype.hasOwnProperty.call(value, "items")) {
+    for (const key of Object.keys(value)) {
+      if (!BATCH_REQUEST_KEYS.has(key)) throw new MissingBoqItemError(`Unexpected request field: ${key}.`)
+    }
+    const items = value.items
+    if (!Array.isArray(items)) throw new MissingBoqItemError("items must be an array.")
+    if (items.length === 0) throw new MissingBoqItemError("items must not be empty.")
+    if (items.length > MAX_BATCH_ENTRIES) {
+      throw new MissingBoqItemError(`items must not contain more than ${MAX_BATCH_ENTRIES} entries.`)
+    }
+    const seenRowIds = new Set<string>()
+    const entries: SourceBackedBatchEntryRequest[] = []
+    for (const entry of items) {
+      if (!isRecord(entry)) throw new MissingBoqItemError("Each batch entry must be an object.")
+      for (const key of Object.keys(entry)) {
+        if (!BATCH_ENTRY_KEYS.has(key)) throw new MissingBoqItemError(`Unexpected batch entry field: ${key}.`)
+      }
+      const sourceRowId = entry.sourceRowId
+      if (typeof sourceRowId !== "string" || !sourceRowId.trim()) {
+        throw new MissingBoqItemError("sourceRowId must be a non-empty string.")
+      }
+      if (seenRowIds.has(sourceRowId)) {
+        throw new MissingBoqItemError("sourceRowId values must be unique.")
+      }
+      seenRowIds.add(sourceRowId)
+      const itemValues = parseSourceBackedItemRequest({ sectionIndex: entry.sectionIndex, item: entry.item })
+      entries.push({ sourceRowId, ...itemValues })
+    }
+    return { mode: "batch", items: entries }
+  }
+  return { mode: "single", value: parseSourceBackedItemRequest(value) }
 }
 
 /** Server-resolved provenance reconstructed from the immutable review draft.
