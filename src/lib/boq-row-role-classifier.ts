@@ -5,6 +5,12 @@ import type {
   BoqSourceRowV3,
   DoclingRawCellV3,
 } from './boq-extraction-schema'
+import {
+  addDecimal,
+  equalAtMinorUnit,
+  parseDecimalString,
+  type DecimalString,
+} from './decimal-string'
 
 /**
  * Evidence-only deterministic triage findings.
@@ -18,14 +24,22 @@ export interface RowRoleFinding {
   sourceRef: BoqSourceRef
 }
 
-const STANDALONE_NUMBER = /^(?:\(?[-+]?\d[\d,]*(?:\.\d+)?\)?)$/
 const NOISE_CELL = /^(?:[-–—_]|n\/?a)?$/i
 
+/**
+ * Mirror production currency-aware amount cells from source mapping:
+ * optional leading/trailing currency code or symbol, commas, decimals.
+ * Used only for amount-bearing detection / exact arithmetic evidence.
+ */
+const STRICT_AMOUNT = /^(?:([A-Z]{3}|[$£¥฿€])\s*)?(\()?((?:0|[1-9]\d*|\d{1,3}(?:,\d{3})+)(?:\.\d+)?)(\))?(?:\s*([A-Z]{3}))?$/
+
 const AMOUNT_IN_WORDS = /\b(?:baht|amount\s+in\s+words)\b[\s\S]*\bonly\b/i
-const SUBTOTAL_LABEL = /\bsub[\s-]*totals?\b/i
-const GRAND_TOTAL_LABEL = /\bgrand[\s-]+totals?\b/i
-const TOTAL_LABEL = /^(?:total|totals)(?:\s|$|:)/i
-const TAX_LABEL = /\b(?:vat|tax|gst|wht)\b|\badd\s+vat\b/i
+const SUBTOTAL_LABEL = /^(?:sub[\s-]*totals?)(?:\s|$|:)/i
+const GRAND_TOTAL_LABEL = /^(?:grand[\s-]+totals?)(?:\s|$|:)/i
+/** Bare summary totals only — not descriptive phrases like "Total station survey". */
+const TIGHT_TOTAL_LABEL = /^(?:totals?)(?:\s*:)?$/i
+/** Summary tax labels only — not incidental wording like "Tax exclusive works". */
+const TAX_LABEL = /^(?:(?:add\s+)?vat(?:\s*\d+(?:\.\d+)?\s*%)?|gst(?:\s*\d+(?:\.\d+)?\s*%)?|wht(?:\s*\d+(?:\.\d+)?\s*%)?|sales\s+tax|output\s+tax)(?:\s|$|:)/i
 const NOTE_LABEL = /^(?:notes?|remarks?)\b/i
 const CONTINUATION_CUE = /^(?:including|incl\.?|complete\s+with|with|and|&)\b/i
 
@@ -72,7 +86,8 @@ interface RowEvidence {
   normalizedCellTexts: string[]
   joinedText: string
   amountBearing: boolean
-  standaloneAmounts: number[]
+  /** Exact decimal amount cells only; never emitted on findings. */
+  standaloneAmounts: DecimalString[]
   warningCodes: string[]
 }
 
@@ -85,14 +100,27 @@ function normalizeLabel(value: string): string {
     .replace(/\s+/g, ' ')
 }
 
-function parseStandaloneNumber(text: string): number | null {
-  const trimmed = text.trim()
-  if (!STANDALONE_NUMBER.test(trimmed)) return null
-  const negative = trimmed.startsWith('(') && trimmed.endsWith(')')
-  const core = trimmed.replace(/[(),]/g, '')
-  const parsed = Number(core)
-  if (!Number.isFinite(parsed)) return null
-  return negative ? -parsed : parsed
+/**
+ * Parse a standalone amount cell using currency-aware production semantics.
+ * Returns canonical DecimalString for exact arithmetic; null if not an amount cell.
+ */
+function parseAmountCell(text: string): DecimalString | null {
+  const match = STRICT_AMOUNT.exec(text.trim())
+  if (!match) return null
+  // Reject dual currency markers and parenthetical negatives (same as source mapping).
+  if ((match[1] !== undefined && match[5] !== undefined) || Boolean(match[2]) !== Boolean(match[4])) {
+    return null
+  }
+  if (match[2]) return null
+  try {
+    return parseDecimalString(match[3]!.replaceAll(',', ''))
+  } catch {
+    return null
+  }
+}
+
+function isAmountCell(text: string): boolean {
+  return parseAmountCell(text) !== null
 }
 
 function isNoiseText(text: string): boolean {
@@ -133,9 +161,9 @@ function buildEvidence(
   const normalizedCellTexts = anchorCells
     .map((cell) => cell.rawText.trim())
     .filter((text) => text.length > 0)
-  const standaloneAmounts: number[] = []
+  const standaloneAmounts: DecimalString[] = []
   for (const text of normalizedCellTexts) {
-    const amount = parseStandaloneNumber(text)
+    const amount = parseAmountCell(text)
     if (amount !== null) standaloneAmounts.push(amount)
   }
   return {
@@ -226,11 +254,25 @@ function hasRowSectionFlags(evidence: RowEvidence): boolean {
 
 function primaryLabel(evidence: RowEvidence): string {
   for (const text of evidence.normalizedCellTexts) {
-    if (parseStandaloneNumber(text) === null && !isNoiseText(text)) {
+    if (!isAmountCell(text) && !isNoiseText(text)) {
       return text
     }
   }
   return evidence.joinedText || evidence.row.rawText
+}
+
+function isTightTotalLabelText(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed) return false
+  if (GRAND_TOTAL_LABEL.test(trimmed)) return true
+  if (TIGHT_TOTAL_LABEL.test(trimmed)) return true
+  // Allow "Total:" with optional trailing whitespace already covered; reject longer phrases.
+  const normalized = normalizeLabel(trimmed)
+  return normalized === 'total' || normalized === 'totals' || normalized === 'grand total' || normalized === 'grand totals'
+}
+
+function isTaxSummaryLabel(text: string): boolean {
+  return TAX_LABEL.test(text.trim())
 }
 
 function clearPricedItemShape(evidence: RowEvidence): boolean {
@@ -268,7 +310,6 @@ function clearPricedItemShape(evidence: RowEvidence): boolean {
     const text = cell.rawText.trim()
     if (!text) continue
     cellByColumn.set(cell.column, text)
-    // Also map by start column offset for multi-col layouts.
     cellByColumn.set(cell.startColumnOffset, text)
   }
 
@@ -277,7 +318,9 @@ function clearPricedItemShape(evidence: RowEvidence): boolean {
     return cellByColumn.get(index)?.trim() ?? ''
   }
 
-  const description = textAt(0) || evidence.normalizedCellTexts.find((text) => parseStandaloneNumber(text) === null) || ''
+  const description = textAt(0)
+    || evidence.normalizedCellTexts.find((text) => !isAmountCell(text))
+    || ''
   if (!description || isNoiseText(description)) return false
 
   const unitText = unitIdx >= 0 ? textAt(unitIdx) : ''
@@ -285,18 +328,17 @@ function clearPricedItemShape(evidence: RowEvidence): boolean {
   const rateText = rateIdx >= 0 ? textAt(rateIdx) : ''
   const amountText = amountIdx >= 0 ? textAt(amountIdx) : ''
 
-  const hasUnit = unitText.length > 0 && parseStandaloneNumber(unitText) === null
-  const hasQty = qtyText.length > 0 && parseStandaloneNumber(qtyText) !== null
-  const hasRate = rateText.length > 0 && parseStandaloneNumber(rateText) !== null
-  const hasAmount = amountText.length > 0 && parseStandaloneNumber(amountText) !== null
+  const hasUnit = unitText.length > 0 && !isAmountCell(unitText)
+  const hasQty = qtyText.length > 0 && isAmountCell(qtyText)
+  const hasRate = rateText.length > 0 && isAmountCell(rateText)
+  const hasAmount = amountText.length > 0 && isAmountCell(amountText)
 
   // Classic BOQ shape: description + unit + qty + (rate or amount)
   if (hasUnit && hasQty && (hasRate || hasAmount)) return true
 
   // Fallback: description plus at least two numeric pricing cells and a non-numeric unit-like token.
-  const nonNumeric = evidence.normalizedCellTexts.filter((text) => parseStandaloneNumber(text) === null && !isNoiseText(text))
-  const numeric = evidence.standaloneAmounts
-  if (nonNumeric.length >= 2 && numeric.length >= 2) {
+  const nonNumeric = evidence.normalizedCellTexts.filter((text) => !isAmountCell(text) && !isNoiseText(text))
+  if (nonNumeric.length >= 2 && evidence.standaloneAmounts.length >= 2) {
     const maybeUnit = nonNumeric.some((text) => text.length <= 8 && !HEADER_VOCAB.has(normalizeLabel(text)))
     if (maybeUnit) return true
   }
@@ -307,7 +349,7 @@ function clearPricedItemShape(evidence: RowEvidence): boolean {
 function nearbyItemAmountSum(
   evidence: RowEvidence,
   tableRows: readonly RowEvidence[],
-): number | null {
+): DecimalString | null {
   const prior = tableRows
     .filter((candidate) => (
       candidate.row.id !== evidence.row.id
@@ -319,20 +361,13 @@ function nearbyItemAmountSum(
 
   if (prior.length === 0) return null
 
-  // Sum priced items above this row in the same table.
-  let sum = 0
-  let sawItem = false
+  let sum: DecimalString | null = null
   for (const candidate of prior) {
     const amount = candidate.standaloneAmounts[candidate.standaloneAmounts.length - 1]
     if (amount === undefined) continue
-    sum += amount
-    sawItem = true
+    sum = sum === null ? amount : addDecimal(sum, amount)
   }
-  return sawItem ? sum : null
-}
-
-function amountsMatch(left: number, right: number): boolean {
-  return Math.abs(left - right) <= 0.05
+  return sum
 }
 
 function classifyOne(
@@ -343,6 +378,7 @@ function classifyOne(
   const label = primaryLabel(evidence)
   const normalizedJoined = evidence.joinedText
   const classification = evidence.row.classification
+  const pricedShape = clearPricedItemShape(evidence)
 
   // 1. Blank / noise (never amount-bearing).
   if (isBlankOrNoise(evidence)) {
@@ -382,39 +418,43 @@ function classifyOne(
     }
   }
 
-  // 4. Tax / VAT summary (amount-bearing allowed when label proves role).
-  if (TAX_LABEL.test(label) || TAX_LABEL.test(normalizedJoined)) {
+  // 4. Tax / VAT summary — tight summary labels only (not incidental "tax" wording).
+  if (isTaxSummaryLabel(label) || isTaxSummaryLabel(normalizedJoined)) {
     const taxReasons = ['tax_label_pattern']
     if (classification === 'total') taxReasons.push('parser_classification_total')
     return { role: 'tax', reasonCodes: taxReasons }
   }
 
-  // 5. Subtotal (label, optional arithmetic confirmation with nearby items).
+  // 5. Subtotal (label required; optional exact arithmetic confirmation).
   if (SUBTOTAL_LABEL.test(label) || SUBTOTAL_LABEL.test(normalizedJoined)) {
     const subtotalReasons = ['subtotal_label_pattern']
     if (classification === 'total') subtotalReasons.push('parser_classification_total')
     if (evidence.amountBearing) {
       const expected = nearbyItemAmountSum(evidence, tableRows)
       const actual = evidence.standaloneAmounts[evidence.standaloneAmounts.length - 1]
-      if (expected !== null && actual !== undefined && amountsMatch(expected, actual)) {
+      if (expected !== null && actual !== undefined && equalAtMinorUnit(expected, actual, 2)) {
         subtotalReasons.push('arithmetic_nearby_item_sum')
       }
     }
     return { role: 'subtotal', reasonCodes: subtotalReasons }
   }
 
-  // 6. Grand total / total summaries.
-  if (
-    GRAND_TOTAL_LABEL.test(label)
-    || GRAND_TOTAL_LABEL.test(normalizedJoined)
+  // 6. Grand total / tight bare total summaries.
+  // Clear priced-item shapes (e.g. "Total station survey") never lose to bare ^total text.
+  // Parser classification `total` alone is insufficient without a tight total label.
+  const hasGrandTotalLabel = GRAND_TOTAL_LABEL.test(label) || GRAND_TOTAL_LABEL.test(normalizedJoined)
+  const hasTightTotalLabel = isTightTotalLabelText(label)
     || (
-      (TOTAL_LABEL.test(label) || TOTAL_LABEL.test(normalizedJoined) || classification === 'total')
-      && !SUBTOTAL_LABEL.test(label)
-      && !TAX_LABEL.test(label)
+      evidence.normalizedCellTexts.length > 0
+      && evidence.normalizedCellTexts
+        .filter((text) => !isAmountCell(text) && !isNoiseText(text))
+        .every((text) => isTightTotalLabelText(text))
+      && evidence.normalizedCellTexts.some((text) => isTightTotalLabelText(text))
     )
-  ) {
+
+  if (!pricedShape && (hasGrandTotalLabel || hasTightTotalLabel)) {
     const totalReasons: string[] = []
-    if (GRAND_TOTAL_LABEL.test(label) || GRAND_TOTAL_LABEL.test(normalizedJoined)) {
+    if (hasGrandTotalLabel) {
       totalReasons.push('grand_total_label_pattern')
     } else {
       totalReasons.push('total_label_pattern')
@@ -471,14 +511,15 @@ function classifyOne(
     }
   }
 
-  // 10. Clear priced item shape.
-  if (clearPricedItemShape(evidence)) {
+  // 10. Clear priced item shape (wins over loose total-like description text).
+  if (pricedShape) {
     const pricedReasons = ['clear_priced_item_shape']
     if (classification === 'item') pricedReasons.push('parser_classification_item')
     return { role: 'priced_item', reasonCodes: pricedReasons }
   }
 
   // 11. Conservative fallback — amount-bearing unproven rows stay uncertain.
+  // Reason codes cite only evidence actually present (no fabricated total labels).
   const uncertainReasons: string[] = []
   if (evidence.amountBearing) {
     uncertainReasons.push('amount_bearing_unproven')

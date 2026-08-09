@@ -344,3 +344,336 @@ test('run-level warnings remain advisory and never create priced snapshots', () 
   assert.equal('extractedItem' in finding, false)
   assert.equal('pricing' in finding, false)
 })
+
+function cell(
+  column: number,
+  rawText: string,
+  flags: Partial<BoqSourceRowV3['rawCells'][number]> = {},
+): BoqSourceRowV3['rawCells'][number] {
+  return {
+    column,
+    rawText,
+    lines: [rawText],
+    rowSpan: 1,
+    columnSpan: 1,
+    startRowOffset: 0,
+    endRowOffset: 1,
+    startColumnOffset: column,
+    endColumnOffset: column + 1,
+    columnHeader: false,
+    rowHeader: false,
+    rowSection: false,
+    carried: false,
+    ...flags,
+  }
+}
+
+function row(input: {
+  id: string
+  page?: number
+  table?: number
+  row: number
+  description: string
+  cells?: Array<{ column: number; text: string; flags?: Partial<BoqSourceRowV3['rawCells'][number]> }>
+  classification?: BoqSourceRowV3['classification']
+  headers?: string[]
+  section?: string | null
+}): BoqSourceRowV3 {
+  const headers = input.headers ?? ['Description', 'Unit', 'Qty', 'Rate', 'Amount']
+  const extra = input.cells ?? []
+  const rawCells = [
+    cell(0, input.description, { startRowOffset: input.row - 1, endRowOffset: input.row }),
+    ...extra.map((entry) => cell(entry.column, entry.text, {
+      startRowOffset: input.row - 1,
+      endRowOffset: input.row,
+      ...entry.flags,
+    })),
+  ]
+  const texts = rawCells.map((entry) => entry.rawText).filter((text) => text.trim().length > 0)
+  return {
+    id: input.id,
+    page: input.page ?? 1,
+    table: input.table ?? 1,
+    row: input.row,
+    section: input.section ?? 'Works',
+    headers,
+    rawCells,
+    rawText: texts.join(' | '),
+    classification: input.classification ?? 'item',
+    confidence: 0.9,
+    warnings: [],
+  }
+}
+
+function classify(rows: readonly BoqSourceRowV3[]): RowRoleFinding[] {
+  return classifySourceRows({ run: minimalRun(rows), sourceRows: rows })
+}
+
+function assertNoPricing(finding: RowRoleFinding): void {
+  const serialized = JSON.stringify(finding)
+  assert.equal('quantity' in finding, false)
+  assert.equal('rate' in finding, false)
+  assert.equal('total' in finding, false)
+  assert.equal('materialRate' in finding, false)
+  assert.equal('labourRate' in finding, false)
+  assert.equal('extractedItem' in finding, false)
+  assert.equal('pricing' in finding, false)
+  assert.match(serialized, /"sourceRowId"/)
+}
+
+test('amount-bearing descriptions starting with Total are not dismissed as total', () => {
+  const rows = [
+    row({
+      id: 'sr-total-station',
+      row: 1,
+      description: 'Total station survey',
+      cells: [
+        { column: 1, text: 'day' },
+        { column: 2, text: '2' },
+        { column: 3, text: '1500.00' },
+        { column: 4, text: '3000.00' },
+      ],
+      classification: 'item',
+    }),
+    row({
+      id: 'sr-total-package',
+      row: 2,
+      description: 'Total package supply',
+      cells: [
+        { column: 1, text: 'set' },
+        { column: 2, text: '1' },
+        { column: 3, text: '980.00' },
+        { column: 4, text: '980.00' },
+      ],
+      classification: 'item',
+    }),
+  ]
+
+  const findings = classify(rows)
+  const station = findingById(findings, 'sr-total-station')
+  const packageSupply = findingById(findings, 'sr-total-package')
+
+  assert.equal(station.role, 'priced_item')
+  assert.deepEqual(station.reasonCodes, [
+    'clear_priced_item_shape',
+    'parser_classification_item',
+  ])
+  assert.equal(packageSupply.role, 'priced_item')
+  assert.deepEqual(packageSupply.reasonCodes, [
+    'clear_priced_item_shape',
+    'parser_classification_item',
+  ])
+  assert.ok(!DISMISSIBLE_ROLES.has(station.role))
+  assert.ok(!DISMISSIBLE_ROLES.has(packageSupply.role))
+  assertNoPricing(station)
+  assertNoPricing(packageSupply)
+})
+
+test('parser classification total without tight total label is not dismissible', () => {
+  const loose = row({
+    id: 'sr-loose-parser-total',
+    row: 4,
+    description: 'Carried works balance',
+    cells: [{ column: 4, text: '4500.00' }],
+    classification: 'total',
+  })
+  const [finding] = classify([loose])
+  assert.equal(finding.role, 'uncertain')
+  assert.deepEqual(finding.reasonCodes, [
+    'amount_bearing_unproven',
+  ])
+  assert.ok(!finding.reasonCodes.includes('total_label_pattern'))
+  assert.ok(!finding.reasonCodes.includes('parser_classification_total'))
+  assert.ok(!finding.reasonCodes.includes('grand_total_label_pattern'))
+  assert.deepEqual(finding.sourceRef, { page: 1, table: 1, row: 4 })
+  assertNoPricing(finding)
+})
+
+test('tight total and grand-total labels remain dismissible with exact reason codes', () => {
+  const rows = [
+    row({
+      id: 'sr-bare-total',
+      row: 10,
+      description: 'Total',
+      cells: [{ column: 4, text: '12000.00' }],
+      classification: 'total',
+    }),
+    row({
+      id: 'sr-grand',
+      row: 11,
+      description: 'Grand Total',
+      cells: [{ column: 4, text: '15000.00' }],
+      classification: 'total',
+    }),
+  ]
+  const findings = classify(rows)
+  const bare = findingById(findings, 'sr-bare-total')
+  const grand = findingById(findings, 'sr-grand')
+  assert.equal(bare.role, 'total')
+  assert.deepEqual(bare.reasonCodes, [
+    'total_label_pattern',
+    'parser_classification_total',
+  ])
+  assert.equal(grand.role, 'total')
+  assert.deepEqual(grand.reasonCodes, [
+    'grand_total_label_pattern',
+    'parser_classification_total',
+  ])
+})
+
+test('incidental tax wording does not dismiss amount-bearing items; VAT/GST/WHT summaries still do', () => {
+  const incidental = row({
+    id: 'sr-tax-exclusive',
+    row: 1,
+    description: 'Tax exclusive works',
+    cells: [
+      { column: 1, text: 'lot' },
+      { column: 2, text: '1' },
+      { column: 3, text: '2000.00' },
+      { column: 4, text: '2000.00' },
+    ],
+    classification: 'item',
+  })
+  const vat = row({
+    id: 'sr-vat-summary',
+    row: 2,
+    description: 'VAT 7%',
+    cells: [{ column: 4, text: '140.00' }],
+    classification: 'total',
+  })
+  const gst = row({
+    id: 'sr-gst-summary',
+    row: 3,
+    description: 'GST 9%',
+    cells: [{ column: 4, text: '180.00' }],
+    classification: 'total',
+  })
+  const wht = row({
+    id: 'sr-wht-summary',
+    row: 4,
+    description: 'WHT 3%',
+    cells: [{ column: 4, text: '60.00' }],
+    classification: 'total',
+  })
+
+  const findings = classify([incidental, vat, gst, wht])
+  const exclusive = findingById(findings, 'sr-tax-exclusive')
+  assert.equal(exclusive.role, 'priced_item')
+  assert.deepEqual(exclusive.reasonCodes, [
+    'clear_priced_item_shape',
+    'parser_classification_item',
+  ])
+  assert.ok(!exclusive.reasonCodes.includes('tax_label_pattern'))
+
+  const vatFinding = findingById(findings, 'sr-vat-summary')
+  const gstFinding = findingById(findings, 'sr-gst-summary')
+  const whtFinding = findingById(findings, 'sr-wht-summary')
+  assert.equal(vatFinding.role, 'tax')
+  assert.deepEqual(vatFinding.reasonCodes, [
+    'tax_label_pattern',
+    'parser_classification_total',
+  ])
+  assert.equal(gstFinding.role, 'tax')
+  assert.deepEqual(gstFinding.reasonCodes, [
+    'tax_label_pattern',
+    'parser_classification_total',
+  ])
+  assert.equal(whtFinding.role, 'tax')
+  assert.deepEqual(whtFinding.reasonCodes, [
+    'tax_label_pattern',
+    'parser_classification_total',
+  ])
+})
+
+test('currency-prefixed and suffixed amounts count as amount-bearing evidence', () => {
+  const noteWithThb = row({
+    id: 'sr-note-thb',
+    row: 1,
+    description: 'Note: provisional sum',
+    cells: [{ column: 4, text: 'THB 980.00' }],
+    classification: 'note',
+  })
+  const sectionWithBaht = row({
+    id: 'sr-section-baht',
+    row: 2,
+    description: 'B. Provisional Works',
+    cells: [{ column: 4, text: '฿1,200.00' }],
+    classification: 'section',
+    section: 'B. Provisional Works',
+  })
+  sectionWithBaht.rawCells[0] = {
+    ...sectionWithBaht.rawCells[0],
+    rowSection: true,
+    columnSpan: 1,
+  }
+  const unknownSuffix = row({
+    id: 'sr-amount-suffix',
+    row: 3,
+    description: 'Contingency hold',
+    cells: [{ column: 4, text: '980.00 THB' }],
+    classification: 'unknown',
+  })
+
+  const findings = classify([noteWithThb, sectionWithBaht, unknownSuffix])
+  const noteFinding = findingById(findings, 'sr-note-thb')
+  const sectionFinding = findingById(findings, 'sr-section-baht')
+  const suffixFinding = findingById(findings, 'sr-amount-suffix')
+
+  assert.equal(noteFinding.role, 'uncertain')
+  assert.deepEqual(noteFinding.reasonCodes, ['amount_bearing_unproven'])
+  assert.equal(sectionFinding.role, 'uncertain')
+  assert.deepEqual(sectionFinding.reasonCodes, ['amount_bearing_unproven'])
+  assert.equal(suffixFinding.role, 'uncertain')
+  assert.deepEqual(suffixFinding.reasonCodes, [
+    'amount_bearing_unproven',
+    'parser_classification_unknown',
+  ])
+  assertNoPricing(noteFinding)
+  assertNoPricing(sectionFinding)
+  assertNoPricing(suffixFinding)
+})
+
+test('subtotal arithmetic reason uses exact decimal equality without embedding amounts', () => {
+  const rows = [
+    row({
+      id: 'sr-a1',
+      row: 1,
+      description: 'Pipe A',
+      cells: [
+        { column: 1, text: 'm' },
+        { column: 2, text: '10' },
+        { column: 3, text: '100.00' },
+        { column: 4, text: '1000.00' },
+      ],
+    }),
+    row({
+      id: 'sr-a2',
+      row: 2,
+      description: 'Pipe B',
+      cells: [
+        { column: 1, text: 'm' },
+        { column: 2, text: '5' },
+        { column: 3, text: '40.00' },
+        { column: 4, text: '200.00' },
+      ],
+    }),
+    row({
+      id: 'sr-sub',
+      row: 3,
+      description: 'Sub-total',
+      cells: [{ column: 4, text: '1200.00' }],
+      classification: 'total',
+    }),
+  ]
+  const findings = classify(rows)
+  const subtotal = findingById(findings, 'sr-sub')
+  assert.equal(subtotal.role, 'subtotal')
+  assert.deepEqual(subtotal.reasonCodes, [
+    'subtotal_label_pattern',
+    'parser_classification_total',
+    'arithmetic_nearby_item_sum',
+  ])
+  assert.equal(JSON.stringify(subtotal).includes('1200'), false)
+  assert.equal(JSON.stringify(subtotal).includes('1000'), false)
+  assertNoPricing(subtotal)
+})
