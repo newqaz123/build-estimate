@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  addDecimal,
   divideDecimalExact,
   equalAtMinorUnit,
   multiplyDecimal,
@@ -69,6 +70,32 @@ test('parseDecimalString rejects unsafe and noncanonical numeric input', () => {
   ]) {
     assert.throws(() => parseDecimalString(value), /decimal|invalid|numeric/i)
   }
+})
+
+test('addDecimal aligns mixed scales without floating point', () => {
+  assert.equal(addDecimal('1.5', '0.25'), '1.75')
+  assert.equal(addDecimal('10', '0.001'), '10.001')
+  assert.equal(addDecimal('0.1', '0.2'), '0.3')
+  assert.equal(addDecimal('100.5', '0.005'), '100.505')
+  assert.equal(addDecimal('0.001', '0.002'), '0.003')
+})
+
+test('addDecimal handles positive and negative operands', () => {
+  assert.equal(addDecimal('5', '3'), '8')
+  assert.equal(addDecimal('-5', '-3'), '-8')
+  assert.equal(addDecimal('5', '-3'), '2')
+  assert.equal(addDecimal('-5', '3'), '-2')
+  assert.equal(addDecimal('1.25', '-0.05'), '1.2')
+  assert.equal(addDecimal('-1.25', '0.05'), '-1.2')
+})
+
+test('addDecimal cancels to canonical zero and drops trailing zeros', () => {
+  assert.equal(addDecimal('1.5', '-1.5'), '0')
+  assert.equal(addDecimal('-0.25', '0.25'), '0')
+  assert.equal(addDecimal('10.00', '0'), '10')
+  assert.equal(addDecimal('1.230', '0.770'), '2')
+  assert.equal(addDecimal('0.100', '0.200'), '0.3')
+  assert.equal(addDecimal('-0', '0'), '0')
 })
 
 test('multiplyDecimal uses exact scale arithmetic and canonical output', () => {

@@ -127,6 +127,25 @@ export function parseDecimalString(value: unknown): DecimalString {
   return canonicalize(parseExact(value))
 }
 
+/**
+ * Add with exact integer scale alignment. Never uses floating-point arithmetic.
+ */
+export function addDecimal(left: DecimalString, right: DecimalString): DecimalString {
+  const leftDecimal = parseExact(left)
+  const rightDecimal = parseExact(right)
+  const scale = Math.max(leftDecimal.scale, rightDecimal.scale)
+  const leftSigned = (leftDecimal.negative ? -leftDecimal.coefficient : leftDecimal.coefficient)
+    * (BIGINT_TEN ** BigInt(scale - leftDecimal.scale))
+  const rightSigned = (rightDecimal.negative ? -rightDecimal.coefficient : rightDecimal.coefficient)
+    * (BIGINT_TEN ** BigInt(scale - rightDecimal.scale))
+  const sum = leftSigned + rightSigned
+  return canonicalize({
+    coefficient: sum < BIGINT_ZERO ? -sum : sum,
+    scale,
+    negative: sum < BIGINT_ZERO,
+  })
+}
+
 export function multiplyDecimal(left: DecimalString, right: DecimalString): DecimalString {
   const leftDecimal = parseExact(left)
   const rightDecimal = parseExact(right)
