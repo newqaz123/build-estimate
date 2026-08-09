@@ -24,8 +24,8 @@ Every likely missing item still requires an explicit human **Add** or **Do not a
 1. Show reviewers only actionable likely-missing-item suggestions.
 2. Hide useless extracted rows from the normal workflow while retaining an inspectable audit trail.
 3. Reduce manual catalog matching by preparing existing-item matches before a missing BOQ item is added.
-4. Normalize names, units, quantities, and unit rates without changing the quoted source total.
-5. Preserve both immutable source values and normalized catalog values.
+4. Normalize names, units, quantities, and unit rates without changing the reviewer-confirmed quoted line total, while preserving final source-document reconciliation.
+5. Preserve immutable extracted values, separate reviewer-confirmed source interpretation, and normalized catalog values.
 6. Minimize AI cost through local matching, batching, caching, and escalation only for ambiguity.
 7. Preserve existing provenance, atomicity, reconciliation, catalog-readiness, and approval safeguards.
 8. Support mixed digital and scanned PDFs, primarily under 100 BOQ rows.
@@ -132,8 +132,8 @@ Approval verifies totals and readiness, then changes status. It does not create 
 5. OCR/source verification and catalog readiness remain two stages in one workspace.
 6. The workflow is optimized for mixed PDFs under 100 rows.
 7. Global and catalog-item-specific conversion rules are supported.
-8. Source and normalized values are both preserved.
-9. Quoted source totals remain authoritative; catalog historical pricing is comparison-only.
+8. Extracted, reviewer-confirmed, and normalized values are preserved as separate layers.
+9. Reviewer-confirmed quoted line totals and the source document total remain authoritative; catalog historical pricing is comparison-only.
 10. A safe existing catalog candidate supports one-action **Add & match**.
 11. If no safe candidate exists, **Add to BOQ** creates only the draft BOQ item; catalog creation/linking occurs in Stage 2 before approval.
 12. AI uses a local-first, cached, one-batch strategy with optional escalation.
@@ -239,7 +239,7 @@ The reviewer sees only `match`, `create`, or `uncertain` rows that could represe
 - proposed BOQ section,
 - existing catalog match or pending-new-item proposal,
 - deterministic conversion explanation,
-- source total and normalized total,
+- extracted, reviewer-confirmed, and normalized totals with any correction reason,
 - catalog historical-price comparison.
 
 Actions:
@@ -289,7 +289,7 @@ type ActionableItemSuggestion = {
   rowRole: RowRole
   deterministicReasons: string[]
   suggestedSectionIndex: number
-  sourceItem: SourcePricingSnapshot
+  extractedItem: ExtractedPricingSnapshot
   catalogCandidates: CatalogCandidateSnapshot[]
   aiAdvice?: {
     decision: 'match' | 'create' | 'dismiss' | 'uncertain'
@@ -306,18 +306,30 @@ type ActionableItemSuggestion = {
 
 Names are illustrative; implementation may reuse existing domain types where boundaries remain clear.
 
-### 8.2 Source and normalized pricing
+### 8.2 Extracted, reviewer-confirmed, and normalized pricing
 
-Preserve immutable source pricing and deterministic normalized pricing:
+Preserve three separate layers:
 
 ```ts
-type SourcePricingSnapshot = {
+type ExtractedPricingSnapshot = {
   description: string
   unit: string
   quantity: DecimalString
   materialRate: DecimalString
   labourRate: DecimalString
   total: DecimalString
+}
+
+type ReviewerPricingSnapshot = {
+  description: string
+  unit: string
+  quantity: DecimalString
+  materialRate: DecimalString
+  labourRate: DecimalString
+  total: DecimalString
+  correctionReason?: string
+  confirmedAt: string
+  confirmedBy: string
 }
 
 type PricingNormalization = {
@@ -333,24 +345,27 @@ type PricingNormalization = {
 }
 ```
 
+`ExtractedPricingSnapshot` is immutable parser output. Raw rows/cells remain separately preserved. `ReviewerPricingSnapshot` is the reviewer-confirmed interpretation used to build the draft BOQ item. If quantity, unit, material rate, labour rate, or total differs from extraction, the decision requires a trimmed correction reason and records field-level deltas.
+
 For factor `f = catalogUnitsPerSourceUnit`:
 
 ```text
-normalized quantity = source quantity × f
-normalized component rate = source component rate ÷ f
+normalized quantity = reviewer quantity × f
+normalized component rate = reviewer component rate ÷ f
 normalized total = normalized quantity × sum(normalized component rates)
 ```
 
-The source and normalized totals must agree at the workspace currency minor-unit boundary. Decimal arithmetic is mandatory.
+Reviewer-confirmed and normalized totals must agree at the workspace currency minor-unit boundary. The extracted line total may differ only through an explicit audited correction. The final BOQ must still reconcile to the authoritative source document total. Decimal arithmetic is mandatory.
 
 ### 8.3 Conversion registry
 
-Two rule families:
+Three rule families:
 
-1. **Global conversion rules** for universal dimensions and aliases.
-2. **Catalog-item conversion rules** for packaging or product-specific units.
+1. **System identity rules** for canonically equal units, always factor `1`, with stable ID `identity:<canonical-unit>:v1`; these are generated by code and never stored as fake human approvals.
+2. **Global conversion rules** for universal dimensions and aliases.
+3. **Catalog-item conversion rules** for packaging or product-specific units.
 
-Each rule stores:
+Each human-approved global or catalog-item rule stores:
 
 - stable ID,
 - source unit,
@@ -362,7 +377,7 @@ Each rule stores:
 - actor and approval timestamp,
 - active/archived status.
 
-AI can select an existing rule but cannot author or change its factor. A new product-specific factor requires explicit human confirmation before reuse.
+System identity rules are generated from the canonical unit and code version, not stored as human approvals. AI can advise selection among allowlisted human-approved rules but cannot author or change a factor. A new product-specific factor requires explicit human confirmation before reuse.
 
 ### 8.4 Mapping cache
 
@@ -384,11 +399,13 @@ Human-approved mappings take priority over model-only advice. Archived catalog e
 Persist separately:
 
 - raw parser output,
+- immutable extracted pricing snapshot,
 - deterministic classification,
 - local catalog candidates,
 - AI advice,
-- reviewer-authored edits,
-- reviewer decision,
+- separate reviewer-confirmed pricing snapshot,
+- numeric correction deltas and reason when applicable,
+- reviewer decision and trusted actor/timestamp,
 - applied normalized values,
 - catalog action,
 - approval event.
@@ -486,12 +503,12 @@ Catalog-pending items show prefilled create/link metadata. The current `Exclude`
 
 ## 11. Atomicity and failure handling
 
-1. **Add & match** creates the BOQ item, source provenance, normalized pricing, catalog link, source-item history, and audit event atomically.
-2. **Add to BOQ** creates the BOQ item, source provenance, pending catalog state, and audit event atomically.
+1. **Add & match** creates the BOQ item, immutable extracted pricing, separate reviewer-confirmed pricing, normalized pricing, source provenance, catalog link, source-item history, and audit event atomically.
+2. **Add to BOQ** creates the BOQ item, immutable extracted pricing, separate reviewer-confirmed pricing, source provenance, pending catalog state, and audit event atomically.
 3. **Do not add** creates no item and records the human disposition.
 4. AI failure does not block local candidates or manual review.
 5. Unknown conversion disables acceptance until the reviewer selects or confirms a valid rule.
-6. Source/normalized total mismatch disables acceptance and shows exact arithmetic.
+6. Reviewer-confirmed/normalized total mismatch disables acceptance and shows exact arithmetic; numeric divergence from extraction requires an explicit audited correction reason.
 7. Stale suggestions are disabled and regenerated.
 8. Archived or changed catalog candidates trigger refresh.
 9. Transaction failure leaves the editor and reviewer inputs intact.
@@ -529,7 +546,7 @@ Keep UI projection logic out of `boq-extraction-proposal-store.ts` and keep conv
 - fuzzy ranking distinguishes size/class/material,
 - incompatible units are rejected,
 - global and item-specific conversions use exact factors,
-- source and normalized totals remain equal,
+- reviewer-confirmed and normalized totals remain equal; extracted numeric differences require an audited correction reason and final document-total reconciliation,
 - archived candidates and rules invalidate caches.
 
 ### 13.3 AI contract
