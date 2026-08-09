@@ -62,7 +62,7 @@ test('buildActionableReviewMetrics keeps count/cost/quality only', () => {
   assert.equal(metrics.quality.decisionCounts.match, 1)
   assert.equal(metrics.quality.decisionCounts.uncertain, 1)
   assert.equal(metrics.quality.decisionCounts.create, 1)
-  assert.equal(metrics.quality.sourceTotalDifference, '12.50')
+  assert.equal(metrics.quality.sourceTotalDifference, '12.5')
   assert.equal(metrics.quality.providerUnavailable, false)
   assert.deepEqual(Object.keys(metrics).sort(), [
     'cost',

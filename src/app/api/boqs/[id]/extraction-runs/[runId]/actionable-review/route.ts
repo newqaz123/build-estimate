@@ -28,7 +28,10 @@ import {
 } from '@/lib/catalog-mapping-cache-storage'
 import type { CatalogShortlistCatalogEntry } from '@/lib/catalog-candidate-shortlist'
 import { createFirestoreExtractionStore } from '@/lib/boq-extraction-storage'
-import { createFirestoreExtractionProposalStore } from '@/lib/boq-extraction-proposal-store'
+import {
+  createFirestoreExtractionProposalStore,
+  type ExtractionProposalReviewState,
+} from '@/lib/boq-extraction-proposal-store'
 import { getCollection, getDb, getDocument } from '@/lib/db'
 import type { StandardEntry } from '@/lib/standard-schema'
 import type { WorkspaceSettings } from '@/lib/settings-schema'
@@ -97,6 +100,66 @@ const FORBIDDEN_BODY_KEYS = new Set([
   'sourceTotalDifference',
 ])
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object'
+    && value !== null
+    && !Array.isArray(value)
+}
+
+function isBoqSnapshot(value: unknown): value is Boq {
+  return isPlainRecord(value)
+    && Array.isArray(value.sections)
+    && typeof value.totalItems === 'number'
+    && typeof value.grandTotal === 'number'
+}
+
+/**
+ * Fail-closed ExtractionProposalAudit guard (mirrors store semantics).
+ * Never treats undo/reopen events or bare `audits` bags as audits.
+ */
+export function isExtractionProposalAudit(value: unknown): value is ExtractionProposalAudit {
+  if (!isPlainRecord(value)) return false
+  if (typeof value.proposalId !== 'string' || value.proposalId.trim() === '') return false
+  if (typeof value.auditId !== 'string' || value.auditId.trim() === '') return false
+  if (typeof value.extractionRunId !== 'string' || value.extractionRunId.trim() === '') return false
+  if (value.status !== 'accepted' && value.status !== 'rejected' && value.status !== 'skipped') {
+    return false
+  }
+  if (!Array.isArray(value.targetItemIds)) return false
+  if (!Array.isArray(value.sourceRowIds)) return false
+  if (typeof value.actorId !== 'string' || value.actorId.trim() === '') return false
+  if (typeof value.timestamp !== 'string' || value.timestamp.trim() === '') return false
+  if (value.status === 'accepted' && !isBoqSnapshot(value.resultBoq)) return false
+  // Undo/reopen events carry status "undone"/"reopened" and are rejected above.
+  return true
+}
+
+/**
+ * Production audit loader input shape: ExtractionProposalReviewState.auditEvents only.
+ * Never reads a fictional `state.audits` field.
+ */
+export function extractAuditsFromReviewState(state: unknown): ExtractionProposalAudit[] {
+  if (!isPlainRecord(state)) return []
+  const events = state.auditEvents
+  if (!Array.isArray(events)) return []
+  const audits: ExtractionProposalAudit[] = []
+  for (const event of events) {
+    if (isExtractionProposalAudit(event)) {
+      audits.push(event)
+    }
+  }
+  return audits
+}
+
+export function createGetAuditsFromReviewState(
+  getReviewState: (boqId: string, runId: string) => Promise<unknown>,
+): ActionableReviewRouteDependencies['getAudits'] {
+  return async (boqId, runId) => {
+    const state = await getReviewState(boqId, runId)
+    return extractAuditsFromReviewState(state)
+  }
+}
+
 async function readPostBody(request: Request): Promise<Record<string, unknown> | Response> {
   const text = await request.text()
   if (text.trim() === '') return {}
@@ -139,6 +202,14 @@ function defaultCostEstimator(): ActionableReviewCostEstimator {
     return Math.max(0, Math.floor(approx))
   }
 }
+
+const EMPTY_AI_BATCH_SUMMARY = {
+  cacheHitCount: 0,
+  initialCallCount: 0,
+  escalationCallCount: 0,
+  estimatedCostMinor: 0,
+  providerUnavailable: false,
+} as const
 
 export function createActionableReviewHandlers(dependencies: ActionableReviewRouteDependencies) {
   async function GET(
@@ -223,6 +294,8 @@ export function createActionableReviewHandlers(dependencies: ActionableReviewRou
       const unitMap = settings.fuzzy?.unitMap ?? {}
       const modelVersion = settings.actionableReview.lowCostModel
 
+      // Provider may still run before collision detection (cost-only inefficiency on
+      // same-fingerprint retries). Response/state remain content-stable via bundle exists.
       const generated: GenerateActionableReviewResult = await generateActionableReview({
         extractionRunId: runId,
         run: imported.run,
@@ -244,10 +317,26 @@ export function createActionableReviewHandlers(dependencies: ActionableReviewRou
         mode,
       })
 
-      // Persist only snapshot/metrics (+ optional model mapping cache advice).
-      // Never touch BOQ sections/items, catalog standards, proposal lifecycle, or approval.
-      const snapshotWrite = await dependencies.storage.writeSnapshot(id, runId, generated.review)
-      const metricsWrite = await dependencies.storage.writeMetrics(id, runId, generated.metrics)
+      // Atomic snapshot+metrics only. Never BOQ/catalog/proposal/approval.
+      const bundle = await dependencies.storage.writeBundle(
+        id,
+        runId,
+        generated.review,
+        generated.metrics,
+      )
+
+      if (bundle.status === 'exists') {
+        // Content-stable: return stored documents; NO model cache writes on collision.
+        return Response.json(
+          {
+            snapshot: bundle.snapshot,
+            metrics: bundle.metrics,
+            idempotent: true,
+            aiBatch: { ...EMPTY_AI_BATCH_SUMMARY },
+          },
+          { status: 200 },
+        )
+      }
 
       for (const write of generated.modelCacheWrites) {
         try {
@@ -263,12 +352,11 @@ export function createActionableReviewHandlers(dependencies: ActionableReviewRou
       void dependencies.mutateProposalLifecycle
       void dependencies.mutateApprovalState
 
-      const existing = snapshotWrite === 'exists' || metricsWrite === 'exists'
       return Response.json(
         {
-          snapshot: generated.review,
-          metrics: generated.metrics,
-          idempotent: existing,
+          snapshot: bundle.snapshot,
+          metrics: bundle.metrics,
+          idempotent: false,
           aiBatch: {
             cacheHitCount: generated.aiBatch.cacheHitCount,
             initialCallCount: generated.aiBatch.initialCallCount,
@@ -277,7 +365,7 @@ export function createActionableReviewHandlers(dependencies: ActionableReviewRou
             providerUnavailable: generated.aiBatch.providerUnavailable,
           },
         },
-        { status: existing ? 200 : 201 },
+        { status: 201 },
       )
     } catch (error) {
       console.error('Error generating actionable review:', error)
@@ -299,6 +387,12 @@ function productionDependencies(): ActionableReviewRouteDependencies {
     const { callLLM: impl } = await import('@/lib/llm')
     return impl(messages, provider, model, signal)
   }
+
+  const getAudits = createGetAuditsFromReviewState(async (boqId, runId) => {
+    const state: ExtractionProposalReviewState | null =
+      await proposalStore().getReviewState(boqId, runId)
+    return state
+  })
 
   return {
     authenticate: auth,
@@ -327,13 +421,7 @@ function productionDependencies(): ActionableReviewRouteDependencies {
       const state = await proposalStore().getReviewState(boqId, runId)
       return (state?.proposals ?? []) as ValidatedProposal[]
     },
-    async getAudits(boqId, runId) {
-      const state = await proposalStore().getReviewState(boqId, runId)
-      const audits = state && 'audits' in state
-        ? (state as { audits?: ExtractionProposalAudit[] }).audits
-        : undefined
-      return audits ?? []
-    },
+    getAudits,
     get storage() {
       return storage()
     },

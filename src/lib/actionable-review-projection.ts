@@ -549,7 +549,6 @@ export async function generateActionableReview(
     run: input.run,
     sourceRows,
   })
-  const roleById = new Map(roles.map((finding) => [finding.sourceRowId, finding]))
 
   const representedRows = reconcileRepresentedRows({
     boq: input.boq,
@@ -589,7 +588,6 @@ export async function generateActionableReview(
 
   const prepared: PreparedRow[] = []
   const cacheKeysBySourceRowId: Record<string, string> = {}
-  const approvedForShortlist: ApprovedCatalogMapping[] = []
 
   for (const finding of actionableFindings) {
     const row = rowsById.get(finding.sourceRowId)
@@ -616,9 +614,6 @@ export async function generateActionableReview(
       cachedMapping = await input.cache.get(cacheKey)
     } catch {
       cachedMapping = null
-    }
-    if (cachedMapping) {
-      approvedForShortlist.push(cachedMapping)
     }
 
     const candidates = shortlistCatalogCandidates({
@@ -777,9 +772,6 @@ export async function generateActionableReview(
       (rejectedReasonCounts.row_cap_excluded ?? 0)
       + (input.sourceRows.length - sourceRows.length)
   }
-
-  void roleById
-  void approvedForShortlist
 
   const reviewWithoutId: Omit<ActionableReview, 'id'> = {
     extractionRunId: input.extractionRunId,

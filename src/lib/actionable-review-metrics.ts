@@ -1,5 +1,5 @@
 import type { ActionableReviewAiBatchResult } from './actionable-review-ai'
-import type { DecimalString } from './decimal-string'
+import { parseDecimalString, type DecimalString } from './decimal-string'
 
 export interface ActionableReviewMetricsCounts {
   rawRowCount: number
@@ -121,6 +121,11 @@ export function buildActionableReviewMetrics(input: {
   }
 
   const summary = input.review.validationSummary
+  let sourceTotalDifference: DecimalString | null = null
+  if (summary.sourceTotalDifference !== null) {
+    // Canonical-validate so metrics never persist non-decimal total deltas.
+    sourceTotalDifference = parseDecimalString(summary.sourceTotalDifference)
+  }
   const metrics: ActionableReviewMetrics = {
     fingerprint: input.fingerprint,
     extractionRunId: input.review.extractionRunId,
@@ -143,7 +148,7 @@ export function buildActionableReviewMetrics(input: {
     quality: {
       rejectedReasonCounts: { ...summary.rejectedReasonCounts },
       decisionCounts,
-      sourceTotalDifference: summary.sourceTotalDifference,
+      sourceTotalDifference,
       providerUnavailable: input.aiBatch.providerUnavailable,
     },
   }
