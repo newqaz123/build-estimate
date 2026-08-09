@@ -677,3 +677,137 @@ test('subtotal arithmetic reason uses exact decimal equality without embedding a
   assert.equal(JSON.stringify(subtotal).includes('1000'), false)
   assertNoPricing(subtotal)
 })
+
+test('amount-bearing item descriptions with VAT/GST/WHT/Sub-total wording are never dismissed as tax/subtotal', () => {
+  const rows = [
+    row({
+      id: 'sr-vat-inclusive-works',
+      row: 1,
+      description: 'VAT inclusive works',
+      cells: [
+        { column: 1, text: 'lot' },
+        { column: 2, text: '1' },
+        { column: 3, text: '5000.00' },
+        { column: 4, text: '5000.00' },
+      ],
+      classification: 'item',
+    }),
+    row({
+      id: 'sr-gst-registration-fee',
+      row: 2,
+      description: 'GST registration fee',
+      cells: [
+        { column: 1, text: 'ea' },
+        { column: 2, text: '1' },
+        { column: 3, text: '800.00' },
+        { column: 4, text: '800.00' },
+      ],
+      classification: 'item',
+    }),
+    row({
+      id: 'sr-wht-certificate',
+      row: 3,
+      description: 'WHT certificate',
+      cells: [
+        { column: 1, text: 'ea' },
+        { column: 2, text: '2' },
+        { column: 3, text: '150.00' },
+        { column: 4, text: '300.00' },
+      ],
+      classification: 'item',
+    }),
+    row({
+      id: 'sr-subtotal-valve-works',
+      row: 4,
+      description: 'Sub-total valve works',
+      cells: [
+        { column: 1, text: 'set' },
+        { column: 2, text: '1' },
+        { column: 3, text: '2200.00' },
+        { column: 4, text: '2200.00' },
+      ],
+      classification: 'item',
+    }),
+  ]
+
+  const findings = classify(rows)
+  const expectedIds = [
+    'sr-vat-inclusive-works',
+    'sr-gst-registration-fee',
+    'sr-wht-certificate',
+    'sr-subtotal-valve-works',
+  ] as const
+
+  for (const id of expectedIds) {
+    const finding = findingById(findings, id)
+    assert.equal(finding.role, 'priced_item', id)
+    assert.deepEqual(finding.reasonCodes, [
+      'clear_priced_item_shape',
+      'parser_classification_item',
+    ], id)
+    assert.ok(!finding.reasonCodes.includes('tax_label_pattern'), id)
+    assert.ok(!finding.reasonCodes.includes('subtotal_label_pattern'), id)
+    assert.ok(!DISMISSIBLE_ROLES.has(finding.role), id)
+    assertNoPricing(finding)
+  }
+})
+
+test('tight bare Subtotal/VAT/GST/WHT summary labels remain dismissible with exact reason codes', () => {
+  const rows = [
+    row({
+      id: 'sr-subtotal-bare',
+      row: 1,
+      description: 'Subtotal',
+      cells: [{ column: 4, text: '900.00' }],
+      classification: 'total',
+    }),
+    row({
+      id: 'sr-sub-total-hyphen',
+      row: 2,
+      description: 'Sub-total',
+      cells: [{ column: 4, text: '900.00' }],
+      classification: 'total',
+    }),
+    row({
+      id: 'sr-vat-bare',
+      row: 3,
+      description: 'VAT',
+      cells: [{ column: 4, text: '63.00' }],
+      classification: 'total',
+    }),
+    row({
+      id: 'sr-add-vat',
+      row: 4,
+      description: 'Add VAT 7%',
+      cells: [{ column: 4, text: '63.00' }],
+      classification: 'total',
+    }),
+  ]
+
+  const findings = classify(rows)
+  const bareSubtotal = findingById(findings, 'sr-subtotal-bare')
+  const hyphenSubtotal = findingById(findings, 'sr-sub-total-hyphen')
+  const vatBare = findingById(findings, 'sr-vat-bare')
+  const addVat = findingById(findings, 'sr-add-vat')
+
+  assert.equal(bareSubtotal.role, 'subtotal')
+  assert.deepEqual(bareSubtotal.reasonCodes, [
+    'subtotal_label_pattern',
+    'parser_classification_total',
+  ])
+  assert.equal(hyphenSubtotal.role, 'subtotal')
+  assert.deepEqual(hyphenSubtotal.reasonCodes, [
+    'subtotal_label_pattern',
+    'parser_classification_total',
+  ])
+  assert.equal(vatBare.role, 'tax')
+  assert.deepEqual(vatBare.reasonCodes, [
+    'tax_label_pattern',
+    'parser_classification_total',
+  ])
+  assert.equal(addVat.role, 'tax')
+  assert.deepEqual(addVat.reasonCodes, [
+    'tax_label_pattern',
+    'parser_classification_total',
+  ])
+})

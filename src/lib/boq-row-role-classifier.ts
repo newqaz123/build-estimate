@@ -34,12 +34,17 @@ const NOISE_CELL = /^(?:[-–—_]|n\/?a)?$/i
 const STRICT_AMOUNT = /^(?:([A-Z]{3}|[$£¥฿€])\s*)?(\()?((?:0|[1-9]\d*|\d{1,3}(?:,\d{3})+)(?:\.\d+)?)(\))?(?:\s*([A-Z]{3}))?$/
 
 const AMOUNT_IN_WORDS = /\b(?:baht|amount\s+in\s+words)\b[\s\S]*\bonly\b/i
-const SUBTOTAL_LABEL = /^(?:sub[\s-]*totals?)(?:\s|$|:)/i
-const GRAND_TOTAL_LABEL = /^(?:grand[\s-]+totals?)(?:\s|$|:)/i
+/** Whole-label subtotal summaries only — not "Sub-total valve works". */
+const SUBTOTAL_LABEL = /^(?:sub[\s-]*totals?)\s*:?\s*$/i
+/** Whole-label grand totals only. */
+const GRAND_TOTAL_LABEL = /^(?:grand[\s-]+totals?)\s*:?\s*$/i
 /** Bare summary totals only — not descriptive phrases like "Total station survey". */
-const TIGHT_TOTAL_LABEL = /^(?:totals?)(?:\s*:)?$/i
-/** Summary tax labels only — not incidental wording like "Tax exclusive works". */
-const TAX_LABEL = /^(?:(?:add\s+)?vat(?:\s*\d+(?:\.\d+)?\s*%)?|gst(?:\s*\d+(?:\.\d+)?\s*%)?|wht(?:\s*\d+(?:\.\d+)?\s*%)?|sales\s+tax|output\s+tax)(?:\s|$|:)/i
+const TIGHT_TOTAL_LABEL = /^(?:totals?)\s*:?\s*$/i
+/**
+ * Whole-label tax summaries only (optional rate / Add VAT).
+ * Not descriptive phrases like "VAT inclusive works" or "GST registration fee".
+ */
+const TAX_LABEL = /^(?:(?:add\s+)?vat(?:\s*\d+(?:\.\d+)?\s*%)?|gst(?:\s*\d+(?:\.\d+)?\s*%)?|wht(?:\s*\d+(?:\.\d+)?\s*%)?|sales\s+tax|output\s+tax)\s*:?\s*$/i
 const NOTE_LABEL = /^(?:notes?|remarks?)\b/i
 const CONTINUATION_CUE = /^(?:including|incl\.?|complete\s+with|with|and|&)\b/i
 
@@ -275,6 +280,22 @@ function isTaxSummaryLabel(text: string): boolean {
   return TAX_LABEL.test(text.trim())
 }
 
+function isSubtotalSummaryLabel(text: string): boolean {
+  return SUBTOTAL_LABEL.test(text.trim())
+}
+
+/** True when every non-amount text cell is a tight summary label of the given kind. */
+function hasTightSummaryLabelCells(
+  evidence: RowEvidence,
+  isSummaryLabel: (text: string) => boolean,
+): boolean {
+  const nonAmount = evidence.normalizedCellTexts.filter(
+    (text) => !isAmountCell(text) && !isNoiseText(text),
+  )
+  if (nonAmount.length === 0) return false
+  return nonAmount.every((text) => isSummaryLabel(text))
+}
+
 function clearPricedItemShape(evidence: RowEvidence): boolean {
   if (!evidence.amountBearing) return false
   if (evidence.row.classification === 'option') return false
@@ -418,15 +439,19 @@ function classifyOne(
     }
   }
 
-  // 4. Tax / VAT summary — tight summary labels only (not incidental "tax" wording).
-  if (isTaxSummaryLabel(label) || isTaxSummaryLabel(normalizedJoined)) {
+  // 4. Tax / VAT summary — whole-label only; clear priced-item shapes never dismissed.
+  const hasTaxSummaryLabel = isTaxSummaryLabel(label)
+    || hasTightSummaryLabelCells(evidence, isTaxSummaryLabel)
+  if (!pricedShape && hasTaxSummaryLabel) {
     const taxReasons = ['tax_label_pattern']
     if (classification === 'total') taxReasons.push('parser_classification_total')
     return { role: 'tax', reasonCodes: taxReasons }
   }
 
-  // 5. Subtotal (label required; optional exact arithmetic confirmation).
-  if (SUBTOTAL_LABEL.test(label) || SUBTOTAL_LABEL.test(normalizedJoined)) {
+  // 5. Subtotal — whole-label only; clear priced-item shapes never dismissed.
+  const hasSubtotalLabel = isSubtotalSummaryLabel(label)
+    || hasTightSummaryLabelCells(evidence, isSubtotalSummaryLabel)
+  if (!pricedShape && hasSubtotalLabel) {
     const subtotalReasons = ['subtotal_label_pattern']
     if (classification === 'total') subtotalReasons.push('parser_classification_total')
     if (evidence.amountBearing) {
