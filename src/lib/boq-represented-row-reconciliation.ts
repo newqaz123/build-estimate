@@ -120,12 +120,6 @@ function decimalFromNumber(value: number): DecimalString | null {
       }
     }
     const zeros = '0'.repeat(magnitude)
-    const candidate = point === -1
-      ? `${sign}${digits}${zeros}`
-      : `${sign}${digits}${zeros}`.replace(
-        new RegExp(`(\\d{${digits.length - frac + magnitude}})$`),
-        '.$1',
-      )
     try {
       // Prefer constructing via integer shift for non-fractional cases.
       if (frac === 0) return parseDecimalString(`${sign}${digits}${zeros}`)
@@ -430,11 +424,13 @@ function groupNormalizedIdentityClaims(
   sourceRows: readonly BoqSourceRowV3[],
   items: readonly BoqItem[],
   unitMap: Record<string, string>,
-  already: ReadonlySet<string>,
+  alreadyRows: ReadonlySet<string>,
+  /** BOQ items already bound by source_identity or accepted_audit — not available for normalized matching. */
+  claimedItemIds: ReadonlySet<string>,
 ): Claim[] {
-  const priced = items.filter(isPricedItem)
   const itemIdentities: Array<{ item: BoqPricedItem; identity: RowIdentity }> = []
-  for (const item of priced) {
+  for (const item of items) {
+    if (!isPricedItem(item) || !nonBlank(item.id) || claimedItemIds.has(item.id)) continue
     const identity = itemIdentity(item)
     if (identity) itemIdentities.push({ item, identity })
   }
@@ -442,19 +438,19 @@ function groupNormalizedIdentityClaims(
   const candidateClaims: Claim[] = []
 
   for (const row of sourceRows) {
-    if (already.has(row.id)) continue
+    if (alreadyRows.has(row.id)) continue
     const rowIdentity = extractRowIdentity(row)
     if (!rowIdentity) continue
 
     const strictMatches: BoqPricedItem[] = []
     let descriptionOnlyConflict = false
 
-    for (const candidate of itemIdentities) {
-      if (identitiesStrictMatch(rowIdentity, candidate.identity, unitMap)) {
-        strictMatches.push(candidate.item)
+    for (const entry of itemIdentities) {
+      if (identitiesStrictMatch(rowIdentity, entry.identity, unitMap)) {
+        strictMatches.push(entry.item)
         continue
       }
-      if (descriptionMatches(rowIdentity, candidate.identity)) {
+      if (descriptionMatches(rowIdentity, entry.identity)) {
         // Same description but unit/amount/code diverge — never represent on similarity alone.
         descriptionOnlyConflict = true
       }
@@ -641,14 +637,18 @@ export function reconcileRepresentedRows(input: {
     ),
   )
 
-  // 3. Strict normalized identity
+  // 3. Strict normalized identity — skip rows and BOQ items already bound above.
   const claimedAfterAudit = new Set([...sourceClaims.keys(), ...auditClaims.keys()])
+  const claimedItemIds = new Set<string>()
+  for (const claim of sourceClaims.values()) claimedItemIds.add(claim.boqItemId)
+  for (const claim of auditClaims.values()) claimedItemIds.add(claim.boqItemId)
   const normalizedClaims = resolveClaims(
     groupNormalizedIdentityClaims(
       input.sourceRows,
       items,
       input.unitMap,
       claimedAfterAudit,
+      claimedItemIds,
     ),
   )
 

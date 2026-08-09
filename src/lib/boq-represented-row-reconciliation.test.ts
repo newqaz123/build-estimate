@@ -842,6 +842,116 @@ test('duplicate source rows cannot both consume one BOQ item via normalized_iden
   assert.deepEqual(findings, [])
 })
 
+test('normalized_identity cannot re-bind an item already claimed by source_identity', () => {
+  const bound = sourceRow({
+    id: 'sr-bound-source',
+    row: 1,
+    cells: ['Ductwork galvanized', 'm', '15', '120', '1800'],
+  })
+  const twin = sourceRow({
+    id: 'sr-twin-source',
+    row: 2,
+    cells: ['Ductwork galvanized', 'm', '15', '120', '1800'],
+  })
+  const item = pricedItem({
+    id: 'item-duct',
+    desc: 'Ductwork galvanized',
+    unit: 'm',
+    qty: 15,
+    rate: 120,
+    total: 1800,
+    sourceRowIds: ['sr-bound-source'],
+  })
+
+  const findings = reconcileRepresentedRows({
+    boq: boqWith([item]),
+    sourceRows: [bound, twin],
+    proposals: [],
+    audits: [],
+    roles: [
+      role('sr-bound-source', 'priced_item', refOf(bound)),
+      role('sr-twin-source', 'priced_item', refOf(twin)),
+    ],
+    unitMap: UNIT_MAP,
+  })
+
+  assert.deepEqual(
+    findings.map((finding) => ({
+      sourceRowIds: finding.sourceRowIds,
+      boqItemId: finding.boqItemId,
+      reason: finding.reason,
+    })),
+    [{
+      sourceRowIds: ['sr-bound-source'],
+      boqItemId: 'item-duct',
+      reason: 'source_identity',
+    }],
+  )
+  assert.equal(
+    findings.some((finding) => finding.sourceRowIds.includes('sr-twin-source')),
+    false,
+  )
+})
+
+test('normalized_identity cannot re-bind an item already claimed by accepted_audit', () => {
+  const bound = sourceRow({
+    id: 'sr-bound-audit',
+    row: 1,
+    cells: ['Fire sleeve', 'pcs', '8', '45', '360'],
+  })
+  const twin = sourceRow({
+    id: 'sr-twin-audit',
+    row: 2,
+    cells: ['Fire sleeve', 'pcs', '8', '45', '360'],
+  })
+  const item = pricedItem({
+    id: 'item-sleeve',
+    desc: 'Fire sleeve',
+    unit: 'pcs',
+    qty: 8,
+    rate: 45,
+    total: 360,
+    // provenance stripped — only audit binds row A
+  })
+  const audit = emptyAudit({
+    sourceRowIds: ['sr-bound-audit'],
+    targetItemIds: ['item-sleeve'],
+    affectedItemFingerprints: {
+      'item-sleeve': fingerprintCanonicalItem(item),
+    },
+    sourceRefs: [{ sourceRowId: 'sr-bound-audit', ...refOf(bound) }],
+  })
+
+  const findings = reconcileRepresentedRows({
+    boq: boqWith([item]),
+    sourceRows: [bound, twin],
+    proposals: [],
+    audits: [audit],
+    roles: [
+      role('sr-bound-audit', 'priced_item', refOf(bound)),
+      role('sr-twin-audit', 'priced_item', refOf(twin)),
+    ],
+    unitMap: UNIT_MAP,
+  })
+
+  assert.deepEqual(
+    findings.map((finding) => ({
+      sourceRowIds: finding.sourceRowIds,
+      boqItemId: finding.boqItemId,
+      reason: finding.reason,
+    })),
+    [{
+      sourceRowIds: ['sr-bound-audit'],
+      boqItemId: 'item-sleeve',
+      reason: 'accepted_audit',
+    }],
+  )
+  assert.equal(
+    findings.some((finding) => finding.sourceRowIds.includes('sr-twin-audit')),
+    false,
+  )
+})
+
 test('rejected and skipped audits never represent rows', () => {
   const row = sourceRow({
     id: 'sr-reject',
