@@ -368,6 +368,38 @@ test("exact Exclude copy remains unchanged outside actionable Stage 2 presentati
 	assert.match(source, /Exclude/);
 });
 
+test("Stage 2 surfaces the catalog-pending subset inside Edit & Verify readiness", () => {
+	// The pure projection is imported and consumed from displayBoq.
+	assert.match(source, /catalogPendingItems/);
+	assert.match(source, /catalogPendingItems\(displayBoq\)/);
+	// The pending subset is surfaced within the Review readiness panel only.
+	const reviewPanel = sourceSection(
+		'id="boq-review-panel"',
+		'id="boq-compare-panel"',
+	);
+	assert.match(reviewPanel, /catalog-pending-focus/);
+	assert.match(reviewPanel, /Focus on/);
+	assert.match(reviewPanel, /Show all items/);
+	// Readiness semantics stay unchanged and still gate approval.
+	assert.match(source, /getBoqCatalogReadiness/);
+	assert.match(source, /catalogReadiness\.blocking/);
+	// The pending subset never leaks into the read-only compare panel.
+	const comparePanel = sourceSection(
+		'id="boq-compare-panel"',
+		"</ReviewWorkspace>",
+	);
+	assert.doesNotMatch(comparePanel, /catalogPendingFocus|catalog-pending-focus/);
+});
+
+test("the unified table renders only catalog-pending rows when focused", () => {
+	// pendingRows is gated on an explicit focus toggle and a non-empty subset.
+	assert.match(
+		source,
+		/catalogPendingFocus\s*&&\s*catalogPending\.length > 0/,
+	);
+	assert.match(source, /pendingRows=\{/);
+});
+
 function actionableStageGateInComparePanel(): RegExp {
 	return /actionableReviewStage|useActionableFocusedReview/;
 }

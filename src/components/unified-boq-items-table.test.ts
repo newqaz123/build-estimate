@@ -9,6 +9,7 @@ import type {
 	BoqSection,
 } from "@/lib/boq-schema";
 import { buildUnifiedBoqSections } from "@/lib/boq-unified-rows";
+import { catalogPendingItems } from "@/lib/catalog-pending-items";
 import type { InlineCatalogRowState } from "./use-inline-catalog-matching";
 import { UnifiedBoqItemsTable } from "./unified-boq-items-table";
 
@@ -682,4 +683,78 @@ test("omits the delete action when readOnly", () => {
 		readOnly: true,
 	});
 	assert.doesNotMatch(html, /Delete row/);
+});
+
+test("renders only catalog-pending rows under a Catalog pending section when pendingRows is provided", () => {
+	const sections: BoqSection[] = [
+		{
+			header: "Valves",
+			items: [
+				item({ id: "pending", desc: "Pending valve", stdStatus: "unmatched" }),
+				item({
+					id: "matched",
+					desc: "Matched valve",
+					stdStatus: "matched",
+					stdId: "std-1",
+				}),
+				item({ id: "excluded", desc: "Excluded valve", stdStatus: "excluded" }),
+			],
+		},
+	];
+	const pendingRows = catalogPendingItems({ sections });
+
+	assert.equal(pendingRows.length, 1);
+	assert.equal(pendingRows[0]!.item.id, "pending");
+
+	const noopRow = () => undefined;
+	const html = renderToStaticMarkup(
+		createElement(UnifiedBoqItemsTable, {
+			sections: buildUnifiedBoqSections(sections),
+			pendingRows,
+			readOnly: false,
+			disabled: false,
+			catalogState: () => ({ suggestion: null, busy: null, error: null }),
+			onFieldChange: () => undefined,
+			onAcceptSuggestion: noopRow,
+			onAiSuggest: noopRow,
+			onDismissSuggestion: noopRow,
+			onFindMatch: noopRow,
+			onExclude: noopRow,
+			onIncludeOptional: () => undefined,
+			onDelete: () => undefined,
+			onComponentDraftValidityChange: () => undefined,
+			units: ["m³", "m²", "Pcs"],
+			onAddUnit: () => undefined,
+		}),
+	);
+
+	assert.match(html, /data-catalog-pending=""/);
+	assert.match(html, /Catalog pending/);
+	assert.match(html, /Pending valve/);
+	assert.doesNotMatch(html, /Matched valve/);
+	assert.doesNotMatch(html, /Excluded valve/);
+	assert.doesNotMatch(html, /Valves/);
+	assert.match(html, /aria-label="Description for Pending valve, row 1"/);
+});
+
+test("renders the full sectioned view without a catalog-pending marker by default", () => {
+	const html = renderTable([
+		{
+			header: "Valves",
+			items: [
+				item({ desc: "Visible valve" }),
+				item({
+					id: "matched",
+					desc: "Matched valve",
+					stdStatus: "matched",
+					stdId: "std-1",
+				}),
+			],
+		},
+	]);
+
+	assert.doesNotMatch(html, /data-catalog-pending=""/);
+	assert.match(html, /Valves/);
+	assert.match(html, /Visible valve/);
+	assert.match(html, /Matched valve/);
 });

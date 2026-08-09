@@ -26,6 +26,12 @@ type EditableBoqField =
 
 export interface UnifiedBoqItemsTableProps {
 	sections: UnifiedBoqSection[];
+	/**
+	 * When provided, the table renders only these catalog-pending rows (under a
+	 * single "Catalog pending" section) instead of the full sectioned view. The
+	 * existing match/exclude/AI callbacks still apply, so no new catalog APIs.
+	 */
+	pendingRows?: UnifiedBoqPricedRow[];
 	readOnly: boolean;
 	disabled: boolean;
 	catalogState: (row: UnifiedBoqPricedRow) => InlineCatalogRowState;
@@ -249,6 +255,7 @@ function ComponentCostInput({
 
 export function UnifiedBoqItemsTable({
 	sections,
+	pendingRows,
 	readOnly,
 	disabled,
 	catalogState,
@@ -266,8 +273,13 @@ export function UnifiedBoqItemsTable({
 	workspaceUnitsError,
 	onAddUnit = () => undefined,
 }: UnifiedBoqItemsTableProps) {
+	const isCatalogPendingView = pendingRows !== undefined;
+	const effectiveSections: UnifiedBoqSection[] = pendingRows
+		? [{ header: "Catalog pending", sectionIndex: 0, rows: pendingRows }]
+		: sections;
+
 	const rowStarts: number[] = [];
-	sections.reduce((rowStart, section) => {
+	effectiveSections.reduce((rowStart, section) => {
 		rowStarts.push(rowStart);
 		return rowStart + section.rows.length;
 	}, 0);
@@ -277,6 +289,7 @@ export function UnifiedBoqItemsTable({
 			<table
 				className="unified-boq-items-table"
 				data-od-id="review-items-table"
+				data-catalog-pending={isCatalogPendingView ? "" : undefined}
 			>
 				<thead>
 					<tr>
@@ -292,7 +305,7 @@ export function UnifiedBoqItemsTable({
 					</tr>
 				</thead>
 				<tbody>
-					{sections.map((section, sectionIndex) => (
+					{effectiveSections.map((section, sectionIndex) => (
 						<FragmentSection
 							key={`section-${section.sectionIndex}`}
 							section={section}

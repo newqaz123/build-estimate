@@ -79,6 +79,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { buildBoqCsv } from "@/lib/boq-csv";
 import { getBoqCatalogReadiness } from "@/lib/boq-catalog-readiness";
+import { catalogPendingItems } from "@/lib/catalog-pending-items";
 import {
 	applyManualCostAllocation,
 	deriveSourceCostAllocation,
@@ -747,6 +748,11 @@ function CanonicalBoqWorkspace({
 		() => getBoqCatalogReadiness(displayBoq),
 		[displayBoq],
 	);
+	const catalogPending = useMemo(
+		() => catalogPendingItems(displayBoq),
+		[displayBoq],
+	);
+	const [catalogPendingFocus, setCatalogPendingFocus] = useState(false);
 	const verification = useMemo(
 		() =>
 			buildReviewVerification(displayBoq, {
@@ -1525,6 +1531,11 @@ function CanonicalBoqWorkspace({
 						{unifiedSections.length > 0 ? (
 							<UnifiedBoqItemsTable
 								sections={unifiedSections}
+								pendingRows={
+									catalogPendingFocus && catalogPending.length > 0
+										? catalogPending
+										: undefined
+								}
 								readOnly={isReadOnly}
 								disabled={isReadOnly || mutationBusy}
 								catalogState={catalogMatching.rowState}
@@ -1586,6 +1597,21 @@ function CanonicalBoqWorkspace({
 									Match an existing item, create a catalog entry, or exclude a
 									one-off line with a reason before approval.
 								</p>
+								{catalogReadiness.blocking > 0 ? (
+									<Button
+										type="button"
+										variant="outline"
+										size="sm"
+										className="mt-2"
+										data-od-id="catalog-pending-focus"
+										aria-pressed={catalogPendingFocus}
+										onClick={() => setCatalogPendingFocus((focus) => !focus)}
+									>
+										{catalogPendingFocus
+											? "Show all items"
+											: `Focus on ${catalogPending.length} catalog-pending item${catalogPending.length === 1 ? "" : "s"}`}
+									</Button>
+								) : null}
 							</div>
 						) : null}
 
