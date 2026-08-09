@@ -5,6 +5,7 @@ import {
 	useCallback,
 	useEffect,
 	useMemo,
+	useReducer,
 	useRef,
 	useState,
 } from "react";
@@ -33,6 +34,14 @@ import {
 } from "@/components/boq-catalog-comparison-panel";
 import { ActionableExtractionReview } from "@/components/actionable-extraction-review";
 import { BoqWorkspaceTabs } from "@/components/boq-workspace-tabs";
+import {
+  createActionableReviewClient,
+  type ActionableReviewTransport,
+} from "@/lib/actionable-review-client";
+import {
+  actionableReviewReducer,
+  initialActionableReviewState,
+} from "@/lib/actionable-review-state";
 import { CatalogMatchModal } from "@/components/catalog-match-modal";
 import { ExtractionReview } from "@/components/extraction-review";
 import { ExtractionWarnings } from "@/components/extraction-warnings";
@@ -377,6 +386,13 @@ function CanonicalBoqWorkspace({
   const comparisonRequestRef = useRef<AbortController | null>(null);
   const [actionableReviewStage, setActionableReviewStage] =
     useState<ActionableReviewStage>("off");
+  const [actionableReviewState, dispatchActionableReview] = useReducer(
+    actionableReviewReducer,
+    undefined,
+    initialActionableReviewState,
+  );
+  const actionableReviewStateRef = useRef(actionableReviewState);
+  actionableReviewStateRef.current = actionableReviewState;
 	const units = useMemo(
 		() => [...STANDARD_UNITS, ...customUnits],
 		[customUnits],
@@ -437,6 +453,72 @@ function CanonicalBoqWorkspace({
 		actionableReviewStage === "focused" ||
 		actionableReviewStage === "add_and_match" ||
 		actionableReviewStage === "default";
+  const actionableReviewTransport = useMemo<ActionableReviewTransport>(
+    () => ({
+      async call(request) {
+        // Client DI transport only allows same-origin relative actionable-review API paths.
+        if (
+          !request.path.startsWith("/api/boqs/") ||
+          request.path.includes("://") ||
+          request.path.includes("..")
+        ) {
+          throw new Error("Invalid actionable review request path.");
+        }
+        const response = await fetch(request.path, {
+          method: request.method,
+          headers:
+            request.body === undefined
+              ? undefined
+              : { "Content-Type": "application/json" },
+          body:
+            request.body === undefined
+              ? undefined
+              : JSON.stringify(request.body),
+          signal: request.signal,
+        });
+        return {
+          status: response.status,
+          json: () => response.json(),
+        };
+      },
+    }),
+    [],
+  );
+  const actionableReviewClient = useMemo(
+    () =>
+      createActionableReviewClient({
+        transport: actionableReviewTransport,
+        dispatch: dispatchActionableReview,
+        getSnapshot: () => actionableReviewStateRef.current.snapshot,
+        getExpectedVersions: () => {
+          const versions = actionableReviewStateRef.current.snapshot?.versions;
+          if (!versions) return null;
+          return {
+            extractionFingerprint: versions.extractionFingerprint,
+            boqSectionsFingerprint: versions.boqSectionsFingerprint,
+            catalogFingerprint: versions.catalogFingerprint,
+            conversionFingerprint: versions.conversionFingerprint,
+          };
+        },
+        readOnly: isReadOnly,
+      }),
+    [actionableReviewTransport, isReadOnly],
+  );
+  useEffect(() => {
+    if (!useActionableFocusedReview) return;
+    const runId = boq.activeExtractionRunId;
+    if (!runId || isReadOnly) return;
+    void actionableReviewClient.generate(boq.id, runId, "focused");
+    return () => {
+      actionableReviewClient.cancel();
+    };
+  }, [
+    actionableReviewClient,
+    boq.activeExtractionRunId,
+    boq.id,
+    isReadOnly,
+    useActionableFocusedReview,
+  ]);
 	const mutationBusy =
 		saving ||
 		approving ||
@@ -1538,10 +1620,23 @@ function CanonicalBoqWorkspace({
 					>
 						{useActionableFocusedReview ? (
 							<ActionableExtractionReview
-								snapshot={null}
+								snapshot={actionableReviewState.snapshot}
 								rolloutStage={actionableReviewStage}
 								readOnly={isReadOnly}
+								loading={actionableReviewState.loading}
+								error={actionableReviewState.error}
+								selectedSuggestionId={actionableReviewState.selectedSuggestionId}
+								auditOpen={actionableReviewState.auditOpen}
 								sectionLabels={boq.sections.map((section) => section.header)}
+								onSelectSuggestion={(suggestionId) =>
+									dispatchActionableReview({
+										type: "select_suggestion",
+										suggestionId,
+									})
+								}
+								onToggleAudit={() =>
+									dispatchActionableReview({ type: "toggle_audit" })
+								}
 								onNavigateToEvidence={(focus) =>
 									setPdfEvidenceFocus((current) => ({
 										page: focus.page,
@@ -1549,7 +1644,7 @@ function CanonicalBoqWorkspace({
 									}))
 								}
 								callbacks={{
-									// Task 2: capability props only — disabled/no-op until Task 3 routes.
+									// Decision mutations stay disabled until Task 4 routes wire callbacks.
 								}}
 							/>
 						) : (

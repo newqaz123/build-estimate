@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { existsSync, readFileSync } from "node:fs";
 
+import { hasAuthoritativeCandidateMatch } from "./actionable-review-detail";
+
 const componentUrl = new URL("./actionable-review-detail.tsx", import.meta.url);
 
 test("actionable review detail component exists", () => {
@@ -32,6 +34,37 @@ test("safe match and no-safe-match presentations are both available", () => {
   assert.match(source, /existing-match-card|No safe existing match|no-safe-match/);
   assert.match(source, /Conversion rule|conversion|normalization/);
   assert.match(source, /catalogCandidates|matchKind/);
+});
+
+test("safe-match presentation uses candidate presence without match-kind policy allowlist", () => {
+  const source = readFileSync(componentUrl, "utf8");
+  assert.doesNotMatch(
+    source,
+    /matchKind\s*===\s*["']exact["'][\s\S]{0,120}alias[\s\S]{0,120}conversion/,
+  );
+  assert.doesNotMatch(
+    source,
+    /matchKind\s*===\s*["']alias["'][\s\S]{0,80}approved_history/,
+  );
+
+  assert.equal(
+    hasAuthoritativeCandidateMatch({
+      catalogCandidates: [
+        {
+          catalogId: "std-1",
+          description: "Concrete",
+          unit: "m3",
+          matchKind: "fuzzy",
+          score: 40,
+        },
+      ],
+    }),
+    true,
+  );
+  assert.equal(
+    hasAuthoritativeCandidateMatch({ catalogCandidates: [] }),
+    false,
+  );
 });
 
 test("Stage 2 catalog-pending presentation preserves Exclude wording", () => {

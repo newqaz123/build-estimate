@@ -2,6 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { existsSync, readFileSync } from "node:fs";
 
+import {
+  evidenceSourceRefKey,
+  resolveActiveEvidenceKey,
+} from "./actionable-extraction-review";
+import { buildDismissedSuggestionIdBySourceRowId } from "./actionable-review-audit-drawer";
+
 const componentUrl = new URL(
   "./actionable-extraction-review.tsx",
   import.meta.url,
@@ -60,6 +66,49 @@ test("selected suggestion drives page table row source highlight", () => {
     source,
     /page[\s\S]{0,40}table[\s\S]{0,40}row|sourceRefs\.map|active.*source|isSelected|aria-pressed/,
   );
+});
+
+test("evidence Show selection updates active highlight beyond the first source ref", () => {
+  const source = readFileSync(componentUrl, "utf8");
+  assert.doesNotMatch(source, /const isSelected = index === 0/);
+  assert.match(
+    source,
+    /activeEvidence|selectedEvidence|evidenceKey|setActiveEvidence/,
+  );
+
+  const refs = [
+    { page: 1, table: 0, row: 2 },
+    { page: 1, table: 0, row: 5 },
+  ];
+  assert.equal(
+    resolveActiveEvidenceKey(refs, null),
+    evidenceSourceRefKey(refs[0]!),
+  );
+  assert.equal(
+    resolveActiveEvidenceKey(refs, evidenceSourceRefKey(refs[1]!)),
+    evidenceSourceRefKey(refs[1]!),
+  );
+  assert.equal(
+    resolveActiveEvidenceKey(refs, "missing"),
+    evidenceSourceRefKey(refs[0]!),
+  );
+});
+
+test("audit restore mapping uses dismissed suggestion ids not bare source row ids", () => {
+  const source = readFileSync(componentUrl, "utf8");
+  assert.match(
+    source,
+    /buildDismissedSuggestionIdBySourceRowId|restorableSuggestionIdBySourceRowId/,
+  );
+
+  const mapping = buildDismissedSuggestionIdBySourceRowId([
+    {
+      id: "opaque-sug",
+      sourceRowIds: ["src-1"],
+      status: "dismissed",
+    },
+  ]);
+  assert.equal(mapping.get("src-1"), "opaque-sug");
 });
 
 test("dismissed and represented evidence appear only inside the audit drawer", () => {

@@ -46,15 +46,14 @@ function topCandidate(suggestion: ActionableItemSuggestion) {
   return suggestion.catalogCandidates[0] ?? null;
 }
 
-function hasSafeMatch(suggestion: ActionableItemSuggestion): boolean {
-  const candidate = topCandidate(suggestion);
-  if (!candidate) return false;
-  return (
-    candidate.matchKind === "exact" ||
-    candidate.matchKind === "alias" ||
-    candidate.matchKind === "approved_history" ||
-    candidate.matchKind === "conversion"
-  );
+/**
+ * Presentation-only: trust the normalized snapshot's candidate list.
+ * Do not re-encode match-kind policy in React.
+ */
+export function hasAuthoritativeCandidateMatch(
+  suggestion: Pick<ActionableItemSuggestion, "catalogCandidates">,
+): boolean {
+  return suggestion.catalogCandidates.length > 0;
 }
 
 export function ActionableReviewDetail({
@@ -239,7 +238,7 @@ export function ActionableReviewDetail({
 
   const item = suggestion.extractedItem;
   const candidate = topCandidate(suggestion);
-  const safeMatch = hasSafeMatch(suggestion);
+  const safeMatch = hasAuthoritativeCandidateMatch(suggestion);
   const pending = suggestion.status === "pending";
   const catalogPending = suggestion.status === "added_pending_catalog";
   const ref = suggestion.sourceRefs[0];

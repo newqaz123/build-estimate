@@ -6,16 +6,35 @@ import {
   ActionableReviewDetail,
   type ActionableReviewDetailStage,
 } from "@/components/actionable-review-detail";
-import { ActionableReviewAuditDrawer } from "@/components/actionable-review-audit-drawer";
+import {
+  ActionableReviewAuditDrawer,
+  buildDismissedSuggestionIdBySourceRowId,
+} from "@/components/actionable-review-audit-drawer";
 import type {
   ActionableItemSuggestion,
   ActionableReview,
 } from "@/lib/actionable-review-projection";
+import type { BoqSourceRef } from "@/lib/boq-schema";
 import { normalizeActionableReviewResponse } from "@/lib/actionable-review-state";
 import type { ActionableReviewStage } from "@/lib/settings-schema";
 
 /** Re-export for callers that normalize before passing snapshot props. */
 export { normalizeActionableReviewResponse };
+
+export function evidenceSourceRefKey(ref: Pick<BoqSourceRef, "page" | "table" | "row">): string {
+  return `${ref.page}:${ref.table}:${ref.row}`;
+}
+
+export function resolveActiveEvidenceKey(
+  refs: readonly Pick<BoqSourceRef, "page" | "table" | "row">[],
+  preferredKey: string | null,
+): string | null {
+  if (refs.length === 0) return null;
+  if (preferredKey && refs.some((ref) => evidenceSourceRefKey(ref) === preferredKey)) {
+    return preferredKey;
+  }
+  return evidenceSourceRefKey(refs[0]!);
+}
 
 export type ActionableMobilePane = "queue" | "evidence" | "detail";
 
@@ -86,6 +105,10 @@ export function ActionableExtractionReview({
     selectedSuggestionIdProp,
   );
   const [internalAuditOpen, setInternalAuditOpen] = useState(false);
+  const [activeEvidence, setActiveEvidence] = useState<{
+    suggestionId: string | null;
+    key: string | null;
+  }>({ suggestionId: null, key: null });
 
   const selectedSuggestionId =
     selectedSuggestionIdProp !== undefined && onSelectSuggestion
@@ -147,11 +170,17 @@ export function ActionableExtractionReview({
     const next = queueItems.find((item) => item.id === id) ?? null;
     const ref = next?.sourceRefs[0];
     if (ref) {
+      setActiveEvidence({
+        suggestionId: id,
+        key: evidenceSourceRefKey(ref),
+      });
       onNavigateToEvidence?.({
         page: ref.page,
         table: ref.table,
         row: ref.row,
       });
+    } else {
+      setActiveEvidence({ suggestionId: id, key: null });
     }
     setMobilePane("detail");
   };
@@ -162,6 +191,19 @@ export function ActionableExtractionReview({
   };
 
   const evidenceRows = selected?.sourceRefs ?? [];
+  const preferredEvidenceKey =
+    activeEvidence.suggestionId === (selected?.id ?? null)
+      ? activeEvidence.key
+      : null;
+  const selectedEvidenceKey = resolveActiveEvidenceKey(
+    evidenceRows,
+    preferredEvidenceKey,
+  );
+
+  const restorableSuggestionIdBySourceRowId = useMemo(
+    () => buildDismissedSuggestionIdBySourceRowId(suggestions),
+    [suggestions],
+  );
 
   return (
     <div
@@ -369,10 +411,11 @@ export function ActionableExtractionReview({
                   </thead>
                   <tbody>
                     {evidenceRows.map((ref, index) => {
-                      const isSelected = index === 0;
+                      const refKey = evidenceSourceRefKey(ref);
+                      const isSelected = refKey === selectedEvidenceKey;
                       return (
                         <tr
-                          key={`${ref.page}-${ref.table}-${ref.row}-${index}`}
+                          key={`${refKey}-${index}`}
                           className={
                             isSelected
                               ? "actionable-source-row is-active"
@@ -392,6 +435,10 @@ export function ActionableExtractionReview({
                               className="actionable-row-select"
                               aria-pressed={isSelected}
                               onClick={() => {
+                                setActiveEvidence({
+                                  suggestionId: selected?.id ?? null,
+                                  key: refKey,
+                                });
                                 onNavigateToEvidence?.({
                                   page: ref.page,
                                   table: ref.table,
@@ -513,9 +560,7 @@ export function ActionableExtractionReview({
         representedRows={snapshot?.representedRows ?? []}
         onClose={toggleAudit}
         onRestore={callbacks.onRestore}
-        restorableSuggestionIds={suggestions
-          .filter((item) => item.status === "dismissed")
-          .map((item) => item.id)}
+        restorableSuggestionIdBySourceRowId={restorableSuggestionIdBySourceRowId}
       />
     </div>
   );

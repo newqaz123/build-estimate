@@ -3,6 +3,12 @@
 import type { RepresentedRowFinding } from "@/lib/boq-represented-row-reconciliation";
 import type { RowRoleFinding } from "@/lib/boq-row-role-classifier";
 
+export interface DismissedRestoreSuggestionRef {
+  id: string;
+  sourceRowIds: readonly string[];
+  status: string;
+}
+
 export interface ActionableReviewAuditDrawerProps {
   open: boolean;
   readOnly?: boolean;
@@ -10,8 +16,33 @@ export interface ActionableReviewAuditDrawerProps {
   representedRows: readonly RepresentedRowFinding[];
   onClose: () => void;
   onRestore?: (suggestionId: string) => void;
-  /** Optional dismissed suggestion ids that can be restored when not read-only. */
-  restorableSuggestionIds?: readonly string[];
+  /**
+   * Maps dismissed evidence source-row ids to opaque suggestion ids.
+   * Restore must call the suggestion digest id, not the source row id.
+   */
+  restorableSuggestionIdBySourceRowId?: ReadonlyMap<string, string>;
+}
+
+export function buildDismissedSuggestionIdBySourceRowId(
+  suggestions: readonly DismissedRestoreSuggestionRef[],
+): ReadonlyMap<string, string> {
+  const mapping = new Map<string, string>();
+  for (const suggestion of suggestions) {
+    if (suggestion.status !== "dismissed") continue;
+    for (const sourceRowId of suggestion.sourceRowIds) {
+      if (!mapping.has(sourceRowId)) {
+        mapping.set(sourceRowId, suggestion.id);
+      }
+    }
+  }
+  return mapping;
+}
+
+export function resolveDismissedRestoreSuggestionId(
+  sourceRowId: string,
+  restorableSuggestionIdBySourceRowId: ReadonlyMap<string, string>,
+): string | null {
+  return restorableSuggestionIdBySourceRowId.get(sourceRowId) ?? null;
 }
 
 function sourceRefLabel(ref: { page: number; table: number; row: number }): string {
@@ -25,12 +56,11 @@ export function ActionableReviewAuditDrawer({
   representedRows,
   onClose,
   onRestore,
-  restorableSuggestionIds = [],
+  restorableSuggestionIdBySourceRowId = new Map(),
 }: ActionableReviewAuditDrawerProps) {
   if (!open) return null;
 
   const canRestore = !readOnly && typeof onRestore === "function";
-  const restorable = new Set(restorableSuggestionIds);
 
   return (
     <div
@@ -70,8 +100,11 @@ export function ActionableReviewAuditDrawer({
           ) : null}
 
           {dismissedEvidence.map((entry) => {
-            const restoreId = entry.sourceRowId;
-            const showRestore = canRestore && restorable.has(restoreId);
+            const restoreId = resolveDismissedRestoreSuggestionId(
+              entry.sourceRowId,
+              restorableSuggestionIdBySourceRowId,
+            );
+            const showRestore = canRestore && restoreId !== null;
             return (
               <article
                 key={`dismissed-${entry.sourceRowId}`}
@@ -83,7 +116,9 @@ export function ActionableReviewAuditDrawer({
                     type="button"
                     className="actionable-restore-btn"
                     disabled={readOnly}
-                    onClick={() => onRestore?.(restoreId)}
+                    onClick={() => {
+                      if (restoreId) onRestore?.(restoreId);
+                    }}
                   >
                     Restore
                   </button>

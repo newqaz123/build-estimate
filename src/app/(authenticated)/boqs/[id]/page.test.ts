@@ -277,6 +277,29 @@ test("view=review with focused or later renders the actionable review workspace"
 	);
 });
 
+test("focused review read path consumes Task 1 client state instead of null snapshot", () => {
+	assert.match(source, /createActionableReviewClient/);
+	assert.match(source, /actionableReviewReducer|initialActionableReviewState/);
+	assert.match(source, /\.generate\(/);
+	assert.match(source, /activeExtractionRunId/);
+	assert.match(source, /snapshot=\{actionableReviewState\.snapshot|snapshot=\{[^}]*snapshot/);
+	assert.doesNotMatch(source, /snapshot=\{null\}/);
+	assert.match(source, /selectedSuggestionId=\{/);
+	assert.match(source, /auditOpen=\{/);
+	assert.match(source, /loading=\{/);
+	assert.match(source, /error=\{/);
+	// Decision mutations stay disabled until Task 4 routes wire callbacks.
+	const mountStart = source.indexOf("<ActionableExtractionReview");
+	assert.ok(mountStart >= 0, "ActionableExtractionReview mount missing");
+	const mountEnd = source.indexOf("/>", mountStart);
+	assert.ok(mountEnd > mountStart, "ActionableExtractionReview self-close missing");
+	const actionableMount = source.slice(mountStart, mountEnd + 2);
+	assert.doesNotMatch(actionableMount, /onAddAndMatch\s*:/);
+	assert.doesNotMatch(actionableMount, /onDoNotAdd\s*:/);
+	assert.doesNotMatch(actionableMount, /onRestore\s*:/);
+	assert.doesNotMatch(actionableMount, /onAddToBoq\s*:/);
+});
+
 test("view=compare stays read-only Compare Catalog at every rollout stage", () => {
 	const comparePanel = sourceSection(
 		'id="boq-compare-panel"',
