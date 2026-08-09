@@ -3880,3 +3880,260 @@ test("decideActionableSuggestion rejects changed source checksum without writes"
 		assert.deepEqual(fixture.db.docs.get(fixture.path), beforeSnap);
 	},
 );
+
+const SUGGESTION_ID_B = "sha256:" + "c".repeat(64);
+
+const matchingItemB = {
+	sectionIndex: 0,
+	desc: "Second item",
+	unit: "ea",
+	qty: 1,
+	materialCost: 10,
+	labourCost: 0,
+};
+
+test("decideActionableSuggestion add updates BOQ fingerprint in-place so a later decision on B succeeds",
+	async () => {
+		const fixture = actionableHarness();
+		const addA = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_pending_catalog",
+				expectedFingerprint: FINGERPRINT,
+				item: matchingItem,
+			},
+			"user-1",
+		);
+		assert.equal(addA.status, 200);
+		if (addA.status !== 200) return;
+
+		const bodyA = addA.body as {
+			snapshot: ActionableReview;
+			boq: Boq;
+			audit: { afterSectionsFingerprint: string };
+		};
+		const afterFp = fingerprintCanonicalSections(bodyA.boq.sections);
+		assert.equal(bodyA.snapshot.id, FINGERPRINT);
+		assert.equal(bodyA.snapshot.versions.boqSectionsFingerprint, afterFp);
+		assert.equal(bodyA.audit.afterSectionsFingerprint, afterFp);
+		for (const suggestion of bodyA.snapshot.actionableItemSuggestions) {
+			assert.equal(suggestion.versions.boqSectionsFingerprint, afterFp);
+		}
+
+		const dismissB = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID_B,
+			{
+				action: "dismiss",
+				expectedFingerprint: bodyA.snapshot.id,
+			},
+			"user-1",
+		);
+		assert.equal(dismissB.status, 200);
+		if (dismissB.status !== 200) return;
+		assert.equal(
+			(dismissB.body as { status: string }).status,
+			"dismissed",
+		);
+
+		// Fresh fixture path for add-B after add-A
+		const fixtureAdd = actionableHarness();
+		const firstAdd = await fixtureAdd.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_pending_catalog",
+				expectedFingerprint: FINGERPRINT,
+				item: matchingItem,
+			},
+			"user-1",
+		);
+		assert.equal(firstAdd.status, 200);
+		if (firstAdd.status !== 200) return;
+		const snapAfterA = (firstAdd.body as { snapshot: ActionableReview })
+			.snapshot;
+		const addB = await fixtureAdd.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID_B,
+			{
+				action: "add_pending_catalog",
+				expectedFingerprint: snapAfterA.id,
+				item: matchingItemB,
+			},
+			"user-1",
+		);
+		assert.equal(addB.status, 200);
+		if (addB.status !== 200) return;
+		assert.equal(
+			(addB.body as { status: string }).status,
+			"added_pending_catalog",
+		);
+		const stored = fixtureAdd.db.docs.get("boqs/boq-1") as unknown as Boq;
+		assert.equal(stored.sections[0].items.length >= 2, true);
+	},
+);
+
+test("decideActionableSuggestion dismiss/restore lifecycle is append-only and re-decidable",
+	async () => {
+		const fixture = actionableHarness();
+		const decisionPath = actionableSuggestionDecisionPath(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+		);
+
+		const dismissed = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "dismiss",
+				expectedFingerprint: FINGERPRINT,
+				note: "first dismiss",
+			},
+			"user-1",
+		);
+		assert.equal(dismissed.status, 200);
+		if (dismissed.status !== 200) return;
+		const dismissAudit = (
+			dismissed.body as { audit: { sequence: number; note?: string } }
+		).audit;
+		assert.equal(dismissAudit.sequence, 1);
+		assert.equal(dismissAudit.note, "first dismiss");
+		assert.ok(fixture.db.docs.has(`${decisionPath}/events/1-dismiss`));
+
+		const restored = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{ action: "restore", expectedFingerprint: FINGERPRINT },
+			"user-1",
+		);
+		assert.equal(restored.status, 200);
+		if (restored.status !== 200) return;
+		const restoreAudit = (restored.body as { audit: { sequence: number } })
+			.audit;
+		assert.equal(restoreAudit.sequence, 2);
+		assert.ok(fixture.db.docs.has(`${decisionPath}/events/2-restore`));
+		// Original dismiss event preserved after restore overwrites head.
+		assert.ok(fixture.db.docs.has(`${decisionPath}/events/1-dismiss`));
+		const headAfterRestore = fixture.db.docs.get(decisionPath) as {
+			humanDecision: string;
+			sequence: number;
+		};
+		assert.equal(headAfterRestore.humanDecision, "restore");
+		assert.equal(headAfterRestore.sequence, 2);
+
+		const reDismiss = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "dismiss",
+				expectedFingerprint: FINGERPRINT,
+				note: "second dismiss",
+			},
+			"user-1",
+		);
+		assert.equal(reDismiss.status, 200);
+		if (reDismiss.status !== 200) return;
+		const reDismissAudit = (
+			reDismiss.body as { audit: { sequence: number; note?: string } }
+		).audit;
+		assert.equal(reDismissAudit.sequence, 3);
+		assert.equal(reDismissAudit.note, "second dismiss");
+		assert.ok(fixture.db.docs.has(`${decisionPath}/events/3-dismiss`));
+		const head = fixture.db.docs.get(decisionPath) as {
+			humanDecision: string;
+			sequence: number;
+			note?: string;
+		};
+		assert.equal(head.humanDecision, "dismiss");
+		assert.equal(head.sequence, 3);
+		assert.equal(head.note, "second dismiss");
+
+		// Same-terminal retry remains idempotent and does not append.
+		const retry = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "dismiss",
+				expectedFingerprint: FINGERPRINT,
+				note: "second dismiss",
+			},
+			"user-1",
+		);
+		assert.equal(retry.status, 200);
+		assert.equal((retry.body as { idempotent?: boolean }).idempotent, true);
+		assert.equal(
+			[...fixture.db.docs.keys()].filter((path) =>
+				path.startsWith(`${decisionPath}/events/`),
+			).length,
+			3,
+		);
+
+		// dismiss → restore → add on a fresh fixture
+		const fixtureAdd = actionableHarness();
+		const decisionPathAdd = actionableSuggestionDecisionPath(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+		);
+		assert.equal(
+			(
+				await fixtureAdd.store.decideActionableSuggestion(
+					"boq-1",
+					"run-1",
+					SUGGESTION_ID,
+					{ action: "dismiss", expectedFingerprint: FINGERPRINT },
+					"user-1",
+				)
+			).status,
+			200,
+		);
+		assert.equal(
+			(
+				await fixtureAdd.store.decideActionableSuggestion(
+					"boq-1",
+					"run-1",
+					SUGGESTION_ID,
+					{ action: "restore", expectedFingerprint: FINGERPRINT },
+					"user-1",
+				)
+			).status,
+			200,
+		);
+		const added = await fixtureAdd.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_pending_catalog",
+				expectedFingerprint: FINGERPRINT,
+				item: matchingItem,
+			},
+			"user-1",
+		);
+		assert.equal(added.status, 200);
+		if (added.status !== 200) return;
+		const addAudit = (added.body as { audit: { sequence: number } }).audit;
+		assert.equal(addAudit.sequence, 3);
+		assert.ok(
+			fixtureAdd.db.docs.has(`${decisionPathAdd}/events/3-add_pending_catalog`),
+		);
+		assert.ok(fixtureAdd.db.docs.has(`${decisionPathAdd}/events/1-dismiss`));
+		assert.ok(fixtureAdd.db.docs.has(`${decisionPathAdd}/events/2-restore`));
+		const headAdd = fixtureAdd.db.docs.get(decisionPathAdd) as {
+			humanDecision: string;
+			sequence: number;
+		};
+		assert.equal(headAdd.humanDecision, "add_pending_catalog");
+		assert.equal(headAdd.sequence, 3);
+	},
+);

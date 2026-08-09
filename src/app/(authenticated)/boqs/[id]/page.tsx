@@ -1644,7 +1644,56 @@ function CanonicalBoqWorkspace({
 									}))
 								}
 								callbacks={{
-									// Decision mutations stay disabled until Task 4 routes wire callbacks.
+									onAddToBoq: (suggestionId) => {
+										const snap = actionableReviewStateRef.current.snapshot;
+										const runId = boq.activeExtractionRunId;
+										const suggestion = snap?.actionableItemSuggestions.find(
+											(entry) => entry.id === suggestionId,
+										);
+										if (!snap || !runId || !suggestion) return;
+										const extracted = suggestion.extractedItem;
+										void actionableReviewClient.decide(
+											boq.id,
+											runId,
+											suggestionId,
+											{
+												action: "add_pending_catalog",
+												expectedFingerprint: snap.id,
+												item: {
+													sectionIndex: suggestion.suggestedSectionIndex,
+													desc:
+														extracted.description.trim() || "Untitled item",
+													unit: extracted.unit.trim() || "ea",
+													qty: Number(extracted.quantity),
+													materialCost: Number(extracted.materialRate),
+													labourCost: Number(extracted.labourRate),
+												},
+											},
+										);
+									},
+									onDoNotAdd: (suggestionId) => {
+										const snap = actionableReviewStateRef.current.snapshot;
+										const runId = boq.activeExtractionRunId;
+										if (!snap || !runId) return;
+										void actionableReviewClient.decide(
+											boq.id,
+											runId,
+											suggestionId,
+											{
+												action: "dismiss",
+												expectedFingerprint: snap.id,
+											},
+										);
+									},
+									onRestore: (suggestionId) => {
+										const runId = boq.activeExtractionRunId;
+										if (!runId) return;
+										void actionableReviewClient.restore(
+											boq.id,
+											runId,
+											suggestionId,
+										);
+									},
 								}}
 							/>
 						) : (

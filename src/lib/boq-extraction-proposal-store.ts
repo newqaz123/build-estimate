@@ -54,6 +54,7 @@ import {
 	type ValidatedSourceMapping,
 } from "./boq-user-entry";
 import type { ActionableReviewDecisionRequest } from "./actionable-review-decision";
+import type { ActionableReview } from "./actionable-review-projection";
 import {
 	actionableReviewSnapshotPath,
 	actionableSuggestionDecisionPath,
@@ -61,6 +62,55 @@ import {
 	parseActionableReviewSnapshotDocument,
 	toSnapshotDocument as toActionableSnapshotDocument,
 } from "./actionable-review-storage";
+
+/** Keep snapshot.id stable while advancing every BOQ sections fingerprint after an add. */
+function withUpdatedBoqSectionsFingerprint(
+	snapshot: ActionableReview,
+	boqSectionsFingerprint: string,
+): ActionableReview {
+	return {
+		...snapshot,
+		versions: {
+			...snapshot.versions,
+			boqSectionsFingerprint,
+		},
+		actionableItemSuggestions: snapshot.actionableItemSuggestions.map(
+			(suggestion) => ({
+				...suggestion,
+				versions: {
+					...suggestion.versions,
+					boqSectionsFingerprint,
+				},
+			}),
+		),
+	};
+}
+
+/** Latest head + append-only event for one actionable decision. */
+function writeActionableDecisionHeadAndEvent(
+	// Firestore Transaction + memory test double share create/update semantics only.
+	transaction: {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		create: (ref: any, data: any) => unknown;
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		update: (ref: any, data: any) => unknown;
+	},
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	decisionRef: any,
+	decisionExists: boolean,
+	audit: ActionableSuggestionDecisionAudit,
+	action: ActionableSuggestionDecisionAudit["humanDecision"],
+): void {
+	if (decisionExists) {
+		transaction.update(decisionRef, audit as never);
+	} else {
+		transaction.create(decisionRef, audit as never);
+	}
+	const eventRef = decisionRef
+		.collection("events")
+		.doc(`${audit.sequence ?? 1}-${action}`);
+	transaction.create(eventRef, audit as never);
+}
 
 export type ProposalStoreResponse =
 	| { status: 200; body: Record<string, unknown> }
@@ -2989,15 +3039,13 @@ export function createFirestoreExtractionProposalStore(
 							snapshotRef,
 							toActionableSnapshotDocument(updatedSnapshot),
 						);
-						if (decisionSnap.exists) {
-							transaction.update(decisionRef, audit as never);
-							const eventRef = decisionRef
-								.collection("events")
-								.doc(`${sequence}-restore`);
-							transaction.create(eventRef, audit as never);
-						} else {
-							transaction.create(decisionRef, audit as never);
-						}
+						writeActionableDecisionHeadAndEvent(
+							transaction,
+							decisionRef,
+							decisionSnap.exists,
+							audit,
+							"restore",
+						);
 
 						return {
 							status: 200,
@@ -3025,7 +3073,7 @@ export function createFirestoreExtractionProposalStore(
 							immutable.sourceRows,
 							suggestion.sourceRowIds,
 						);
-						const sequence = 1;
+						const sequence = (existingAudit?.sequence ?? 0) + 1;
 						const audit = buildActionableSuggestionDecisionAudit({
 							suggestionId,
 							extractionRunId: runId,
@@ -3052,7 +3100,13 @@ export function createFirestoreExtractionProposalStore(
 							snapshotRef,
 							toActionableSnapshotDocument(updatedSnapshot),
 						);
-						transaction.create(decisionRef, audit as never);
+						writeActionableDecisionHeadAndEvent(
+							transaction,
+							decisionRef,
+							decisionSnap.exists,
+							audit,
+							"dismiss",
+						);
 
 						return {
 							status: 200,
@@ -3152,6 +3206,7 @@ export function createFirestoreExtractionProposalStore(
 					const afterFingerprint = fingerprintCanonicalSections(
 						finalBoq.sections,
 					);
+					const sequence = (existingAudit?.sequence ?? 0) + 1;
 					const audit = buildActionableSuggestionDecisionAudit({
 						suggestionId,
 						extractionRunId: runId,
@@ -3174,13 +3229,16 @@ export function createFirestoreExtractionProposalStore(
 						beforeSectionsFingerprint: beforeFingerprint,
 						afterSectionsFingerprint: afterFingerprint,
 						resultBoq: finalBoq,
-						sequence: 1,
+						sequence,
 					});
 
-					const updatedSnapshot = applySuggestionStatusToReview(
-						snapshot,
-						suggestionId,
-						"added_pending_catalog",
+					const updatedSnapshot = withUpdatedBoqSectionsFingerprint(
+						applySuggestionStatusToReview(
+							snapshot,
+							suggestionId,
+							"added_pending_catalog",
+						),
+						afterFingerprint,
 					);
 
 					// All validation complete — perform writes together.
@@ -3195,7 +3253,13 @@ export function createFirestoreExtractionProposalStore(
 						snapshotRef,
 						toActionableSnapshotDocument(updatedSnapshot),
 					);
-					transaction.create(decisionRef, audit as never);
+					writeActionableDecisionHeadAndEvent(
+						transaction,
+						decisionRef,
+						decisionSnap.exists,
+						audit,
+						"add_pending_catalog",
+					);
 
 					return {
 						status: 200,

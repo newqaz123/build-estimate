@@ -288,16 +288,21 @@ test("focused review read path consumes Task 1 client state instead of null snap
 	assert.match(source, /auditOpen=\{/);
 	assert.match(source, /loading=\{/);
 	assert.match(source, /error=\{/);
-	// Decision mutations stay disabled until Task 4 routes wire callbacks.
+	// Decision mutations wire through the injected actionable review client.
 	const mountStart = source.indexOf("<ActionableExtractionReview");
 	assert.ok(mountStart >= 0, "ActionableExtractionReview mount missing");
 	const mountEnd = source.indexOf("/>", mountStart);
 	assert.ok(mountEnd > mountStart, "ActionableExtractionReview self-close missing");
 	const actionableMount = source.slice(mountStart, mountEnd + 2);
 	assert.doesNotMatch(actionableMount, /onAddAndMatch\s*:/);
-	assert.doesNotMatch(actionableMount, /onDoNotAdd\s*:/);
-	assert.doesNotMatch(actionableMount, /onRestore\s*:/);
-	assert.doesNotMatch(actionableMount, /onAddToBoq\s*:/);
+	assert.match(actionableMount, /onAddToBoq\s*:/);
+	assert.match(actionableMount, /onDoNotAdd\s*:/);
+	assert.match(actionableMount, /onRestore\s*:/);
+	assert.match(actionableMount, /actionableReviewClient\.decide/);
+	assert.match(actionableMount, /actionableReviewClient\.restore/);
+	assert.match(actionableMount, /action:\s*"add_pending_catalog"/);
+	assert.match(actionableMount, /action:\s*"dismiss"/);
+	assert.match(actionableMount, /expectedFingerprint:\s*snap\.id/);
 });
 
 test("view=compare stays read-only Compare Catalog at every rollout stage", () => {
