@@ -4,6 +4,7 @@ import {
 	canonicalUnit,
 	normalizeCatalogText,
 	rankCatalogMatches,
+	scoreCatalogTextMatch,
 	unitsCompatible,
 } from "./standard-matching";
 
@@ -150,4 +151,37 @@ test("canonicalizes component units through the same unitMap used by matching", 
 	assert.equal(canonicalUnit("PC", unitMap), "piece");
 	assert.equal(canonicalUnit("Db", unitMap), "joint");
 	assert.equal(canonicalUnit("Lot", unitMap), "lot");
+});
+
+test("exposes pure text match scores without changing rank acceptance", () => {
+	assert.deepEqual(
+		scoreCatalogTextMatch("Reinforcement bar SD40 16mm", "Reinforcement bar SD40 16mm", []),
+		{ score: 300, reason: "exact" },
+	);
+	assert.deepEqual(
+		scoreCatalogTextMatch("Rebar SD40 16 mm", "Reinforcement bar SD40 16mm", [
+			"rebar SD40 16 mm",
+		]),
+		{ score: 200, reason: "alias" },
+	);
+
+	const fuzzy = scoreCatalogTextMatch(
+		"Slab formwork",
+		"Slab formwork installation",
+		[],
+	);
+	assert.equal(fuzzy.reason, "fuzzy");
+	assert.ok(fuzzy.score > 100);
+
+	// Existing rankCatalogMatches acceptance remains exact > alias and unit-boosted.
+	const ranked = rankCatalogMatches(
+		"Reinforcement bar SD40 16mm",
+		"tonne",
+		catalog,
+		{ tonne: "ton" },
+	);
+	assert.equal(ranked[0].id, "std-rebar");
+	assert.equal(ranked[0].matchReason, "exact");
+	assert.equal(ranked[0].unitCompatible, true);
+	assert.ok(ranked[0].score >= 1300);
 });

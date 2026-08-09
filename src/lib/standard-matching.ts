@@ -127,6 +127,21 @@ function scoreCandidate(
 	return { score: 100 + bestOverlap, reason: "fuzzy" };
 }
 
+/**
+ * Pure description/alias score shared by ranking and local shortlisting.
+ * Does not apply unit compatibility boosts.
+ */
+export function scoreCatalogTextMatch(
+	description: string,
+	candidateDescription: string,
+	aliases: string[] = [],
+): { score: number; reason: "exact" | "alias" | "fuzzy" } {
+	const searchText = normalizeCatalogText(description);
+	const candidateText = normalizeCatalogText(candidateDescription);
+	const normalizedAliases = uniqueNormalized(aliases);
+	return scoreCandidate(searchText, candidateText, normalizedAliases);
+}
+
 export function rankCatalogMatches(
 	description: string,
 	unit: string,
