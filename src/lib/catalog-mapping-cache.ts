@@ -60,7 +60,26 @@ export function isHashedCatalogMappingCacheKey(key: string): boolean {
   return typeof key === 'string' && /^sha256:[a-f0-9]{64}$/.test(key)
 }
 
+/**
+ * Mapping/shortlist/AI revalidation signature.
+ * Description + unit only — never workspaceScope or unitMap.
+ */
 export function buildSourceSignature(input: {
+  description: string
+  unit: string
+}): string {
+  return digest({
+    description: normalizeCatalogText(input.description),
+    unit: canonicalUnit(input.unit, {}),
+  })
+}
+
+/**
+ * Scope-sensitive signature used only inside Task 6 hashed cache keys.
+ * Incorporates workspaceScope + unitMap so keys isolate workspace context
+ * without poisoning mapping.sourceSignature revalidation.
+ */
+export function buildScopedSourceSignature(input: {
   description: string
   unit: string
   unitMap?: Record<string, string>

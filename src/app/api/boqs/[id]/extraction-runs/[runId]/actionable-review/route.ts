@@ -35,7 +35,11 @@ import {
 import { getCollection, getDb, getDocument } from '@/lib/db'
 import type { StandardEntry } from '@/lib/standard-schema'
 import type { WorkspaceSettings } from '@/lib/settings-schema'
-import { DEFAULT_SETTINGS } from '@/lib/settings-storage'
+import {
+  DEFAULT_SETTINGS,
+  fromStoredSettings,
+  type StoredWorkspaceSettings,
+} from '@/lib/settings-storage'
 
 export type ActionableReviewRouteContext = {
   params: Promise<{ id: string; runId: string }>
@@ -158,6 +162,17 @@ export function createGetAuditsFromReviewState(
     const state = await getReviewState(boqId, runId)
     return extractAuditsFromReviewState(state)
   }
+}
+
+/**
+ * Production settings decode path.
+ * Legacy docs without actionableReview default safely; invalid/partial sections throw
+ * (fail closed) instead of returning a half-typed object that TypeErrors later.
+ */
+export function decodeActionableReviewSettingsDoc(
+  stored: StoredWorkspaceSettings | null | undefined,
+): WorkspaceSettings {
+  return fromStoredSettings(stored)
 }
 
 async function readPostBody(request: Request): Promise<Record<string, unknown> | Response> {
@@ -402,7 +417,8 @@ function productionDependencies(): ActionableReviewRouteDependencies {
     getReadyImport: (boqId, runId) => extractionStore().getReadyImport(boqId, runId),
     getSourceRows: (boqId, runId) => extractionStore().getSourceRows(boqId, runId),
     async getSettings() {
-      return getDocument<WorkspaceSettings>('settings', 'workspace')
+      const stored = await getDocument<StoredWorkspaceSettings>('settings', 'workspace')
+      return decodeActionableReviewSettingsDoc(stored)
     },
     async listCatalog() {
       const standards = await getCollection<StandardEntry>('standards')

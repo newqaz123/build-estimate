@@ -52,6 +52,7 @@ import {
   buildCatalogFingerprint,
   buildCatalogMappingCacheKey,
   buildConversionFingerprint,
+  buildScopedSourceSignature,
   buildSourceSignature,
   type ApprovedCatalogMapping,
   type CatalogMappingCache,
@@ -476,17 +477,19 @@ function tryNormalization(input: {
 
   if (!rule && sourceCanonical === catalogCanonical && sourceCanonical !== '') {
     // Identity only when units already agree canonically.
+    // Canonicalize the source unit for the rule path; extracted snapshot stays raw.
     const identity = identityConversionRule(sourceCanonical)
     try {
       return normalizePricingWithRule({
         source: {
           ...input.extracted,
+          unit: sourceCanonical,
           confirmedAt: input.now,
           confirmedBy: 'shadow-projection',
         },
         catalogId: candidate.catalogId,
         catalogDescription: candidate.description,
-        catalogUnit: candidate.unit,
+        catalogUnit: catalogCanonical,
         rule: identity,
         currencyScale: input.currencyScale,
       })
@@ -593,14 +596,20 @@ export async function generateActionableReview(
     const row = rowsById.get(finding.sourceRowId)
     if (!row) continue
     const evidence = extractRowEvidence(row)
+    // Mapping/shortlist/AI revalidation: description+unit only.
     const sourceSignature = buildSourceSignature({
+      description: evidence.description,
+      unit: evidence.unit,
+    })
+    // Task 6 hashed key: scope + unitMap live only in the scoped signature input.
+    const scopedSourceSignature = buildScopedSourceSignature({
       description: evidence.description,
       unit: evidence.unit,
       unitMap: input.unitMap,
       workspaceScope,
     })
     const cacheKey = buildCatalogMappingCacheKey({
-      sourceSignature,
+      sourceSignature: scopedSourceSignature,
       workspaceScope,
       catalogFingerprint: versions.catalogFingerprint,
       conversionFingerprint: versions.conversionFingerprint,

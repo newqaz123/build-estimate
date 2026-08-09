@@ -4,6 +4,7 @@ import {
   buildCatalogFingerprint,
   buildCatalogMappingCacheKey,
   buildConversionFingerprint,
+  buildScopedSourceSignature,
   buildSourceSignature,
   isHashedCatalogMappingCacheKey,
   selectPreferredCatalogMapping,
@@ -28,21 +29,40 @@ const modelMapping: CatalogMappingRecord = {
   conversionRuleId: 'rule-1',
 }
 
-test('source signatures normalize description and canonical unit', () => {
+test('source signatures normalize description and unit only', () => {
   const left = buildSourceSignature({
     description: '  PVC  Pipe — 100mm ',
     unit: 'Length',
-    unitMap: { length: 'length' },
-    workspaceScope: 'ws-1',
   })
   const right = buildSourceSignature({
     description: 'pvc pipe 100mm',
     unit: 'length',
-    unitMap: { length: 'length' },
-    workspaceScope: 'ws-1',
   })
   assert.equal(left, right)
   assert.match(left, /^sha256:[a-f0-9]{64}$/)
+})
+
+test('source signatures ignore workspace scope and unitMap (scoped signature owns those)', () => {
+  const plain = buildSourceSignature({
+    description: 'Ready mix concrete C25',
+    unit: 'cu m',
+  })
+  const scoped = buildScopedSourceSignature({
+    description: 'Ready mix concrete C25',
+    unit: 'cu m',
+    unitMap: { 'cu m': 'm3' },
+    workspaceScope: 'boq-prod-1',
+  })
+  assert.notEqual(plain, scoped)
+  assert.match(scoped, /^sha256:[a-f0-9]{64}$/)
+  // Mapping/AI revalidation signature stays stable across scope/unitMap.
+  assert.equal(
+    plain,
+    buildSourceSignature({
+      description: 'Ready mix concrete C25',
+      unit: 'cu m',
+    }),
+  )
 })
 
 test('catalog fingerprint changes when a standard is archived', () => {

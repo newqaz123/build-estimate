@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   createActionableReviewHandlers,
   createGetAuditsFromReviewState,
+  decodeActionableReviewSettingsDoc,
   extractAuditsFromReviewState,
   isExtractionProposalAudit,
   type ActionableReviewRouteDependencies,
@@ -702,4 +703,68 @@ test('projection helper stays independent of proposal grouping (route-level smok
   })
   assert.ok(left.review.id.startsWith('sha256:'))
   assert.equal(left.review.mode, 'shadow')
+})
+
+test('decodeActionableReviewSettingsDoc defaults legacy docs without actionableReview', () => {
+  const decoded = decodeActionableReviewSettingsDoc({
+    llm: { provider: 'openai', model: 'gpt-4o' },
+  })
+  assert.equal(decoded.actionableReview.stage, 'off')
+  assert.equal(decoded.actionableReview.maxEstimatedCostMinor, 0)
+  assert.equal(decoded.actionableReview.maxRows, 100)
+  assert.equal(decoded.llm.model, 'gpt-4o')
+})
+
+test('decodeActionableReviewSettingsDoc fails closed on partial/invalid actionableReview', () => {
+  assert.throws(() => decodeActionableReviewSettingsDoc({
+    actionableReview: {
+      stage: 'shadow',
+      // missing required numeric/boolean fields
+    },
+  }))
+  assert.throws(() => decodeActionableReviewSettingsDoc({
+    actionableReview: {
+      stage: 'shadow',
+      maxRows: 100,
+      maxPromptTokens: 8000,
+      maxEstimatedCostMinor: 0,
+      escalationEnabled: true,
+      unknownKey: true,
+    },
+  }))
+})
+
+test('POST treats legacy settings without actionableReview as stage off (409), not TypeError 500', async () => {
+  const d = deps({
+    getSettings: async () => decodeActionableReviewSettingsDoc({
+      llm: { provider: 'openai', model: 'gpt-4o' },
+      // no actionableReview section — production decode defaults to off
+    }),
+  })
+  const { POST } = createActionableReviewHandlers(d)
+  const response = await POST(
+    new Request('http://localhost/api', { method: 'POST', body: '{}' }),
+    context(),
+  )
+  assert.equal(response.status, 409)
+  const body = await response.json() as { error: string }
+  assert.match(body.error, /stage/i)
+})
+
+test('POST fails closed when settings decode rejects invalid actionableReview', async () => {
+  const d = deps({
+    getSettings: async () => decodeActionableReviewSettingsDoc({
+      actionableReview: { stage: 'shadow' },
+    }),
+  })
+  const { POST } = createActionableReviewHandlers(d)
+  const response = await POST(
+    new Request('http://localhost/api', { method: 'POST', body: '{}' }),
+    context(),
+  )
+  // Fail closed: structured 500, never an unhandled TypeError on .stage
+  assert.equal(response.status, 500)
+  const body = await response.json() as { error: string }
+  assert.equal(typeof body.error, 'string')
+  assert.ok(body.error.length > 0)
 })

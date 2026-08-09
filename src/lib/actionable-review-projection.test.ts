@@ -14,6 +14,7 @@ import type { ValidatedProposal } from './boq-extraction-proposals'
 import type { Boq, BoqPricedItem } from './boq-schema'
 import {
   buildCatalogMappingCacheKey,
+  buildScopedSourceSignature,
   buildSourceSignature,
   type ApprovedCatalogMapping,
   type CatalogMappingCache,
@@ -556,12 +557,18 @@ test('precomputes Task 6 hashed cache keys and revalidates without human approva
       amount: '1000',
     }),
   ]
-  const signature = buildSourceSignature({
+  // Cache key embeds scoped signature (unitMap + workspaceScope); mapping signature does not.
+  const scopedSignature = buildScopedSourceSignature({
     description: 'Ready mix concrete C25',
     unit: 'm3',
     unitMap: UNIT_MAP,
     workspaceScope: 'ws-1',
   })
+  const plainSignature = buildSourceSignature({
+    description: 'Ready mix concrete C25',
+    unit: 'm3',
+  })
+  assert.notEqual(scopedSignature, plainSignature)
   // Will be aligned by generateActionableReview to active fingerprints.
   const cache = memoryCache()
   let capturedKey: string | undefined
@@ -586,7 +593,7 @@ test('precomputes Task 6 hashed cache keys and revalidates without human approva
   assert.equal(
     rowKey,
     buildCatalogMappingCacheKey({
-      sourceSignature: signature,
+      sourceSignature: scopedSignature,
       workspaceScope: 'ws-1',
       catalogFingerprint: result.review.versions.catalogFingerprint,
       conversionFingerprint: result.review.versions.conversionFingerprint,
@@ -594,6 +601,144 @@ test('precomputes Task 6 hashed cache keys and revalidates without human approva
       modelVersion: 'gpt-4o-mini',
     }),
   )
+})
+
+test('seeded scoped cache mapping hits with unitMap + multiple candidates and zero provider calls', async () => {
+  const description = 'Structural concrete package ambiguous'
+  const unit = 'cu m'
+  const sourceRows = [
+    headerRow('h', 0),
+    sourceRow({
+      id: 'row-1',
+      row: 1,
+      desc: description,
+      unit,
+      qty: '10',
+      rate: '100',
+      amount: '1000',
+    }),
+  ]
+  const plainSignature = buildSourceSignature({ description, unit })
+  const catalog = [
+    {
+      id: 'std-a',
+      description: 'Structural concrete package A',
+      unit: 'm3',
+      aliases: ['structural concrete package'],
+    },
+    {
+      id: 'std-b',
+      description: 'Structural concrete package B',
+      unit: 'm3',
+      aliases: ['structural concrete package'],
+    },
+    {
+      id: 'std-c',
+      description: 'Structural concrete package C',
+      unit: 'm3',
+      aliases: ['structural concrete package'],
+    },
+  ]
+  const versionsInput = baseInput({
+    sourceRows,
+    run: minimalRun(sourceRows, 1000),
+    catalog,
+    settings: settings({ maxEstimatedCostMinor: 0 }),
+    callProvider: async () => ({ advice: [] }),
+  })
+  // Probe fingerprints once so we can seed the exact Task 6 hashed key.
+  const probe = await generateActionableReview(versionsInput)
+  const scopedSignature = buildScopedSourceSignature({
+    description,
+    unit,
+    unitMap: UNIT_MAP,
+    workspaceScope: 'ws-1',
+  })
+  const cacheKey = buildCatalogMappingCacheKey({
+    sourceSignature: scopedSignature,
+    workspaceScope: 'ws-1',
+    catalogFingerprint: probe.review.versions.catalogFingerprint,
+    conversionFingerprint: probe.review.versions.conversionFingerprint,
+    promptVersion: ACTIONABLE_REVIEW_PROMPT_VERSION,
+    modelVersion: 'gpt-4o-mini',
+  })
+  const seededMapping: ApprovedCatalogMapping = {
+    sourceSignature: plainSignature,
+    catalogId: 'std-b',
+    approvedBy: 'model:prior',
+    approvedAt: '2026-08-01T00:00:00.000Z',
+  }
+  const cache = memoryCache({ [cacheKey]: seededMapping })
+  let providerCalls = 0
+
+  const result = await generateActionableReview(baseInput({
+    sourceRows,
+    run: minimalRun(sourceRows, 1000),
+    catalog,
+    cache,
+    workspaceScope: 'ws-1',
+    unitMap: UNIT_MAP,
+    settings: settings({ maxEstimatedCostMinor: 500 }),
+    estimateCostMinor: () => 10,
+    callProvider: async () => {
+      providerCalls += 1
+      throw new Error('provider must not run on validated cache hit')
+    },
+  }))
+
+  assert.equal(providerCalls, 0)
+  assert.ok(result.aiBatch.cacheHitCount >= 1)
+  assert.equal(result.aiBatch.initialCallCount, 0)
+  const suggestion = result.review.actionableItemSuggestions.find(
+    (item) => item.sourceRowIds.includes('row-1'),
+  )
+  assert.ok(suggestion)
+  assert.equal(suggestion.aiAdvice?.decision, 'match')
+  assert.equal(suggestion.aiAdvice?.catalogId, 'std-b')
+  // Multiple candidates remain on the shortlist; cache hit still wins.
+  assert.ok(suggestion.catalogCandidates.length >= 2)
+})
+
+test('identity normalization aliases cu m to m3 while extracted snapshot keeps raw unit', async () => {
+  const sourceRows = [
+    headerRow('h', 0),
+    sourceRow({
+      id: 'row-1',
+      row: 1,
+      desc: 'Ready mix concrete C25',
+      unit: 'cu m',
+      qty: '10',
+      rate: '100',
+      amount: '1000',
+    }),
+  ]
+  const result = await generateActionableReview(baseInput({
+    sourceRows,
+    run: minimalRun(sourceRows, 1000),
+    unitMap: UNIT_MAP,
+    catalog: [
+      {
+        id: 'std-concrete',
+        description: 'Ready mix concrete C25',
+        unit: 'm3',
+        aliases: ['concrete c25'],
+      },
+    ],
+    settings: settings({ maxEstimatedCostMinor: 0 }),
+    callProvider: async () => ({ advice: [] }),
+  }))
+
+  const suggestion = result.review.actionableItemSuggestions.find(
+    (item) => item.sourceRowIds.includes('row-1'),
+  )
+  assert.ok(suggestion)
+  assert.equal(suggestion.extractedItem.unit, 'cu m')
+  assert.ok(suggestion.normalization, 'identity normalization must succeed for alias units')
+  assert.equal(suggestion.normalization?.ruleId, 'identity:m3:v1')
+  assert.equal(suggestion.normalization?.catalogUnit, 'm3')
+  assert.equal(suggestion.normalization?.catalogUnitsPerSourceUnit, '1')
+  assert.equal(suggestion.normalization?.normalizedQuantity, '10')
+  assert.equal(suggestion.normalization?.normalizedTotal, '1000')
 })
 
 test('provider failure and budget zero still produce deterministic local shadow fallback', async () => {
