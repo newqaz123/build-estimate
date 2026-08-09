@@ -282,13 +282,18 @@ function descriptionMatches(left: RowIdentity, right: RowIdentity): boolean {
   return normalizeCatalogText(left.description) === normalizeCatalogText(right.description)
 }
 
+/**
+ * Accepted-audit binding requires a non-blank fingerprint for the live target
+ * that exactly matches fingerprintCanonicalItem. Missing/blank fingerprints
+ * never suppress as accepted_audit (normalized identity may still apply later).
+ */
 function itemStillMatchesFingerprint(
   item: BoqItem,
   fingerprints: Record<string, string> | undefined,
 ): boolean {
   if (!nonBlank(item.id)) return false
   const expected = fingerprints?.[item.id]
-  if (!nonBlank(expected)) return true
+  if (!nonBlank(expected)) return false
   return fingerprintCanonicalItem(item) === expected
 }
 
@@ -434,7 +439,7 @@ function groupNormalizedIdentityClaims(
     if (identity) itemIdentities.push({ item, identity })
   }
 
-  const claims: Claim[] = []
+  const candidateClaims: Claim[] = []
 
   for (const row of sourceRows) {
     if (already.has(row.id)) continue
@@ -465,13 +470,27 @@ function groupNormalizedIdentityClaims(
 
     const match = strictMatches[0]!
     if (!nonBlank(match.id)) continue
-    claims.push({
+    candidateClaims.push({
       sourceRowId: row.id,
       boqItemId: match.id,
       reason: 'normalized_identity',
     })
   }
 
+  // One-to-one consumption: a BOQ item may absorb at most one pure normalized_identity
+  // source row. When two+ rows compete for the same item, none are represented — the
+  // extra duplicate must remain actionable rather than silently hidden.
+  const byItem = new Map<string, Claim[]>()
+  for (const claim of candidateClaims) {
+    const bucket = byItem.get(claim.boqItemId)
+    if (bucket) bucket.push(claim)
+    else byItem.set(claim.boqItemId, [claim])
+  }
+
+  const claims: Claim[] = []
+  for (const bucket of byItem.values()) {
+    if (bucket.length === 1) claims.push(bucket[0]!)
+  }
   return claims
 }
 

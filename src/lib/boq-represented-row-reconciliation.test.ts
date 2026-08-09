@@ -348,13 +348,13 @@ test('accepted audit add decisions bind specific rows; ignore decisions stay unr
   }])
 })
 
-test('stale accepted audit fingerprints do not represent rows', () => {
+test('stale or missing audit fingerprints never bind as accepted_audit', () => {
   const row = sourceRow({
     id: 'sr-stale',
     row: 1,
     cells: ['Cable tray', 'm', '10', '50', '500'],
   })
-  const item = pricedItem({
+  const live = pricedItem({
     id: 'item-tray',
     desc: 'Cable tray',
     unit: 'm',
@@ -362,23 +362,6 @@ test('stale accepted audit fingerprints do not represent rows', () => {
     rate: 50,
     total: 500,
   })
-  const audit = emptyAudit({
-    sourceRowIds: ['sr-stale'],
-    targetItemIds: ['item-tray'],
-    affectedItemFingerprints: { 'item-tray': 'sha256:stale-fingerprint' },
-    sourceRefs: [{ sourceRowId: 'sr-stale', ...refOf(row) }],
-  })
-
-  const findings = reconcileRepresentedRows({
-    boq: boqWith([item]),
-    sourceRows: [row],
-    proposals: [],
-    audits: [audit],
-    roles: [role('sr-stale', 'priced_item', refOf(row))],
-    unitMap: UNIT_MAP,
-  })
-
-  // Row may still match via normalized identity; force mismatch on amounts so only audit path is tested.
   const drifted = pricedItem({
     id: 'item-tray',
     desc: 'Cable tray',
@@ -387,16 +370,94 @@ test('stale accepted audit fingerprints do not represent rows', () => {
     rate: 55,
     total: 550,
   })
-  const auditOnly = reconcileRepresentedRows({
+
+  const staleAudit = emptyAudit({
+    sourceRowIds: ['sr-stale'],
+    targetItemIds: ['item-tray'],
+    affectedItemFingerprints: { 'item-tray': 'sha256:stale-fingerprint' },
+    sourceRefs: [{ sourceRowId: 'sr-stale', ...refOf(row) }],
+  })
+  const missingFingerprintAudit = emptyAudit({
+    auditId: 'audit-missing-fp',
+    sourceRowIds: ['sr-stale'],
+    targetItemIds: ['item-tray'],
+    affectedItemFingerprints: {},
+    sourceRefs: [{ sourceRowId: 'sr-stale', ...refOf(row) }],
+  })
+  const blankFingerprintAudit = emptyAudit({
+    auditId: 'audit-blank-fp',
+    sourceRowIds: ['sr-stale'],
+    targetItemIds: ['item-tray'],
+    affectedItemFingerprints: { 'item-tray': '   ' },
+    sourceRefs: [{ sourceRowId: 'sr-stale', ...refOf(row) }],
+  })
+
+  // Stale fingerprint + amount conflict: no audit bind and no normalized fallback.
+  assert.deepEqual(reconcileRepresentedRows({
     boq: boqWith([drifted]),
     sourceRows: [row],
     proposals: [],
-    audits: [audit],
+    audits: [staleAudit],
+    roles: [role('sr-stale', 'priced_item', refOf(row))],
+    unitMap: UNIT_MAP,
+  }), [])
+
+  // Missing/blank fingerprint must not suppress as accepted_audit even when item is live.
+  for (const audit of [missingFingerprintAudit, blankFingerprintAudit]) {
+    const findings = reconcileRepresentedRows({
+      boq: boqWith([live]),
+      sourceRows: [row],
+      proposals: [],
+      audits: [audit],
+      roles: [role('sr-stale', 'priced_item', refOf(row))],
+      unitMap: UNIT_MAP,
+    })
+    assert.equal(findings.some((finding) => finding.reason === 'accepted_audit'), false)
+    // Independent strict normalized identity may still apply.
+    assert.deepEqual(findings, [{
+      sourceRowIds: ['sr-stale'],
+      boqItemId: 'item-tray',
+      reason: 'normalized_identity',
+      sourceRefs: [refOf(row)],
+    }])
+  }
+
+  // Stale fingerprint blocks accepted_audit; independent normalized identity may still win.
+  const staleButNormalized = reconcileRepresentedRows({
+    boq: boqWith([live]),
+    sourceRows: [row],
+    proposals: [],
+    audits: [staleAudit],
     roles: [role('sr-stale', 'priced_item', refOf(row))],
     unitMap: UNIT_MAP,
   })
-  assert.deepEqual(auditOnly, [])
-  assert.ok(findings.length <= 1)
+  assert.deepEqual(staleButNormalized, [{
+    sourceRowIds: ['sr-stale'],
+    boqItemId: 'item-tray',
+    reason: 'normalized_identity',
+    sourceRefs: [refOf(row)],
+  }])
+
+  // Sparse row cannot normalize and stays unrepresented when audit fingerprint is stale.
+  const sparse = sourceRow({
+    id: 'sr-sparse',
+    row: 2,
+    cells: ['Cable tray only description', '', '', '', ''],
+  })
+  assert.deepEqual(reconcileRepresentedRows({
+    boq: boqWith([live]),
+    sourceRows: [sparse],
+    proposals: [],
+    audits: [emptyAudit({
+      auditId: 'audit-sparse',
+      sourceRowIds: ['sr-sparse'],
+      targetItemIds: ['item-tray'],
+      affectedItemFingerprints: { 'item-tray': 'sha256:stale' },
+      sourceRefs: [{ sourceRowId: 'sr-sparse', ...refOf(sparse) }],
+    })],
+    roles: [role('sr-sparse', 'uncertain', refOf(sparse))],
+    unitMap: UNIT_MAP,
+  }), [])
 })
 
 test('strict normalized identity matches canonical units and amounts without source ids', () => {
@@ -686,13 +747,14 @@ test('findings follow source-row order across mixed reasons', () => {
   )
 })
 
-test('validated proposals are consumed immutably and never invent BOQ values from raw text alone', () => {
-  // A validated proposal exists for a row, but the BOQ item differs in total.
-  // Raw text must not be treated as authority to force a match.
-  const row = sourceRow({
+test('validated proposals never authorize representation without provenance, audit, or strict normalized evidence', () => {
+  // Sparse source row has no extractable identity. Proposal/model payload looks like a
+  // perfect match for a live BOQ item, but must never create representation on its own.
+  const sparseRow = sourceRow({
     id: 'sr-proposal',
     row: 1,
-    cells: ['Fire damper', 'pcs', '3', '700', '2100'],
+    cells: ['see vendor schedule', '', '', '', ''],
+    classification: 'unknown',
   })
   const item = pricedItem({
     id: 'item-damper',
@@ -700,18 +762,35 @@ test('validated proposals are consumed immutably and never invent BOQ values fro
     unit: 'pcs',
     qty: 3,
     rate: 700,
-    total: 9999, // conflicts with source amounts
+    total: 2100,
+    // no sourceRowIds — no source identity
   })
   const proposal = {
     id: 'p-1',
     extractionRunId: 'run-1',
     operation: 'insert_missing_item',
     sourceRowIds: ['sr-proposal'],
-    targetItemIds: [],
-    affectedItemFingerprints: {},
-    confidence: 0.9,
-    explanation: 'missing',
-    proposedItems: [],
+    targetItemIds: ['item-damper'],
+    affectedItemFingerprints: {
+      'item-damper': fingerprintCanonicalItem(item),
+    },
+    confidence: 0.99,
+    explanation: 'model says already represented',
+    proposedItems: [{
+      id: 'item-damper',
+      desc: 'Fire damper',
+      pricingRole: 'standard' as const,
+      parentBundleId: null,
+      sourceRowIds: ['sr-proposal'],
+      unit: 'pcs',
+      qty: 3,
+      rate: 700,
+      total: 2100,
+      costComponent: 'combined' as const,
+      optional: false,
+      excludedFromTotal: false,
+      entryOrigin: 'ai_accepted' as const,
+    }],
     evidenceValid: true as const,
     reconciled: true as const,
     stale: false,
@@ -719,10 +798,83 @@ test('validated proposals are consumed immutably and never invent BOQ values fro
 
   assert.deepEqual(reconcileRepresentedRows({
     boq: boqWith([item]),
-    sourceRows: [row],
+    sourceRows: [sparseRow],
     proposals: [proposal],
     audits: [],
-    roles: [role('sr-proposal', 'priced_item', refOf(row))],
+    roles: [role('sr-proposal', 'uncertain', refOf(sparseRow))],
     unitMap: UNIT_MAP,
   }), [])
+})
+
+test('duplicate source rows cannot both consume one BOQ item via normalized_identity', () => {
+  const rowA = sourceRow({
+    id: 'sr-dup-a',
+    row: 1,
+    cells: ['G.I. pipe 50mm', 'm', '20', '40', '800'],
+  })
+  const rowB = sourceRow({
+    id: 'sr-dup-b',
+    row: 2,
+    cells: ['G.I. pipe 50mm', 'm', '20', '40', '800'],
+  })
+  const item = pricedItem({
+    id: 'item-pipe',
+    desc: 'G.I. pipe 50mm',
+    unit: 'm',
+    qty: 20,
+    rate: 40,
+    total: 800,
+  })
+
+  const findings = reconcileRepresentedRows({
+    boq: boqWith([item]),
+    sourceRows: [rowA, rowB],
+    proposals: [],
+    audits: [],
+    roles: [
+      role('sr-dup-a', 'priced_item', refOf(rowA)),
+      role('sr-dup-b', 'priced_item', refOf(rowB)),
+    ],
+    unitMap: UNIT_MAP,
+  })
+
+  // Pure normalized duplicates are ambiguous — neither unsafe extra row is hidden.
+  assert.deepEqual(findings, [])
+})
+
+test('rejected and skipped audits never represent rows', () => {
+  const row = sourceRow({
+    id: 'sr-reject',
+    row: 1,
+    cells: ['Junction box', 'pcs', '5', '80', '400'],
+  })
+  // Drift amounts so normalized identity cannot salvage a non-accepted audit.
+  const item = pricedItem({
+    id: 'item-box',
+    desc: 'Junction box',
+    unit: 'pcs',
+    qty: 5,
+    rate: 90,
+    total: 450,
+  })
+  const fingerprint = fingerprintCanonicalItem(item)
+
+  for (const status of ['rejected', 'skipped'] as const) {
+    const findings = reconcileRepresentedRows({
+      boq: boqWith([item]),
+      sourceRows: [row],
+      proposals: [],
+      audits: [emptyAudit({
+        auditId: `audit-${status}`,
+        status,
+        sourceRowIds: ['sr-reject'],
+        targetItemIds: ['item-box'],
+        affectedItemFingerprints: { 'item-box': fingerprint },
+        sourceRefs: [{ sourceRowId: 'sr-reject', ...refOf(row) }],
+      })],
+      roles: [role('sr-reject', 'priced_item', refOf(row))],
+      unitMap: UNIT_MAP,
+    })
+    assert.deepEqual(findings, [], `status=${status} must not represent`)
+  }
 })
