@@ -30,11 +30,29 @@ export class CatalogMappingCacheStorageError extends Error {
   }
 }
 
+/**
+ * Document adapter with one atomic compare/write primitive.
+ * Firestore implementations must use transactions for runAtomic.
+ */
 export interface CatalogMappingDocumentStore {
   get(id: string): Promise<{ id: string; data: Record<string, unknown> } | null>
-  set(id: string, data: Record<string, unknown>): Promise<void>
-  update(id: string, data: Record<string, unknown>): Promise<void>
   delete(id: string): Promise<void>
+  /**
+   * Atomically read current document data (or null), decide next state.
+   * Return `null` from mutate to skip the write and preserve the current value.
+   */
+  runAtomic(
+    id: string,
+    mutate: (current: Record<string, unknown> | null) => Record<string, unknown> | null,
+  ): Promise<'applied' | 'skipped'>
+}
+
+/**
+ * Concrete store: exact public cache interface plus explicit model-write path.
+ * Model writes are never available through CatalogMappingCache.put.
+ */
+export interface CatalogMappingCacheStore extends CatalogMappingCache {
+  putModel(key: string, mapping: ApprovedCatalogMapping): Promise<void>
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -139,9 +157,41 @@ function toStoredDocument(record: CatalogMappingRecord): Record<string, unknown>
   return doc
 }
 
+function existingOrigin(current: Record<string, unknown> | null): CatalogMappingOrigin | null {
+  if (!current) return null
+  try {
+    return parseCatalogMappingRecord(current).origin
+  } catch {
+    // Corrupt/unknown documents are treated as absent for overwrite decisions only
+    // after parse failure on write paths that re-validate next payload.
+    return null
+  }
+}
+
 export function createCatalogMappingCacheStore(
   documents: CatalogMappingDocumentStore,
-): CatalogMappingCache {
+): CatalogMappingCacheStore {
+  async function writeOrigin(
+    key: string,
+    mapping: ApprovedCatalogMapping,
+    origin: CatalogMappingOrigin,
+  ): Promise<void> {
+    const cacheKey = assertHashedKey(key)
+    const approved = parseApprovedMappingInput(mapping)
+    const next = toStoredDocument({
+      ...approved,
+      origin,
+    })
+
+    await documents.runAtomic(cacheKey, (current) => {
+      if (origin === 'model' && existingOrigin(current) === 'human') {
+        // Preserve human-approved mapping against model advice.
+        return null
+      }
+      return next
+    })
+  }
+
   return {
     async get(key: string): Promise<ApprovedCatalogMapping | null> {
       const cacheKey = assertHashedKey(key)
@@ -151,32 +201,14 @@ export function createCatalogMappingCacheStore(
       return toApprovedCatalogMapping(record)
     },
 
-    async put(
-      key: string,
-      mapping: ApprovedCatalogMapping,
-      options: { origin?: CatalogMappingOrigin } = {},
-    ): Promise<void> {
-      const cacheKey = assertHashedKey(key)
-      const origin = options.origin ?? 'human'
-      const approved = parseApprovedMappingInput(mapping)
-      const next: CatalogMappingRecord = {
-        ...approved,
-        origin,
-      }
+    /** Explicit human approval write. */
+    async put(key: string, mapping: ApprovedCatalogMapping): Promise<void> {
+      await writeOrigin(key, mapping, 'human')
+    },
 
-      const existingSnap = await documents.get(cacheKey)
-      if (!existingSnap) {
-        await documents.set(cacheKey, toStoredDocument(next))
-        return
-      }
-
-      const existing = parseCatalogMappingRecord(existingSnap.data)
-      // Human-approved mappings cannot be overwritten by model-only advice.
-      if (existing.origin === 'human' && origin === 'model') {
-        return
-      }
-
-      await documents.update(cacheKey, toStoredDocument(next))
+    /** Explicit model-advice write; never overwrites human. */
+    async putModel(key: string, mapping: ApprovedCatalogMapping): Promise<void> {
+      await writeOrigin(key, mapping, 'model')
     },
 
     async remove(key: string): Promise<void> {
@@ -197,30 +229,27 @@ export function createFirestoreCatalogMappingDocuments(
       if (!snap.exists) return null
       return { id: snap.id, data: (snap.data() ?? {}) as Record<string, unknown> }
     },
-    async set(id, data) {
-      const ref = collection().doc(id)
-      const existing = await ref.get()
-      if (existing.exists) {
-        throw new CatalogMappingCacheStorageError('Mapping cache entry already exists.', 409)
-      }
-      await ref.set(data)
-    },
-    async update(id, data) {
-      const ref = collection().doc(id)
-      const existing = await ref.get()
-      if (!existing.exists) {
-        throw new CatalogMappingCacheStorageError('Mapping cache entry not found.', 404)
-      }
-      await ref.set(data)
-    },
     async delete(id) {
       await collection().doc(id).delete()
+    },
+    async runAtomic(id, mutate) {
+      return db.runTransaction(async (transaction) => {
+        const ref = collection().doc(id)
+        const snap = await transaction.get(ref)
+        const current = snap.exists
+          ? ((snap.data() ?? {}) as Record<string, unknown>)
+          : null
+        const next = mutate(current)
+        if (next === null) return 'skipped' as const
+        transaction.set(ref, next)
+        return 'applied' as const
+      })
     },
   }
 }
 
 export function createFirestoreCatalogMappingCacheStore(
   db: Firestore = getDb(),
-): CatalogMappingCache {
+): CatalogMappingCacheStore {
   return createCatalogMappingCacheStore(createFirestoreCatalogMappingDocuments(db))
 }

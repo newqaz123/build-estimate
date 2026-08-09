@@ -20,13 +20,13 @@ export interface CatalogMappingRecord extends ApprovedCatalogMapping {
   origin: CatalogMappingOrigin
 }
 
+/**
+ * Exact public cache contract.
+ * `put` always means explicit human approval — no origin option footgun.
+ */
 export interface CatalogMappingCache {
   get(key: string): Promise<ApprovedCatalogMapping | null>
-  put(
-    key: string,
-    mapping: ApprovedCatalogMapping,
-    options?: { origin?: CatalogMappingOrigin },
-  ): Promise<void>
+  put(key: string, mapping: ApprovedCatalogMapping): Promise<void>
   remove(key: string): Promise<void>
 }
 

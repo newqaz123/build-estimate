@@ -392,3 +392,231 @@ test('global conversion rules may apply to any catalog item with matching units'
     ['beam-a', 'beam-b'],
   )
 })
+
+test('approved history fails closed when units are incompatible and conversionRuleId is missing', () => {
+  const candidates = shortlistCatalogCandidates({
+    description: '100mm PVC pipe',
+    unit: 'length',
+    sourceSignature: 'sig-pipe',
+    unitMap: {},
+    approvedMappings: [mapping({ catalogId: 'pipe-100' })],
+    conversionRules: [],
+    catalog: [
+      { id: 'pipe-100', description: '100mm PVC pipe', unit: 'm', aliases: [] },
+    ],
+  })
+  assert.deepEqual(candidates, [])
+})
+
+test('approved history drops missing archived wrong-unit and wrong-item conversion rule ids', () => {
+  const catalog = [
+    { id: 'pipe-100', description: '100mm PVC pipe', unit: 'm', aliases: [] as string[] },
+    { id: 'pipe-200', description: '200mm PVC pipe', unit: 'm', aliases: [] as string[] },
+  ]
+
+  // Missing mapped rule id must not be echoed; without any valid rule the row stays out.
+  const missing = shortlistCatalogCandidates({
+    description: '100mm PVC pipe',
+    unit: 'length',
+    sourceSignature: 'sig-pipe',
+    unitMap: {},
+    approvedMappings: [
+      mapping({ catalogId: 'pipe-100', conversionRuleId: 'rule-missing' }),
+    ],
+    // A different valid rule may still unlock normal conversion matching, but history
+    // must not surface with the unresolved mapped id.
+    conversionRules: [
+      rule({
+        id: 'rule-real',
+        sourceUnit: 'length',
+        catalogUnit: 'm',
+        catalogId: 'pipe-100',
+      }),
+    ],
+    catalog,
+  })
+  assert.ok(missing.every((candidate) => candidate.matchKind !== 'approved_history'))
+  assert.ok(missing.every((candidate) => candidate.conversionRuleId !== 'rule-missing'))
+
+  assert.deepEqual(
+    shortlistCatalogCandidates({
+      description: '100mm PVC pipe',
+      unit: 'length',
+      sourceSignature: 'sig-pipe',
+      unitMap: {},
+      approvedMappings: [
+        mapping({ catalogId: 'pipe-100', conversionRuleId: 'rule-archived' }),
+      ],
+      conversionRules: [
+        rule({
+          id: 'rule-archived',
+          sourceUnit: 'length',
+          catalogUnit: 'm',
+          catalogId: 'pipe-100',
+          archivedAt: '2026-08-01T00:00:00.000Z',
+        }),
+      ],
+      catalog,
+    }),
+    [],
+  )
+
+  assert.deepEqual(
+    shortlistCatalogCandidates({
+      description: '100mm PVC pipe',
+      unit: 'length',
+      sourceSignature: 'sig-pipe',
+      unitMap: {},
+      approvedMappings: [
+        mapping({ catalogId: 'pipe-100', conversionRuleId: 'rule-wrong-unit' }),
+      ],
+      conversionRules: [
+        rule({
+          id: 'rule-wrong-unit',
+          sourceUnit: 'ft',
+          catalogUnit: 'm',
+          catalogId: 'pipe-100',
+        }),
+      ],
+      catalog,
+    }),
+    [],
+  )
+
+  // Mapped rule belongs to a different catalog item — must not authorize pipe-100 history,
+  // and the foreign catalog entry is unrelated so conversion matching stays empty.
+  assert.deepEqual(
+    shortlistCatalogCandidates({
+      description: '100mm PVC pipe',
+      unit: 'length',
+      sourceSignature: 'sig-pipe',
+      unitMap: {},
+      approvedMappings: [
+        mapping({ catalogId: 'pipe-100', conversionRuleId: 'rule-for-200' }),
+      ],
+      conversionRules: [
+        rule({
+          id: 'rule-for-200',
+          sourceUnit: 'length',
+          catalogUnit: 'm',
+          catalogId: 'pipe-200',
+        }),
+      ],
+      catalog: [
+        { id: 'pipe-100', description: '100mm PVC pipe', unit: 'm', aliases: [] },
+        { id: 'pipe-200', description: 'Office cleaning service', unit: 'm', aliases: [] },
+      ],
+    }),
+    [],
+  )
+
+  // Pure fail-closed history with no alternate conversion path.
+  assert.deepEqual(
+    shortlistCatalogCandidates({
+      description: '100mm PVC pipe',
+      unit: 'length',
+      sourceSignature: 'sig-pipe',
+      unitMap: {},
+      approvedMappings: [
+        mapping({ catalogId: 'pipe-100', conversionRuleId: 'rule-missing' }),
+      ],
+      conversionRules: [],
+      catalog,
+    }),
+    [],
+  )
+})
+
+test('compatible approved history never echoes a stale unresolved conversionRuleId', () => {
+  const candidates = shortlistCatalogCandidates({
+    description: 'Reinforcement bar SD40 16mm',
+    unit: 'ton',
+    sourceSignature: 'sig-rebar',
+    unitMap: {},
+    approvedMappings: [
+      mapping({
+        sourceSignature: 'sig-rebar',
+        catalogId: 'std-rebar',
+        conversionRuleId: 'rule-stale-or-missing',
+      }),
+    ],
+    conversionRules: [],
+    catalog: [
+      {
+        id: 'std-rebar',
+        description: 'Reinforcement bar SD40 16mm',
+        unit: 'ton',
+        aliases: [],
+      },
+    ],
+  })
+
+  assert.equal(candidates.length, 1)
+  assert.equal(candidates[0]?.matchKind, 'approved_history')
+  assert.equal(candidates[0]?.catalogId, 'std-rebar')
+  assert.equal('conversionRuleId' in (candidates[0] ?? {}), false)
+  assert.equal(candidates[0]?.conversionRuleId, undefined)
+})
+
+test('incompatible approved history echoes only a validated active conversion rule id', () => {
+  const candidates = shortlistCatalogCandidates({
+    description: '100mm PVC pipe',
+    unit: 'length',
+    sourceSignature: 'sig-pipe',
+    unitMap: {},
+    approvedMappings: [
+      mapping({ catalogId: 'pipe-100', conversionRuleId: 'rule-pipe-100' }),
+    ],
+    conversionRules: [
+      rule({
+        id: 'rule-pipe-100',
+        sourceUnit: 'length',
+        catalogUnit: 'm',
+        catalogId: 'pipe-100',
+      }),
+    ],
+    catalog: [
+      { id: 'pipe-100', description: '100mm PVC pipe', unit: 'm', aliases: [] },
+    ],
+  })
+
+  assert.equal(candidates.length, 1)
+  assert.equal(candidates[0]?.matchKind, 'approved_history')
+  assert.equal(candidates[0]?.conversionRuleId, 'rule-pipe-100')
+})
+
+test('selects the lowest conversion rule id when multiple equivalent rules match', () => {
+  const candidates = shortlistCatalogCandidates({
+    description: 'Timber beam',
+    unit: 'ft',
+    unitMap: {},
+    conversionRules: [
+      {
+        id: 'rule-z',
+        sourceUnit: 'ft',
+        catalogUnit: 'm',
+        catalogUnitsPerSourceUnit: '0.3048',
+        scope: 'global',
+        version: 1,
+        approvedBy: 'admin-1',
+        approvedAt: '2026-08-08T00:00:00.000Z',
+      },
+      {
+        id: 'rule-a',
+        sourceUnit: 'ft',
+        catalogUnit: 'm',
+        catalogUnitsPerSourceUnit: '0.3048',
+        scope: 'global',
+        version: 1,
+        approvedBy: 'admin-1',
+        approvedAt: '2026-08-08T00:00:00.000Z',
+      },
+    ],
+    catalog: [
+      { id: 'beam-a', description: 'Timber beam', unit: 'm', aliases: [] },
+    ],
+  })
+
+  assert.equal(candidates.length, 1)
+  assert.equal(candidates[0]?.conversionRuleId, 'rule-a')
+})

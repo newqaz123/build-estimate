@@ -52,29 +52,106 @@ function isActiveRule(rule: HumanApprovedCatalogConversionRule): boolean {
   return rule.archivedAt === undefined
 }
 
+function ruleMatchesTarget(
+  rule: HumanApprovedCatalogConversionRule,
+  sourceUnit: string,
+  catalogId: string,
+  catalogUnit: string,
+): boolean {
+  if (!isActiveRule(rule)) return false
+  if (rule.sourceUnit !== sourceUnit || rule.catalogUnit !== catalogUnit) return false
+  if (rule.scope === 'catalog_item') {
+    return rule.catalogId === catalogId
+  }
+  return rule.scope === 'global'
+}
+
+function pickLowestIdRule(
+  rules: readonly HumanApprovedCatalogConversionRule[],
+): HumanApprovedCatalogConversionRule | null {
+  if (rules.length === 0) return null
+  return [...rules].sort((left, right) => left.id.localeCompare(right.id))[0] ?? null
+}
+
+/**
+ * Prefer catalog-item rules over global; within a family pick lowest stable id.
+ */
 function findConversionRule(
   rules: readonly HumanApprovedCatalogConversionRule[],
   sourceUnit: string,
   catalogId: string,
   catalogUnit: string,
 ): HumanApprovedCatalogConversionRule | null {
-  let globalMatch: HumanApprovedCatalogConversionRule | null = null
+  const itemMatches: HumanApprovedCatalogConversionRule[] = []
+  const globalMatches: HumanApprovedCatalogConversionRule[] = []
 
   for (const rule of rules) {
-    if (!isActiveRule(rule)) continue
-    if (rule.sourceUnit !== sourceUnit || rule.catalogUnit !== catalogUnit) continue
+    if (!ruleMatchesTarget(rule, sourceUnit, catalogId, catalogUnit)) continue
+    if (rule.scope === 'catalog_item') itemMatches.push(rule)
+    else globalMatches.push(rule)
+  }
 
-    if (rule.scope === 'catalog_item') {
-      if (rule.catalogId === catalogId) return rule
-      continue
-    }
+  return pickLowestIdRule(itemMatches) ?? pickLowestIdRule(globalMatches)
+}
 
-    if (rule.scope === 'global' && globalMatch === null) {
-      globalMatch = rule
+/**
+ * Resolve mapping.conversionRuleId only when the referenced rule is active and
+ * exactly matches source/catalog units plus scope/catalogId. Never echo bad IDs.
+ */
+function resolveMappedConversionRule(
+  mapping: ApprovedCatalogMapping,
+  sourceUnit: string,
+  catalogId: string,
+  catalogUnit: string,
+  rulesById: ReadonlyMap<string, HumanApprovedCatalogConversionRule>,
+): HumanApprovedCatalogConversionRule | null {
+  const ruleId = mapping.conversionRuleId
+  if (typeof ruleId !== 'string' || ruleId.trim() === '') return null
+  const rule = rulesById.get(ruleId)
+  if (!rule) return null
+  if (!ruleMatchesTarget(rule, sourceUnit, catalogId, catalogUnit)) return null
+  return rule
+}
+
+function approvedHistoryCandidate(
+  mapping: ApprovedCatalogMapping,
+  entry: CatalogShortlistCatalogEntry,
+  sourceUnit: string,
+  unitMap: Record<string, string>,
+  rulesById: ReadonlyMap<string, HumanApprovedCatalogConversionRule>,
+): CatalogCandidateSnapshot | null {
+  const compatible = unitsCompatible(sourceUnit, entry.unit, unitMap)
+
+  if (compatible) {
+    // Compatible units: eligible without a conversion rule.
+    // Never echo a stale/unresolved conversionRuleId on the snapshot.
+    return {
+      catalogId: entry.id,
+      description: entry.description,
+      unit: entry.unit,
+      matchKind: 'approved_history',
+      score: APPROVED_HISTORY_SCORE,
     }
   }
 
-  return globalMatch
+  // Incompatible units: require a validated active human-approved rule.
+  const rule = resolveMappedConversionRule(
+    mapping,
+    sourceUnit,
+    entry.id,
+    entry.unit,
+    rulesById,
+  )
+  if (!rule) return null
+
+  return {
+    catalogId: entry.id,
+    description: entry.description,
+    unit: entry.unit,
+    matchKind: 'approved_history',
+    score: APPROVED_HISTORY_SCORE,
+    conversionRuleId: rule.id,
+  }
 }
 
 function compareCandidates(
@@ -111,6 +188,7 @@ export function shortlistCatalogCandidates(
   if (activeCatalog.length === 0) return []
 
   const activeRules = (input.conversionRules ?? []).filter(isActiveRule)
+  const rulesById = new Map(activeRules.map((rule) => [rule.id, rule]))
   const catalogById = new Map(activeCatalog.map((entry) => [entry.id, entry]))
   const candidates: CatalogCandidateSnapshot[] = []
 
@@ -119,17 +197,14 @@ export function shortlistCatalogCandidates(
       if (mapping.sourceSignature !== input.sourceSignature) continue
       const entry = catalogById.get(mapping.catalogId)
       if (!entry) continue
-      const snapshot: CatalogCandidateSnapshot = {
-        catalogId: entry.id,
-        description: entry.description,
-        unit: entry.unit,
-        matchKind: 'approved_history',
-        score: APPROVED_HISTORY_SCORE,
-      }
-      if (mapping.conversionRuleId !== undefined) {
-        snapshot.conversionRuleId = mapping.conversionRuleId
-      }
-      candidates.push(snapshot)
+      const snapshot = approvedHistoryCandidate(
+        mapping,
+        entry,
+        input.unit,
+        input.unitMap,
+        rulesById,
+      )
+      if (snapshot) candidates.push(snapshot)
     }
   }
 
