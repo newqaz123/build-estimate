@@ -100,6 +100,14 @@ function nonEmptyString(value: unknown, label: string): string {
   return value
 }
 
+/** Plain string field for preservation contracts; empty string is allowed. */
+function plainString(value: unknown, label: string): string {
+  if (typeof value !== 'string') {
+    throw new ActionableReviewTypeError(`Invalid ${label}.`)
+  }
+  return value
+}
+
 function optionalNonEmptyString(value: unknown, label: string): string | undefined {
   if (value === undefined) return undefined
   return nonEmptyString(value, label)
@@ -202,13 +210,28 @@ export function parseSuggestionVersions(value: unknown): SuggestionVersions {
   return parsed
 }
 
-function parsePricingFields(value: Record<string, unknown>, label: string): Omit<
-  ExtractedPricingSnapshot,
-  never
-> {
+function parseExtractedPricingFields(
+  value: Record<string, unknown>,
+  label: string,
+): ExtractedPricingSnapshot {
   return {
-    description: nonEmptyString(value.description, `${label}.description`),
-    unit: nonEmptyString(value.unit, `${label}.unit`),
+    // Preservation contract: empty source description/unit are valid.
+    description: plainString(value.description, `${label}.description`),
+    unit: plainString(value.unit, `${label}.unit`),
+    quantity: parseDecimalField(value.quantity, `${label}.quantity`),
+    materialRate: parseDecimalField(value.materialRate, `${label}.materialRate`),
+    labourRate: parseDecimalField(value.labourRate, `${label}.labourRate`),
+    total: parseDecimalField(value.total, `${label}.total`),
+  }
+}
+
+function parseReviewerPricingFields(
+  value: Record<string, unknown>,
+  label: string,
+): Omit<ReviewerPricingSnapshot, 'correctionReason' | 'confirmedAt' | 'confirmedBy'> {
+  return {
+    description: plainString(value.description, `${label}.description`),
+    unit: plainString(value.unit, `${label}.unit`),
     quantity: parseDecimalField(value.quantity, `${label}.quantity`),
     materialRate: parseDecimalField(value.materialRate, `${label}.materialRate`),
     labourRate: parseDecimalField(value.labourRate, `${label}.labourRate`),
@@ -226,24 +249,28 @@ export function parseExtractedPricingSnapshot(value: unknown): ExtractedPricingS
       throw new ActionableReviewTypeError('Invalid extracted pricing snapshot.')
     }
   }
-  return parsePricingFields(value, 'extracted pricing')
+  return parseExtractedPricingFields(value, 'extracted pricing')
 }
 
-function pricingDiverges(
-  left: ExtractedPricingSnapshot,
-  right: ExtractedPricingSnapshot,
+/**
+ * Spec-gated fields: quantity, unit, material rate, labour rate, total.
+ * Description-only edits do not require correctionReason.
+ */
+function pricingRequiresCorrection(
+  reviewer: Omit<ReviewerPricingSnapshot, 'correctionReason' | 'confirmedAt' | 'confirmedBy'>,
+  extracted: ExtractedPricingSnapshot,
 ): boolean {
-  return left.description !== right.description
-    || left.unit !== right.unit
-    || left.quantity !== right.quantity
-    || left.materialRate !== right.materialRate
-    || left.labourRate !== right.labourRate
-    || left.total !== right.total
+  return reviewer.unit !== extracted.unit
+    || reviewer.quantity !== extracted.quantity
+    || reviewer.materialRate !== extracted.materialRate
+    || reviewer.labourRate !== extracted.labourRate
+    || reviewer.total !== extracted.total
 }
 
 /**
  * Reviewer-confirmed pricing used when a decision is applied.
- * Numeric or descriptive divergence from extraction requires correctionReason.
+ * Changes to quantity, unit, material rate, labour rate, or total require correctionReason.
+ * Description-only edits do not.
  */
 export function parseReviewerPricingSnapshot(
   value: unknown,
@@ -259,14 +286,17 @@ export function parseReviewerPricingSnapshot(
     }
   }
 
-  const pricing = parsePricingFields(value, 'reviewer pricing')
+  // Canonicalize extracted decimals before divergence comparison so equivalent
+  // spellings (e.g. 12.50 vs 12.5) are not treated as corrections.
+  const canonicalExtracted = parseExtractedPricingSnapshot(extracted)
+  const pricing = parseReviewerPricingFields(value, 'reviewer pricing')
   const confirmedAt = nonEmptyString(value.confirmedAt, 'confirmedAt')
   const confirmedBy = nonEmptyString(value.confirmedBy, 'confirmedBy')
 
-  const diverges = pricingDiverges(pricing, extracted)
+  const needsCorrection = pricingRequiresCorrection(pricing, canonicalExtracted)
   const correctionReason = optionalNonEmptyString(value.correctionReason, 'correctionReason')
 
-  if (diverges && correctionReason === undefined) {
+  if (needsCorrection && correctionReason === undefined) {
     throw new ActionableReviewTypeError(
       'Reviewer pricing divergence requires a non-empty correctionReason.',
     )

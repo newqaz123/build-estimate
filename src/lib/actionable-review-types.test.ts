@@ -195,6 +195,125 @@ test('parseReviewerPricingSnapshot requires confirmation metadata and correction
   )
 })
 
+test('description-only reviewer edits succeed without correctionReason', () => {
+  const extracted = {
+    description: 'C25 concrete',
+    unit: 'm3',
+    quantity: '12.5',
+    materialRate: '100',
+    labourRate: '0',
+    total: '1250',
+  }
+
+  assert.deepEqual(
+    parseReviewerPricingSnapshot({
+      ...extracted,
+      description: 'C25 structural concrete (cleaned)',
+      confirmedAt: '2026-08-08T12:00:00.000Z',
+      confirmedBy: 'user-1',
+    }, extracted),
+    {
+      ...extracted,
+      description: 'C25 structural concrete (cleaned)',
+      confirmedAt: '2026-08-08T12:00:00.000Z',
+      confirmedBy: 'user-1',
+    },
+  )
+})
+
+test('unit-only reviewer edits require correctionReason', () => {
+  const extracted = {
+    description: 'C25 concrete',
+    unit: 'm3',
+    quantity: '12.5',
+    materialRate: '100',
+    labourRate: '0',
+    total: '1250',
+  }
+
+  assert.throws(
+    () => parseReviewerPricingSnapshot({
+      ...extracted,
+      unit: 'cu.m',
+      confirmedAt: '2026-08-08T12:00:00.000Z',
+      confirmedBy: 'user-1',
+    }, extracted),
+    /correction/i,
+  )
+
+  assert.deepEqual(
+    parseReviewerPricingSnapshot({
+      ...extracted,
+      unit: 'cu.m',
+      correctionReason: 'Normalized source unit alias',
+      confirmedAt: '2026-08-08T12:00:00.000Z',
+      confirmedBy: 'user-1',
+    }, extracted),
+    {
+      ...extracted,
+      unit: 'cu.m',
+      correctionReason: 'Normalized source unit alias',
+      confirmedAt: '2026-08-08T12:00:00.000Z',
+      confirmedBy: 'user-1',
+    },
+  )
+})
+
+test('equivalent decimal spellings do not create false reviewer divergence', () => {
+  const extracted = {
+    description: 'C25 concrete',
+    unit: 'm3',
+    quantity: '12.50',
+    materialRate: '100.00',
+    labourRate: '0.0',
+    total: '1250.0',
+  }
+
+  assert.deepEqual(
+    parseReviewerPricingSnapshot({
+      description: 'C25 concrete',
+      unit: 'm3',
+      quantity: '12.5',
+      materialRate: '100',
+      labourRate: '0',
+      total: '1250',
+      confirmedAt: '2026-08-08T12:00:00.000Z',
+      confirmedBy: 'user-1',
+    }, extracted),
+    {
+      description: 'C25 concrete',
+      unit: 'm3',
+      quantity: '12.5',
+      materialRate: '100',
+      labourRate: '0',
+      total: '1250',
+      confirmedAt: '2026-08-08T12:00:00.000Z',
+      confirmedBy: 'user-1',
+    },
+  )
+})
+
+test('extracted pricing preserves empty description and unit strings', () => {
+  assert.deepEqual(
+    parseExtractedPricingSnapshot({
+      description: '',
+      unit: '',
+      quantity: '1',
+      materialRate: '0',
+      labourRate: '0',
+      total: '0',
+    }),
+    {
+      description: '',
+      unit: '',
+      quantity: '1',
+      materialRate: '0',
+      labourRate: '0',
+      total: '0',
+    },
+  )
+})
+
 test('parsePricingNormalization rejects negative conversion factors and incomplete catalog metadata', () => {
   assert.deepEqual(
     parsePricingNormalization({
