@@ -250,7 +250,7 @@ export interface SuggestionVersions {
 
 - [ ] **Step 1: Write failing decimal and closed-contract tests**
 
-Cover canonical decimal strings and exact arithmetic:
+Cover canonical decimal strings and exact addition, multiplication, and division:
 
 ```ts
 test('normalizes quantity and component rates without changing total', () => {
@@ -279,12 +279,13 @@ Expected: FAIL because modules do not exist.
 
 - [ ] **Step 3: Implement exact scale/integer arithmetic**
 
-Implement decimal parsing as sign + integer digits + scale. Reject exponent notation, `NaN`, `Infinity`, empty input, zero divisor, and negative conversion factors. Canonicalize trailing zeros and `-0`.
+Implement decimal parsing as sign + integer digits + scale. Reject exponent notation, `NaN`, `Infinity`, empty input, zero divisor, and negative conversion factors. Canonicalize trailing zeros and `-0`. Addition must align integer scales exactly and never use floating-point arithmetic.
 
 Export:
 
 ```ts
 export function parseDecimalString(value: unknown): DecimalString
+export function addDecimal(left: DecimalString, right: DecimalString): DecimalString
 export function multiplyDecimal(left: DecimalString, right: DecimalString): DecimalString
 export function divideDecimalExact(
   dividend: DecimalString,
