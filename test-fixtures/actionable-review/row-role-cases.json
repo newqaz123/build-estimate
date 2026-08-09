@@ -1,0 +1,1272 @@
+{
+  "documentName": "synthetic-row-role-cases.pdf",
+  "note": "Sanitized synthetic fixtures only. No real quotation content.",
+  "cases": [
+    {
+      "id": "column-header-band",
+      "description": "Column header vocabulary band with Docling columnHeader flags",
+      "sourceRows": [
+        {
+          "id": "sr-col-header",
+          "page": 1,
+          "table": 1,
+          "row": 1,
+          "section": null,
+          "headers": ["Description", "Unit", "Qty", "Rate", "Amount"],
+          "rawCells": [
+            {
+              "column": 0,
+              "rawText": "Description",
+              "lines": ["Description"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 0,
+              "endRowOffset": 1,
+              "startColumnOffset": 0,
+              "endColumnOffset": 1,
+              "columnHeader": true,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 1,
+              "rawText": "Unit",
+              "lines": ["Unit"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 0,
+              "endRowOffset": 1,
+              "startColumnOffset": 1,
+              "endColumnOffset": 2,
+              "columnHeader": true,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 2,
+              "rawText": "Qty",
+              "lines": ["Qty"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 0,
+              "endRowOffset": 1,
+              "startColumnOffset": 2,
+              "endColumnOffset": 3,
+              "columnHeader": true,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 3,
+              "rawText": "Rate",
+              "lines": ["Rate"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 0,
+              "endRowOffset": 1,
+              "startColumnOffset": 3,
+              "endColumnOffset": 4,
+              "columnHeader": true,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 4,
+              "rawText": "Amount",
+              "lines": ["Amount"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 0,
+              "endRowOffset": 1,
+              "startColumnOffset": 4,
+              "endColumnOffset": 5,
+              "columnHeader": true,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            }
+          ],
+          "rawText": "Description | Unit | Qty | Rate | Amount",
+          "classification": "header",
+          "confidence": 1,
+          "warnings": []
+        }
+      ],
+      "expected": [
+        {
+          "sourceRowId": "sr-col-header",
+          "role": "column_header",
+          "deterministic": true,
+          "sourceRef": { "page": 1, "table": 1, "row": 1 }
+        }
+      ]
+    },
+    {
+      "id": "repeated-column-header",
+      "description": "Repeated mid-table header labels matching prior normalized headers",
+      "sourceRows": [
+        {
+          "id": "sr-header-1",
+          "page": 1,
+          "table": 2,
+          "row": 1,
+          "section": "Works",
+          "headers": ["Description", "Unit", "Qty", "Rate", "Amount"],
+          "rawCells": [
+            {
+              "column": 0,
+              "rawText": "Description",
+              "lines": ["Description"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 0,
+              "endRowOffset": 1,
+              "startColumnOffset": 0,
+              "endColumnOffset": 1,
+              "columnHeader": true,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 1,
+              "rawText": "Unit",
+              "lines": ["Unit"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 0,
+              "endRowOffset": 1,
+              "startColumnOffset": 1,
+              "endColumnOffset": 2,
+              "columnHeader": true,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 2,
+              "rawText": "Qty",
+              "lines": ["Qty"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 0,
+              "endRowOffset": 1,
+              "startColumnOffset": 2,
+              "endColumnOffset": 3,
+              "columnHeader": true,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 3,
+              "rawText": "Rate",
+              "lines": ["Rate"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 0,
+              "endRowOffset": 1,
+              "startColumnOffset": 3,
+              "endColumnOffset": 4,
+              "columnHeader": true,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 4,
+              "rawText": "Amount",
+              "lines": ["Amount"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 0,
+              "endRowOffset": 1,
+              "startColumnOffset": 4,
+              "endColumnOffset": 5,
+              "columnHeader": true,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            }
+          ],
+          "rawText": "Description | Unit | Qty | Rate | Amount",
+          "classification": "header",
+          "confidence": 1,
+          "warnings": []
+        },
+        {
+          "id": "sr-item-before-repeat",
+          "page": 1,
+          "table": 2,
+          "row": 2,
+          "section": "Works",
+          "headers": ["Description", "Unit", "Qty", "Rate", "Amount"],
+          "rawCells": [
+            {
+              "column": 0,
+              "rawText": "Supply pump set A",
+              "lines": ["Supply pump set A"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 1,
+              "endRowOffset": 2,
+              "startColumnOffset": 0,
+              "endColumnOffset": 1,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 1,
+              "rawText": "set",
+              "lines": ["set"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 1,
+              "endRowOffset": 2,
+              "startColumnOffset": 1,
+              "endColumnOffset": 2,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 2,
+              "rawText": "2",
+              "lines": ["2"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 1,
+              "endRowOffset": 2,
+              "startColumnOffset": 2,
+              "endColumnOffset": 3,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 3,
+              "rawText": "1000.00",
+              "lines": ["1000.00"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 1,
+              "endRowOffset": 2,
+              "startColumnOffset": 3,
+              "endColumnOffset": 4,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 4,
+              "rawText": "2000.00",
+              "lines": ["2000.00"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 1,
+              "endRowOffset": 2,
+              "startColumnOffset": 4,
+              "endColumnOffset": 5,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            }
+          ],
+          "rawText": "Supply pump set A | set | 2 | 1000.00 | 2000.00",
+          "classification": "item",
+          "confidence": 0.98,
+          "warnings": []
+        },
+        {
+          "id": "sr-header-repeat",
+          "page": 1,
+          "table": 2,
+          "row": 3,
+          "section": "Works",
+          "headers": ["Description", "Unit", "Qty", "Rate", "Amount"],
+          "rawCells": [
+            {
+              "column": 0,
+              "rawText": "Description",
+              "lines": ["Description"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 2,
+              "endRowOffset": 3,
+              "startColumnOffset": 0,
+              "endColumnOffset": 1,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 1,
+              "rawText": "Unit",
+              "lines": ["Unit"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 2,
+              "endRowOffset": 3,
+              "startColumnOffset": 1,
+              "endColumnOffset": 2,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 2,
+              "rawText": "Qty",
+              "lines": ["Qty"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 2,
+              "endRowOffset": 3,
+              "startColumnOffset": 2,
+              "endColumnOffset": 3,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 3,
+              "rawText": "Rate",
+              "lines": ["Rate"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 2,
+              "endRowOffset": 3,
+              "startColumnOffset": 3,
+              "endColumnOffset": 4,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 4,
+              "rawText": "Amount",
+              "lines": ["Amount"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 2,
+              "endRowOffset": 3,
+              "startColumnOffset": 4,
+              "endColumnOffset": 5,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            }
+          ],
+          "rawText": "Description | Unit | Qty | Rate | Amount",
+          "classification": "unknown",
+          "confidence": 0.7,
+          "warnings": []
+        }
+      ],
+      "expected": [
+        {
+          "sourceRowId": "sr-header-1",
+          "role": "column_header",
+          "deterministic": true,
+          "sourceRef": { "page": 1, "table": 2, "row": 1 }
+        },
+        {
+          "sourceRowId": "sr-item-before-repeat",
+          "role": "priced_item",
+          "deterministic": true,
+          "sourceRef": { "page": 1, "table": 2, "row": 2 }
+        },
+        {
+          "sourceRowId": "sr-header-repeat",
+          "role": "column_header",
+          "deterministic": true,
+          "sourceRef": { "page": 1, "table": 2, "row": 3 }
+        }
+      ]
+    },
+    {
+      "id": "section-header",
+      "description": "Section title with rowSection flag and no amounts",
+      "sourceRows": [
+        {
+          "id": "sr-section",
+          "page": 1,
+          "table": 3,
+          "row": 1,
+          "section": "A. Piping Works",
+          "headers": ["Description", "Unit", "Qty", "Rate", "Amount"],
+          "rawCells": [
+            {
+              "column": 0,
+              "rawText": "A. Piping Works",
+              "lines": ["A. Piping Works"],
+              "rowSpan": 1,
+              "columnSpan": 5,
+              "startRowOffset": 0,
+              "endRowOffset": 1,
+              "startColumnOffset": 0,
+              "endColumnOffset": 5,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": true,
+              "carried": false
+            }
+          ],
+          "rawText": "A. Piping Works",
+          "classification": "section",
+          "confidence": 1,
+          "warnings": []
+        }
+      ],
+      "expected": [
+        {
+          "sourceRowId": "sr-section",
+          "role": "section_header",
+          "deterministic": true,
+          "sourceRef": { "page": 1, "table": 3, "row": 1 }
+        }
+      ]
+    },
+    {
+      "id": "continuation-description",
+      "description": "Continuation description tail without pricing cells",
+      "sourceRows": [
+        {
+          "id": "sr-base-item",
+          "page": 2,
+          "table": 1,
+          "row": 4,
+          "section": "Works",
+          "headers": ["Description", "Unit", "Qty", "Rate", "Amount"],
+          "rawCells": [
+            {
+              "column": 0,
+              "rawText": "Install valve assembly",
+              "lines": ["Install valve assembly"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 3,
+              "endRowOffset": 4,
+              "startColumnOffset": 0,
+              "endColumnOffset": 1,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 1,
+              "rawText": "set",
+              "lines": ["set"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 3,
+              "endRowOffset": 4,
+              "startColumnOffset": 1,
+              "endColumnOffset": 2,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 2,
+              "rawText": "1",
+              "lines": ["1"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 3,
+              "endRowOffset": 4,
+              "startColumnOffset": 2,
+              "endColumnOffset": 3,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 3,
+              "rawText": "500.00",
+              "lines": ["500.00"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 3,
+              "endRowOffset": 4,
+              "startColumnOffset": 3,
+              "endColumnOffset": 4,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 4,
+              "rawText": "500.00",
+              "lines": ["500.00"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 3,
+              "endRowOffset": 4,
+              "startColumnOffset": 4,
+              "endColumnOffset": 5,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            }
+          ],
+          "rawText": "Install valve assembly | set | 1 | 500.00 | 500.00",
+          "classification": "item",
+          "confidence": 0.97,
+          "warnings": []
+        },
+        {
+          "id": "sr-continuation",
+          "page": 2,
+          "table": 1,
+          "row": 5,
+          "section": "Works",
+          "headers": ["Description", "Unit", "Qty", "Rate", "Amount"],
+          "rawCells": [
+            {
+              "column": 0,
+              "rawText": "including gaskets and bolts",
+              "lines": ["including gaskets and bolts"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 4,
+              "endRowOffset": 5,
+              "startColumnOffset": 0,
+              "endColumnOffset": 1,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            }
+          ],
+          "rawText": "including gaskets and bolts",
+          "classification": "continuation",
+          "confidence": 0.9,
+          "warnings": []
+        }
+      ],
+      "expected": [
+        {
+          "sourceRowId": "sr-base-item",
+          "role": "priced_item",
+          "deterministic": true,
+          "sourceRef": { "page": 2, "table": 1, "row": 4 }
+        },
+        {
+          "sourceRowId": "sr-continuation",
+          "role": "continuation",
+          "deterministic": true,
+          "sourceRef": { "page": 2, "table": 1, "row": 5 }
+        }
+      ]
+    },
+    {
+      "id": "note-row",
+      "description": "Note/remark row without amount evidence",
+      "sourceRows": [
+        {
+          "id": "sr-note",
+          "page": 2,
+          "table": 1,
+          "row": 10,
+          "section": "Works",
+          "headers": ["Description", "Unit", "Qty", "Rate", "Amount"],
+          "rawCells": [
+            {
+              "column": 0,
+              "rawText": "Note: Prices exclude scaffolding",
+              "lines": ["Note: Prices exclude scaffolding"],
+              "rowSpan": 1,
+              "columnSpan": 5,
+              "startRowOffset": 9,
+              "endRowOffset": 10,
+              "startColumnOffset": 0,
+              "endColumnOffset": 5,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            }
+          ],
+          "rawText": "Note: Prices exclude scaffolding",
+          "classification": "note",
+          "confidence": 0.95,
+          "warnings": []
+        }
+      ],
+      "expected": [
+        {
+          "sourceRowId": "sr-note",
+          "role": "note",
+          "deterministic": true,
+          "sourceRef": { "page": 2, "table": 1, "row": 10 }
+        }
+      ]
+    },
+    {
+      "id": "subtotal-row",
+      "description": "Subtotal label with amount matching nearby priced items",
+      "sourceRows": [
+        {
+          "id": "sr-sub-item-1",
+          "page": 3,
+          "table": 1,
+          "row": 1,
+          "section": "Works",
+          "headers": ["Description", "Unit", "Qty", "Rate", "Amount"],
+          "rawCells": [
+            {
+              "column": 0,
+              "rawText": "Pipe DN50",
+              "lines": ["Pipe DN50"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 0,
+              "endRowOffset": 1,
+              "startColumnOffset": 0,
+              "endColumnOffset": 1,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 1,
+              "rawText": "m",
+              "lines": ["m"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 0,
+              "endRowOffset": 1,
+              "startColumnOffset": 1,
+              "endColumnOffset": 2,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 2,
+              "rawText": "10",
+              "lines": ["10"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 0,
+              "endRowOffset": 1,
+              "startColumnOffset": 2,
+              "endColumnOffset": 3,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 3,
+              "rawText": "100.00",
+              "lines": ["100.00"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 0,
+              "endRowOffset": 1,
+              "startColumnOffset": 3,
+              "endColumnOffset": 4,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 4,
+              "rawText": "1000.00",
+              "lines": ["1000.00"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 0,
+              "endRowOffset": 1,
+              "startColumnOffset": 4,
+              "endColumnOffset": 5,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            }
+          ],
+          "rawText": "Pipe DN50 | m | 10 | 100.00 | 1000.00",
+          "classification": "item",
+          "confidence": 0.99,
+          "warnings": []
+        },
+        {
+          "id": "sr-sub-item-2",
+          "page": 3,
+          "table": 1,
+          "row": 2,
+          "section": "Works",
+          "headers": ["Description", "Unit", "Qty", "Rate", "Amount"],
+          "rawCells": [
+            {
+              "column": 0,
+              "rawText": "Elbow DN50",
+              "lines": ["Elbow DN50"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 1,
+              "endRowOffset": 2,
+              "startColumnOffset": 0,
+              "endColumnOffset": 1,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 1,
+              "rawText": "ea",
+              "lines": ["ea"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 1,
+              "endRowOffset": 2,
+              "startColumnOffset": 1,
+              "endColumnOffset": 2,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 2,
+              "rawText": "5",
+              "lines": ["5"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 1,
+              "endRowOffset": 2,
+              "startColumnOffset": 2,
+              "endColumnOffset": 3,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 3,
+              "rawText": "40.00",
+              "lines": ["40.00"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 1,
+              "endRowOffset": 2,
+              "startColumnOffset": 3,
+              "endColumnOffset": 4,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 4,
+              "rawText": "200.00",
+              "lines": ["200.00"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 1,
+              "endRowOffset": 2,
+              "startColumnOffset": 4,
+              "endColumnOffset": 5,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            }
+          ],
+          "rawText": "Elbow DN50 | ea | 5 | 40.00 | 200.00",
+          "classification": "item",
+          "confidence": 0.99,
+          "warnings": []
+        },
+        {
+          "id": "sr-subtotal",
+          "page": 3,
+          "table": 1,
+          "row": 3,
+          "section": "Works",
+          "headers": ["Description", "Unit", "Qty", "Rate", "Amount"],
+          "rawCells": [
+            {
+              "column": 0,
+              "rawText": "Sub-total",
+              "lines": ["Sub-total"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 2,
+              "endRowOffset": 3,
+              "startColumnOffset": 0,
+              "endColumnOffset": 1,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 4,
+              "rawText": "1200.00",
+              "lines": ["1200.00"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 2,
+              "endRowOffset": 3,
+              "startColumnOffset": 4,
+              "endColumnOffset": 5,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            }
+          ],
+          "rawText": "Sub-total | 1200.00",
+          "classification": "total",
+          "confidence": 0.96,
+          "warnings": []
+        }
+      ],
+      "expected": [
+        {
+          "sourceRowId": "sr-sub-item-1",
+          "role": "priced_item",
+          "deterministic": true,
+          "sourceRef": { "page": 3, "table": 1, "row": 1 }
+        },
+        {
+          "sourceRowId": "sr-sub-item-2",
+          "role": "priced_item",
+          "deterministic": true,
+          "sourceRef": { "page": 3, "table": 1, "row": 2 }
+        },
+        {
+          "sourceRowId": "sr-subtotal",
+          "role": "subtotal",
+          "deterministic": true,
+          "sourceRef": { "page": 3, "table": 1, "row": 3 }
+        }
+      ]
+    },
+    {
+      "id": "grand-total-row",
+      "description": "Grand total summary row",
+      "sourceRows": [
+        {
+          "id": "sr-grand-total",
+          "page": 3,
+          "table": 1,
+          "row": 20,
+          "section": null,
+          "headers": ["Description", "Unit", "Qty", "Rate", "Amount"],
+          "rawCells": [
+            {
+              "column": 0,
+              "rawText": "Grand Total",
+              "lines": ["Grand Total"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 19,
+              "endRowOffset": 20,
+              "startColumnOffset": 0,
+              "endColumnOffset": 1,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 4,
+              "rawText": "15800.00",
+              "lines": ["15800.00"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 19,
+              "endRowOffset": 20,
+              "startColumnOffset": 4,
+              "endColumnOffset": 5,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            }
+          ],
+          "rawText": "Grand Total | 15800.00",
+          "classification": "total",
+          "confidence": 0.99,
+          "warnings": []
+        }
+      ],
+      "expected": [
+        {
+          "sourceRowId": "sr-grand-total",
+          "role": "total",
+          "deterministic": true,
+          "sourceRef": { "page": 3, "table": 1, "row": 20 }
+        }
+      ]
+    },
+    {
+      "id": "vat-tax-row",
+      "description": "VAT/tax summary row",
+      "sourceRows": [
+        {
+          "id": "sr-vat",
+          "page": 3,
+          "table": 1,
+          "row": 18,
+          "section": null,
+          "headers": ["Description", "Unit", "Qty", "Rate", "Amount"],
+          "rawCells": [
+            {
+              "column": 0,
+              "rawText": "VAT 7%",
+              "lines": ["VAT 7%"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 17,
+              "endRowOffset": 18,
+              "startColumnOffset": 0,
+              "endColumnOffset": 1,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 4,
+              "rawText": "1106.00",
+              "lines": ["1106.00"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 17,
+              "endRowOffset": 18,
+              "startColumnOffset": 4,
+              "endColumnOffset": 5,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            }
+          ],
+          "rawText": "VAT 7% | 1106.00",
+          "classification": "total",
+          "confidence": 0.95,
+          "warnings": []
+        }
+      ],
+      "expected": [
+        {
+          "sourceRowId": "sr-vat",
+          "role": "tax",
+          "deterministic": true,
+          "sourceRef": { "page": 3, "table": 1, "row": 18 }
+        }
+      ]
+    },
+    {
+      "id": "amount-in-words",
+      "description": "Amount-in-words legal line",
+      "sourceRows": [
+        {
+          "id": "sr-words",
+          "page": 4,
+          "table": 1,
+          "row": 1,
+          "section": null,
+          "headers": [],
+          "rawCells": [
+            {
+              "column": 0,
+              "rawText": "Baht: Fifteen thousand eight hundred only",
+              "lines": ["Baht: Fifteen thousand eight hundred only"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 0,
+              "endRowOffset": 1,
+              "startColumnOffset": 0,
+              "endColumnOffset": 1,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            }
+          ],
+          "rawText": "Baht: Fifteen thousand eight hundred only",
+          "classification": "note",
+          "confidence": 0.9,
+          "warnings": []
+        }
+      ],
+      "expected": [
+        {
+          "sourceRowId": "sr-words",
+          "role": "amount_in_words",
+          "deterministic": true,
+          "sourceRef": { "page": 4, "table": 1, "row": 1 }
+        }
+      ]
+    },
+    {
+      "id": "blank-noise",
+      "description": "Blank/noise row with only dashes",
+      "sourceRows": [
+        {
+          "id": "sr-blank",
+          "page": 4,
+          "table": 1,
+          "row": 2,
+          "section": null,
+          "headers": ["Description", "Unit", "Qty", "Rate", "Amount"],
+          "rawCells": [
+            {
+              "column": 0,
+              "rawText": "",
+              "lines": [""],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 1,
+              "endRowOffset": 2,
+              "startColumnOffset": 0,
+              "endColumnOffset": 1,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 1,
+              "rawText": "-",
+              "lines": ["-"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 1,
+              "endRowOffset": 2,
+              "startColumnOffset": 1,
+              "endColumnOffset": 2,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 2,
+              "rawText": "—",
+              "lines": ["—"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 1,
+              "endRowOffset": 2,
+              "startColumnOffset": 2,
+              "endColumnOffset": 3,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            }
+          ],
+          "rawText": "",
+          "classification": "unknown",
+          "confidence": 0.4,
+          "warnings": []
+        }
+      ],
+      "expected": [
+        {
+          "sourceRowId": "sr-blank",
+          "role": "blank_or_noise",
+          "deterministic": true,
+          "sourceRef": { "page": 4, "table": 1, "row": 2 }
+        }
+      ]
+    },
+    {
+      "id": "clear-priced-item",
+      "description": "Clear priced item with unit/qty/rate/amount shape",
+      "sourceRows": [
+        {
+          "id": "sr-priced",
+          "page": 5,
+          "table": 1,
+          "row": 3,
+          "section": "Electrical",
+          "headers": ["Description", "Unit", "Qty", "Rate", "Amount"],
+          "rawCells": [
+            {
+              "column": 0,
+              "rawText": "Cable tray 300 mm",
+              "lines": ["Cable tray 300 mm"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 2,
+              "endRowOffset": 3,
+              "startColumnOffset": 0,
+              "endColumnOffset": 1,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 1,
+              "rawText": "m",
+              "lines": ["m"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 2,
+              "endRowOffset": 3,
+              "startColumnOffset": 1,
+              "endColumnOffset": 2,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 2,
+              "rawText": "12",
+              "lines": ["12"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 2,
+              "endRowOffset": 3,
+              "startColumnOffset": 2,
+              "endColumnOffset": 3,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 3,
+              "rawText": "250.00",
+              "lines": ["250.00"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 2,
+              "endRowOffset": 3,
+              "startColumnOffset": 3,
+              "endColumnOffset": 4,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 4,
+              "rawText": "3000.00",
+              "lines": ["3000.00"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 2,
+              "endRowOffset": 3,
+              "startColumnOffset": 4,
+              "endColumnOffset": 5,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            }
+          ],
+          "rawText": "Cable tray 300 mm | m | 12 | 250.00 | 3000.00",
+          "classification": "item",
+          "confidence": 0.99,
+          "warnings": []
+        }
+      ],
+      "expected": [
+        {
+          "sourceRowId": "sr-priced",
+          "role": "priced_item",
+          "deterministic": true,
+          "sourceRef": { "page": 5, "table": 1, "row": 3 }
+        }
+      ]
+    },
+    {
+      "id": "amount-bearing-ambiguous",
+      "description": "Amount-bearing row without proven structural role stays uncertain",
+      "sourceRows": [
+        {
+          "id": "sr-ambiguous-amount",
+          "page": 5,
+          "table": 1,
+          "row": 8,
+          "section": "Electrical",
+          "headers": ["Description", "Unit", "Qty", "Rate", "Amount"],
+          "rawCells": [
+            {
+              "column": 0,
+              "rawText": "Adjustment / contingency",
+              "lines": ["Adjustment / contingency"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 7,
+              "endRowOffset": 8,
+              "startColumnOffset": 0,
+              "endColumnOffset": 1,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            },
+            {
+              "column": 4,
+              "rawText": "450.00",
+              "lines": ["450.00"],
+              "rowSpan": 1,
+              "columnSpan": 1,
+              "startRowOffset": 7,
+              "endRowOffset": 8,
+              "startColumnOffset": 4,
+              "endColumnOffset": 5,
+              "columnHeader": false,
+              "rowHeader": false,
+              "rowSection": false,
+              "carried": false
+            }
+          ],
+          "rawText": "Adjustment / contingency | 450.00",
+          "classification": "unknown",
+          "confidence": 0.55,
+          "warnings": [
+            {
+              "code": "ambiguous_row",
+              "message": "Row has amount evidence without clear item structure"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "sourceRowId": "sr-ambiguous-amount",
+          "role": "uncertain",
+          "deterministic": true,
+          "sourceRef": { "page": 5, "table": 1, "row": 8 }
+        }
+      ]
+    }
+  ]
+}
