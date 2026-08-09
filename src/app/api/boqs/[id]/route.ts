@@ -16,7 +16,24 @@ import {
   ACTIONABLE_REVIEW_SNAPSHOTS_COLLECTION,
   parseActionableReviewSnapshotDocument,
 } from '@/lib/actionable-review-storage'
+import type { ActionableReviewStage } from '@/lib/settings-schema'
+import {
+  WORKSPACE_SETTINGS_ID,
+  fromStoredSettings,
+  type StoredWorkspaceSettings,
+} from '@/lib/settings-storage'
 import { createBoqDetailHandlers, type BoqDetailRouteContext } from './handler'
+
+/**
+ * Actionable-review stages that surface the focused decision review. When the
+ * stage is `off` or `shadow` there is no decision surface to resolve a leftover
+ * snapshot, so actionable blocking must not strand approval.
+ */
+const ACTIONABLE_BLOCKING_STAGES: ReadonlySet<ActionableReviewStage> = new Set([
+  'focused',
+  'add_and_match',
+  'default',
+])
 
 const handlers = createBoqDetailHandlers({
   authenticate: auth,
@@ -30,18 +47,37 @@ const handlers = createBoqDetailHandlers({
     let actionableBlocking: { pending: number; stale: boolean } | null = null
     const runId = current.activeExtractionRunId
     if (runId) {
-      const snapshotsPath = `${extractionRunPath(current.id, runId)}/${ACTIONABLE_REVIEW_SNAPSHOTS_COLLECTION}`
-      const snapshotQuery = await transaction.get(
-        db.collection(snapshotsPath).orderBy('generatedAt', 'desc').limit(1),
-      )
-      if (!snapshotQuery.empty) {
-        const latest = parseActionableReviewSnapshotDocument(snapshotQuery.docs[0]!.data())
-        const pending = latest.actionableItemSuggestions.filter(
-          (suggestion) => suggestion.status === 'pending',
-        ).length
-        const stale =
-          latest.versions.boqSectionsFingerprint !== fingerprintCanonicalSections(current.sections)
-        actionableBlocking = { pending, stale }
+      // Read the workspace actionable-review stage inside the same transaction so
+      // the gate is consistent with the BOQ/snapshot reads. A leftover snapshot
+      // after the stage is turned to `off`/`shadow` must not strand approval.
+      // Default to `off` (do not block) when the settings doc is missing or unreadable.
+      let stage: ActionableReviewStage = 'off'
+      try {
+        const settingsSnap = await transaction.get(
+          db.collection('settings').doc(WORKSPACE_SETTINGS_ID),
+        )
+        stage = fromStoredSettings(
+          settingsSnap.exists
+            ? (settingsSnap.data() as StoredWorkspaceSettings | undefined)
+            : null,
+        ).actionableReview.stage
+      } catch {
+        stage = 'off'
+      }
+      if (ACTIONABLE_BLOCKING_STAGES.has(stage)) {
+        const snapshotsPath = `${extractionRunPath(current.id, runId)}/${ACTIONABLE_REVIEW_SNAPSHOTS_COLLECTION}`
+        const snapshotQuery = await transaction.get(
+          db.collection(snapshotsPath).orderBy('generatedAt', 'desc').limit(1),
+        )
+        if (!snapshotQuery.empty) {
+          const latest = parseActionableReviewSnapshotDocument(snapshotQuery.docs[0]!.data())
+          const pending = latest.actionableItemSuggestions.filter(
+            (suggestion) => suggestion.status === 'pending',
+          ).length
+          const stale =
+            latest.versions.boqSectionsFingerprint !== fingerprintCanonicalSections(current.sections)
+          actionableBlocking = { pending, stale }
+        }
       }
     }
     const decision = prepareUpdate(current, actionableBlocking)

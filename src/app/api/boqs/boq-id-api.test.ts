@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import type { Boq, BoqPricedItem } from '@/lib/boq-schema'
 import { fingerprintCanonicalSections } from '@/lib/boq-extraction-proposals'
+import type { ActionableReviewStage } from '@/lib/settings-schema'
 import { createBoqDetailHandlers } from './[id]/handler'
 import { createSourceHandler } from './[id]/source/handler'
 
@@ -555,9 +556,25 @@ function readActionableBlocking(
   return { pending, stale }
 }
 
+const ACTIONABLE_BLOCKING_STAGES: ReadonlySet<ActionableReviewStage> = new Set([
+  'focused',
+  'add_and_match',
+  'default',
+])
+
+function actionableBlockingForStage(
+  stage: ActionableReviewStage,
+  boq: Boq,
+  snapshots: TestActionableSnapshot[],
+): { pending: number; stale: boolean } | null {
+  if (!ACTIONABLE_BLOCKING_STAGES.has(stage)) return null
+  return readActionableBlocking(boq, snapshots)
+}
+
 function actionableApprovalHarness(
   boq: Boq,
   snapshots: TestActionableSnapshot[],
+  stage: ActionableReviewStage = 'focused',
   onTransaction?: (boq: Boq, snapshots: TestActionableSnapshot[]) => void,
 ) {
   let current = boq
@@ -568,7 +585,7 @@ function actionableApprovalHarness(
     updateBoq: async (_id, prepareUpdate) => {
       attempts += 1
       if (onTransaction) onTransaction(current, snapshots)
-      const decision = prepareUpdate(current, readActionableBlocking(current, snapshots))
+      const decision = prepareUpdate(current, actionableBlockingForStage(stage, current, snapshots))
       if (decision.kind === 'rejected') return decision
       current = { ...current, ...decision.updates } as Boq
       return 'updated'
@@ -632,6 +649,36 @@ test('approval blocks when the latest actionable snapshot is stale against the l
 test('approval succeeds when there is no active extraction run or generated snapshot', async () => {
   const boq = detailBoq()
   const harness = actionableApprovalHarness(boq, [])
+
+  const response = await harness.handlers.PUT(approveRequest(), detailContext)
+
+  assert.equal(response.status, 200)
+  assert.equal(harness.current().status, 'approved')
+})
+
+test('approval succeeds when actionable review stage is off despite a pending snapshot', async () => {
+  const boq = detailBoq({ activeExtractionRunId: 'run-1' })
+  const liveFingerprint = fingerprintCanonicalSections(boq.sections)
+  const harness = actionableApprovalHarness(
+    boq,
+    [makeActionableSnapshot('2026-01-01T00:00:00.000Z', liveFingerprint, [{ status: 'pending' }])],
+    'off',
+  )
+
+  const response = await harness.handlers.PUT(approveRequest(), detailContext)
+
+  assert.equal(response.status, 200)
+  assert.equal(harness.current().status, 'approved')
+})
+
+test('approval succeeds when actionable review stage is shadow despite a pending snapshot', async () => {
+  const boq = detailBoq({ activeExtractionRunId: 'run-1' })
+  const liveFingerprint = fingerprintCanonicalSections(boq.sections)
+  const harness = actionableApprovalHarness(
+    boq,
+    [makeActionableSnapshot('2026-01-01T00:00:00.000Z', liveFingerprint, [{ status: 'pending' }])],
+    'shadow',
+  )
 
   const response = await harness.handlers.PUT(approveRequest(), detailContext)
 
