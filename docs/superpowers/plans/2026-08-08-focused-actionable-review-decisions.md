@@ -23,6 +23,7 @@
 - Hidden rows remain auditable and restorable; hidden evidence is never deleted.
 - Client requests may supply only bounded reviewer-editable BOQ fields through `SourceBackedItemRequest`; they never supply immutable extraction provenance/raw evidence, normalized values, AI advice, or conversion factors.
 - Approved BOQs expose history read-only and reject generation, restore, Add, dismiss, catalog, or conversion mutations.
+- Preserve the top-level **Edit & Verify** / **Compare Catalog** contract: actionable review may render only for `view=review`; `view=compare` must keep the existing read-only comparison surface, receive no mutation callbacks/action column, preserve opaque BOQ IDs and `safeCompareReturnPath`, and behave identically at every rollout stage.
 - `Add & match` remains disabled in this plan; it is enabled only by the next plan after conversion-aware persistence is complete.
 - Before changing React/page code, read completely:
   - `node_modules/next/dist/docs/01-app/01-getting-started/05-server-and-client-components.md`
@@ -161,7 +162,11 @@ Tests must prove:
 - restore is hidden in approved/read-only mode,
 - buttons read **Add & match**, **Add to BOQ**, **Find another**, and **Do not add**,
 - **Add & match** is disabled below `add_and_match`,
-- old `off`/`shadow` stages keep the current `ExtractionReview`,
+- `view=review` with old `off`/`shadow` stages keeps the current `ExtractionReview`,
+- `view=review` with `focused` or later renders the actionable review workspace,
+- `view=compare` at every rollout stage renders the existing read-only **Compare Catalog** surface with no mutation callbacks or action column,
+- switching tabs preserves opaque BOQ IDs, `safeCompareReturnPath`, and existing unsaved-edit structural-mutation guards,
+- inner Stage 2 catalog readiness remains part of **Edit & Verify** and never replaces **Compare Catalog**,
 - no page-level mobile overflow selectors are introduced,
 - exact **Exclude** copy is unchanged elsewhere.
 
@@ -536,6 +541,7 @@ git commit -m "fix: block approval on pending extraction review"
 - [ ] Stage 2 contains only catalog-pending priced items and preserves Exclude.
 - [ ] Approval transaction blocks pending/stale review and does not create catalog entries.
 - [ ] Approved BOQs are read-only.
+- [ ] Actionable review renders only for `view=review`; `view=compare` preserves the existing read-only **Compare Catalog** surface, tab routing, opaque BOQ IDs, `safeCompareReturnPath`, and unsaved-edit guards at every rollout stage.
 - [ ] Desktop and mobile browser QA use at least one sanitized text-layer digital PDF fixture and one sanitized image-only scanned PDF fixture.
 - [ ] `npm run check`, `npx tsc --noEmit`, `graphify update .`, and `git diff --check` pass.
 - [ ] No unrelated working-tree edits were staged.
