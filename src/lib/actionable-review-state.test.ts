@@ -88,6 +88,23 @@ test('normalizeActionableReviewResponse accepts a closed valid snapshot', () => 
   assert.equal(normalized?.actionableItemSuggestions.length, 1)
 })
 
+test('normalizeActionableReviewResponse accepts an audit-only snapshot with no suggestions', () => {
+  const snapshot = validSnapshot()
+  snapshot.actionableItemSuggestions = []
+  snapshot.dismissedEvidence = [
+    {
+      sourceRowId: 'row-9',
+      role: 'note',
+      reasonCodes: ['note_row'],
+      deterministic: true,
+      sourceRef: { page: 1, table: 0, row: 9 },
+    },
+  ]
+  const normalized = normalizeActionableReviewResponse(snapshot)
+  assert.equal(normalized?.actionableItemSuggestions.length, 0)
+  assert.equal(normalized?.dismissedEvidence[0]?.sourceRowId, 'row-9')
+})
+
 test('normalizeActionableReviewResponse rejects non-object payloads', () => {
   for (const value of [null, undefined, 'x', 1, true, [], 'shadow']) {
     assert.equal(normalizeActionableReviewResponse(value), null)
@@ -347,6 +364,15 @@ test('normalizeActionableReviewResponse rejects malformed extracted pricing', ()
   assert.equal(normalizeActionableReviewResponse(snapshot), null)
 })
 
+test('normalizeActionableReviewResponse rejects source-cell rows outside suggestion provenance', () => {
+  const snapshot = validSnapshot()
+  snapshot.actionableItemSuggestions[0]!.sourceCellMapping = {
+    sourceRowIds: ['row-2'],
+    description: [{ sourceRowId: 'row-2', column: 0 }],
+  }
+  assert.equal(normalizeActionableReviewResponse(snapshot), null)
+})
+
 test('normalizeActionableReviewResponse rejects malformed validation summary', () => {
   for (const override of [
     { rawRowCount: '1' },
@@ -455,10 +481,12 @@ test('initialActionableReviewState starts empty and idle', () => {
 })
 
 test('load_started transitions to loading and clears error', () => {
-  const state = actionableReviewReducer(initialActionableReviewState(), {
-    type: 'load_started',
-  })
+  const state = actionableReviewReducer(
+    { ...initialActionableReviewState(), submittingSuggestionId: 'sug-1' },
+    { type: 'load_started' },
+  )
   assert.equal(state.loading, true)
+  assert.equal(state.submittingSuggestionId, null)
   assert.equal(state.error, null)
 })
 
@@ -501,12 +529,28 @@ test('load_failed clears loading and records the error', () => {
 })
 
 test('decision_started records the submitting suggestion and clears error', () => {
-  const state = actionableReviewReducer(initialActionableReviewState(), {
-    type: 'decision_started',
-    suggestionId: 'sug-1',
-  })
+  const state = actionableReviewReducer(
+    { ...initialActionableReviewState(), loading: true },
+    { type: 'decision_started', suggestionId: 'sug-1' },
+  )
+  assert.equal(state.loading, false)
   assert.equal(state.submittingSuggestionId, 'sug-1')
   assert.equal(state.error, null)
+})
+
+test('requests_cancelled clears in-flight request flags without changing selection', () => {
+  const state = actionableReviewReducer(
+    {
+      ...initialActionableReviewState(),
+      loading: true,
+      submittingSuggestionId: 'sug-1',
+      selectedSuggestionId: 'sug-1',
+    },
+    { type: 'requests_cancelled' },
+  )
+  assert.equal(state.loading, false)
+  assert.equal(state.submittingSuggestionId, null)
+  assert.equal(state.selectedSuggestionId, 'sug-1')
 })
 
 test('decision_failed preserves selected suggestion and form state', () => {

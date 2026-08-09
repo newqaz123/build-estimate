@@ -123,6 +123,17 @@ function boundedDecisionRequest(request: ActionableReviewClientDecisionRequest):
   }
 }
 
+function requestFailureMessage(
+  cause: unknown,
+  signal: AbortSignal,
+  cancelledMessage: string,
+  fallback: string,
+): string {
+  if (signal.aborted) return cancelledMessage
+  if (cause instanceof Error) return cause.message
+  return fallback
+}
+
 function createRequestController(
   current: AbortController | null,
   timeoutMs: number,
@@ -257,9 +268,12 @@ export function createActionableReviewClient(
         options.dispatch({
           type: 'decision_failed',
           suggestionId,
-          error: requestState.controller.signal.aborted
-            ? 'Actionable review decision was cancelled.'
-            : cause instanceof Error ? cause.message : 'Actionable review decision failed.',
+          error: requestFailureMessage(
+            cause,
+            requestState.controller.signal,
+            'Actionable review decision was cancelled.',
+            'Actionable review decision failed.',
+          ),
         })
         return false
       } finally {
@@ -300,7 +314,16 @@ export function createActionableReviewClient(
         return true
       } catch (cause) {
         if (!isLatestActionableReviewRequest(generation, requestGeneration)) return false
-        options.dispatch({ type: 'decision_failed', suggestionId, error: requestState.controller.signal.aborted ? 'Actionable review restore was cancelled.' : cause instanceof Error ? cause.message : 'Actionable review restore failed.' })
+        options.dispatch({
+          type: 'decision_failed',
+          suggestionId,
+          error: requestFailureMessage(
+            cause,
+            requestState.controller.signal,
+            'Actionable review restore was cancelled.',
+            'Actionable review restore failed.',
+          ),
+        })
         return false
       } finally {
         clearTimeout(requestState.timeout)
@@ -312,6 +335,7 @@ export function createActionableReviewClient(
       invalidateActionableReviewRequests(generation)
       currentController?.abort()
       currentController = null
+      options.dispatch({ type: 'requests_cancelled' })
     },
   }
 

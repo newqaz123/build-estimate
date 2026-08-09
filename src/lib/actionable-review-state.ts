@@ -32,6 +32,7 @@ export type ActionableReviewAction =
   | { type: 'load_started' }
   | { type: 'load_succeeded'; snapshot: ActionableReview }
   | { type: 'load_failed'; error: string }
+  | { type: 'requests_cancelled' }
   | { type: 'decision_started'; suggestionId: string }
   | { type: 'decision_succeeded'; suggestionId: string }
   | { type: 'decision_failed'; suggestionId: string; error: string }
@@ -171,7 +172,10 @@ const SOURCE_MAPPING_FIELDS = [
   'amount',
 ] as const
 
-function parseSourceCellMapping(value: unknown): SourceCellMapping {
+function parseSourceCellMapping(
+  value: unknown,
+  suggestionSourceRowIds: ReadonlySet<string>,
+): SourceCellMapping {
   if (!isPlainRecord(value)) throw new TypeError('Invalid sourceCellMapping.')
   exactKeys(value, ['sourceRowIds', ...SOURCE_MAPPING_FIELDS], 'sourceCellMapping')
   if (!Array.isArray(value.sourceRowIds) || value.sourceRowIds.length === 0) {
@@ -181,6 +185,9 @@ function parseSourceCellMapping(value: unknown): SourceCellMapping {
     nonEmptyString(rowId, `sourceCellMapping.sourceRowIds[${index}]`, 256),
   )
   if (new Set(sourceRowIds).size !== sourceRowIds.length) throw new TypeError('Duplicate source cell row ids.')
+  if (sourceRowIds.some((rowId) => !suggestionSourceRowIds.has(rowId))) {
+    throw new TypeError('Invalid sourceCellMapping.sourceRowIds.')
+  }
 
   const parsed: SourceCellMapping = { sourceRowIds }
   for (const field of SOURCE_MAPPING_FIELDS) {
@@ -335,7 +342,9 @@ function parseSuggestion(value: unknown, review: { extractionRunId: string; vers
     status: status as ActionableSuggestionStatus,
     versions,
   }
-  if (value.sourceCellMapping !== undefined) parsed.sourceCellMapping = parseSourceCellMapping(value.sourceCellMapping)
+  if (value.sourceCellMapping !== undefined) {
+    parsed.sourceCellMapping = parseSourceCellMapping(value.sourceCellMapping, sourceRowSet)
+  }
   if (aiAdvice !== undefined) parsed.aiAdvice = aiAdvice
   if (normalization !== undefined) parsed.normalization = normalization
   return parsed
@@ -425,7 +434,7 @@ function parseReview(value: unknown): ActionableReview {
   const mode = nonEmptyString(value.mode, 'review.mode', 32)
   if (!REVIEW_MODES.has(mode)) throw new TypeError('Invalid review.mode.')
   const versions = parseSuggestionVersions(value.versions)
-  if (!Array.isArray(value.actionableItemSuggestions) || value.actionableItemSuggestions.length === 0) throw new TypeError('Invalid actionableItemSuggestions.')
+  if (!Array.isArray(value.actionableItemSuggestions)) throw new TypeError('Invalid actionableItemSuggestions.')
   const actionableItemSuggestions = value.actionableItemSuggestions.map((suggestion, index) => parseSuggestion(suggestion, { extractionRunId, versions }, index))
   if (new Set(actionableItemSuggestions.map((suggestion) => suggestion.id)).size !== actionableItemSuggestions.length) throw new TypeError('Duplicate suggestion ids.')
   const dismissedEvidence = Array.isArray(value.dismissedEvidence)
@@ -487,7 +496,7 @@ export function actionableReviewReducer(
 ): ActionableReviewState {
   switch (action.type) {
     case 'load_started':
-      return { ...state, loading: true, error: null }
+      return { ...state, loading: true, submittingSuggestionId: null, error: null }
     case 'load_succeeded': {
       const selectedSuggestionId = action.snapshot.actionableItemSuggestions.some(
         (suggestion) => suggestion.id === state.selectedSuggestionId,
@@ -496,8 +505,10 @@ export function actionableReviewReducer(
     }
     case 'load_failed':
       return { ...state, loading: false, error: action.error }
+    case 'requests_cancelled':
+      return { ...state, loading: false, submittingSuggestionId: null }
     case 'decision_started':
-      return { ...state, submittingSuggestionId: action.suggestionId, error: null }
+      return { ...state, loading: false, submittingSuggestionId: action.suggestionId, error: null }
     case 'decision_succeeded':
       return { ...state, submittingSuggestionId: null, error: null }
     case 'decision_failed':

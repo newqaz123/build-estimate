@@ -288,7 +288,7 @@ test('decide posts a bounded decision body and clears submitting state on succes
     status: 200,
     json: async () => ({ ok: true }),
   }))
-  const ok = await harness.client.decide('boq-1', 'run-1', 'sug-1', {
+  const ok = await harness.client.decide('boq/1', 'run?1', 'sug-1', {
     action: 'dismiss',
     expectedFingerprint: FINGERPRINT,
     note: 'covered',
@@ -299,12 +299,56 @@ test('decide posts a bounded decision body and clears submitting state on succes
   assert.equal(harness.transport.calls[0]!.method, 'POST')
   assert.match(
     harness.transport.calls[0]!.path,
-    /\/actionable-review\/sug-1\/decision$/,
+    /\/api\/boqs\/boq%2F1\/extraction-runs\/run%3F1\/actionable-review\/sug-1\/decision$/,
   )
   assert.deepEqual(harness.transport.calls[0]!.body, {
     action: 'dismiss',
     expectedFingerprint: FINGERPRINT,
     note: 'covered',
+  })
+})
+
+test('decide bounds add-to-BOQ fields and excludes immutable values', async () => {
+  const harness = createHarness({
+    initialState: {
+      ...initialActionableReviewState(),
+      snapshot: validSnapshot(),
+      selectedSuggestionId: 'sug-1',
+    },
+  })
+  harness.transport.setResponse(async () => ({
+    status: 200,
+    json: async () => ({ ok: true }),
+  }))
+  const ok = await harness.client.decide('boq-1', 'run-1', 'sug-1', {
+    action: 'add_pending_catalog',
+    expectedFingerprint: FINGERPRINT,
+    item: {
+      sectionIndex: 2,
+      desc: 'Corrected concrete',
+      unit: 'm3',
+      qty: 4,
+      materialCost: 100,
+      labourCost: 20,
+      sourceRowIds: ['model-row'],
+      extractedPricing: { total: '480' },
+      conversionFactor: '2',
+    } as never,
+    correctionReason: 'x'.repeat(700),
+  })
+  assert.equal(ok, true)
+  assert.deepEqual(harness.transport.calls[0]!.body, {
+    action: 'add_pending_catalog',
+    expectedFingerprint: FINGERPRINT,
+    item: {
+      sectionIndex: 2,
+      desc: 'Corrected concrete',
+      unit: 'm3',
+      qty: 4,
+      materialCost: 100,
+      labourCost: 20,
+    },
+    correctionReason: 'x'.repeat(500),
   })
 })
 
@@ -422,23 +466,56 @@ test('restore is refused in read-only context', async () => {
   assert.equal(harness.transport.calls.length, 0)
 })
 
-test('cancel aborts in-flight snapshot requests', async () => {
+test('cancel aborts in-flight snapshot requests and clears loading state', async () => {
   const harness = createHarness()
   let abortedSignal: AbortSignal | undefined
+  let resolveResponse!: (response: ActionableReviewTransportResponse) => void
+  const response = new Promise<ActionableReviewTransportResponse>((resolve) => {
+    resolveResponse = resolve
+  })
   harness.transport.setResponse(async (req) => {
     abortedSignal = req.signal
-    return { status: 200, json: async () => ({ snapshot: validSnapshot() }) }
+    return response
   })
   const loadPromise = harness.client.load('boq-1', 'run-1', FINGERPRINT)
   harness.client.cancel()
+  resolveResponse({ status: 200, json: async () => ({ snapshot: validSnapshot() }) })
   await loadPromise
   assert.ok(abortedSignal, 'transport received an abort signal')
+  assert.equal(abortedSignal?.aborted, true)
+  assert.equal(harness.state().loading, false)
+  assert.equal(harness.state().submittingSuggestionId, null)
 })
 
-test('client reuses the shared normalizer for response snapshots', () => {
-  // The client must consume normalizeActionableReviewResponse; a snapshot that
-  // fails closed-schema validation must never reach state.
-  const malformed = validSnapshot()
-  malformed.actionableItemSuggestions = []
-  assert.equal(normalizeActionableReviewResponse(malformed), null)
+test('cancel clears an in-flight decision without applying its stale result', async () => {
+  const harness = createHarness({
+    initialState: {
+      ...initialActionableReviewState(),
+      snapshot: validSnapshot(),
+      selectedSuggestionId: 'sug-1',
+    },
+  })
+  let resolveResponse!: (response: ActionableReviewTransportResponse) => void
+  const response = new Promise<ActionableReviewTransportResponse>((resolve) => {
+    resolveResponse = resolve
+  })
+  harness.transport.setResponse(async () => response)
+  const decisionPromise = harness.client.decide('boq-1', 'run-1', 'sug-1', {
+    action: 'dismiss',
+    expectedFingerprint: FINGERPRINT,
+  })
+  await Promise.resolve()
+  assert.equal(harness.state().submittingSuggestionId, 'sug-1')
+  harness.client.cancel()
+  resolveResponse({ status: 200, json: async () => ({ ok: true }) })
+  assert.equal(await decisionPromise, false)
+  assert.equal(harness.state().submittingSuggestionId, null)
+  assert.equal(harness.state().selectedSuggestionId, 'sug-1')
+  assert.equal(harness.state().error, null)
+})
+
+test('client reuses the shared normalizer for empty audit-only snapshots', () => {
+  const snapshot = validSnapshot()
+  snapshot.actionableItemSuggestions = []
+  assert.ok(normalizeActionableReviewResponse(snapshot))
 })
