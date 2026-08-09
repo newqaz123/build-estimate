@@ -156,3 +156,14 @@ test("shell keeps projection logic outside React and uses capability callbacks",
   assert.doesNotMatch(source, /reconcileRepresentedRows\(/);
   assert.match(source, /onAddAndMatch\?:|onDoNotAdd\?:|callbacks/);
 });
+
+test("shell wires Add to BOQ, Do not add, and restore through capability callbacks only", () => {
+  const source = readFileSync(componentUrl, "utf8");
+  assert.match(source, /onAddToBoq/);
+  assert.match(source, /onDoNotAdd/);
+  assert.match(source, /onRestore/);
+  // Persistence stays in the client/store — the shell must not POST decisions.
+  assert.doesNotMatch(source, /fetch\(/);
+  assert.doesNotMatch(source, /createActionableReviewClient/);
+  assert.doesNotMatch(source, /decideActionableSuggestion/);
+});

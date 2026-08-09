@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   createActionableReviewClient,
+  nextPendingSuggestionId,
   type ActionableReviewClient,
   type ActionableReviewTransport,
   type ActionableReviewTransportRequest,
@@ -518,4 +519,96 @@ test('client reuses the shared normalizer for empty audit-only snapshots', () =>
   const snapshot = validSnapshot()
   snapshot.actionableItemSuggestions = []
   assert.ok(normalizeActionableReviewResponse(snapshot))
+})
+
+
+test('successful decide applies server snapshot and advances to the next pending suggestion', async () => {
+  const secondId = 'sug-2'
+  const initial = validSnapshot()
+  initial.actionableItemSuggestions.push({
+    ...initial.actionableItemSuggestions[0]!,
+    id: secondId,
+    sourceRowIds: ['row-2'],
+  })
+  const after = structuredClone(initial)
+  after.actionableItemSuggestions[0]!.status = 'dismissed'
+  after.validationSummary = {
+    ...after.validationSummary,
+    actionableCount: 1,
+    dismissedCount: 1,
+  }
+
+  const harness = createHarness({
+    initialState: {
+      ...initialActionableReviewState(),
+      snapshot: initial,
+      selectedSuggestionId: 'sug-1',
+    },
+  })
+  harness.transport.setResponse(async () => ({
+    status: 200,
+    json: async () => ({
+      status: 'dismissed',
+      snapshot: after,
+    }),
+  }))
+  const ok = await harness.client.decide('boq-1', 'run-1', 'sug-1', {
+    action: 'dismiss',
+    expectedFingerprint: FINGERPRINT,
+  })
+  assert.equal(ok, true)
+  assert.equal(harness.state().submittingSuggestionId, null)
+  assert.equal(harness.state().selectedSuggestionId, secondId)
+  assert.equal(harness.state().snapshot?.actionableItemSuggestions[0]!.status, 'dismissed')
+})
+
+test('failed decide preserves selection, snapshot, and does not advance', async () => {
+  const before = {
+    ...initialActionableReviewState(),
+    snapshot: validSnapshot(),
+    selectedSuggestionId: 'sug-1',
+  }
+  const harness = createHarness({ initialState: before })
+  harness.transport.setResponse(async () => ({
+    status: 409,
+    json: async () => ({ error: 'stale' }),
+  }))
+  const ok = await harness.client.decide('boq-1', 'run-1', 'sug-1', {
+    action: 'dismiss',
+    expectedFingerprint: FINGERPRINT,
+  })
+  assert.equal(ok, false)
+  assert.equal(harness.state().selectedSuggestionId, 'sug-1')
+  assert.equal(harness.state().snapshot, before.snapshot)
+  assert.ok(harness.state().error)
+})
+
+test('nextPendingSuggestionId walks forward then wraps to the first pending', () => {
+  const snapshot = validSnapshot()
+  snapshot.actionableItemSuggestions = [
+    {
+      ...snapshot.actionableItemSuggestions[0]!,
+      id: 'a',
+      status: 'dismissed',
+    },
+    {
+      ...snapshot.actionableItemSuggestions[0]!,
+      id: 'b',
+      status: 'pending',
+      sourceRowIds: ['row-b'],
+    },
+    {
+      ...snapshot.actionableItemSuggestions[0]!,
+      id: 'c',
+      status: 'pending',
+      sourceRowIds: ['row-c'],
+    },
+  ]
+  assert.equal(nextPendingSuggestionId(snapshot, 'a'), 'b')
+  assert.equal(nextPendingSuggestionId(snapshot, 'b'), 'c')
+  assert.equal(nextPendingSuggestionId(snapshot, 'c'), 'b')
+  snapshot.actionableItemSuggestions.forEach((s) => {
+    s.status = 'dismissed'
+  })
+  assert.equal(nextPendingSuggestionId(snapshot, 'a'), null)
 })

@@ -5,6 +5,11 @@ import type { BoqExtractionRun } from "./boq-extraction-run";
 import type { BoqSourceRowV3 } from "./boq-extraction-schema";
 import {
 	acceptExtractionProposal,
+	buildActionablePricingFieldDeltas,
+	buildActionableSuggestionDecisionAudit,
+	buildReviewerPricingFromSourceBackedItem,
+	decimalStringFromFiniteNumber,
+	isIdempotentActionableDecision,
 	normalizeSourceRowAuditDecisions,
 	proposalMatchesAudit,
 	rejectExtractionProposal,
@@ -804,3 +809,193 @@ test("proposalMatchesAudit includes provider source-row suggestions and tolerate
 	});
 	assert.equal(proposalMatchesAudit(altered, auditWithSuggestions), false);
 });
+
+const extractedPricing = {
+	description: "Ready mix concrete",
+	unit: "m3",
+	quantity: "2",
+	materialRate: "50",
+	labourRate: "0",
+	total: "100",
+};
+
+test("buildReviewerPricingFromSourceBackedItem preserves extracted snapshot and authors server confirmation",
+	() => {
+		const reviewer = buildReviewerPricingFromSourceBackedItem({
+			item: {
+				sectionIndex: 0,
+				desc: "Ready mix concrete",
+				unit: "m3",
+				qty: 2,
+				materialCost: 50,
+				labourCost: 0,
+			},
+			extracted: extractedPricing,
+			actorId: "user-9",
+			now: "2026-08-08T15:00:00.000Z",
+		});
+		assert.equal(reviewer.confirmedBy, "user-9");
+		assert.equal(reviewer.confirmedAt, "2026-08-08T15:00:00.000Z");
+		assert.equal(reviewer.quantity, "2");
+		assert.equal(reviewer.materialRate, "50");
+		assert.equal(reviewer.labourRate, "0");
+		assert.equal(reviewer.total, "100");
+		assert.equal(reviewer.correctionReason, undefined);
+		assert.deepEqual(extractedPricing, {
+			description: "Ready mix concrete",
+			unit: "m3",
+			quantity: "2",
+			materialRate: "50",
+			labourRate: "0",
+			total: "100",
+		});
+	},
+);
+
+test("buildReviewerPricingFromSourceBackedItem requires correctionReason on numeric divergence",
+	() => {
+		assert.throws(
+			() =>
+				buildReviewerPricingFromSourceBackedItem({
+					item: {
+						sectionIndex: 0,
+						desc: "Ready mix concrete",
+						unit: "m3",
+						qty: 3,
+						materialCost: 50,
+						labourCost: 0,
+					},
+					extracted: extractedPricing,
+					actorId: "user-9",
+					now: "2026-08-08T15:00:00.000Z",
+				}),
+			/correction/i,
+		);
+		const reviewer = buildReviewerPricingFromSourceBackedItem({
+			item: {
+				sectionIndex: 0,
+				desc: "Ready mix concrete",
+				unit: "m3",
+				qty: 3,
+				materialCost: 50,
+				labourCost: 0,
+			},
+			extracted: extractedPricing,
+			actorId: "user-9",
+			now: "2026-08-08T15:00:00.000Z",
+			correctionReason: "Takeoff adjustment",
+		});
+		assert.equal(reviewer.quantity, "3");
+		assert.equal(reviewer.total, "150");
+		assert.equal(reviewer.correctionReason, "Takeoff adjustment");
+		const deltas = buildActionablePricingFieldDeltas(
+			extractedPricing,
+			reviewer,
+		);
+		assert.deepEqual(
+			deltas.map((d) => d.field).sort(),
+			["quantity", "total"],
+		);
+	},
+);
+
+test("buildActionableSuggestionDecisionAudit keeps AI advice separate from human decision",
+	() => {
+		const audit = buildActionableSuggestionDecisionAudit({
+			suggestionId: "sha256:" + "b".repeat(64),
+			extractionRunId: "run-1",
+			humanDecision: "dismiss",
+			suggestionStatus: "dismissed",
+			actorId: "user-1",
+			now: "2026-08-08T16:00:00.000Z",
+			sourceRowIds: ["row-1"],
+			sourceRefs: [
+				{ sourceRowId: "row-1", page: 1, table: 0, row: 2 },
+			],
+			extractedItem: extractedPricing,
+			aiAdvice: {
+				sourceRowId: "row-1",
+				decision: "match",
+				confidence: 0.9,
+				reason: "looks like a match",
+			},
+			note: "covered elsewhere",
+		});
+		assert.equal(audit.humanDecision, "dismiss");
+		assert.equal(audit.suggestionStatus, "dismissed");
+		assert.equal(audit.aiAdvice?.decision, "match");
+		assert.notEqual(audit.humanDecision, audit.aiAdvice?.decision);
+		assert.deepEqual(audit.extractedItem, extractedPricing);
+		assert.equal(audit.note, "covered elsewhere");
+		assert.equal(audit.itemId, undefined);
+		assert.equal(audit.reviewerPricing, undefined);
+	},
+);
+
+test("add decision audit records distinct reviewer pricing, deltas, and catalog-pending item id",
+	() => {
+		const reviewer = buildReviewerPricingFromSourceBackedItem({
+			item: {
+				sectionIndex: 0,
+				desc: "Concrete cleaned",
+				unit: "m3",
+				qty: 2,
+				materialCost: 55,
+				labourCost: 5,
+			},
+			extracted: extractedPricing,
+			actorId: "user-2",
+			now: "2026-08-08T17:00:00.000Z",
+			correctionReason: "Rate split correction",
+		});
+		const deltas = buildActionablePricingFieldDeltas(
+			extractedPricing,
+			reviewer,
+		);
+		const audit = buildActionableSuggestionDecisionAudit({
+			suggestionId: "sha256:" + "c".repeat(64),
+			extractionRunId: "run-1",
+			humanDecision: "add_pending_catalog",
+			suggestionStatus: "added_pending_catalog",
+			actorId: "user-2",
+			now: "2026-08-08T17:00:00.000Z",
+			sourceRowIds: ["row-9"],
+			sourceRefs: [
+				{ sourceRowId: "row-9", page: 2, table: 1, row: 4 },
+			],
+			extractedItem: extractedPricing,
+			reviewerPricing: reviewer,
+			fieldDeltas: deltas,
+			correctionReason: "Rate split correction",
+			itemId: "user-ar-item-1",
+			beforeSectionsFingerprint: "sha256:before",
+			afterSectionsFingerprint: "sha256:after",
+		});
+		assert.equal(audit.humanDecision, "add_pending_catalog");
+		assert.equal(audit.itemId, "user-ar-item-1");
+		assert.ok(audit.reviewerPricing);
+		assert.notDeepEqual(audit.extractedItem, {
+			description: audit.reviewerPricing!.description,
+			unit: audit.reviewerPricing!.unit,
+			quantity: audit.reviewerPricing!.quantity,
+			materialRate: audit.reviewerPricing!.materialRate,
+			labourRate: audit.reviewerPricing!.labourRate,
+			total: audit.reviewerPricing!.total,
+		});
+		assert.ok(audit.fieldDeltas && audit.fieldDeltas.length > 0);
+		assert.equal(audit.correctionReason, "Rate split correction");
+		assert.equal(
+			isIdempotentActionableDecision(audit, "add_pending_catalog"),
+			true,
+		);
+		assert.equal(isIdempotentActionableDecision(audit, "dismiss"), false);
+	},
+);
+
+test("decimalStringFromFiniteNumber rejects unsafe numeric forms",
+	() => {
+		assert.equal(decimalStringFromFiniteNumber(12.5), "12.5");
+		assert.equal(decimalStringFromFiniteNumber(0), "0");
+		assert.throws(() => decimalStringFromFiniteNumber(Number.NaN), /finite/i);
+	},
+);

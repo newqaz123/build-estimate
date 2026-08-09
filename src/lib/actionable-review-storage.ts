@@ -52,6 +52,13 @@ export type ActionableReviewBundleWriteResult =
  * Document adapter. Bundle writes are the only create path used by the route.
  * Implementations must never leave snapshot without metrics or vice versa.
  */
+export type ActionableSuggestionDecisionStatus =
+  | 'pending'
+  | 'added_matched'
+  | 'added_pending_catalog'
+  | 'dismissed'
+  | 'stale'
+
 export interface ActionableReviewDocumentStore {
   get(path: string): Promise<{ path: string; data: Record<string, unknown> } | null>
   /**
@@ -825,7 +832,7 @@ export function parseActionableReviewSnapshotDocument(value: unknown): Actionabl
   }
 }
 
-function toSnapshotDocument(review: ActionableReview): Record<string, unknown> {
+export function toSnapshotDocument(review: ActionableReview): Record<string, unknown> {
   const parsed = parseActionableReviewSnapshotDocument(review)
   return structuredClone(parsed) as unknown as Record<string, unknown>
 }
@@ -904,7 +911,98 @@ export function createActionableReviewStorage(
       if (!snap) return null
       return parseActionableReviewMetricsDocument(snap.data)
     },
+
+    /**
+     * Pure in-memory status mutation for a bound snapshot document.
+     * Does not re-fingerprint or regenerate the snapshot id.
+     * Callers persist the result inside their ambient transaction.
+     */
+    applySuggestionStatus(
+      snapshot: ActionableReview,
+      suggestionId: string,
+      status: ActionableSuggestionDecisionStatus,
+    ): ActionableReview {
+      return applySuggestionStatusToReview(snapshot, suggestionId, status)
+    },
+
+    /** Serialize a validated snapshot for an in-transaction update write. */
+    toSnapshotWriteData(snapshot: ActionableReview): Record<string, unknown> {
+      return toSnapshotDocument(snapshot)
+    },
   }
+}
+
+/**
+ * Apply a terminal/restored suggestion status without regenerating the fingerprint.
+ * Used by decision transactions so status survives without re-projection.
+ */
+export function applySuggestionStatusToReview(
+  snapshot: ActionableReview,
+  suggestionId: string,
+  status: ActionableSuggestionDecisionStatus,
+): ActionableReview {
+  const index = snapshot.actionableItemSuggestions.findIndex(
+    (entry) => entry.id === suggestionId,
+  )
+  if (index < 0) {
+    throw new ActionableReviewStorageError(
+      'Actionable suggestion not found in snapshot.',
+      404,
+    )
+  }
+  const previous = snapshot.actionableItemSuggestions[index]!
+  if (previous.status === status) {
+    return structuredClone(snapshot)
+  }
+  const suggestions = snapshot.actionableItemSuggestions.map((entry, i) =>
+    i === index ? { ...entry, status } : entry,
+  )
+  const validationSummary = adjustValidationSummaryForStatusTransition(
+    snapshot.validationSummary,
+    previous.status,
+    status,
+  )
+  return {
+    ...structuredClone(snapshot),
+    actionableItemSuggestions: structuredClone(suggestions),
+    validationSummary,
+  }
+}
+
+function adjustValidationSummaryForStatusTransition(
+  summary: ActionableReviewValidationSummary,
+  from: ActionableItemSuggestion['status'],
+  to: ActionableSuggestionDecisionStatus,
+): ActionableReviewValidationSummary {
+  let actionableCount = summary.actionableCount
+  let dismissedCount = summary.dismissedCount
+  let locallyPreparedCatalogCount = summary.locallyPreparedCatalogCount
+
+  if (from === 'pending') actionableCount = Math.max(0, actionableCount - 1)
+  if (from === 'dismissed') dismissedCount = Math.max(0, dismissedCount - 1)
+  if (from === 'added_pending_catalog') {
+    locallyPreparedCatalogCount = Math.max(0, locallyPreparedCatalogCount - 1)
+  }
+
+  if (to === 'pending') actionableCount += 1
+  if (to === 'dismissed') dismissedCount += 1
+  if (to === 'added_pending_catalog') locallyPreparedCatalogCount += 1
+
+  return {
+    ...summary,
+    actionableCount,
+    dismissedCount,
+    locallyPreparedCatalogCount,
+  }
+}
+
+/** Path for append-only human decision audits (not regenerated fingerprints). */
+export function actionableSuggestionDecisionPath(
+  boqId: string,
+  runId: string,
+  suggestionId: string,
+): string {
+  return `${extractionRunPath(boqId, runId)}/actionableSuggestionDecisions/${suggestionId}`
 }
 
 export type ActionableReviewStorage = ReturnType<typeof createActionableReviewStorage>

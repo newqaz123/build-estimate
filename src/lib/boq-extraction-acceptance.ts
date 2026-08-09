@@ -24,6 +24,20 @@ import {
 	type SourceRowDispositionSuggestion,
 	type ValidatedProposal,
 } from "./boq-extraction-proposals";
+import type { ActionableReviewAiAdvice } from "./actionable-review-ai";
+import {
+	parseExtractedPricingSnapshot,
+	parseReviewerPricingSnapshot,
+	type ExtractedPricingSnapshot,
+	type ReviewerPricingSnapshot,
+} from "./actionable-review-types";
+import {
+	addDecimal,
+	multiplyDecimal,
+	parseDecimalString,
+	type DecimalString,
+} from "./decimal-string";
+import type { SourceBackedItemRequest } from "./boq-user-entry";
 
 export type ExtractionProposalAuditStatus = "accepted" | "rejected" | "skipped";
 
@@ -771,4 +785,215 @@ export function undoExtractionProposal(input: {
 	} catch {
 		return { kind: "conflict" };
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Actionable review decisions (human disposition, separate from AI advice)
+// ---------------------------------------------------------------------------
+
+export type ActionableHumanDecision =
+	| "add_pending_catalog"
+	| "dismiss"
+	| "restore";
+
+export type ActionablePricingField =
+	| "description"
+	| "unit"
+	| "quantity"
+	| "materialRate"
+	| "labourRate"
+	| "total";
+
+export interface ActionablePricingFieldDelta {
+	field: ActionablePricingField;
+	before: string;
+	after: string;
+}
+
+/**
+ * Append-only human decision audit for an actionable suggestion.
+ * AI advice is copied separately and never treated as the human decision.
+ * Extracted pricing is frozen; reviewer pricing is distinct when present.
+ */
+export interface ActionableSuggestionDecisionAudit {
+	auditId: string;
+	suggestionId: string;
+	extractionRunId: string;
+	/** Human decision only — never AI advice. */
+	humanDecision: ActionableHumanDecision;
+	/** Terminal suggestion status after this decision. */
+	suggestionStatus: "added_pending_catalog" | "dismissed" | "pending";
+	actorId: string;
+	timestamp: string;
+	sourceRowIds: string[];
+	sourceRefs: Array<{
+		sourceRowId: string;
+		page: number;
+		table: number;
+		row: number;
+	}>;
+	/** Immutable extracted pricing preserved byte-stable at decision time. */
+	extractedItem: ExtractedPricingSnapshot;
+	/** Optional AI advice snapshot; never used as the human decision. */
+	aiAdvice?: ActionableReviewAiAdvice;
+	/** Server-authored reviewer-confirmed pricing (add only). */
+	reviewerPricing?: ReviewerPricingSnapshot;
+	/** Field-level extracted → reviewer deltas (add only when values differ). */
+	fieldDeltas?: ActionablePricingFieldDelta[];
+	correctionReason?: string;
+	note?: string;
+	itemId?: string;
+	beforeSectionsFingerprint?: string;
+	afterSectionsFingerprint?: string;
+	resultBoq?: Boq;
+	sequence?: number;
+}
+
+const PRICING_DELTA_FIELDS: readonly ActionablePricingField[] = [
+	"description",
+	"unit",
+	"quantity",
+	"materialRate",
+	"labourRate",
+	"total",
+];
+
+/** Convert a finite number into a canonical decimal string. */
+export function decimalStringFromFiniteNumber(value: number): DecimalString {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		throw new TypeError("Value must be a finite number.");
+	}
+	if (Object.is(value, -0) || value === 0) return "0";
+	const text = String(value);
+	if (/e/i.test(text)) {
+		throw new TypeError("Scientific notation is not a safe decimal source.");
+	}
+	return parseDecimalString(text);
+}
+
+/**
+ * Build server-authored reviewer pricing from the closed SourceBackedItemRequest.
+ * Rates come from material/labour components; total is qty × (material + labour).
+ * confirmedAt/confirmedBy are always server-supplied.
+ */
+export function buildReviewerPricingFromSourceBackedItem(input: {
+	item: SourceBackedItemRequest;
+	extracted: ExtractedPricingSnapshot;
+	actorId: string;
+	now: string;
+	correctionReason?: string;
+}): ReviewerPricingSnapshot {
+	const quantity = decimalStringFromFiniteNumber(input.item.qty);
+	const materialRate = decimalStringFromFiniteNumber(input.item.materialCost);
+	const labourRate = decimalStringFromFiniteNumber(input.item.labourCost);
+	const total = multiplyDecimal(
+		quantity,
+		addDecimal(materialRate, labourRate),
+	);
+	const candidate = {
+		description: input.item.desc,
+		unit: input.item.unit,
+		quantity,
+		materialRate,
+		labourRate,
+		total,
+		confirmedAt: input.now,
+		confirmedBy: input.actorId,
+		...(input.correctionReason
+			? { correctionReason: input.correctionReason }
+			: {}),
+	};
+	return parseReviewerPricingSnapshot(candidate, input.extracted);
+}
+
+/** Field-level extracted → reviewer deltas; empty when identical. */
+export function buildActionablePricingFieldDeltas(
+	extracted: ExtractedPricingSnapshot,
+	reviewer: ReviewerPricingSnapshot,
+): ActionablePricingFieldDelta[] {
+	const frozen = parseExtractedPricingSnapshot(extracted);
+	const deltas: ActionablePricingFieldDelta[] = [];
+	for (const field of PRICING_DELTA_FIELDS) {
+		const before = frozen[field];
+		const after = reviewer[field];
+		if (before !== after) {
+			deltas.push({ field, before, after });
+		}
+	}
+	return deltas;
+}
+
+export function buildActionableSuggestionDecisionAudit(input: {
+	suggestionId: string;
+	extractionRunId: string;
+	humanDecision: ActionableHumanDecision;
+	suggestionStatus: ActionableSuggestionDecisionAudit["suggestionStatus"];
+	actorId: string;
+	now: string;
+	sourceRowIds: readonly string[];
+	sourceRefs: ActionableSuggestionDecisionAudit["sourceRefs"];
+	extractedItem: ExtractedPricingSnapshot;
+	aiAdvice?: ActionableReviewAiAdvice;
+	reviewerPricing?: ReviewerPricingSnapshot;
+	fieldDeltas?: readonly ActionablePricingFieldDelta[];
+	correctionReason?: string;
+	note?: string;
+	itemId?: string;
+	beforeSectionsFingerprint?: string;
+	afterSectionsFingerprint?: string;
+	resultBoq?: Boq;
+	sequence?: number;
+}): ActionableSuggestionDecisionAudit {
+	const extractedItem = parseExtractedPricingSnapshot(input.extractedItem);
+	const audit: ActionableSuggestionDecisionAudit = {
+		auditId: `${input.suggestionId}:${input.humanDecision}:${input.now}`,
+		suggestionId: input.suggestionId,
+		extractionRunId: input.extractionRunId,
+		humanDecision: input.humanDecision,
+		suggestionStatus: input.suggestionStatus,
+		actorId: input.actorId,
+		timestamp: input.now,
+		sourceRowIds: [...input.sourceRowIds],
+		sourceRefs: structuredClone(input.sourceRefs),
+		extractedItem: structuredClone(extractedItem),
+	};
+	if (input.aiAdvice !== undefined) {
+		audit.aiAdvice = structuredClone(input.aiAdvice);
+	}
+	if (input.reviewerPricing !== undefined) {
+		audit.reviewerPricing = structuredClone(input.reviewerPricing);
+	}
+	if (input.fieldDeltas && input.fieldDeltas.length > 0) {
+		audit.fieldDeltas = structuredClone([...input.fieldDeltas]);
+	}
+	if (input.correctionReason !== undefined) {
+		audit.correctionReason = input.correctionReason;
+	}
+	if (input.note !== undefined) {
+		audit.note = input.note;
+	}
+	if (input.itemId !== undefined) {
+		audit.itemId = input.itemId;
+	}
+	if (input.beforeSectionsFingerprint !== undefined) {
+		audit.beforeSectionsFingerprint = input.beforeSectionsFingerprint;
+	}
+	if (input.afterSectionsFingerprint !== undefined) {
+		audit.afterSectionsFingerprint = input.afterSectionsFingerprint;
+	}
+	if (input.resultBoq !== undefined) {
+		audit.resultBoq = structuredClone(input.resultBoq);
+	}
+	if (input.sequence !== undefined) {
+		audit.sequence = input.sequence;
+	}
+	return audit;
+}
+
+/** True when an existing terminal audit matches a retry of the same human decision. */
+export function isIdempotentActionableDecision(
+	existing: ActionableSuggestionDecisionAudit,
+	humanDecision: ActionableHumanDecision,
+): boolean {
+	return existing.humanDecision === humanDecision;
 }

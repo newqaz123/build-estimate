@@ -25,10 +25,17 @@ import type { Boq, BoqPricedItem, BoqSection } from "./boq-schema";
 import type { BoqSourceRowV3 } from "./boq-extraction-schema";
 import {
 	fingerprintCanonicalItem,
+	fingerprintCanonicalSections,
 	type ExtractionProposal,
 	type ValidatedProposal,
 } from "./boq-extraction-proposals";
 import type { ExtractionProposalAudit } from "./boq-extraction-acceptance";
+import type { ActionableReview } from "./actionable-review-projection";
+import {
+	actionableReviewSnapshotPath,
+	actionableSuggestionDecisionPath,
+	toSnapshotDocument,
+} from "./actionable-review-storage";
 
 type RecordData = Record<string, unknown>;
 
@@ -3352,3 +3359,524 @@ test("reviewRun summary omits unexpected stored fields that could leak provider 
 	assert.equal(summary?.sourceDataBlob, undefined);
 	assert.equal(summary?.internalDebugTrace, undefined);
 });
+
+// ---------------------------------------------------------------------------
+// Actionable review decisions
+// ---------------------------------------------------------------------------
+
+const SUGGESTION_ID = "sha256:" + "b".repeat(64);
+const FINGERPRINT = "sha256:" + "a".repeat(64);
+
+function actionableHarness(
+	clock: () => Date = () => new Date("2026-08-08T12:00:00.000Z"),
+) {
+	const fixture = harness(clock);
+	const boq = fixture.db.docs.get("boqs/boq-1")! as unknown as Boq;
+	const firstRow = fixture.sourceRows[0]!;
+	const boqFp = fingerprintCanonicalSections(boq.sections);
+	const versions = {
+		extractionFingerprint: "sha256:extract",
+		boqSectionsFingerprint: boqFp,
+		catalogFingerprint: "sha256:catalog",
+		conversionFingerprint: "sha256:conversion",
+		promptVersion: "actionable-review-ai-v1",
+	};
+	const snapshot: ActionableReview = {
+		id: FINGERPRINT,
+		extractionRunId: "run-1",
+		mode: "focused",
+		generatedAt: "2026-08-08T12:00:00.000Z",
+		versions,
+		actionableItemSuggestions: [
+			{
+				id: SUGGESTION_ID,
+				extractionRunId: "run-1",
+				sourceRowIds: [firstRow.id],
+				sourceRefs: [
+					{ page: firstRow.page, table: firstRow.table, row: firstRow.row },
+				],
+				rowRole: "priced_item",
+				deterministicReasons: ["structural_item"],
+				suggestedSectionIndex: 0,
+				extractedItem: {
+					description: "Ready mix concrete",
+					unit: "m3",
+					quantity: "2",
+					materialRate: "50",
+					labourRate: "0",
+					total: "100",
+				},
+				catalogCandidates: [],
+				aiAdvice: {
+					sourceRowId: firstRow.id,
+					decision: "uncertain",
+					confidence: 0.4,
+					reason: "no safe match",
+				},
+				status: "pending",
+				versions,
+			},
+			{
+				id: "sha256:" + "c".repeat(64),
+				extractionRunId: "run-1",
+				sourceRowIds: [fixture.sourceRows[1]?.id ?? firstRow.id],
+				sourceRefs: [
+					{
+						page: fixture.sourceRows[1]?.page ?? 1,
+						table: fixture.sourceRows[1]?.table ?? 0,
+						row: fixture.sourceRows[1]?.row ?? 2,
+					},
+				],
+				rowRole: "priced_item",
+				deterministicReasons: ["structural_item"],
+				suggestedSectionIndex: 0,
+				extractedItem: {
+					description: "Second item",
+					unit: "ea",
+					quantity: "1",
+					materialRate: "10",
+					labourRate: "0",
+					total: "10",
+				},
+				catalogCandidates: [],
+				status: "pending",
+				versions,
+			},
+		],
+		dismissedEvidence: [],
+		representedRows: [],
+		validationSummary: {
+			rawRowCount: 2,
+			actionableCount: 2,
+			dismissedCount: 0,
+			representedCount: 0,
+			locallyPreparedCatalogCount: 0,
+			aiReviewedCount: 1,
+			sourceTotalDifference: "0",
+			rejectedReasonCounts: {},
+		},
+	};
+	const path = actionableReviewSnapshotPath("boq-1", "run-1", FINGERPRINT);
+	fixture.db.docs.set(path, toSnapshotDocument(snapshot));
+	return { ...fixture, snapshot, firstRow, path, boqFp };
+}
+
+const matchingItem = {
+	sectionIndex: 0,
+	desc: "Ready mix concrete",
+	unit: "m3",
+	qty: 2,
+	materialCost: 50,
+	labourCost: 0,
+};
+
+test("decideActionableSuggestion add_pending_catalog creates one catalog-pending item with distinct pricing audit",
+	async () => {
+		const fixture = actionableHarness();
+		const beforeItems = (
+			fixture.db.docs.get("boqs/boq-1") as unknown as Boq
+		).sections[0].items.length;
+
+		const result = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_pending_catalog",
+				expectedFingerprint: FINGERPRINT,
+				item: matchingItem,
+			},
+			"user-1",
+		);
+		assert.equal(result.status, 200);
+		if (result.status !== 200) return;
+
+		const body = result.body as {
+			status: string;
+			audit: Record<string, unknown>;
+			snapshot: ActionableReview;
+			boq: Boq;
+			itemId: string;
+		};
+		assert.equal(body.status, "added_pending_catalog");
+		assert.equal(body.audit.humanDecision, "add_pending_catalog");
+		assert.notEqual(body.audit.humanDecision, (body.audit.aiAdvice as { decision: string })?.decision);
+		assert.deepEqual(body.audit.extractedItem, {
+			description: "Ready mix concrete",
+			unit: "m3",
+			quantity: "2",
+			materialRate: "50",
+			labourRate: "0",
+			total: "100",
+		});
+		const reviewer = body.audit.reviewerPricing as {
+			confirmedBy: string;
+			confirmedAt: string;
+			total: string;
+		};
+		assert.equal(reviewer.confirmedBy, "user-1");
+		assert.equal(reviewer.confirmedAt, "2026-08-08T12:00:00.000Z");
+		assert.equal(reviewer.total, "100");
+
+		const stored = fixture.db.docs.get("boqs/boq-1") as unknown as Boq;
+		assert.equal(stored.sections[0].items.length, beforeItems + 1);
+		const added = stored.sections[0].items[beforeItems] as BoqPricedItem;
+		assert.equal(added.entryOrigin, "user");
+		assert.equal(added.stdStatus, "unmatched");
+		assert.equal(added.sourceRowId, fixture.firstRow.id);
+		assert.deepEqual(added.sourceRowIds, [fixture.firstRow.id]);
+		assert.ok(added.sourceRef);
+
+		const snap = body.snapshot.actionableItemSuggestions.find(
+			(s) => s.id === SUGGESTION_ID,
+		);
+		assert.equal(snap?.status, "added_pending_catalog");
+		assert.equal(body.snapshot.id, FINGERPRINT);
+		assert.equal(
+			body.snapshot.validationSummary.locallyPreparedCatalogCount,
+			1,
+		);
+
+		const decisionPath = actionableSuggestionDecisionPath(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+		);
+		assert.ok(fixture.db.docs.has(decisionPath));
+	},
+);
+
+test("decideActionableSuggestion add requires correctionReason on numeric divergence and writes field deltas",
+	async () => {
+		const fixture = actionableHarness();
+		const missing = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_pending_catalog",
+				expectedFingerprint: FINGERPRINT,
+				item: { ...matchingItem, qty: 3, materialCost: 50, labourCost: 0 },
+			},
+			"user-1",
+		);
+		assert.equal(missing.status, 400);
+		assert.equal(
+			fixture.db.docs.has(
+				actionableSuggestionDecisionPath("boq-1", "run-1", SUGGESTION_ID),
+			),
+			false,
+		);
+
+		const ok = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_pending_catalog",
+				expectedFingerprint: FINGERPRINT,
+				item: { ...matchingItem, qty: 3, materialCost: 50, labourCost: 0 },
+				correctionReason: "Takeoff correction",
+			},
+			"user-1",
+		);
+		assert.equal(ok.status, 200);
+		if (ok.status !== 200) return;
+		const audit = (ok.body as { audit: { fieldDeltas: Array<{ field: string }>; correctionReason: string } }).audit;
+		assert.equal(audit.correctionReason, "Takeoff correction");
+		assert.ok(audit.fieldDeltas.some((d) => d.field === "quantity"));
+	},
+);
+
+test("decideActionableSuggestion dismiss writes audit/status and creates no item",
+	async () => {
+		const fixture = actionableHarness();
+		const before = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
+		const result = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "dismiss",
+				expectedFingerprint: FINGERPRINT,
+				note: "covered elsewhere",
+			},
+			"user-1",
+		);
+		assert.equal(result.status, 200);
+		if (result.status !== 200) return;
+		assert.equal((result.body as { status: string }).status, "dismissed");
+		assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), before);
+		const snap = (result.body as { snapshot: ActionableReview }).snapshot;
+		assert.equal(
+			snap.actionableItemSuggestions.find((s) => s.id === SUGGESTION_ID)
+				?.status,
+			"dismissed",
+		);
+		assert.equal(snap.validationSummary.dismissedCount, 1);
+		const audit = (result.body as { audit: { note: string; humanDecision: string } }).audit;
+		assert.equal(audit.humanDecision, "dismiss");
+		assert.equal(audit.note, "covered elsewhere");
+	},
+);
+
+test("decideActionableSuggestion restore returns dismissed to pending and rejects represented rows",
+	async () => {
+		const fixture = actionableHarness();
+		await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{ action: "dismiss", expectedFingerprint: FINGERPRINT },
+			"user-1",
+		);
+		const restored = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{ action: "restore", expectedFingerprint: FINGERPRINT },
+			"user-1",
+		);
+		assert.equal(restored.status, 200);
+		if (restored.status !== 200) return;
+		assert.equal((restored.body as { status: string }).status, "pending");
+		const snap = (restored.body as { snapshot: ActionableReview }).snapshot;
+		assert.equal(
+			snap.actionableItemSuggestions.find((s) => s.id === SUGGESTION_ID)
+				?.status,
+			"pending",
+		);
+
+		// Represented rows cannot restore.
+		const path = fixture.path;
+		const raw = fixture.db.docs.get(path)!;
+		const suggestions = raw.actionableItemSuggestions as Array<
+			Record<string, unknown>
+		>;
+		suggestions[0] = { ...suggestions[0]!, status: "dismissed" };
+		raw.representedRows = [
+			{
+				sourceRowIds: [fixture.firstRow.id],
+				boqItemId: "existing",
+				reason: "source_identity",
+				sourceRefs: [
+					{
+						page: fixture.firstRow.page,
+						table: fixture.firstRow.table,
+						row: fixture.firstRow.row,
+					},
+				],
+			},
+		];
+		const blocked = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{ action: "restore", expectedFingerprint: FINGERPRINT },
+			"user-1",
+		);
+		assert.equal(blocked.status, 409);
+		assert.match(
+			String((blocked.body as { error: string }).error),
+			/represented/i,
+		);
+	},
+);
+
+test("decideActionableSuggestion is idempotent and never duplicates items on retry",
+	async () => {
+		const fixture = actionableHarness();
+		const first = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_pending_catalog",
+				expectedFingerprint: FINGERPRINT,
+				item: matchingItem,
+			},
+			"user-1",
+		);
+		assert.equal(first.status, 200);
+		if (first.status !== 200) return;
+		const firstBoq = (first.body as { boq: Boq }).boq;
+		const firstItemId = (first.body as { itemId: string }).itemId;
+
+		const retry = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_pending_catalog",
+				expectedFingerprint: FINGERPRINT,
+				item: matchingItem,
+			},
+			"user-1",
+		);
+		assert.equal(retry.status, 200);
+		assert.equal((retry.body as { idempotent?: boolean }).idempotent, true);
+		assert.equal((retry.body as { itemId: string }).itemId, firstItemId);
+		const stored = fixture.db.docs.get("boqs/boq-1") as unknown as Boq;
+		assert.equal(
+			stored.sections[0].items.length,
+			firstBoq.sections[0].items.length,
+		);
+	},
+);
+
+test("decideActionableSuggestion rejects approved, stale fingerprint, changed BOQ fingerprint, non-pending, and invalid fields without partial writes",
+	async () => {
+		const fixture = actionableHarness();
+		const snapshotBefore = structuredClone(fixture.db.docs.get(fixture.path)!);
+		const boqBefore = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
+
+		fixture.db.docs.get("boqs/boq-1")!.status = "approved";
+		const approved = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{ action: "dismiss", expectedFingerprint: FINGERPRINT },
+			"user-1",
+		);
+		assert.equal(approved.status, 409);
+		fixture.db.docs.get("boqs/boq-1")!.status = "draft";
+
+		const staleFp = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "dismiss",
+				expectedFingerprint: "sha256:" + "f".repeat(64),
+			},
+			"user-1",
+		);
+		assert.equal(staleFp.status, 409);
+
+		// Change live BOQ sections fingerprint vs snapshot versions.
+		const boqDoc = fixture.db.docs.get("boqs/boq-1")! as unknown as Boq;
+		boqDoc.sections = [
+			...boqDoc.sections,
+			{ header: "Extra", items: [] },
+		];
+		const staleBoq = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{ action: "dismiss", expectedFingerprint: FINGERPRINT },
+			"user-1",
+		);
+		assert.equal(staleBoq.status, 409);
+		// restore boq
+		fixture.db.docs.set("boqs/boq-1", structuredClone(boqBefore));
+
+		// non-pending
+		const raw = fixture.db.docs.get(fixture.path)!;
+		(raw.actionableItemSuggestions as Array<{ status: string }>)[0]!.status =
+			"dismissed";
+		const nonPending = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_pending_catalog",
+				expectedFingerprint: FINGERPRINT,
+				item: matchingItem,
+			},
+			"user-1",
+		);
+		assert.equal(nonPending.status, 409);
+		(raw.actionableItemSuggestions as Array<{ status: string }>)[0]!.status =
+			"pending";
+
+		// invalid fields
+		const invalid = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_pending_catalog",
+				expectedFingerprint: FINGERPRINT,
+				item: { ...matchingItem, sectionIndex: 99 },
+			},
+			"user-1",
+		);
+		assert.equal(invalid.status, 400);
+
+		assert.deepEqual(fixture.db.docs.get(fixture.path), snapshotBefore);
+		assert.equal(
+			fixture.db.docs.has(
+				actionableSuggestionDecisionPath("boq-1", "run-1", SUGGESTION_ID),
+			),
+			false,
+		);
+	},
+);
+
+test("decideActionableSuggestion simulated final-write failure leaves no partial writes",
+	async () => {
+		const fixture = actionableHarness();
+		const beforeBoq = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
+		const beforeSnap = structuredClone(fixture.db.docs.get(fixture.path)!);
+		const originalRun = fixture.db.runTransaction.bind(fixture.db);
+		fixture.db.runTransaction = async (callback) => {
+			const result = await originalRun(async (tx) => {
+				const wrapped = {
+					...tx,
+					create: (ref: MemoryDoc, data: RecordData) => {
+						tx.create(ref, data);
+						if (String(ref.path).includes("actionableSuggestionDecisions")) {
+							throw new Error("injected final write failure");
+						}
+					},
+				};
+				return callback(wrapped as never);
+			});
+			return result;
+		};
+
+		const result = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_pending_catalog",
+				expectedFingerprint: FINGERPRINT,
+				item: matchingItem,
+			},
+			"user-1",
+		);
+		assert.equal(result.status, 500);
+		assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), beforeBoq);
+		assert.deepEqual(fixture.db.docs.get(fixture.path), beforeSnap);
+		assert.equal(
+			fixture.db.docs.has(
+				actionableSuggestionDecisionPath("boq-1", "run-1", SUGGESTION_ID),
+			),
+			false,
+		);
+	},
+);
+
+test("decideActionableSuggestion rejects changed source checksum without writes",
+	async () => {
+		const fixture = actionableHarness();
+		// Tamper identity inside TX verification without failing outer loadImmutable.
+		const runRecord = fixture.db.docs.get(fixture.runPath)! as {
+			identityFingerprint: string;
+		};
+		runRecord.identityFingerprint = "sha256:tampered-identity";
+		const before = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
+		const beforeSnap = structuredClone(fixture.db.docs.get(fixture.path)!);
+		const result = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{ action: "dismiss", expectedFingerprint: FINGERPRINT },
+			"user-1",
+		);
+		assert.equal(result.status, 409);
+		assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), before);
+		assert.deepEqual(fixture.db.docs.get(fixture.path), beforeSnap);
+	},
+);

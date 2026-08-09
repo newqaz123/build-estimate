@@ -301,3 +301,12 @@ test("decision never decodes opaque path ids into business fields beyond lookup"
     "opaque-suggestion",
   ]);
 });
+
+test('production route source binds decideActionableSuggestion so 501 unbound path is gone', async () => {
+  const { readFileSync } = await import('node:fs')
+  const source = readFileSync(new URL('./[suggestionId]/decision/route.ts', import.meta.url), 'utf8')
+  assert.match(source, /decideActionableSuggestion/)
+  assert.match(source, /createFirestoreExtractionProposalStore/)
+  // Production handlers must not default to the unbound 501 adapter.
+  assert.doesNotMatch(source, /decide:\s*unboundActionableReviewDecision/)
+})

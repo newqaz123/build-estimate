@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Firestore } from "firebase-admin/firestore";
-import type { Boq, BoqSection, BoqSourceCosts } from "./boq-schema";
+import type { Boq, BoqPricedItem, BoqSection, BoqSourceCosts } from "./boq-schema";
 import {
 	extractionRunPath,
 	sourceRowPath,
@@ -29,6 +29,10 @@ import { reconstructSourceMappedItem } from "./boq-extraction-proposal-contract"
 import type { SourceBackedResolvedValues } from "./boq-extraction-cell-mapping";
 import {
 	acceptExtractionProposal,
+	buildActionablePricingFieldDeltas,
+	buildActionableSuggestionDecisionAudit,
+	buildReviewerPricingFromSourceBackedItem,
+	isIdempotentActionableDecision,
 	normalizeSourceRowAuditDecisions,
 	proposalMatchesAudit,
 	rejectExtractionProposal,
@@ -36,6 +40,7 @@ import {
 	skipExtractionProposal,
 	undoExtractionProposal,
 	validateExtractionProposal,
+	type ActionableSuggestionDecisionAudit,
 	type ExtractionProposalAudit,
 	type ExtractionProposalReopenEvent,
 	type ExtractionProposalUndoEvent,
@@ -48,6 +53,14 @@ import {
 	type SourceRowDecisionRequest,
 	type ValidatedSourceMapping,
 } from "./boq-user-entry";
+import type { ActionableReviewDecisionRequest } from "./actionable-review-decision";
+import {
+	actionableReviewSnapshotPath,
+	actionableSuggestionDecisionPath,
+	applySuggestionStatusToReview,
+	parseActionableReviewSnapshotDocument,
+	toSnapshotDocument as toActionableSnapshotDocument,
+} from "./actionable-review-storage";
 
 export type ProposalStoreResponse =
 	| { status: 200; body: Record<string, unknown> }
@@ -2736,6 +2749,471 @@ export function createFirestoreExtractionProposalStore(
 				return {
 					status: 500,
 					body: { error: "Source-backed item could not be added" },
+				};
+			}
+		},
+
+		/**
+		 * Apply an actionable-review decision atomically.
+		 * Validates BOQ/run/fingerprint/suggestion state before any write.
+		 * Does not run projection; mutates bound snapshot suggestion status in place.
+		 */
+		async decideActionableSuggestion(
+			boqId: string,
+			runId: string,
+			suggestionId: string,
+			request: ActionableReviewDecisionRequest,
+			actorId: string,
+		): Promise<ProposalStoreResponse> {
+			let immutable: Awaited<ReturnType<typeof loadImmutable>>;
+			try {
+				immutable = await loadImmutable(boqId, runId);
+			} catch {
+				return { status: 404, body: { error: "Extraction run not found" } };
+			}
+			if (!immutable) {
+				return { status: 404, body: { error: "Extraction run not found" } };
+			}
+
+			try {
+				return await db.runTransaction(async (transaction) => {
+					const boqRef = db.collection("boqs").doc(boqId);
+					const runRef = db.doc(extractionRunPath(boqId, runId));
+					const snapshotRef = db.doc(
+						actionableReviewSnapshotPath(
+							boqId,
+							runId,
+							request.expectedFingerprint,
+						),
+					);
+					const decisionRef = db.doc(
+						actionableSuggestionDecisionPath(boqId, runId, suggestionId),
+					);
+
+					const [boqSnap, runSnap, snapshotSnap, decisionSnap] =
+						await Promise.all([
+							transaction.get(boqRef),
+							transaction.get(runRef),
+							transaction.get(snapshotRef),
+							transaction.get(decisionRef),
+						]);
+
+					if (
+						!boqSnap.exists ||
+						!runSnap.exists ||
+						runSnap.data()?.status !== "ready"
+					) {
+						return {
+							status: 404,
+							body: { error: "Extraction run not found" },
+						};
+					}
+
+					if (
+						!(await verifyImmutableContext(
+							transaction,
+							db,
+							boqId,
+							runId,
+							runSnap,
+							immutable,
+						))
+					) {
+						return {
+							status: 409,
+							body: {
+								error:
+									"Extraction evidence changed; recheck the suggestion",
+							},
+						};
+					}
+
+					const boq = { id: boqSnap.id, ...boqSnap.data() } as Boq;
+					if (boq.status === "approved") {
+						return {
+							status: 409,
+							body: { error: "Approved BOQs cannot be mutated." },
+						};
+					}
+
+					if (!snapshotSnap.exists) {
+						return {
+							status: 409,
+							body: {
+								error: "Actionable review fingerprint is stale.",
+							},
+						};
+					}
+
+					let snapshot;
+					try {
+						snapshot = parseActionableReviewSnapshotDocument(
+							(snapshotSnap.data() ?? {}) as Record<string, unknown>,
+						);
+					} catch {
+						return {
+							status: 409,
+							body: {
+								error: "Actionable review snapshot is invalid.",
+							},
+						};
+					}
+
+					if (snapshot.id !== request.expectedFingerprint) {
+						return {
+							status: 409,
+							body: {
+								error: "Actionable review fingerprint is stale.",
+							},
+						};
+					}
+
+					const suggestion = snapshot.actionableItemSuggestions.find(
+						(entry) => entry.id === suggestionId,
+					);
+					if (!suggestion) {
+						return {
+							status: 404,
+							body: { error: "Actionable suggestion not found" },
+						};
+					}
+
+					// Represented rows are audit-only and cannot be restored as suggestions.
+					const representedSourceIds = new Set(
+						snapshot.representedRows.flatMap((row) => row.sourceRowIds),
+					);
+					const touchesRepresented = suggestion.sourceRowIds.some((id) =>
+						representedSourceIds.has(id),
+					);
+
+					const existingAudit = decisionSnap.exists
+						? (decisionSnap.data() as ActionableSuggestionDecisionAudit)
+						: null;
+
+					// Idempotent terminal retry before BOQ fingerprint gate: an add mutates
+					// sections, so retries must still return the original terminal body.
+					if (
+						existingAudit &&
+						isIdempotentActionableDecision(
+							existingAudit,
+							request.action,
+						) &&
+						((request.action === "add_pending_catalog" &&
+							suggestion.status === "added_pending_catalog") ||
+							(request.action === "dismiss" &&
+								suggestion.status === "dismissed") ||
+							(request.action === "restore" &&
+								suggestion.status === "pending" &&
+								existingAudit.suggestionStatus === "pending"))
+					) {
+						return {
+							status: 200,
+							body: {
+								status: existingAudit.suggestionStatus,
+								snapshot,
+								audit: existingAudit,
+								...(existingAudit.resultBoq
+									? { boq: existingAudit.resultBoq }
+									: {}),
+								...(existingAudit.itemId
+									? { itemId: existingAudit.itemId }
+									: {}),
+								idempotent: true,
+							},
+						};
+					}
+
+					const liveBoqFingerprint = fingerprintCanonicalSections(
+						boq.sections,
+					);
+					if (
+						snapshot.versions.boqSectionsFingerprint !== liveBoqFingerprint
+					) {
+						return {
+							status: 409,
+							body: {
+								error:
+									"Canonical BOQ changed; recheck the actionable review",
+							},
+						};
+					}
+
+					if (request.action === "restore") {
+						if (touchesRepresented) {
+							return {
+								status: 409,
+								body: {
+									error:
+										"Represented rows cannot be restored to the actionable queue",
+								},
+							};
+						}
+						if (suggestion.status !== "dismissed") {
+							return {
+								status: 409,
+								body: {
+									error:
+										"Only dismissed suggestions can be restored",
+								},
+							};
+						}
+
+						const actionTimestamp = now().toISOString();
+						const sourceRefs = auditSourceRefs(
+							immutable.sourceRows,
+							suggestion.sourceRowIds,
+						);
+						const sequence = (existingAudit?.sequence ?? 0) + 1;
+						const audit = buildActionableSuggestionDecisionAudit({
+							suggestionId,
+							extractionRunId: runId,
+							humanDecision: "restore",
+							suggestionStatus: "pending",
+							actorId,
+							now: actionTimestamp,
+							sourceRowIds: suggestion.sourceRowIds,
+							sourceRefs,
+							extractedItem: suggestion.extractedItem,
+							...(suggestion.aiAdvice
+								? { aiAdvice: suggestion.aiAdvice }
+								: {}),
+							sequence,
+						});
+						const updatedSnapshot = applySuggestionStatusToReview(
+							snapshot,
+							suggestionId,
+							"pending",
+						);
+
+						transaction.update(
+							snapshotRef,
+							toActionableSnapshotDocument(updatedSnapshot),
+						);
+						if (decisionSnap.exists) {
+							transaction.update(decisionRef, audit as never);
+							const eventRef = decisionRef
+								.collection("events")
+								.doc(`${sequence}-restore`);
+							transaction.create(eventRef, audit as never);
+						} else {
+							transaction.create(decisionRef, audit as never);
+						}
+
+						return {
+							status: 200,
+							body: {
+								status: "pending",
+								snapshot: updatedSnapshot,
+								audit,
+							},
+						};
+					}
+
+					if (suggestion.status !== "pending") {
+						return {
+							status: 409,
+							body: {
+								error:
+									"Suggestion is not pending for this decision",
+							},
+						};
+					}
+
+					if (request.action === "dismiss") {
+						const actionTimestamp = now().toISOString();
+						const sourceRefs = auditSourceRefs(
+							immutable.sourceRows,
+							suggestion.sourceRowIds,
+						);
+						const sequence = 1;
+						const audit = buildActionableSuggestionDecisionAudit({
+							suggestionId,
+							extractionRunId: runId,
+							humanDecision: "dismiss",
+							suggestionStatus: "dismissed",
+							actorId,
+							now: actionTimestamp,
+							sourceRowIds: suggestion.sourceRowIds,
+							sourceRefs,
+							extractedItem: suggestion.extractedItem,
+							...(suggestion.aiAdvice
+								? { aiAdvice: suggestion.aiAdvice }
+								: {}),
+							...(request.note ? { note: request.note } : {}),
+							sequence,
+						});
+						const updatedSnapshot = applySuggestionStatusToReview(
+							snapshot,
+							suggestionId,
+							"dismissed",
+						);
+
+						transaction.update(
+							snapshotRef,
+							toActionableSnapshotDocument(updatedSnapshot),
+						);
+						transaction.create(decisionRef, audit as never);
+
+						return {
+							status: 200,
+							body: {
+								status: "dismissed",
+								snapshot: updatedSnapshot,
+								audit,
+							},
+						};
+					}
+
+					// add_pending_catalog
+					const actionTimestamp = now().toISOString();
+					let reviewerPricing;
+					try {
+						reviewerPricing = buildReviewerPricingFromSourceBackedItem({
+							item: request.item,
+							extracted: suggestion.extractedItem,
+							actorId,
+							now: actionTimestamp,
+							...(request.correctionReason
+								? { correctionReason: request.correctionReason }
+								: {}),
+						});
+					} catch (error) {
+						return {
+							status: 400,
+							body: {
+								error:
+									error instanceof Error
+										? error.message
+										: "Invalid reviewer pricing",
+							},
+						};
+					}
+
+					const rowsById = new Map(
+						immutable.sourceRows.map((row) => [row.id, row]),
+					);
+					const sourceRows = suggestion.sourceRowIds.map((id) =>
+						rowsById.get(id),
+					);
+					if (
+						sourceRows.length === 0 ||
+						sourceRows.some((row) => row === undefined)
+					) {
+						return {
+							status: 409,
+							body: {
+								error:
+									"Extraction evidence changed; recheck the suggestion",
+							},
+						};
+					}
+					const first = sourceRows[0]!;
+					const validatedSourceMapping: ValidatedSourceMapping = {
+						sourceRowId: first.id,
+						sourceRowIds: [...suggestion.sourceRowIds],
+						sourceRef: {
+							page: first.page,
+							table: first.table,
+							row: first.row,
+						},
+					};
+
+					const itemId = `user-ar-${suggestionId.replace(/^sha256:/, "").slice(0, 32)}`;
+					let addResult: { boq: Boq; item: BoqPricedItem };
+					try {
+						addResult = addSourceBackedBoqItem({
+							boq,
+							validatedSourceMapping,
+							userValues: request.item,
+							itemId,
+						});
+					} catch (error) {
+						if (error instanceof MissingBoqItemError) {
+							return { status: 400, body: { error: error.message } };
+						}
+						throw error;
+					}
+
+					const finalBoq = {
+						...addResult.boq,
+						updatedAt: actionTimestamp,
+					};
+					const fieldDeltas = buildActionablePricingFieldDeltas(
+						suggestion.extractedItem,
+						reviewerPricing,
+					);
+					const sourceRefs = auditSourceRefs(
+						immutable.sourceRows,
+						suggestion.sourceRowIds,
+					);
+					const beforeFingerprint = fingerprintCanonicalSections(
+						boq.sections,
+					);
+					const afterFingerprint = fingerprintCanonicalSections(
+						finalBoq.sections,
+					);
+					const audit = buildActionableSuggestionDecisionAudit({
+						suggestionId,
+						extractionRunId: runId,
+						humanDecision: "add_pending_catalog",
+						suggestionStatus: "added_pending_catalog",
+						actorId,
+						now: actionTimestamp,
+						sourceRowIds: suggestion.sourceRowIds,
+						sourceRefs,
+						extractedItem: suggestion.extractedItem,
+						...(suggestion.aiAdvice
+							? { aiAdvice: suggestion.aiAdvice }
+							: {}),
+						reviewerPricing,
+						fieldDeltas,
+						...(request.correctionReason
+							? { correctionReason: request.correctionReason }
+							: {}),
+						itemId: addResult.item.id ?? itemId,
+						beforeSectionsFingerprint: beforeFingerprint,
+						afterSectionsFingerprint: afterFingerprint,
+						resultBoq: finalBoq,
+						sequence: 1,
+					});
+
+					const updatedSnapshot = applySuggestionStatusToReview(
+						snapshot,
+						suggestionId,
+						"added_pending_catalog",
+					);
+
+					// All validation complete — perform writes together.
+					transaction.update(boqRef, {
+						sections: finalBoq.sections,
+						totalItems: finalBoq.totalItems,
+						grandTotal: finalBoq.grandTotal,
+						stdStatus: finalBoq.stdStatus,
+						updatedAt: actionTimestamp,
+					});
+					transaction.update(
+						snapshotRef,
+						toActionableSnapshotDocument(updatedSnapshot),
+					);
+					transaction.create(decisionRef, audit as never);
+
+					return {
+						status: 200,
+						body: {
+							status: "added_pending_catalog",
+							snapshot: updatedSnapshot,
+							audit,
+							boq: finalBoq,
+							itemId: addResult.item.id ?? itemId,
+						},
+					};
+				});
+			} catch {
+				return {
+					status: 500,
+					body: {
+						error: "Actionable review decision could not be saved",
+					},
 				};
 			}
 		},

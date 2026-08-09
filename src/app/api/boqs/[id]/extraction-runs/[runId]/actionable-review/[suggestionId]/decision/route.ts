@@ -4,6 +4,8 @@ import {
   parseActionableReviewDecisionRequest,
   type ActionableReviewDecisionRequest,
 } from '@/lib/actionable-review-decision'
+import { createFirestoreExtractionProposalStore } from '@/lib/boq-extraction-proposal-store'
+import { getDb } from '@/lib/db'
 
 export type ActionableReviewDecisionRouteContext = {
   params: Promise<{ id: string; runId: string; suggestionId: string }>
@@ -41,9 +43,8 @@ function actorId(
 }
 
 /**
- * Task 3/4 seam: production persistence is added in Task 4 via
- * `decideActionableSuggestion` on the proposal store. Until then the route
- * keeps a typed unbound adapter that never mutates BOQ/catalog state.
+ * Unbound adapter retained for tests that inject their own dependency.
+ * Production binds `decideActionableSuggestion` on the proposal store.
  */
 export const unboundActionableReviewDecision: ActionableReviewDecisionDependencies['decide'] =
   async () => ({
@@ -107,15 +108,24 @@ export function createActionableReviewDecisionHandlers(
   return { POST }
 }
 
+const proposalStore = () => createFirestoreExtractionProposalStore(getDb())
+
 const handlers = createActionableReviewDecisionHandlers({
   authenticate: auth,
-  decide: unboundActionableReviewDecision,
+  decide: (boqId, runId, suggestionId, request, actorId) =>
+    proposalStore().decideActionableSuggestion(
+      boqId,
+      runId,
+      suggestionId,
+      request,
+      actorId,
+    ),
 })
 
 /**
  * Closed actionable-review decision endpoint.
- * Authenticates, parses the closed body, and delegates to the decision dependency.
- * Task 4 binds persistence; this route never trusts client provenance/pricing.
+ * Authenticates, parses the closed body, and delegates to the bound store.
+ * Never trusts client provenance/pricing beyond the closed request shape.
  */
 export async function POST(
   request: Request,

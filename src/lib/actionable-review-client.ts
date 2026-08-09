@@ -95,6 +95,48 @@ function snapshotPayload(value: unknown): unknown {
   return value
 }
 
+
+function decisionSnapshotPayload(value: unknown): unknown {
+  if (value && typeof value === 'object' && !Array.isArray(value) && 'snapshot' in value) {
+    return (value as { snapshot?: unknown }).snapshot
+  }
+  return null
+}
+
+/** Prefer the next pending suggestion after `afterId`, else the first pending. */
+export function nextPendingSuggestionId(
+  snapshot: ActionableReview,
+  afterId: string,
+): string | null {
+  const suggestions = snapshot.actionableItemSuggestions
+  const pending = suggestions.filter((entry) => entry.status === 'pending')
+  if (pending.length === 0) return null
+  const afterIndex = suggestions.findIndex((entry) => entry.id === afterId)
+  if (afterIndex >= 0) {
+    for (let index = afterIndex + 1; index < suggestions.length; index += 1) {
+      const candidate = suggestions[index]!
+      if (candidate.status === 'pending') return candidate.id
+    }
+  }
+  return pending[0]!.id
+}
+
+function applyDecisionSuccess(
+  dispatch: (action: ActionableReviewAction) => void,
+  body: unknown,
+  suggestionId: string,
+): void {
+  const normalized = normalizeActionableReviewResponse(decisionSnapshotPayload(body))
+  if (normalized) {
+    dispatch({ type: 'load_succeeded', snapshot: normalized })
+    dispatch({
+      type: 'select_suggestion',
+      suggestionId: nextPendingSuggestionId(normalized, suggestionId),
+    })
+  }
+  dispatch({ type: 'decision_succeeded', suggestionId })
+}
+
 function boundedDecisionRequest(request: ActionableReviewClientDecisionRequest): ActionableReviewClientDecisionRequest {
   if (request.action === 'dismiss') {
     const note = request.note?.trim()
@@ -261,7 +303,8 @@ export function createActionableReviewClient(
         if (response.status < 200 || response.status >= 300) {
           throw await responseError(response, 'Actionable review decision failed.')
         }
-        options.dispatch({ type: 'decision_succeeded', suggestionId })
+        const body = await response.json()
+        applyDecisionSuccess(options.dispatch, body, suggestionId)
         return true
       } catch (cause) {
         if (!isLatestActionableReviewRequest(generation, requestGeneration)) return false
@@ -310,7 +353,8 @@ export function createActionableReviewClient(
         if (response.status < 200 || response.status >= 300) {
           throw await responseError(response, 'Actionable review restore failed.')
         }
-        options.dispatch({ type: 'decision_succeeded', suggestionId })
+        const body = await response.json()
+        applyDecisionSuccess(options.dispatch, body, suggestionId)
         return true
       } catch (cause) {
         if (!isLatestActionableReviewRequest(generation, requestGeneration)) return false

@@ -5,6 +5,8 @@ import type { ActionableReviewMetrics } from './actionable-review-metrics'
 import {
   actionableReviewMetricsPath,
   actionableReviewSnapshotPath,
+  actionableSuggestionDecisionPath,
+  applySuggestionStatusToReview,
   createActionableReviewStorage,
   parseActionableReviewMetricsDocument,
   parseActionableReviewSnapshotDocument,
@@ -342,4 +344,72 @@ test('getters return null for missing documents and parse stored payloads', asyn
 
   assert.deepEqual(await storage.getSnapshot('boq-1', 'run-1', fingerprint), review)
   assert.deepEqual(await storage.getMetrics('boq-1', 'run-1', fingerprint), metrics)
+})
+
+test('applySuggestionStatusToReview mutates status without changing snapshot id or regenerating fingerprint', () => {
+  const fingerprint = 'sha256:' + 'a'.repeat(64)
+  const review = nestedSuggestionReview(fingerprint)
+  review.validationSummary = {
+    ...review.validationSummary,
+    actionableCount: 1,
+    dismissedCount: 0,
+    locallyPreparedCatalogCount: 0,
+  }
+  const suggestionId = review.actionableItemSuggestions[0]!.id
+
+  const dismissed = applySuggestionStatusToReview(review, suggestionId, 'dismissed')
+  assert.equal(dismissed.id, fingerprint)
+  assert.equal(dismissed.actionableItemSuggestions[0]!.status, 'dismissed')
+  assert.equal(dismissed.validationSummary.actionableCount, 0)
+  assert.equal(dismissed.validationSummary.dismissedCount, 1)
+  // Original immutable snapshot identity preserved on the source object.
+  assert.equal(review.actionableItemSuggestions[0]!.status, 'pending')
+
+  const restored = applySuggestionStatusToReview(dismissed, suggestionId, 'pending')
+  assert.equal(restored.id, fingerprint)
+  assert.equal(restored.actionableItemSuggestions[0]!.status, 'pending')
+  assert.equal(restored.validationSummary.actionableCount, 1)
+  assert.equal(restored.validationSummary.dismissedCount, 0)
+
+  const added = applySuggestionStatusToReview(review, suggestionId, 'added_pending_catalog')
+  assert.equal(added.actionableItemSuggestions[0]!.status, 'added_pending_catalog')
+  assert.equal(added.validationSummary.locallyPreparedCatalogCount, 1)
+  assert.equal(added.validationSummary.actionableCount, 0)
+})
+
+test('storage.applySuggestionStatus and toSnapshotWriteData support in-transaction persistence', async () => {
+  const documents = memoryDocuments()
+  const storage = createActionableReviewStorage(documents)
+  const fingerprint = 'sha256:' + 'd'.repeat(64)
+  const review = nestedSuggestionReview(fingerprint)
+  review.validationSummary = {
+    ...review.validationSummary,
+    actionableCount: 1,
+    dismissedCount: 0,
+    locallyPreparedCatalogCount: 0,
+  }
+  await storage.writeBundle('boq-1', 'run-1', review, sampleMetrics(fingerprint))
+
+  const suggestionId = review.actionableItemSuggestions[0]!.id
+  const updated = storage.applySuggestionStatus(review, suggestionId, 'dismissed')
+  const writeData = storage.toSnapshotWriteData(updated)
+  assert.equal(writeData.id, fingerprint)
+  assert.equal(
+    (writeData.actionableItemSuggestions as Array<{ status: string }>)[0]!.status,
+    'dismissed',
+  )
+
+  // Simulate ambient TX update without re-creating the bundle fingerprint path.
+  const path = actionableReviewSnapshotPath('boq-1', 'run-1', fingerprint)
+  documents.docs.set(path, writeData)
+  const reloaded = await storage.getSnapshot('boq-1', 'run-1', fingerprint)
+  assert.equal(reloaded?.id, fingerprint)
+  assert.equal(reloaded?.actionableItemSuggestions[0]!.status, 'dismissed')
+})
+
+test('actionableSuggestionDecisionPath nests under the extraction run', () => {
+  assert.equal(
+    actionableSuggestionDecisionPath('boq-1', 'run-1', 'sug-1'),
+    'boqs/boq-1/extractionRuns/run-1/actionableSuggestionDecisions/sug-1',
+  )
 })
