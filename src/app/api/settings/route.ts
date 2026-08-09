@@ -4,10 +4,17 @@ import { getDocument, setDocument } from '@/lib/db'
 import {
   DEFAULT_SETTINGS,
   fromStoredSettings,
+  parseActionableReviewSettings,
   type StoredWorkspaceSettings,
   WORKSPACE_SETTINGS_ID,
 } from '@/lib/settings-storage'
-import type { DoclingSettings, FuzzySettings, LlmSettings, PromptSettings } from '@/lib/settings-schema'
+import type {
+  ActionableReviewSettings,
+  DoclingSettings,
+  FuzzySettings,
+  LlmSettings,
+  PromptSettings,
+} from '@/lib/settings-schema'
 
 const MAX_ENDPOINT_LENGTH = 2048
 const MAX_PROMPT_LENGTH = 20_000
@@ -36,7 +43,17 @@ function isHttpUrl(value: unknown, optional = false) {
   }
 }
 
-function validateSection(section: unknown, data: unknown): { valid: true; data: LlmSettings | DoclingSettings | FuzzySettings | PromptSettings } | { valid: false; error: string } {
+type SettingsSectionData =
+  | LlmSettings
+  | DoclingSettings
+  | FuzzySettings
+  | PromptSettings
+  | ActionableReviewSettings
+
+export function validateSettingsSection(
+  section: unknown,
+  data: unknown,
+): { valid: true; data: SettingsSectionData } | { valid: false; error: string } {
   if (!isPlainRecord(data)) return { valid: false, error: 'Settings data must be an object' }
   if (section === 'llm') {
     if (!hasOnlyKeys(data, ['provider', 'model', 'endpoint']) || !PROVIDERS.has(String(data.provider)) || !isBoundedString(data.model, 200) || !isHttpUrl(data.endpoint, true)) return { valid: false, error: 'Invalid LLM settings' }
@@ -53,6 +70,13 @@ function validateSection(section: unknown, data: unknown): { valid: true; data: 
   if (section === 'prompts') {
     if (!hasOnlyKeys(data, ['analysisPrompt', 'stdPrompt', 'estimatePrompt']) || !isBoundedString(data.analysisPrompt, MAX_PROMPT_LENGTH) || !isBoundedString(data.stdPrompt, MAX_PROMPT_LENGTH) || !isBoundedString(data.estimatePrompt, MAX_PROMPT_LENGTH)) return { valid: false, error: 'Prompts must be nonblank and no longer than 20000 characters' }
     return { valid: true, data: data as unknown as PromptSettings }
+  }
+  if (section === 'actionableReview') {
+    try {
+      return { valid: true, data: parseActionableReviewSettings(data) }
+    } catch {
+      return { valid: false, error: 'Invalid actionable review settings' }
+    }
   }
   return { valid: false, error: 'Invalid section' }
 }
@@ -84,9 +108,9 @@ export async function PUT(request: NextRequest) {
   try {
     const body: unknown = await request.json()
     if (!isPlainRecord(body) || !hasOnlyKeys(body, ['section', 'data'])) return NextResponse.json({ error: 'Malformed settings request' }, { status: 400 })
-    const result = validateSection(body.section, body.data)
+    const result = validateSettingsSection(body.section, body.data)
     if (!result.valid) return NextResponse.json({ error: result.error }, { status: 400 })
-    const section = body.section as 'llm' | 'docling' | 'fuzzy' | 'prompts'
+    const section = body.section as 'llm' | 'docling' | 'fuzzy' | 'prompts' | 'actionableReview'
     const persistedData = section === 'fuzzy'
       ? {
           ...(result.data as FuzzySettings),

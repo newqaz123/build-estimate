@@ -23,6 +23,23 @@ export interface UnitSettings {
   customUnits: string[]
 }
 
+export type ActionableReviewStage =
+  | 'off'
+  | 'shadow'
+  | 'focused'
+  | 'add_and_match'
+  | 'default'
+
+export interface ActionableReviewSettings {
+  stage: ActionableReviewStage
+  lowCostModel?: string
+  escalationModel?: string
+  maxRows: number
+  maxPromptTokens: number
+  maxEstimatedCostMinor: number
+  escalationEnabled: boolean
+}
+
 export interface Vendor {
   id: string
   name: string
@@ -40,4 +57,5 @@ export interface WorkspaceSettings {
   fuzzy: FuzzySettings
   prompts: PromptSettings
   units: UnitSettings
+  actionableReview: ActionableReviewSettings
 }

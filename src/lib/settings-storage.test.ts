@@ -74,3 +74,24 @@ test('toStoredSettings normalizes dirty custom units before serialization', () =
 
   assert.deepEqual(stored.units, { customUnits: ['Bag', 'drum'] })
 })
+
+test('defaults actionable review to off for existing settings documents', () => {
+  const settings = fromStoredSettings({})
+  assert.equal(settings.actionableReview.stage, 'off')
+  assert.equal(settings.actionableReview.maxRows, 100)
+  assert.equal(settings.actionableReview.escalationEnabled, true)
+  assert.equal(settings.actionableReview.maxPromptTokens, 8_000)
+  assert.equal(settings.actionableReview.maxEstimatedCostMinor, 0)
+})
+
+test('rejects unknown stages and negative budgets', () => {
+  assert.throws(() => fromStoredSettings({
+    actionableReview: {
+      stage: 'automatic',
+      maxRows: -1,
+      maxPromptTokens: 0,
+      maxEstimatedCostMinor: -1,
+      escalationEnabled: true,
+    },
+  }))
+})
