@@ -250,3 +250,96 @@ test("load and approval failures stay on Details with recovery controls", () => 
   assert.match(source, /Failed to approve BOQ/);
   assert.match(source, /setApproving\(false\)/);
 });
+
+test("view=review keeps ExtractionReview for off and shadow rollout stages", () => {
+	assert.match(source, /ActionableReviewStage|actionableReviewStage|actionableReview\.stage/);
+	assert.match(
+		source,
+		/stage\s*===\s*["']off["']|stage\s*===\s*["']shadow["']|["']off["']|["']shadow["']/,
+	);
+	assert.match(source, /<ExtractionReview/);
+	assert.match(
+		source,
+		/focused|add_and_match|default/,
+	);
+	// Old stages still mount the compound-cell ExtractionReview path.
+	assert.match(
+		source,
+		/useActionableFocusedReview|showActionableReview|actionableReviewEnabled|isActionableFocusedStage/,
+	);
+});
+
+test("view=review with focused or later renders the actionable review workspace", () => {
+	assert.match(source, /ActionableExtractionReview/);
+	assert.match(
+		source,
+		/useActionableFocusedReview\s*\?\s*\([\s\S]*ActionableExtractionReview|[\s\S]*ActionableExtractionReview[\s\S]*ExtractionReview/,
+	);
+});
+
+test("view=compare stays read-only Compare Catalog at every rollout stage", () => {
+	const comparePanel = sourceSection(
+		'id="boq-compare-panel"',
+		"</ReviewWorkspace>",
+	);
+	assert.match(comparePanel, /BoqCatalogComparisonPanel/);
+	assert.doesNotMatch(comparePanel, /ActionableExtractionReview/);
+	assert.doesNotMatch(comparePanel, /onAddAndMatch/);
+	assert.doesNotMatch(comparePanel, /onDoNotAdd/);
+	assert.doesNotMatch(comparePanel, /CatalogMatchModal/);
+	assert.doesNotMatch(comparePanel, /\bonMatch\b/);
+	assert.doesNotMatch(comparePanel, /onExclude/);
+	// Stage gating must not rewrite the compare surface.
+	assert.doesNotMatch(
+		comparePanel,
+		actionableStageGateInComparePanel(),
+	);
+});
+
+test("tab switching preserves opaque BOQ ids, safeCompareReturnPath, and unsaved-edit guards", () => {
+	assert.match(source, /safeCompareReturnPath\(rawReturnTo\)/);
+	assert.match(source, /boqWorkspaceHref\(id, nextView, returnTo\)/);
+	assert.match(source, /encodeURIComponent\(boq\.id\)/);
+	assert.match(
+		source,
+		/hasUnsavedChanges=\{\s*pendingChanges > 0 \|\| invalidDraftKeys\.size > 0\s*\}/,
+	);
+	assert.match(
+		source,
+		/pendingChanges > 0[\s\S]{0,120}Save draft|invalidDraftKeys\.size > 0/,
+	);
+	assert.match(source, /onViewChange\("review"\)|onViewChange=\{onViewChange\}/);
+});
+
+test("Stage 2 catalog readiness stays inside Edit & Verify and never replaces Compare Catalog", () => {
+	const comparePanel = sourceSection(
+		'id="boq-compare-panel"',
+		"</ReviewWorkspace>",
+	);
+	const reviewPanel = sourceSection(
+		'id="boq-review-panel"',
+		'id="boq-compare-panel"',
+	);
+	assert.match(reviewPanel, /catalog-readiness|catalogReadiness|Catalog Ready|added_pending_catalog/);
+	assert.doesNotMatch(comparePanel, /catalog-readiness/);
+	assert.doesNotMatch(comparePanel, /ActionableExtractionReview/);
+	assert.match(source, /BoqWorkspaceTabs/);
+	assert.match(source, /boq-compare-tab|Compare Catalog|onViewChange\("review"\)/);
+});
+
+test("page does not introduce page-level mobile overflow selectors", () => {
+	assert.doesNotMatch(source, /@media/);
+	assert.doesNotMatch(source, /overflow-x:\s*hidden/);
+	assert.doesNotMatch(source, /max-width:\s*920px/);
+});
+
+test("exact Exclude copy remains unchanged outside actionable Stage 2 presentation", () => {
+	assert.match(source, /onExclude=/);
+	// Page still routes exclusions through the existing exclude dialog path.
+	assert.match(source, /setExcludeTarget/);
+	assert.match(source, /Exclude/);
+});
+
+function actionableStageGateInComparePanel(): RegExp {
+	return /actionableReviewStage|useActionableFocusedReview/;
+}

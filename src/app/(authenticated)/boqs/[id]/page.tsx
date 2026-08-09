@@ -31,6 +31,7 @@ import {
   BoqCatalogComparisonPanel,
   type BoqComparisonPanelState,
 } from "@/components/boq-catalog-comparison-panel";
+import { ActionableExtractionReview } from "@/components/actionable-extraction-review";
 import { BoqWorkspaceTabs } from "@/components/boq-workspace-tabs";
 import { CatalogMatchModal } from "@/components/catalog-match-modal";
 import { ExtractionReview } from "@/components/extraction-review";
@@ -101,6 +102,7 @@ import {
 	buildUnifiedBoqSections,
 	type UnifiedBoqPricedRow,
 } from "@/lib/boq-unified-rows";
+import type { ActionableReviewStage } from "@/lib/settings-schema";
 import { STANDARD_UNITS } from "@/lib/units";
 import {
 	addWorkspaceUnit,
@@ -373,6 +375,8 @@ function CanonicalBoqWorkspace({
     string | null
   >(null);
   const comparisonRequestRef = useRef<AbortController | null>(null);
+  const [actionableReviewStage, setActionableReviewStage] =
+    useState<ActionableReviewStage>("off");
 	const units = useMemo(
 		() => [...STANDARD_UNITS, ...customUnits],
 		[customUnits],
@@ -397,7 +401,42 @@ function CanonicalBoqWorkspace({
 			active = false;
 		};
 	}, []);
+	useEffect(() => {
+		let active = true;
+		const controller = new AbortController();
+		void fetch("/api/settings", { signal: controller.signal })
+			.then(async (response) => {
+				if (!response.ok) return null;
+				return (await response.json()) as {
+					actionableReview?: { stage?: ActionableReviewStage };
+				};
+			})
+			.then((settings) => {
+				if (!active || !settings) return;
+				const stage = settings.actionableReview?.stage;
+				if (
+					stage === "off" ||
+					stage === "shadow" ||
+					stage === "focused" ||
+					stage === "add_and_match" ||
+					stage === "default"
+				) {
+					setActionableReviewStage(stage);
+				}
+			})
+			.catch(() => {
+				/* Keep default off stage when settings are unavailable. */
+			});
+		return () => {
+			active = false;
+			controller.abort();
+		};
+	}, []);
 	const isReadOnly = boq.status === "approved";
+	const useActionableFocusedReview =
+		actionableReviewStage === "focused" ||
+		actionableReviewStage === "add_and_match" ||
+		actionableReviewStage === "default";
 	const mutationBusy =
 		saving ||
 		approving ||
@@ -1497,6 +1536,23 @@ function CanonicalBoqWorkspace({
 						id="boq-extraction-panel"
 						hidden={rightPaneMode !== "extraction"}
 					>
+						{useActionableFocusedReview ? (
+							<ActionableExtractionReview
+								snapshot={null}
+								rolloutStage={actionableReviewStage}
+								readOnly={isReadOnly}
+								sectionLabels={boq.sections.map((section) => section.header)}
+								onNavigateToEvidence={(focus) =>
+									setPdfEvidenceFocus((current) => ({
+										page: focus.page,
+										key: current.key + 1,
+									}))
+								}
+								callbacks={{
+									// Task 2: capability props only — disabled/no-op until Task 3 routes.
+								}}
+							/>
+						) : (
 						<ExtractionReview
 							boq={boq}
 							canonicalRevisionKey={canonicalRevisionKey}
@@ -1517,6 +1573,7 @@ function CanonicalBoqWorkspace({
 								}))
 							}
 						/>
+						)}
 					</div>
           </div>
           <div
