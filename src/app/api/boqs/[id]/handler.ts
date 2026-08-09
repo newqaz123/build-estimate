@@ -5,6 +5,7 @@ import { toPublicBoq } from '@/lib/boq-public'
 import { getBoqCatalogReadiness } from '@/lib/boq-catalog-readiness'
 import { calculateBoqTotals } from '@/lib/boq-pricing'
 import { BoqCanonicalValidationError, parseCanonicalBoqSections } from '@/lib/boq-canonical'
+import { buildBoqApprovalReadiness } from '@/lib/boq-approval-readiness'
 
 export type BoqDetailRouteContext = { params: Promise<{ id: string }> }
 export type BoqUpdateDecision =
@@ -15,7 +16,13 @@ export type BoqUpdateResult = 'updated' | 'approved' | 'not-found' | Extract<Boq
 interface BoqDetailDependencies {
   authenticate(): Promise<{ user?: unknown } | null>
   getBoq(id: string): Promise<Boq | null>
-  updateBoq(id: string, prepareUpdate: (current: Boq) => BoqUpdateDecision): Promise<BoqUpdateResult>
+  updateBoq(
+    id: string,
+    prepareUpdate: (
+      current: Boq,
+      actionableBlocking?: { pending: number; stale: boolean } | null,
+    ) => BoqUpdateDecision,
+  ): Promise<BoqUpdateResult>
   deleteBoq(id: string): Promise<void>
   loadSource(path: string): Promise<Buffer>
   deleteSource(path: string): Promise<void>
@@ -77,7 +84,7 @@ export function createBoqDetailHandlers(dependencies: BoqDetailDependencies) {
       }
       const hasSections = body.sections !== undefined
       const requestSections = hasSections ? parseCanonicalBoqSections(body.sections) : undefined
-      const updateResult = await dependencies.updateBoq(id, (current) => {
+      const updateResult = await dependencies.updateBoq(id, (current, actionableBlocking) => {
         const updates = { ...requestedUpdates }
         if (requestSections || body.status === 'approved') {
           const sections = requestSections ?? parseCanonicalBoqSections(current.sections)
@@ -103,6 +110,26 @@ export function createBoqDetailHandlers(dependencies: BoqDetailDependencies) {
               kind: 'rejected',
               status: 400,
               body: { error: 'Resolve catalog items before approval', catalogReadiness },
+            }
+          }
+          const readiness = buildBoqApprovalReadiness({
+            verificationBlocking: verification.hasBlockingIssues ? 1 : 0,
+            catalogBlocking: catalogReadiness.blocking,
+            actionableBlocking: actionableBlocking ?? null,
+          })
+          if (readiness.actionableReviewBlocking > 0 || readiness.staleReview) {
+            return {
+              kind: 'rejected',
+              status: 400,
+              body: {
+                error: 'Resolve pending extraction review before approval',
+                actionableReview: {
+                  pending: readiness.actionableReviewBlocking,
+                  stale: readiness.staleReview,
+                },
+                verification,
+                catalogReadiness,
+              },
             }
           }
         }

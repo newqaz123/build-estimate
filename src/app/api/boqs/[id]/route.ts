@@ -10,6 +10,12 @@ import type { Boq } from '@/lib/boq-schema'
 import type { StandardEntry } from '@/lib/standard-schema'
 import { getDocument, runTransaction } from '@/lib/db'
 import { pruneBoqFromStandards } from '@/lib/boq-deletion'
+import { extractionRunPath } from '@/lib/boq-extraction-storage'
+import { fingerprintCanonicalSections } from '@/lib/boq-extraction-proposals'
+import {
+  ACTIONABLE_REVIEW_SNAPSHOTS_COLLECTION,
+  parseActionableReviewSnapshotDocument,
+} from '@/lib/actionable-review-storage'
 import { createBoqDetailHandlers, type BoqDetailRouteContext } from './handler'
 
 const handlers = createBoqDetailHandlers({
@@ -21,7 +27,24 @@ const handlers = createBoqDetailHandlers({
     if (!snapshot.exists) return 'not-found'
     if (snapshot.data()?.status === 'approved') return 'approved'
     const current = { id: snapshot.id, ...snapshot.data() } as Boq
-    const decision = prepareUpdate(current)
+    let actionableBlocking: { pending: number; stale: boolean } | null = null
+    const runId = current.activeExtractionRunId
+    if (runId) {
+      const snapshotsPath = `${extractionRunPath(current.id, runId)}/${ACTIONABLE_REVIEW_SNAPSHOTS_COLLECTION}`
+      const snapshotQuery = await transaction.get(
+        db.collection(snapshotsPath).orderBy('generatedAt', 'desc').limit(1),
+      )
+      if (!snapshotQuery.empty) {
+        const latest = parseActionableReviewSnapshotDocument(snapshotQuery.docs[0]!.data())
+        const pending = latest.actionableItemSuggestions.filter(
+          (suggestion) => suggestion.status === 'pending',
+        ).length
+        const stale =
+          latest.versions.boqSectionsFingerprint !== fingerprintCanonicalSections(current.sections)
+        actionableBlocking = { pending, stale }
+      }
+    }
+    const decision = prepareUpdate(current, actionableBlocking)
     if (decision.kind === 'rejected') return decision
     transaction.update(ref, { ...decision.updates, updatedAt: new Date().toISOString() })
     return 'updated'

@@ -1155,7 +1155,7 @@ function CanonicalBoqWorkspace({
       }
       const approved = (await response.json()) as Boq;
       applyMutationBoq(approved);
-      toast.success("BOQ approved and linked to the Standard Catalog");
+      toast.success("BOQ approved");
 		} catch (error) {
 			toast.error(
 				error instanceof Error ? error.message : "Failed to approve BOQ",

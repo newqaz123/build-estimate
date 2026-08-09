@@ -107,6 +107,15 @@ test("approval finalizes in place without redirect", () => {
   assert.doesNotMatch(approval, /onApproved/);
 });
 
+test("approval success copy is status-only without linking to the catalog", () => {
+  const approval = sourceSection(
+    "const handleApprove",
+    "const reloadAfterManualMatch",
+  );
+  assert.match(approval, /toast\.success\("BOQ approved"\)/);
+  assert.doesNotMatch(approval, /linked to the Standard Catalog/);
+});
+
 test("every existing approval blocker remains before the approval request", () => {
   const approval = sourceSection(
     "const handleApprove",

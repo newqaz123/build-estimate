@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import type { Boq, BoqPricedItem } from '@/lib/boq-schema'
+import { fingerprintCanonicalSections } from '@/lib/boq-extraction-proposals'
 import { createBoqDetailHandlers } from './[id]/handler'
 import { createSourceHandler } from './[id]/source/handler'
 
@@ -514,4 +515,180 @@ test('DELETE still removes BOQs without a source reference', async () => {
   const response = await harness.handlers.DELETE(new Request('http://localhost/api/boqs/boq-1', { method: 'DELETE' }), detailContext)
   assert.equal(response.status, 200)
   assert.deepEqual(harness.calls, ['db'])
+})
+
+// Actionable extraction review is read inside the approval transaction (mirrors
+// route.ts) and blocks approval when suggestions are pending or the snapshot is
+// stale. The harness reads the latest snapshot fresh each transaction attempt.
+interface TestActionableSnapshot {
+  generatedAt: string
+  versions: { boqSectionsFingerprint: string }
+  actionableItemSuggestions: { status: string }[]
+}
+
+function makeActionableSnapshot(
+  generatedAt: string,
+  boqSectionsFingerprint: string,
+  suggestions: { status: string }[],
+): TestActionableSnapshot {
+  return {
+    generatedAt,
+    versions: { boqSectionsFingerprint },
+    actionableItemSuggestions: suggestions,
+  }
+}
+
+function readActionableBlocking(
+  boq: Boq,
+  snapshots: TestActionableSnapshot[],
+): { pending: number; stale: boolean } | null {
+  const runId = boq.activeExtractionRunId
+  if (!runId || snapshots.length === 0) return null
+  const latest = [...snapshots].sort((a, b) =>
+    b.generatedAt.localeCompare(a.generatedAt),
+  )[0]!
+  const pending = latest.actionableItemSuggestions.filter(
+    (suggestion) => suggestion.status === 'pending',
+  ).length
+  const stale =
+    latest.versions.boqSectionsFingerprint !== fingerprintCanonicalSections(boq.sections)
+  return { pending, stale }
+}
+
+function actionableApprovalHarness(
+  boq: Boq,
+  snapshots: TestActionableSnapshot[],
+  onTransaction?: (boq: Boq, snapshots: TestActionableSnapshot[]) => void,
+) {
+  let current = boq
+  let attempts = 0
+  const handlers = createBoqDetailHandlers({
+    authenticate: async () => ({ user: {} }),
+    getBoq: async () => current,
+    updateBoq: async (_id, prepareUpdate) => {
+      attempts += 1
+      if (onTransaction) onTransaction(current, snapshots)
+      const decision = prepareUpdate(current, readActionableBlocking(current, snapshots))
+      if (decision.kind === 'rejected') return decision
+      current = { ...current, ...decision.updates } as Boq
+      return 'updated'
+    },
+    deleteBoq: async () => {},
+    loadSource: async () => Buffer.from('%PDF'),
+    deleteSource: async () => {},
+    saveSource: async () => {},
+    logError: () => {},
+  })
+  return { handlers, attempts: () => attempts, current: () => current }
+}
+
+function approveRequest() {
+  return new Request('http://localhost/api/boqs/boq-1', {
+    method: 'PUT',
+    body: JSON.stringify({ status: 'approved' }),
+  })
+}
+
+test('approval blocks when the latest actionable snapshot has a pending suggestion', async () => {
+  const boq = detailBoq({ activeExtractionRunId: 'run-1' })
+  const liveFingerprint = fingerprintCanonicalSections(boq.sections)
+  const { handlers } = actionableApprovalHarness(boq, [
+    makeActionableSnapshot('2026-01-01T00:00:00.000Z', liveFingerprint, [
+      { status: 'pending' },
+      { status: 'added_matched' },
+    ]),
+  ])
+
+  const response = await handlers.PUT(approveRequest(), detailContext)
+  const body = await response.json()
+
+  assert.equal(response.status, 400)
+  assert.equal(body.error, 'Resolve pending extraction review before approval')
+  assert.equal(body.actionableReview.pending, 1)
+  assert.equal(body.actionableReview.stale, false)
+  assert.equal(body.verification.hasBlockingIssues, false)
+  assert.equal(body.catalogReadiness.blocking, 0)
+  assert.equal(boq.status, 'draft')
+})
+
+test('approval blocks when the latest actionable snapshot is stale against the live BOQ', async () => {
+  const boq = detailBoq({ activeExtractionRunId: 'run-1' })
+  const { handlers } = actionableApprovalHarness(boq, [
+    makeActionableSnapshot('2026-01-01T00:00:00.000Z', 'sha256:stale-fingerprint', [
+      { status: 'added_matched' },
+    ]),
+  ])
+
+  const response = await handlers.PUT(approveRequest(), detailContext)
+  const body = await response.json()
+
+  assert.equal(response.status, 400)
+  assert.equal(body.error, 'Resolve pending extraction review before approval')
+  assert.equal(body.actionableReview.pending, 0)
+  assert.equal(body.actionableReview.stale, true)
+  assert.equal(boq.status, 'draft')
+})
+
+test('approval succeeds when there is no active extraction run or generated snapshot', async () => {
+  const boq = detailBoq()
+  const harness = actionableApprovalHarness(boq, [])
+
+  const response = await harness.handlers.PUT(approveRequest(), detailContext)
+
+  assert.equal(response.status, 200)
+  assert.equal(harness.current().status, 'approved')
+})
+
+test('approval retries the transaction and blocks after a concurrent restore adds a pending suggestion', async () => {
+  const boq = detailBoq({ activeExtractionRunId: 'run-1' })
+  const liveFingerprint = fingerprintCanonicalSections(boq.sections)
+  const resolved = makeActionableSnapshot('2026-01-01T00:00:00.000Z', liveFingerprint, [
+    { status: 'added_matched' },
+  ])
+  const restored = makeActionableSnapshot('2026-01-02T00:00:00.000Z', liveFingerprint, [
+    { status: 'pending' },
+  ])
+  let snapshots: TestActionableSnapshot[] = [resolved]
+  let restoreFired = false
+  let current = boq
+  let attempts = 0
+  const handlers = createBoqDetailHandlers({
+    authenticate: async () => ({ user: {} }),
+    getBoq: async () => current,
+    updateBoq: async (_id, prepareUpdate) => {
+      attempts += 1
+      let blocking = readActionableBlocking(current, snapshots)
+      let decision = prepareUpdate(current, blocking)
+      // First attempt read the resolved snapshot and would commit, but a
+      // concurrent restore flips the latest snapshot to pending before the
+      // commit. The transaction conflicts and retries, re-reading the
+      // now-pending snapshot.
+      if (attempts === 1 && decision.kind === 'update' && !restoreFired) {
+        restoreFired = true
+        snapshots = [restored]
+        attempts += 1
+        blocking = readActionableBlocking(current, snapshots)
+        decision = prepareUpdate(current, blocking)
+      }
+      if (decision.kind === 'rejected') return decision
+      current = { ...current, ...decision.updates } as Boq
+      return 'updated'
+    },
+    deleteBoq: async () => {},
+    loadSource: async () => Buffer.from('%PDF'),
+    deleteSource: async () => {},
+    saveSource: async () => {},
+    logError: () => {},
+  })
+
+  const response = await handlers.PUT(approveRequest(), detailContext)
+  const body = await response.json()
+
+  assert.equal(attempts, 2)
+  assert.equal(restoreFired, true)
+  assert.equal(response.status, 400)
+  assert.equal(body.error, 'Resolve pending extraction review before approval')
+  assert.equal(body.actionableReview.pending, 1)
+  assert.equal(body.actionableReview.stale, false)
+  assert.equal(current.status, 'draft')
 })
