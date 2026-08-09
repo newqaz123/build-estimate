@@ -80,7 +80,7 @@ export function createActionableReviewProviderCall(deps: {
       },
     ]
     const result = await invoke(messages, deps.provider, model, deps.signal)
-    const content = result.content.trim()
+    const content = unwrapConventionalJsonFence(result.content)
     try {
       return JSON.parse(content) as unknown
     } catch {
@@ -88,4 +88,15 @@ export function createActionableReviewProviderCall(deps: {
       return { malformed: true, content }
     }
   }
+}
+
+/**
+ * Safely unwrap one conventional ``` / ```json fenced object before JSON.parse.
+ * Anything else is returned trimmed for fail-closed parse.
+ */
+export function unwrapConventionalJsonFence(raw: string): string {
+  const trimmed = raw.trim()
+  const fenced = /^```(?:json)?\s*\r?\n?([\s\S]*?)\r?\n?```\s*$/i.exec(trimmed)
+  if (!fenced) return trimmed
+  return fenced[1]!.trim()
 }

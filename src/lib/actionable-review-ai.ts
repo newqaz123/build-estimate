@@ -5,6 +5,7 @@ import {
 } from './actionable-review-types'
 import {
   buildSourceSignature,
+  isHashedCatalogMappingCacheKey,
   type CatalogMappingCache,
   type ApprovedCatalogMapping,
 } from './catalog-mapping-cache'
@@ -77,6 +78,7 @@ const MAX_DESCRIPTION_LENGTH = 400
 const LOCAL_FALLBACK_REASON = 'local_manual_fallback'
 const LOCAL_EXACT_REASON = 'deterministic_exact_match'
 const LOCAL_CACHE_REASON = 'validated_mapping_cache'
+const DUPLICATE_ROW_REASON = 'duplicate_source_row_id'
 
 const ADVICE_KEYS = new Set([
   'sourceRowId',
@@ -147,6 +149,7 @@ function closedCandidate(
   return closed
 }
 
+/** Clamp only outbound provider payloads — never use for cache signature revalidation. */
 function closedRequestRow(row: ActionableReviewAiRequestRow): ActionableReviewAiRequestRow {
   return {
     sourceRowId: row.sourceRowId,
@@ -168,6 +171,36 @@ function localFallback(sourceRowId: string, reason = LOCAL_FALLBACK_REASON): Act
   }
 }
 
+/**
+ * Maps executor sourceRowId lookups onto precomputed Task 6 hashed cache keys.
+ * Task 8 owns key computation from workspace/catalog/conversion/prompt/model fingerprints.
+ * Fail-closed for missing or non-hashed mappings. Read-only — never writes.
+ */
+export function createActionableReviewRowCacheAdapter(input: {
+  cache: CatalogMappingCache
+  keysBySourceRowId: ReadonlyMap<string, string> | Readonly<Record<string, string>>
+}): CatalogMappingCache {
+  const keyLookup = input.keysBySourceRowId instanceof Map
+    ? input.keysBySourceRowId
+    : new Map(Object.entries(input.keysBySourceRowId))
+
+  return {
+    async get(sourceRowId: string): Promise<ApprovedCatalogMapping | null> {
+      const hashedKey = keyLookup.get(sourceRowId)
+      if (typeof hashedKey !== 'string' || !isHashedCatalogMappingCacheKey(hashedKey)) {
+        return null
+      }
+      return input.cache.get(hashedKey)
+    },
+    async put(): Promise<void> {
+      throw new Error('Actionable review row-cache adapter is read-only.')
+    },
+    async remove(): Promise<void> {
+      throw new Error('Actionable review row-cache adapter is read-only.')
+    },
+  }
+}
+
 function isDeterministicExact(row: ActionableReviewAiRequestRow): ActionableReviewAiCatalogCandidate | null {
   if (row.candidates.length !== 1) return null
   const only = row.candidates[0]
@@ -178,18 +211,27 @@ function isDeterministicExact(row: ActionableReviewAiRequestRow): ActionableRevi
   return null
 }
 
-function conversionAllowed(
+/**
+ * Match conversion rules are exact:
+ * - candidate with conversion metadata requires that exact rule id
+ * - candidate without conversion rejects any rule id
+ */
+function conversionMatches(
   candidate: ActionableReviewAiCatalogCandidate,
   conversionRuleId: string | undefined,
 ): boolean {
-  if (conversionRuleId === undefined) return true
-  return candidate.conversion?.ruleId === conversionRuleId
+  const required = candidate.conversion?.ruleId
+  if (required !== undefined) {
+    return conversionRuleId === required
+  }
+  return conversionRuleId === undefined
 }
 
 function revalidateCachedMapping(
   row: ActionableReviewAiRequestRow,
   mapping: ApprovedCatalogMapping,
 ): ActionableReviewAiAdvice | null {
+  // ORIGINAL unclamped description/unit — clamping is outbound-only.
   const rowSignature = buildSourceSignature({
     description: row.description,
     unit: row.unit,
@@ -198,7 +240,7 @@ function revalidateCachedMapping(
 
   const candidate = row.candidates.find((item) => item.catalogId === mapping.catalogId)
   if (!candidate) return null
-  if (!conversionAllowed(candidate, mapping.conversionRuleId)) return null
+  if (!conversionMatches(candidate, mapping.conversionRuleId)) return null
 
   const advice: ActionableReviewAiAdvice = {
     sourceRowId: row.sourceRowId,
@@ -304,9 +346,8 @@ function parseOneAdvice(
     if (!hasCatalogId || hasProposed) return null
     const candidate = row.candidates.find((item) => item.catalogId === catalogId)
     if (!candidate) return null
-    if (hasConversionRuleId) {
-      if (!conversionAllowed(candidate, conversionRuleId as string)) return null
-    }
+    const selectedRule = hasConversionRuleId ? (conversionRuleId as string) : undefined
+    if (!conversionMatches(candidate, selectedRule)) return null
     const advice: ActionableReviewAiAdvice = {
       sourceRowId,
       decision: 'match',
@@ -314,8 +355,8 @@ function parseOneAdvice(
       confidence,
       reason,
     }
-    if (hasConversionRuleId) {
-      advice.conversionRuleId = conversionRuleId as string
+    if (selectedRule !== undefined) {
+      advice.conversionRuleId = selectedRule
     }
     seenIds.add(sourceRowId)
     return advice
@@ -365,8 +406,6 @@ export function parseActionableReviewAiProviderResponse(
   for (const entry of value.advice) {
     const advice = parseOneAdvice(entry, rowById, seenIds)
     if (!advice) {
-      // Malformed entry invalidates the whole envelope when any unknown/dup/forbidden shape appears.
-      // Callers may still recover per-row via local fallback.
       return null
     }
     parsed.push(advice)
@@ -395,6 +434,24 @@ function mergeAdviceByRowId(
   return base.map((item) => map.get(item.sourceRowId) ?? item)
 }
 
+function collectUniqueRows(rows: readonly ActionableReviewAiRequestRow[]): {
+  unique: ActionableReviewAiRequestRow[]
+  hasDuplicates: boolean
+} {
+  const seen = new Set<string>()
+  const unique: ActionableReviewAiRequestRow[] = []
+  let hasDuplicates = false
+  for (const row of rows) {
+    if (seen.has(row.sourceRowId)) {
+      hasDuplicates = true
+      continue
+    }
+    seen.add(row.sourceRowId)
+    unique.push(row)
+  }
+  return { unique, hasDuplicates }
+}
+
 async function invokeProvider(input: {
   model: string
   rows: readonly ActionableReviewAiRequestRow[]
@@ -409,6 +466,7 @@ async function invokeProvider(input: {
   providerUnavailable: boolean
   remainingBudget: number
 }> {
+  // Clamp only the outbound payload; parse allowlists use the same closed snapshot.
   const closedRows = input.rows.map(closedRequestRow)
   const fallback = closedRows.map((row) => localFallback(row.sourceRowId))
 
@@ -427,7 +485,20 @@ async function invokeProvider(input: {
     rows: closedRows,
     maxPromptTokens: input.settings.maxPromptTokens,
   }
-  const estimated = input.estimateCostMinor(estimateInput)
+
+  let estimated: number
+  try {
+    estimated = input.estimateCostMinor(estimateInput)
+  } catch {
+    return {
+      advice: fallback,
+      called: false,
+      estimatedCostMinor: 0,
+      providerUnavailable: false,
+      remainingBudget: input.remainingBudget,
+    }
+  }
+
   if (!Number.isFinite(estimated) || estimated < 0 || estimated > input.remainingBudget) {
     return {
       advice: fallback,
@@ -479,15 +550,26 @@ export async function executeActionableReviewAiBatch(input: {
   estimateCostMinor: ActionableReviewCostEstimator
   cache: CatalogMappingCache
 }): Promise<ActionableReviewAiBatchResult> {
-  const limitedRows = input.rows
-    .slice(0, Math.max(0, input.settings.maxRows))
-    .map(closedRequestRow)
+  // Keep ORIGINAL rows for cache signature / local decisions; clamp only on provider send.
+  const limitedRows = input.rows.slice(0, Math.max(0, input.settings.maxRows))
+  const { unique, hasDuplicates } = collectUniqueRows(limitedRows)
+
+  if (hasDuplicates) {
+    return {
+      advice: unique.map((row) => localFallback(row.sourceRowId, DUPLICATE_ROW_REASON)),
+      cacheHitCount: 0,
+      initialCallCount: 0,
+      escalationCallCount: 0,
+      estimatedCostMinor: 0,
+      providerUnavailable: false,
+    }
+  }
 
   const adviceById = new Map<string, ActionableReviewAiAdvice>()
   const pending: ActionableReviewAiRequestRow[] = []
   let cacheHitCount = 0
 
-  for (const row of limitedRows) {
+  for (const row of unique) {
     const cached = await input.cache.get(row.sourceRowId)
     if (cached) {
       const validated = revalidateCachedMapping(row, cached)
@@ -515,7 +597,7 @@ export async function executeActionableReviewAiBatch(input: {
 
   if (pending.length === 0) {
     return {
-      advice: limitedRows.map((row) => adviceById.get(row.sourceRowId) ?? localFallback(row.sourceRowId)),
+      advice: unique.map((row) => adviceById.get(row.sourceRowId) ?? localFallback(row.sourceRowId)),
       cacheHitCount,
       initialCallCount,
       escalationCallCount,
@@ -529,7 +611,7 @@ export async function executeActionableReviewAiBatch(input: {
       adviceById.set(row.sourceRowId, localFallback(row.sourceRowId))
     }
     return {
-      advice: limitedRows.map((row) => adviceById.get(row.sourceRowId) ?? localFallback(row.sourceRowId)),
+      advice: unique.map((row) => adviceById.get(row.sourceRowId) ?? localFallback(row.sourceRowId)),
       cacheHitCount,
       initialCallCount: 0,
       escalationCallCount: 0,
@@ -557,7 +639,6 @@ export async function executeActionableReviewAiBatch(input: {
     adviceById.set(item.sourceRowId, item)
   }
 
-  // If the initial call was blocked by budget/estimate, mark fallbacks.
   if (!initial.called) {
     for (const row of pending) {
       if (!adviceById.has(row.sourceRowId)) {
@@ -566,6 +647,8 @@ export async function executeActionableReviewAiBatch(input: {
     }
   }
 
+  // Paid escalation only after a usable initial response. Throw/malformed/incomplete
+  // sets providerUnavailable and must not trigger a second paid call.
   const uncertainRows = pending.filter((row) => {
     const advice = adviceById.get(row.sourceRowId)
     return advice?.decision === 'uncertain'
@@ -573,7 +656,8 @@ export async function executeActionableReviewAiBatch(input: {
 
   const escalationModel = input.settings.escalationModel?.trim()
   if (
-    input.settings.escalationEnabled
+    !providerUnavailable
+    && input.settings.escalationEnabled
     && uncertainRows.length > 0
     && escalationModel
     && remainingBudget > 0
@@ -604,7 +688,7 @@ export async function executeActionableReviewAiBatch(input: {
   }
 
   return {
-    advice: limitedRows.map((row) => adviceById.get(row.sourceRowId) ?? localFallback(row.sourceRowId)),
+    advice: unique.map((row) => adviceById.get(row.sourceRowId) ?? localFallback(row.sourceRowId)),
     cacheHitCount,
     initialCallCount,
     escalationCallCount,
