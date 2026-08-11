@@ -5,16 +5,14 @@ import type { StandardEntry } from '@/lib/standard-schema'
 import type { Boq, BoqItem } from '@/lib/boq-schema'
 import { buildCatalogHistoricalPricing } from '@/lib/catalog-historical-pricing'
 import { isPricedBoqItem } from '@/lib/boq-pricing'
+import {
+  mergeStandardSourceItems,
+  normalizeStandardEntry,
+} from '@/lib/catalog-linking'
 
 type MatchConfidence = BoqItem['stdConfidence']
 
-export function normalizeStandardEntry(entry: StandardEntry): StandardEntry {
-  return {
-    ...entry,
-    aliases: entry.aliases ?? [],
-    sourceItems: entry.sourceItems ?? [],
-  }
-}
+export { mergeStandardSourceItems, normalizeStandardEntry }
 
 export function queryStandards(
   entries: StandardEntry[],
@@ -67,33 +65,6 @@ export function applyStandardToBoqItem(
   }
   delete updated.stdExclusionReason
   return updated
-}
-
-export function mergeStandardSourceItems(
-  standard: StandardEntry,
-  sourceItem: NonNullable<StandardEntry['sourceItems']>[number],
-  matchedAt: string,
-): StandardEntry {
-  const existingItems = standard.sourceItems ?? []
-  const alreadyPresent = existingItems.some(
-    (entry) =>
-      entry.boqId === sourceItem.boqId &&
-      entry.sectionIndex === sourceItem.sectionIndex &&
-      (sourceItem.itemId
-        ? entry.itemId === sourceItem.itemId
-        : !entry.itemId && entry.itemCode === sourceItem.itemCode) &&
-      entry.sourceDescription === sourceItem.sourceDescription,
-  )
-
-  const nextSourceItems = alreadyPresent ? existingItems : [...existingItems, sourceItem]
-  const uniqueBoqIds = new Set(nextSourceItems.map((entry) => entry.boqId))
-
-  return {
-    ...normalizeStandardEntry(standard),
-    sourceItems: nextSourceItems,
-    sourceBoqCount: uniqueBoqIds.size,
-    lastMatched: matchedAt,
-  }
 }
 
 export async function GET(request: NextRequest) {

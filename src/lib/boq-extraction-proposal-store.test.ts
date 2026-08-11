@@ -36,6 +36,13 @@ import {
 	actionableSuggestionDecisionPath,
 	toSnapshotDocument,
 } from "./actionable-review-storage";
+import {
+	buildCatalogFingerprint,
+	buildConversionFingerprint,
+} from "./catalog-mapping-cache";
+import { CATALOG_CONVERSION_RULES_COLLECTION } from "./catalog-conversion-storage";
+import type { StandardEntry } from "./standard-schema";
+import { parseCanonicalBoqSections } from "./boq-canonical";
 
 type RecordData = Record<string, unknown>;
 
@@ -125,7 +132,10 @@ class MemoryDb {
 			data: RecordData;
 		}> = [];
 		const transaction = {
-			get: async (ref: MemoryDoc) => ref.get(),
+			get: async (ref: MemoryDoc | MemoryCollection) => {
+				if (ref instanceof MemoryCollection) return ref.get();
+				return ref.get();
+			},
 			getAll: async (...refs: MemoryDoc[]) =>
 				Promise.all(refs.map((ref) => ref.get())),
 			create: (ref: MemoryDoc, data: RecordData) =>
@@ -4135,5 +4145,711 @@ test("decideActionableSuggestion dismiss/restore lifecycle is append-only and re
 		};
 		assert.equal(headAdd.humanDecision, "add_pending_catalog");
 		assert.equal(headAdd.sequence, 3);
+	},
+);
+
+// ---------------------------------------------------------------------------
+// Task 3: add_and_match atomic transaction
+// ---------------------------------------------------------------------------
+
+const STD_SAME = "std-same-unit";
+const STD_BOLTS = "std-bolts";
+const RULE_GLOBAL = "rule-global-ea-10ea";
+const RULE_ITEM = "rule-item-ea-10ea";
+
+function seedMatchCatalog(
+	fixture: ReturnType<typeof actionableHarness>,
+	options: {
+		sameUnit?: boolean;
+		conversion?: "global" | "catalog_item" | "none";
+		extraCandidates?: boolean;
+	} = {},
+) {
+	const sameUnit = options.sameUnit !== false;
+	const conversion = options.conversion ?? "none";
+
+	const standards: StandardEntry[] = [];
+	if (sameUnit || conversion === "none") {
+		standards.push({
+			id: STD_SAME,
+			description: "Ready mix concrete",
+			unit: "m3",
+			aliases: [],
+			sourceItems: [],
+			sourceBoqCount: 0,
+			createdAt: "2026-08-01T00:00:00.000Z",
+			updatedAt: "2026-08-01T00:00:00.000Z",
+		});
+	}
+	if (conversion !== "none") {
+		standards.push({
+			id: STD_BOLTS,
+			description: "Hex bolts",
+			unit: "10ea",
+			aliases: [],
+			sourceItems: [],
+			sourceBoqCount: 0,
+			createdAt: "2026-08-01T00:00:00.000Z",
+			updatedAt: "2026-08-01T00:00:00.000Z",
+		});
+	}
+	for (const entry of standards) {
+		fixture.db.docs.set(`standards/${entry.id}`, { ...entry });
+	}
+
+	const rules: Array<Record<string, unknown>> = [];
+	if (conversion === "global") {
+		rules.push({
+			id: RULE_GLOBAL,
+			sourceUnit: "ea",
+			catalogUnit: "10ea",
+			catalogUnitsPerSourceUnit: "10",
+			scope: "global",
+			version: 1,
+			approvedBy: "admin",
+			approvedAt: "2026-01-01T00:00:00.000Z",
+		});
+	}
+	if (conversion === "catalog_item") {
+		rules.push({
+			id: RULE_ITEM,
+			sourceUnit: "ea",
+			catalogUnit: "10ea",
+			catalogUnitsPerSourceUnit: "10",
+			scope: "catalog_item",
+			catalogId: STD_BOLTS,
+			version: 1,
+			approvedBy: "admin",
+			approvedAt: "2026-01-01T00:00:00.000Z",
+		});
+	}
+	for (const rule of rules) {
+		fixture.db.docs.set(
+			`${CATALOG_CONVERSION_RULES_COLLECTION}/${rule.id as string}`,
+			{ ...rule },
+		);
+	}
+
+	const catalogFingerprint = buildCatalogFingerprint(standards);
+	const conversionFingerprint = buildConversionFingerprint(
+		rules.map((rule) => ({
+			id: String(rule.id),
+			sourceUnit: String(rule.sourceUnit),
+			catalogUnit: String(rule.catalogUnit),
+			catalogUnitsPerSourceUnit: String(rule.catalogUnitsPerSourceUnit),
+			scope: rule.scope as "global" | "catalog_item",
+			catalogId:
+				typeof rule.catalogId === "string" ? rule.catalogId : undefined,
+			version: Number(rule.version),
+		})),
+	);
+
+	const snap = fixture.db.docs.get(fixture.path)! as {
+		versions: Record<string, string>;
+		actionableItemSuggestions: Array<Record<string, unknown>>;
+	};
+	snap.versions.catalogFingerprint = catalogFingerprint;
+	snap.versions.conversionFingerprint = conversionFingerprint;
+
+	const suggestion = snap.actionableItemSuggestions[0]!;
+	const versions = {
+		...(suggestion.versions as Record<string, string>),
+		catalogFingerprint,
+		conversionFingerprint,
+	};
+	suggestion.versions = versions;
+
+	if (conversion === "none") {
+		suggestion.catalogCandidates = [
+			{
+				catalogId: STD_SAME,
+				description: "Ready mix concrete",
+				unit: "m3",
+				matchKind: "exact",
+				score: 100,
+			},
+		];
+	} else {
+		suggestion.extractedItem = {
+			description: "Bolts",
+			unit: "ea",
+			quantity: "10",
+			materialRate: "5",
+			labourRate: "3",
+			total: "80",
+		};
+		suggestion.catalogCandidates = [
+			{
+				catalogId: STD_BOLTS,
+				description: "Hex bolts",
+				unit: "10ea",
+				matchKind: "conversion",
+				score: 90,
+				conversionRuleId: conversion === "global" ? RULE_GLOBAL : RULE_ITEM,
+			},
+		];
+	}
+
+	if (options.extraCandidates) {
+		(suggestion.catalogCandidates as unknown[]).push({
+			catalogId: "not-shortlisted-never",
+			description: "Other",
+			unit: "ea",
+			matchKind: "fuzzy",
+			score: 10,
+		});
+	}
+
+	// Keep second suggestion versions in sync for fingerprint consistency.
+	for (const entry of snap.actionableItemSuggestions) {
+		entry.versions = {
+			...(entry.versions as Record<string, string>),
+			catalogFingerprint,
+			conversionFingerprint,
+		};
+	}
+
+	return {
+		catalogFingerprint,
+		conversionFingerprint,
+		sameUnitItem: matchingItem,
+		boltsItem: {
+			sectionIndex: 0,
+			desc: "Bolts",
+			unit: "ea",
+			qty: 10,
+			materialCost: 5,
+			labourCost: 3,
+		},
+	};
+}
+
+test("decideActionableSuggestion add_and_match same-unit persists matched item, snapshots, history, and is idempotent",
+	async () => {
+		const fixture = actionableHarness();
+		const seeded = seedMatchCatalog(fixture, { conversion: "none" });
+		const beforeItems = (
+			fixture.db.docs.get("boqs/boq-1") as unknown as Boq
+		).sections[0]!.items.length;
+		const beforeStd = structuredClone(
+			fixture.db.docs.get(`standards/${STD_SAME}`),
+		);
+
+		const result = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_and_match",
+				expectedFingerprint: FINGERPRINT,
+				catalogId: STD_SAME,
+				item: seeded.sameUnitItem,
+			},
+			"user-1",
+		);
+		assert.equal(result.status, 200);
+		if (result.status !== 200) return;
+
+		const body = result.body as {
+			status: string;
+			audit: Record<string, unknown>;
+			snapshot: ActionableReview;
+			boq: Boq;
+			itemId: string;
+		};
+		assert.equal(body.status, "added_matched");
+		assert.equal(body.audit.humanDecision, "add_and_match");
+		assert.equal(body.audit.suggestionStatus, "added_matched");
+		assert.equal(body.audit.catalogId, STD_SAME);
+		assert.equal(body.audit.actorId, "user-1");
+		assert.notEqual(
+			body.audit.humanDecision,
+			(body.audit.aiAdvice as { decision: string } | undefined)?.decision,
+		);
+		assert.ok(body.audit.reviewerPricing);
+		assert.ok(body.audit.pricingNormalization);
+
+		const stored = fixture.db.docs.get("boqs/boq-1") as unknown as Boq;
+		assert.equal(stored.sections[0]!.items.length, beforeItems + 1);
+		const added = stored.sections[0]!.items[beforeItems]! as BoqPricedItem;
+		assert.equal(added.id, body.itemId);
+		assert.equal(added.stdStatus, "matched");
+		assert.equal(added.stdId, STD_SAME);
+		assert.equal(added.unit, "m3");
+		assert.ok(added.extractedPricing);
+		assert.ok(added.reviewerPricing);
+		assert.ok(added.pricingNormalization);
+		assert.equal(added.pricingNormalization?.catalogId, STD_SAME);
+
+		// Canonical three-snapshot invariants hold on the persisted item.
+		const [section] = parseCanonicalBoqSections([
+			{ header: "S", items: [added] },
+		]);
+		assert.equal((section!.items[0] as BoqPricedItem).stdId, STD_SAME);
+
+		const std = fixture.db.docs.get(`standards/${STD_SAME}`) as {
+			sourceItems: unknown[];
+			sourceBoqCount: number;
+			lastMatched: string;
+		};
+		assert.equal(std.sourceItems.length, 1);
+		assert.equal(std.sourceBoqCount, 1);
+		assert.equal(std.lastMatched, "2026-08-08T12:00:00.000Z");
+		assert.notDeepEqual(std, beforeStd);
+
+		const snapSuggestion = body.snapshot.actionableItemSuggestions.find(
+			(s) => s.id === SUGGESTION_ID,
+		);
+		assert.equal(snapSuggestion?.status, "added_matched");
+
+		// Identical retry does not duplicate item or source history.
+		const retry = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_and_match",
+				expectedFingerprint: FINGERPRINT,
+				catalogId: STD_SAME,
+				item: seeded.sameUnitItem,
+			},
+			"user-1",
+		);
+		assert.equal(retry.status, 200);
+		assert.equal((retry.body as { idempotent?: boolean }).idempotent, true);
+		assert.equal(
+			(fixture.db.docs.get("boqs/boq-1") as unknown as Boq).sections[0]!
+				.items.length,
+			beforeItems + 1,
+		);
+		assert.equal(
+			(fixture.db.docs.get(`standards/${STD_SAME}`) as { sourceItems: unknown[] })
+				.sourceItems.length,
+			1,
+		);
+	},
+);
+
+test("decideActionableSuggestion add_and_match global conversion normalizes operational fields",
+	async () => {
+		const fixture = actionableHarness();
+		const seeded = seedMatchCatalog(fixture, { conversion: "global" });
+		const beforeItems = (
+			fixture.db.docs.get("boqs/boq-1") as unknown as Boq
+		).sections[0]!.items.length;
+
+		const result = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_and_match",
+				expectedFingerprint: FINGERPRINT,
+				catalogId: STD_BOLTS,
+				conversionRuleId: RULE_GLOBAL,
+				item: seeded.boltsItem,
+			},
+			"user-1",
+		);
+		assert.equal(result.status, 200);
+		if (result.status !== 200) return;
+		const body = result.body as {
+			audit: { conversionRuleId?: string; pricingNormalization?: { normalizedQuantity: string } };
+			itemId: string;
+		};
+		assert.equal(body.audit.conversionRuleId, RULE_GLOBAL);
+		assert.equal(body.audit.pricingNormalization?.normalizedQuantity, "100");
+
+		const added = (
+			fixture.db.docs.get("boqs/boq-1") as unknown as Boq
+		).sections[0]!.items[beforeItems]! as BoqPricedItem;
+		assert.equal(added.unit, "10ea");
+		assert.equal(added.qty, 100);
+		assert.equal(added.rate, 0.8);
+		assert.equal(added.total, 80);
+		assert.deepEqual(added.costAllocation, {
+			basis: "rate",
+			material: 0.5,
+			labour: 0.3,
+			origin: "manual",
+		});
+		parseCanonicalBoqSections([{ header: "S", items: [added] }]);
+	},
+);
+
+test("decideActionableSuggestion add_and_match catalog-item conversion path",
+	async () => {
+		const fixture = actionableHarness();
+		const seeded = seedMatchCatalog(fixture, { conversion: "catalog_item" });
+		const result = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_and_match",
+				expectedFingerprint: FINGERPRINT,
+				catalogId: STD_BOLTS,
+				conversionRuleId: RULE_ITEM,
+				item: seeded.boltsItem,
+			},
+			"user-1",
+		);
+		assert.equal(result.status, 200);
+		if (result.status !== 200) return;
+		assert.equal(
+			(result.body as { audit: { conversionRuleId?: string } }).audit
+				.conversionRuleId,
+			RULE_ITEM,
+		);
+	},
+);
+
+test("decideActionableSuggestion add_and_match rejects catalog fingerprint drift without writes",
+	async () => {
+		const fixture = actionableHarness();
+		seedMatchCatalog(fixture, { conversion: "none" });
+		const beforeBoq = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
+		const beforeSnap = structuredClone(fixture.db.docs.get(fixture.path)!);
+		const beforeStd = structuredClone(
+			fixture.db.docs.get(`standards/${STD_SAME}`),
+		);
+
+		// Drift catalog by mutating stored standard description.
+		const std = fixture.db.docs.get(`standards/${STD_SAME}`)!;
+		std.description = "Changed catalog description";
+
+		const result = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_and_match",
+				expectedFingerprint: FINGERPRINT,
+				catalogId: STD_SAME,
+				item: matchingItem,
+			},
+			"user-1",
+		);
+		assert.equal(result.status, 409);
+		assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), beforeBoq);
+		assert.deepEqual(fixture.db.docs.get(fixture.path), beforeSnap);
+		assert.deepEqual(fixture.db.docs.get(`standards/${STD_SAME}`), {
+			...beforeStd,
+			description: "Changed catalog description",
+		});
+		assert.equal(
+			fixture.db.docs.has(
+				actionableSuggestionDecisionPath("boq-1", "run-1", SUGGESTION_ID),
+			),
+			false,
+		);
+	},
+);
+
+test("decideActionableSuggestion add_and_match rejects conversion fingerprint drift without writes",
+	async () => {
+		const fixture = actionableHarness();
+		const seeded = seedMatchCatalog(fixture, { conversion: "global" });
+		const beforeBoq = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
+		// Drift conversion version.
+		const rule = fixture.db.docs.get(
+			`${CATALOG_CONVERSION_RULES_COLLECTION}/${RULE_GLOBAL}`,
+		)!;
+		rule.version = 99;
+
+		const result = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_and_match",
+				expectedFingerprint: FINGERPRINT,
+				catalogId: STD_BOLTS,
+				conversionRuleId: RULE_GLOBAL,
+				item: seeded.boltsItem,
+			},
+			"user-1",
+		);
+		assert.equal(result.status, 409);
+		assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), beforeBoq);
+		assert.equal(
+			fixture.db.docs.has(
+				actionableSuggestionDecisionPath("boq-1", "run-1", SUGGESTION_ID),
+			),
+			false,
+		);
+	},
+);
+
+test("decideActionableSuggestion add_and_match rejects non-shortlisted catalog without writes",
+	async () => {
+		const fixture = actionableHarness();
+		seedMatchCatalog(fixture, { conversion: "none" });
+		// Add an active standard that is not shortlisted.
+		fixture.db.docs.set("standards/std-other", {
+			id: "std-other",
+			description: "Other",
+			unit: "m3",
+			aliases: [],
+			sourceItems: [],
+			sourceBoqCount: 0,
+			createdAt: "2026-08-01T00:00:00.000Z",
+			updatedAt: "2026-08-01T00:00:00.000Z",
+		});
+		// Keep fingerprint matching the shortlisted-only catalog by restoring fingerprint
+		// after adding the extra standard would drift it — so put it then recompute?
+		// Non-shortlisted check happens after fingerprint. Adding extra std drifts fingerprint.
+		// Instead only request a non-shortlisted id without adding it to catalogCandidates,
+		// while keeping catalog as seeded (STD_SAME only). Request std-other not in shortlist
+		// and not in active catalog → missing catalog 409. Better: include std-other in
+		// active catalog fingerprint.
+		const standards = [
+			fixture.db.docs.get(`standards/${STD_SAME}`) as unknown as StandardEntry,
+			fixture.db.docs.get("standards/std-other") as unknown as StandardEntry,
+		];
+		const fp = buildCatalogFingerprint(standards);
+		const snap = fixture.db.docs.get(fixture.path)! as {
+			versions: Record<string, string>;
+			actionableItemSuggestions: Array<Record<string, unknown>>;
+		};
+		snap.versions.catalogFingerprint = fp;
+		for (const s of snap.actionableItemSuggestions) {
+			(s.versions as Record<string, string>).catalogFingerprint = fp;
+		}
+
+		const beforeBoq = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
+		const result = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_and_match",
+				expectedFingerprint: FINGERPRINT,
+				catalogId: "std-other",
+				item: matchingItem,
+			},
+			"user-1",
+		);
+		assert.equal(result.status, 400);
+		assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), beforeBoq);
+	},
+);
+
+test("decideActionableSuggestion add_and_match rejects approved BOQ without writes",
+	async () => {
+		const fixture = actionableHarness();
+		seedMatchCatalog(fixture, { conversion: "none" });
+		fixture.db.docs.get("boqs/boq-1")!.status = "approved";
+		const beforeSnap = structuredClone(fixture.db.docs.get(fixture.path)!);
+		const result = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_and_match",
+				expectedFingerprint: FINGERPRINT,
+				catalogId: STD_SAME,
+				item: matchingItem,
+			},
+			"user-1",
+		);
+		assert.equal(result.status, 409);
+		assert.deepEqual(fixture.db.docs.get(fixture.path), beforeSnap);
+	},
+);
+
+test("decideActionableSuggestion add_and_match rejects stale BOQ fingerprint without writes",
+	async () => {
+		const fixture = actionableHarness();
+		seedMatchCatalog(fixture, { conversion: "none" });
+		const boqDoc = fixture.db.docs.get("boqs/boq-1")! as unknown as Boq;
+		boqDoc.sections = [...boqDoc.sections, { header: "Extra", items: [] }];
+		const result = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_and_match",
+				expectedFingerprint: FINGERPRINT,
+				catalogId: STD_SAME,
+				item: matchingItem,
+			},
+			"user-1",
+		);
+		assert.equal(result.status, 409);
+	},
+);
+
+test("decideActionableSuggestion add_and_match rejects item id collision without writes",
+	async () => {
+		const fixture = actionableHarness();
+		seedMatchCatalog(fixture, { conversion: "none" });
+		const itemId = `user-ar-${SUGGESTION_ID.replace(/^sha256:/, "").slice(0, 32)}`;
+		const boq = fixture.db.docs.get("boqs/boq-1")! as unknown as Boq;
+		boq.sections[0]!.items.push({
+			id: itemId,
+			desc: "Collision",
+			unit: "m3",
+			qty: 1,
+			rate: 1,
+			total: 1,
+			type: "unit",
+			stdStatus: "unmatched",
+		});
+		// Update snapshot BOQ fingerprint to match the collision-seeded BOQ.
+		const fp = fingerprintCanonicalSections(boq.sections);
+		const snap = fixture.db.docs.get(fixture.path)! as {
+			versions: Record<string, string>;
+			actionableItemSuggestions: Array<Record<string, unknown>>;
+		};
+		snap.versions.boqSectionsFingerprint = fp;
+		for (const s of snap.actionableItemSuggestions) {
+			(s.versions as Record<string, string>).boqSectionsFingerprint = fp;
+		}
+
+		const beforeStd = structuredClone(
+			fixture.db.docs.get(`standards/${STD_SAME}`),
+		);
+		const result = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_and_match",
+				expectedFingerprint: FINGERPRINT,
+				catalogId: STD_SAME,
+				item: matchingItem,
+			},
+			"user-1",
+		);
+		assert.equal(result.status, 409);
+		assert.deepEqual(fixture.db.docs.get(`standards/${STD_SAME}`), beforeStd);
+	},
+);
+
+test("decideActionableSuggestion add_and_match conflicting retry fails closed",
+	async () => {
+		const fixture = actionableHarness();
+		seedMatchCatalog(fixture, { conversion: "none" });
+		const first = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_and_match",
+				expectedFingerprint: FINGERPRINT,
+				catalogId: STD_SAME,
+				item: matchingItem,
+			},
+			"user-1",
+		);
+		assert.equal(first.status, 200);
+		const itemsAfter = (
+			fixture.db.docs.get("boqs/boq-1") as unknown as Boq
+		).sections[0]!.items.length;
+
+		// Conflicting catalog on retry.
+		const conflict = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_and_match",
+				expectedFingerprint: FINGERPRINT,
+				catalogId: "std-other",
+				item: matchingItem,
+			},
+			"user-1",
+		);
+		assert.equal(conflict.status, 409);
+		assert.equal(
+			(fixture.db.docs.get("boqs/boq-1") as unknown as Boq).sections[0]!
+				.items.length,
+			itemsAfter,
+		);
+	},
+);
+
+test("decideActionableSuggestion add_and_match simulated write failure leaves no partial writes",
+	async () => {
+		const fixture = actionableHarness();
+		seedMatchCatalog(fixture, { conversion: "none" });
+		const beforeBoq = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
+		const beforeSnap = structuredClone(fixture.db.docs.get(fixture.path)!);
+		const beforeStd = structuredClone(
+			fixture.db.docs.get(`standards/${STD_SAME}`),
+		);
+		const originalRun = fixture.db.runTransaction.bind(fixture.db);
+		fixture.db.runTransaction = async (callback) => {
+			const result = await originalRun(async (tx) => {
+				const wrapped = {
+					...tx,
+					create: (ref: MemoryDoc, data: RecordData) => {
+						tx.create(ref, data);
+						if (String(ref.path).includes("actionableSuggestionDecisions")) {
+							throw new Error("injected final write failure");
+						}
+					},
+					update: (ref: MemoryDoc, data: RecordData) => {
+						tx.update(ref, data);
+						if (String(ref.path).includes(`standards/${STD_SAME}`)) {
+							throw new Error("injected standard write failure");
+						}
+					},
+				};
+				return callback(wrapped as never);
+			});
+			return result;
+		};
+
+		const result = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_and_match",
+				expectedFingerprint: FINGERPRINT,
+				catalogId: STD_SAME,
+				item: matchingItem,
+			},
+			"user-1",
+		);
+		assert.equal(result.status, 500);
+		assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), beforeBoq);
+		assert.deepEqual(fixture.db.docs.get(fixture.path), beforeSnap);
+		assert.deepEqual(fixture.db.docs.get(`standards/${STD_SAME}`), beforeStd);
+		assert.equal(
+			fixture.db.docs.has(
+				actionableSuggestionDecisionPath("boq-1", "run-1", SUGGESTION_ID),
+			),
+			false,
+		);
+	},
+);
+
+test("decideActionableSuggestion add_pending_catalog remains valid without pricing snapshots",
+	async () => {
+		const fixture = actionableHarness();
+		const result = await fixture.store.decideActionableSuggestion(
+			"boq-1",
+			"run-1",
+			SUGGESTION_ID,
+			{
+				action: "add_pending_catalog",
+				expectedFingerprint: FINGERPRINT,
+				item: matchingItem,
+			},
+			"user-1",
+		);
+		assert.equal(result.status, 200);
+		if (result.status !== 200) return;
+		const stored = fixture.db.docs.get("boqs/boq-1") as unknown as Boq;
+		const added = stored.sections[0]!.items.at(-1)! as BoqPricedItem;
+		assert.equal(added.stdStatus, "unmatched");
+		assert.equal(added.extractedPricing, undefined);
+		assert.equal(added.reviewerPricing, undefined);
+		assert.equal(added.pricingNormalization, undefined);
+		// Legacy no-snapshot pending items still canonicalize.
+		parseCanonicalBoqSections([{ header: "S", items: [added] }]);
 	},
 );

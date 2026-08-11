@@ -29,6 +29,7 @@ import {
 	parseExtractedPricingSnapshot,
 	parseReviewerPricingSnapshot,
 	type ExtractedPricingSnapshot,
+	type PricingNormalization,
 	type ReviewerPricingSnapshot,
 } from "./actionable-review-types";
 import {
@@ -793,6 +794,7 @@ export function undoExtractionProposal(input: {
 
 export type ActionableHumanDecision =
 	| "add_pending_catalog"
+	| "add_and_match"
 	| "dismiss"
 	| "restore";
 
@@ -822,7 +824,11 @@ export interface ActionableSuggestionDecisionAudit {
 	/** Human decision only — never AI advice. */
 	humanDecision: ActionableHumanDecision;
 	/** Terminal suggestion status after this decision. */
-	suggestionStatus: "added_pending_catalog" | "dismissed" | "pending";
+	suggestionStatus:
+		| "added_matched"
+		| "added_pending_catalog"
+		| "dismissed"
+		| "pending";
 	actorId: string;
 	timestamp: string;
 	sourceRowIds: string[];
@@ -843,6 +849,12 @@ export interface ActionableSuggestionDecisionAudit {
 	correctionReason?: string;
 	note?: string;
 	itemId?: string;
+	/** Catalog entry linked by add_and_match. */
+	catalogId?: string;
+	/** Human-approved conversion rule id when a non-identity rule was applied. */
+	conversionRuleId?: string;
+	/** Server-authored pricing normalization snapshot for the matched item. */
+	pricingNormalization?: PricingNormalization;
 	beforeSectionsFingerprint?: string;
 	afterSectionsFingerprint?: string;
 	resultBoq?: Boq;
@@ -886,10 +898,7 @@ export function buildReviewerPricingFromSourceBackedItem(input: {
 	const quantity = decimalStringFromFiniteNumber(input.item.qty);
 	const materialRate = decimalStringFromFiniteNumber(input.item.materialCost);
 	const labourRate = decimalStringFromFiniteNumber(input.item.labourCost);
-	const total = multiplyDecimal(
-		quantity,
-		addDecimal(materialRate, labourRate),
-	);
+	const total = multiplyDecimal(quantity, addDecimal(materialRate, labourRate));
 	const candidate = {
 		description: input.item.desc,
 		unit: input.item.unit,
@@ -939,6 +948,9 @@ export function buildActionableSuggestionDecisionAudit(input: {
 	correctionReason?: string;
 	note?: string;
 	itemId?: string;
+	catalogId?: string;
+	conversionRuleId?: string;
+	pricingNormalization?: PricingNormalization;
 	beforeSectionsFingerprint?: string;
 	afterSectionsFingerprint?: string;
 	resultBoq?: Boq;
@@ -986,6 +998,15 @@ export function buildActionableSuggestionDecisionAudit(input: {
 	}
 	if (input.sequence !== undefined) {
 		audit.sequence = input.sequence;
+	}
+	if (input.catalogId !== undefined) {
+		audit.catalogId = input.catalogId;
+	}
+	if (input.conversionRuleId !== undefined) {
+		audit.conversionRuleId = input.conversionRuleId;
+	}
+	if (input.pricingNormalization !== undefined) {
+		audit.pricingNormalization = structuredClone(input.pricingNormalization);
 	}
 	return audit;
 }
