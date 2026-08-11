@@ -3,6 +3,7 @@ import test from 'node:test'
 import { readFileSync } from 'node:fs'
 
 import { parseCanonicalBoqSections } from './boq-canonical'
+import type { BoqPricedItem } from './boq-schema'
 
 const priced = {
   id: 'parent', desc: 'Pump package', unit: 'item', qty: 1, rate: 95_200, total: 95_200,
@@ -93,6 +94,106 @@ test('valid common provenance and structured warnings survive canonical parsing 
   assert.deepEqual(item.sourceRef, { page: 2, table: 1, row: 4 })
   assert.deepEqual(item.extractionWarnings, [{ code: 'merged_row', message: 'Confirm grouping', sourceRef: { page: 2, table: 1, row: 4 } }])
   assert.deepEqual(item.sourceRowIds, ['row-4', 'row-5'])
+})
+
+const extractedPricing = {
+  description: 'Pump package', unit: 'item', quantity: '1',
+  materialRate: '57120', labourRate: '38080', total: '95200',
+}
+const reviewerPricing = {
+  description: 'Pump package', unit: 'item', quantity: '1',
+  materialRate: '57120', labourRate: '38080', total: '95200',
+  confirmedAt: '2026-08-08T00:00:00.000Z', confirmedBy: 'reviewer-1',
+}
+const pricingNormalization = {
+  catalogId: 'STD-PUMP', catalogDescription: 'Pump package', catalogUnit: 'item',
+  ruleId: 'identity', catalogUnitsPerSourceUnit: '1',
+  normalizedQuantity: '1', normalizedMaterialRate: '57120',
+  normalizedLabourRate: '38080', normalizedTotal: '95200',
+}
+const convertedItem = {
+  ...priced, stdId: 'STD-PUMP', extractedPricing, reviewerPricing, pricingNormalization,
+}
+
+test('converted items round-trip immutable extracted, reviewer, and normalization snapshots', () => {
+  const parsed = parseCanonicalBoqSections([{ header: 'Pump', items: [convertedItem] }])
+  const item = parsed[0].items[0] as BoqPricedItem
+  assert.deepEqual(item.extractedPricing, extractedPricing)
+  assert.deepEqual(item.reviewerPricing, reviewerPricing)
+  assert.deepEqual(item.pricingNormalization, pricingNormalization)
+})
+
+test('legacy items without snapshots still canonicalize with no backfill', () => {
+  const parsed = parseCanonicalBoqSections([{ header: 'Pump', items: [priced] }])
+  const item = parsed[0].items[0] as BoqPricedItem
+  assert.equal(item.extractedPricing, undefined)
+  assert.equal(item.reviewerPricing, undefined)
+  assert.equal(item.pricingNormalization, undefined)
+})
+
+test('converted items require all three pricing snapshots together', () => {
+  for (const partial of [
+    { extractedPricing },
+    { reviewerPricing },
+    { pricingNormalization },
+    { extractedPricing, reviewerPricing },
+    { reviewerPricing, pricingNormalization },
+  ]) {
+    assert.throws(
+      () => parseCanonicalBoqSections([{ header: 'Pump', items: [{ ...priced, stdId: 'STD-PUMP', ...partial }] }]),
+      /together/i,
+    )
+  }
+})
+
+test('reviewer edits never overwrite extracted pricing and divergence needs a correction reason', () => {
+  const divergentReviewer = {
+    ...reviewerPricing,
+    labourRate: '38880',
+    total: '96000',
+    correctionReason: 'Adjusted labour allocation per vendor call',
+  }
+  const divergentNormalization = { ...pricingNormalization, normalizedLabourRate: '38880', normalizedTotal: '96000' }
+  const parsed = parseCanonicalBoqSections([{ header: 'Pump', items: [
+    { ...priced, stdId: 'STD-PUMP', total: 96_000, extractedPricing, reviewerPricing: divergentReviewer, pricingNormalization: divergentNormalization },
+  ] }])
+  const item = parsed[0].items[0] as BoqPricedItem
+  assert.equal(item.extractedPricing?.total, '95200')
+  assert.equal(item.reviewerPricing?.total, '96000')
+  assert.equal(item.reviewerPricing?.correctionReason, 'Adjusted labour allocation per vendor call')
+
+  assert.throws(
+    () => parseCanonicalBoqSections([{ header: 'Pump', items: [
+      { ...priced, stdId: 'STD-PUMP', total: 96_000, extractedPricing, reviewerPricing: { ...divergentReviewer, correctionReason: undefined }, pricingNormalization: divergentNormalization },
+    ] }]),
+    /correctionReason|divergence/i,
+  )
+})
+
+test('normalization catalog id, unit, and total must match the linked priced item', () => {
+  assert.throws(
+    () => parseCanonicalBoqSections([{ header: 'Pump', items: [{ ...convertedItem, stdId: 'WRONG' }] }]),
+    /catalogId.*stdId/i,
+  )
+  assert.throws(
+    () => parseCanonicalBoqSections([{ header: 'Pump', items: [{ ...convertedItem, unit: 'ft3' }] }]),
+    /catalogUnit.*unit/i,
+  )
+  assert.throws(
+    () => parseCanonicalBoqSections([{ header: 'Pump', items: [{ ...convertedItem, total: 99_999 }] }]),
+    /normalizedTotal.*total/i,
+  )
+})
+
+test('reviewer-confirmed total must match the normalized total at currency minor-unit precision', () => {
+  assert.throws(
+    () => parseCanonicalBoqSections([{ header: 'Pump', items: [
+      { ...priced, stdId: 'STD-PUMP', total: 96_000, extractedPricing,
+        reviewerPricing: { ...reviewerPricing, total: '95200', correctionReason: 'Labour reallocation' },
+        pricingNormalization: { ...pricingNormalization, normalizedLabourRate: '38880', normalizedTotal: '96000' } },
+    ] }]),
+    /reviewerPricing\.total.*normalized/i,
+  )
 })
 
 test('source costs accept an absent v2 component with an empty unit but not a present one', () => {

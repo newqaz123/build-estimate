@@ -6,6 +6,15 @@ import type {
   BoqSourceCosts,
   BoqSourceRef,
 } from './boq-schema'
+import {
+  parseExtractedPricingSnapshot,
+  parsePricingNormalization,
+  parseReviewerPricingSnapshot,
+  type ExtractedPricingSnapshot,
+  type PricingNormalization,
+  type ReviewerPricingSnapshot,
+} from './actionable-review-types'
+import { equalAtMinorUnit } from './decimal-string'
 
 const STD_STATUSES = new Set(['matched', 'unmatched', 'pending', 'excluded'])
 const PRICING_ROLES = new Set(['standard', 'bundle_parent', 'bundle_child'])
@@ -127,6 +136,76 @@ function setDefined(target: Record<string, unknown>, key: string, value: unknown
   if (value !== undefined) target[key] = value
 }
 
+function attachPricingSnapshots(
+  value: Record<string, unknown>,
+  priced: Record<string, unknown>,
+  item: { unit: string; total: number; stdId: string | undefined },
+  path: string,
+): void {
+  const snapshotKeys = ['extractedPricing', 'reviewerPricing', 'pricingNormalization'] as const
+  const presentCount = snapshotKeys.reduce(
+    (count, key) => count + (value[key] !== undefined ? 1 : 0),
+    0,
+  )
+  if (presentCount === 0) return
+  if (presentCount !== snapshotKeys.length) {
+    throw new BoqCanonicalValidationError(
+      `${path} converted items require extractedPricing, reviewerPricing, and pricingNormalization together.`,
+    )
+  }
+
+  let extracted: ExtractedPricingSnapshot
+  let reviewer: ReviewerPricingSnapshot
+  let normalization: PricingNormalization
+  try {
+    extracted = parseExtractedPricingSnapshot(value.extractedPricing)
+    reviewer = parseReviewerPricingSnapshot(value.reviewerPricing, extracted)
+    normalization = parsePricingNormalization(value.pricingNormalization)
+  } catch (error) {
+    throw new BoqCanonicalValidationError(
+      `${path} pricing snapshots are invalid: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+
+  // Reviewer edits never overwrite extracted pricing: the two snapshots stay distinct.
+  // Normalization is derived from the reviewer snapshot and must reconcile with the
+  // persisted operational fields at currency minor-unit precision.
+  if (item.stdId !== normalization.catalogId) {
+    throw new BoqCanonicalValidationError(`${path}.pricingNormalization.catalogId must match the item stdId.`)
+  }
+  if (item.unit !== normalization.catalogUnit) {
+    throw new BoqCanonicalValidationError(`${path}.pricingNormalization.catalogUnit must match the item unit.`)
+  }
+
+  let normalizedMatchesTotal = false
+  try {
+    normalizedMatchesTotal = equalAtMinorUnit(normalization.normalizedTotal, String(item.total))
+  } catch {
+    normalizedMatchesTotal = false
+  }
+  if (!normalizedMatchesTotal) {
+    throw new BoqCanonicalValidationError(
+      `${path}.pricingNormalization.normalizedTotal must match the persisted line total at currency minor-unit precision.`,
+    )
+  }
+
+  let reviewerMatchesNormalized = false
+  try {
+    reviewerMatchesNormalized = equalAtMinorUnit(reviewer.total, normalization.normalizedTotal)
+  } catch {
+    reviewerMatchesNormalized = false
+  }
+  if (!reviewerMatchesNormalized) {
+    throw new BoqCanonicalValidationError(
+      `${path}.reviewerPricing.total must match the normalized total at currency minor-unit precision.`,
+    )
+  }
+
+  priced.extractedPricing = extracted
+  priced.reviewerPricing = reviewer
+  priced.pricingNormalization = normalization
+}
+
 function parseItem(value: unknown, sectionIndex: number, itemIndex: number): BoqItem {
   const path = `sections[${sectionIndex}].items[${itemIndex}]`
   if (!isRecord(value)) throw new BoqCanonicalValidationError(`${path} must be an object.`)
@@ -144,7 +223,8 @@ function parseItem(value: unknown, sectionIndex: number, itemIndex: number): Boq
   setDefined(common, 'sourceRowId', optionalString(value.sourceRowId, `${path}.sourceRowId`))
   setDefined(common, 'stdExclusionReason', optionalString(value.stdExclusionReason, `${path}.stdExclusionReason`))
   setDefined(common, 'stdMatch', optionalString(value.stdMatch, `${path}.stdMatch`))
-  setDefined(common, 'stdId', optionalString(value.stdId, `${path}.stdId`))
+  const stdId = optionalString(value.stdId, `${path}.stdId`)
+  setDefined(common, 'stdId', stdId)
   setDefined(common, 'sourceDesc', optionalString(value.sourceDesc, `${path}.sourceDesc`))
   setDefined(common, 'sourceUnit', optionalString(value.sourceUnit, `${path}.sourceUnit`))
   setDefined(common, 'optional', optionalBoolean(value.optional, `${path}.optional`))
@@ -167,7 +247,7 @@ function parseItem(value: unknown, sectionIndex: number, itemIndex: number): Boq
 
   if (pricingRole === 'bundle_child') {
     const parentBundleId = nonEmptyString(value.parentBundleId, `${path}.parentBundleId`)
-    for (const field of ['unit', 'qty', 'rate', 'total', 'type', 'costComponent', 'sourceCosts', 'costAllocation'] as const) {
+    for (const field of ['unit', 'qty', 'rate', 'total', 'type', 'costComponent', 'sourceCosts', 'costAllocation', 'extractedPricing', 'reviewerPricing', 'pricingNormalization'] as const) {
       if (Object.hasOwn(value, field)) {
         throw new BoqCanonicalValidationError(`${path}.${field} is not allowed for an informational bundle child.`)
       }
@@ -177,18 +257,16 @@ function parseItem(value: unknown, sectionIndex: number, itemIndex: number): Boq
 
   const type = optionalEnum<'unit' | 'lump_sum' | 'job'>(value.type, ITEM_TYPES, `${path}.type`)
   if (type === undefined) throw new BoqCanonicalValidationError(`${path}.type is invalid.`)
-  const priced: Record<string, unknown> = {
-    ...common,
-    unit: nonEmptyString(value.unit, `${path}.unit`),
-    qty: finiteNonNegative(value.qty, `${path}.qty`),
-    rate: finiteNonNegative(value.rate, `${path}.rate`),
-    total: finiteNonNegative(value.total, `${path}.total`),
-    type,
-  }
+  const unit = nonEmptyString(value.unit, `${path}.unit`)
+  const qty = finiteNonNegative(value.qty, `${path}.qty`)
+  const rate = finiteNonNegative(value.rate, `${path}.rate`)
+  const total = finiteNonNegative(value.total, `${path}.total`)
+  const priced: Record<string, unknown> = { ...common, unit, qty, rate, total, type }
   setDefined(priced, 'pricingRole', pricingRole)
   setDefined(priced, 'costComponent', optionalEnum(value.costComponent, COST_COMPONENTS, `${path}.costComponent`))
   setDefined(priced, 'sourceCosts', parseSourceCosts(value.sourceCosts, `${path}.sourceCosts`))
   setDefined(priced, 'costAllocation', parseCostAllocation(value.costAllocation, `${path}.costAllocation`))
+  attachPricingSnapshots(value, priced, { unit, total, stdId }, path)
   return priced as unknown as BoqItem
 }
 

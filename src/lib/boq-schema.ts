@@ -1,3 +1,9 @@
+import type {
+  ExtractedPricingSnapshot,
+  PricingNormalization,
+  ReviewerPricingSnapshot,
+} from './actionable-review-types'
+
 export interface BoqSection {
   header: string
   items: BoqItem[]
@@ -85,6 +91,9 @@ export interface BoqPricedItem extends BoqItemCommon {
   costComponent?: 'material' | 'labour' | 'combined' | 'lump_sum'
   sourceCosts?: BoqSourceCosts
   costAllocation?: BoqCostAllocation
+  extractedPricing?: ExtractedPricingSnapshot
+  reviewerPricing?: ReviewerPricingSnapshot
+  pricingNormalization?: PricingNormalization
 }
 
 export interface BoqInformationalItem extends BoqItemCommon {

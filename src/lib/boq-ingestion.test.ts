@@ -359,6 +359,35 @@ test('local verification accepts a correct BOQ and arithmetic within 0.01 tolera
   assert.equal(result.hasBlockingIssues, false)
 })
 
+test('local verification is not weakened by priced items carrying pricing snapshots', () => {
+  const result = verifyBoqLocally(makeBoq({
+    sections: [{
+      header: 'Concrete Works',
+      items: [{
+        code: '', desc: 'Concrete', unit: 'm3', qty: 3, rate: 100, total: 300, type: 'unit', stdStatus: 'matched', stdId: 'STD-CONCRETE',
+        extractedPricing: {
+          description: 'Concrete', unit: 'm3', quantity: '3',
+          materialRate: '60', labourRate: '40', total: '300',
+        },
+        reviewerPricing: {
+          description: 'Concrete', unit: 'm3', quantity: '3',
+          materialRate: '60', labourRate: '40', total: '300',
+          confirmedAt: '2026-08-08T00:00:00.000Z', confirmedBy: 'reviewer-1',
+        },
+        pricingNormalization: {
+          catalogId: 'STD-CONCRETE', catalogDescription: 'Concrete', catalogUnit: 'm3',
+          ruleId: 'identity', catalogUnitsPerSourceUnit: '1',
+          normalizedQuantity: '3', normalizedMaterialRate: '60',
+          normalizedLabourRate: '40', normalizedTotal: '300',
+        },
+      }],
+    }],
+  }))
+
+  assert.deepEqual(result.issues, [])
+  assert.equal(result.hasBlockingIssues, false)
+})
+
 test('local verification skips informational children and excludes optional priced rows from totals', () => {
   const result = verifyBoqLocally({
     vendor: 'Vendor',
