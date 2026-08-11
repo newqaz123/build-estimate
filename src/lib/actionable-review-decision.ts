@@ -12,6 +12,14 @@ export type ActionableReviewDecisionRequest =
       correctionReason?: string;
     }
   | {
+      action: "add_and_match";
+      expectedFingerprint: string;
+      catalogId: string;
+      conversionRuleId?: string;
+      item: SourceBackedItemRequest;
+      correctionReason?: string;
+    }
+  | {
       action: "dismiss";
       expectedFingerprint: string;
       note?: string;
@@ -34,6 +42,15 @@ const ADD_KEYS = new Set([
   "item",
   "correctionReason",
 ]);
+const ADD_AND_MATCH_KEYS = new Set([
+  "action",
+  "expectedFingerprint",
+  "catalogId",
+  "conversionRuleId",
+  "item",
+  "correctionReason",
+]);
+const MAX_ID_LENGTH = 240;
 const FLATTENED_ITEM_KEYS = new Set([
   "sectionIndex",
   "desc",
@@ -42,6 +59,28 @@ const FLATTENED_ITEM_KEYS = new Set([
   "materialCost",
   "labourCost",
 ]);
+
+function requireBoundedId(
+  field: "catalogId" | "conversionRuleId",
+  value: unknown,
+): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new ActionableReviewDecisionError(
+      `${field} must be a non-empty string.`,
+    );
+  }
+  if (value.length > MAX_ID_LENGTH) {
+    throw new ActionableReviewDecisionError(
+      `${field} must not exceed ${MAX_ID_LENGTH} characters.`,
+    );
+  }
+  if (value.includes("/")) {
+    throw new ActionableReviewDecisionError(
+      `${field} must not contain a slash.`,
+    );
+  }
+  return value;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -130,10 +169,11 @@ export function parseActionableReviewDecisionRequest(
   if (
     action !== "dismiss" &&
     action !== "restore" &&
-    action !== "add_pending_catalog"
+    action !== "add_pending_catalog" &&
+    action !== "add_and_match"
   ) {
     throw new ActionableReviewDecisionError(
-      "action must be 'dismiss', 'restore', or 'add_pending_catalog'.",
+      "action must be 'dismiss', 'restore', 'add_pending_catalog', or 'add_and_match'.",
     );
   }
 
@@ -152,6 +192,41 @@ export function parseActionableReviewDecisionRequest(
       action: "restore",
       expectedFingerprint: requireFingerprint(value.expectedFingerprint),
     };
+  }
+
+  if (action === "add_and_match") {
+    assertExactKeys(value, ADD_AND_MATCH_KEYS);
+    const expectedFingerprint = requireFingerprint(value.expectedFingerprint);
+    const catalogId = requireBoundedId("catalogId", value.catalogId);
+    const conversionRuleId =
+      value.conversionRuleId === undefined
+        ? undefined
+        : requireBoundedId("conversionRuleId", value.conversionRuleId);
+    const item = parseFlattenedItem(value.item);
+    const correctionReason = requireOptionalTrimmedText(
+      "correctionReason",
+      value.correctionReason,
+    );
+    const result: {
+      action: "add_and_match";
+      expectedFingerprint: string;
+      catalogId: string;
+      conversionRuleId?: string;
+      item: SourceBackedItemRequest;
+      correctionReason?: string;
+    } = {
+      action: "add_and_match",
+      expectedFingerprint,
+      catalogId,
+      item,
+    };
+    if (conversionRuleId !== undefined) {
+      result.conversionRuleId = conversionRuleId;
+    }
+    if (correctionReason !== undefined) {
+      result.correctionReason = correctionReason;
+    }
+    return result;
   }
 
   assertExactKeys(value, ADD_KEYS);

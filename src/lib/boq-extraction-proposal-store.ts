@@ -2940,6 +2940,18 @@ export function createFirestoreExtractionProposalStore(
 						? (decisionSnap.data() as ActionableSuggestionDecisionAudit)
 						: null;
 
+					// The add_and_match transaction lands in Task 3; reject early so the
+					// closed decision parser type does not widen the existing store path.
+					if (request.action === "add_and_match") {
+						return {
+							status: 400,
+							body: {
+								error:
+									"add_and_match is not yet wired to the transaction store.",
+							},
+						};
+					}
+
 					// Idempotent terminal retry before BOQ fingerprint gate: an add mutates
 					// sections, so retries must still return the original terminal body.
 					if (

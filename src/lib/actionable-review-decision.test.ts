@@ -311,3 +311,220 @@ test("parseActionableReviewDecisionRequest rejects malformed editable item value
     );
   }
 });
+
+test("parseActionableReviewDecisionRequest accepts closed add_and_match body", () => {
+  assert.deepEqual(
+    parseActionableReviewDecisionRequest({
+      action: "add_and_match",
+      expectedFingerprint: FINGERPRINT,
+      catalogId: "std-1",
+      conversionRuleId: "rule-1",
+      item: validItem,
+      correctionReason: "  adjusted labour  ",
+    }),
+    {
+      action: "add_and_match",
+      expectedFingerprint: FINGERPRINT,
+      catalogId: "std-1",
+      conversionRuleId: "rule-1",
+      item: {
+        sectionIndex: 0,
+        desc: "Wall installation",
+        unit: "m2",
+        qty: 18,
+        materialCost: 980,
+        labourCost: 650,
+      },
+      correctionReason: "adjusted labour",
+    },
+  );
+});
+
+test("parseActionableReviewDecisionRequest omits optional add_and_match fields when absent", () => {
+  assert.deepEqual(
+    parseActionableReviewDecisionRequest({
+      action: "add_and_match",
+      expectedFingerprint: FINGERPRINT,
+      catalogId: "std-1",
+      item: validItem,
+    }),
+    {
+      action: "add_and_match",
+      expectedFingerprint: FINGERPRINT,
+      catalogId: "std-1",
+      item: {
+        sectionIndex: 0,
+        desc: "Wall installation",
+        unit: "m2",
+        qty: 18,
+        materialCost: 980,
+        labourCost: 650,
+      },
+    },
+  );
+});
+
+test("parseActionableReviewDecisionRequest omits blank correctionReason in add_and_match", () => {
+  const parsed = parseActionableReviewDecisionRequest({
+    action: "add_and_match",
+    expectedFingerprint: FINGERPRINT,
+    catalogId: "std-1",
+    item: validItem,
+    correctionReason: "   ",
+  });
+  assert.equal(parsed.action, "add_and_match");
+  if (parsed.action === "add_and_match") {
+    assert.equal("correctionReason" in parsed, false);
+  }
+});
+
+test("parseActionableReviewDecisionRequest accepts conversionRuleId without correctionReason", () => {
+  const parsed = parseActionableReviewDecisionRequest({
+    action: "add_and_match",
+    expectedFingerprint: FINGERPRINT,
+    catalogId: "std-1",
+    conversionRuleId: "rule-1",
+    item: validItem,
+  });
+  assert.deepEqual(parsed, {
+    action: "add_and_match",
+    expectedFingerprint: FINGERPRINT,
+    catalogId: "std-1",
+    conversionRuleId: "rule-1",
+    item: {
+      sectionIndex: 0,
+      desc: "Wall installation",
+      unit: "m2",
+      qty: 18,
+      materialCost: 980,
+      labourCost: 650,
+    },
+  });
+});
+
+test("parseActionableReviewDecisionRequest validates catalogId and conversionRuleId bounds", () => {
+  for (const catalogId of ["", "a/b", "x".repeat(241)]) {
+    assert.throws(
+      () =>
+        parseActionableReviewDecisionRequest({
+          action: "add_and_match",
+          expectedFingerprint: FINGERPRINT,
+          catalogId,
+          item: validItem,
+        }),
+      ActionableReviewDecisionError,
+    );
+  }
+  for (const conversionRuleId of ["", "a/b", "y".repeat(241)]) {
+    assert.throws(
+      () =>
+        parseActionableReviewDecisionRequest({
+          action: "add_and_match",
+          expectedFingerprint: FINGERPRINT,
+          catalogId: "std-1",
+          conversionRuleId,
+          item: validItem,
+        }),
+      ActionableReviewDecisionError,
+    );
+  }
+});
+
+test("parseActionableReviewDecisionRequest accepts catalogId and conversionRuleId at the 240-char bound", () => {
+  const catalogId = "c".repeat(240);
+  const conversionRuleId = "r".repeat(240);
+  const parsed = parseActionableReviewDecisionRequest({
+    action: "add_and_match",
+    expectedFingerprint: FINGERPRINT,
+    catalogId,
+    conversionRuleId,
+    item: validItem,
+  });
+  assert.equal(parsed.action, "add_and_match");
+  if (parsed.action === "add_and_match") {
+    assert.equal(parsed.catalogId, catalogId);
+    assert.equal(parsed.conversionRuleId, conversionRuleId);
+  }
+});
+
+test("parseActionableReviewDecisionRequest rejects unexpected keys in add_and_match", () => {
+  const cases: unknown[] = [
+    {
+      action: "add_and_match",
+      expectedFingerprint: FINGERPRINT,
+      catalogId: "std-1",
+      item: validItem,
+      extractedPricing: {},
+    },
+    {
+      action: "add_and_match",
+      expectedFingerprint: FINGERPRINT,
+      catalogId: "std-1",
+      item: validItem,
+      conversionFactor: "1",
+    },
+    {
+      action: "add_and_match",
+      expectedFingerprint: FINGERPRINT,
+      catalogId: "std-1",
+      item: validItem,
+      snapshot: {},
+    },
+    {
+      action: "add_and_match",
+      expectedFingerprint: FINGERPRINT,
+      catalogId: "std-1",
+      item: validItem,
+      reviewerPricing: {},
+    },
+    {
+      action: "add_and_match",
+      expectedFingerprint: FINGERPRINT,
+      catalogId: "std-1",
+      item: validItem,
+      sourceRowIds: ["row-1"],
+    },
+  ];
+  for (const payload of cases) {
+    assert.throws(
+      () => parseActionableReviewDecisionRequest(payload),
+      ActionableReviewDecisionError,
+    );
+  }
+});
+
+test("parseActionableReviewDecisionRequest rejects malformed fingerprint in add_and_match", () => {
+  assert.throws(
+    () =>
+      parseActionableReviewDecisionRequest({
+        action: "add_and_match",
+        expectedFingerprint: "not-a-hash",
+        catalogId: "std-1",
+        item: validItem,
+      }),
+    ActionableReviewDecisionError,
+  );
+});
+
+test("parseActionableReviewDecisionRequest rejects client provenance fields on add_and_match item", () => {
+  for (const field of [
+    "sourceRowIds",
+    "extractedPricing",
+    "reviewerPricing",
+    "catalogCandidates",
+    "aiAdvice",
+    "normalizedTotal",
+    "conversionFactor",
+  ]) {
+    assert.throws(
+      () =>
+        parseActionableReviewDecisionRequest({
+          action: "add_and_match",
+          expectedFingerprint: FINGERPRINT,
+          catalogId: "std-1",
+          item: { ...validItem, [field]: "client-supplied" },
+        }),
+      ActionableReviewDecisionError,
+    );
+  }
+});
