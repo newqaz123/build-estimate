@@ -3480,416 +3480,403 @@ const matchingItem = {
 	labourCost: 0,
 };
 
-test("decideActionableSuggestion add_pending_catalog creates one catalog-pending item with distinct pricing audit",
-	async () => {
-		const fixture = actionableHarness();
-		const beforeItems = (
-			fixture.db.docs.get("boqs/boq-1") as unknown as Boq
-		).sections[0].items.length;
+test("decideActionableSuggestion add_pending_catalog creates one catalog-pending item with distinct pricing audit", async () => {
+	const fixture = actionableHarness();
+	const beforeItems = (fixture.db.docs.get("boqs/boq-1") as unknown as Boq)
+		.sections[0].items.length;
 
-		const result = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_pending_catalog",
-				expectedFingerprint: FINGERPRINT,
-				item: matchingItem,
-			},
-			"user-1",
-		);
-		assert.equal(result.status, 200);
-		if (result.status !== 200) return;
+	const result = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_pending_catalog",
+			expectedFingerprint: FINGERPRINT,
+			item: matchingItem,
+		},
+		"user-1",
+	);
+	assert.equal(result.status, 200);
+	if (result.status !== 200) return;
 
-		const body = result.body as {
-			status: string;
-			audit: Record<string, unknown>;
-			snapshot: ActionableReview;
-			boq: Boq;
-			itemId: string;
-		};
-		assert.equal(body.status, "added_pending_catalog");
-		assert.equal(body.audit.humanDecision, "add_pending_catalog");
-		assert.notEqual(body.audit.humanDecision, (body.audit.aiAdvice as { decision: string })?.decision);
-		assert.deepEqual(body.audit.extractedItem, {
-			description: "Ready mix concrete",
-			unit: "m3",
-			quantity: "2",
-			materialRate: "50",
-			labourRate: "0",
-			total: "100",
+	const body = result.body as {
+		status: string;
+		audit: Record<string, unknown>;
+		snapshot: ActionableReview;
+		boq: Boq;
+		itemId: string;
+	};
+	assert.equal(body.status, "added_pending_catalog");
+	assert.equal(body.audit.humanDecision, "add_pending_catalog");
+	assert.notEqual(
+		body.audit.humanDecision,
+		(body.audit.aiAdvice as { decision: string })?.decision,
+	);
+	assert.deepEqual(body.audit.extractedItem, {
+		description: "Ready mix concrete",
+		unit: "m3",
+		quantity: "2",
+		materialRate: "50",
+		labourRate: "0",
+		total: "100",
+	});
+	const reviewer = body.audit.reviewerPricing as {
+		confirmedBy: string;
+		confirmedAt: string;
+		total: string;
+	};
+	assert.equal(reviewer.confirmedBy, "user-1");
+	assert.equal(reviewer.confirmedAt, "2026-08-08T12:00:00.000Z");
+	assert.equal(reviewer.total, "100");
+
+	const stored = fixture.db.docs.get("boqs/boq-1") as unknown as Boq;
+	assert.equal(stored.sections[0].items.length, beforeItems + 1);
+	const added = stored.sections[0].items[beforeItems] as BoqPricedItem;
+	assert.equal(added.entryOrigin, "user");
+	assert.equal(added.stdStatus, "unmatched");
+	assert.equal(added.sourceRowId, fixture.firstRow.id);
+	assert.deepEqual(added.sourceRowIds, [fixture.firstRow.id]);
+	assert.ok(added.sourceRef);
+
+	const snap = body.snapshot.actionableItemSuggestions.find(
+		(s) => s.id === SUGGESTION_ID,
+	);
+	assert.equal(snap?.status, "added_pending_catalog");
+	assert.equal(body.snapshot.id, FINGERPRINT);
+	assert.equal(body.snapshot.validationSummary.locallyPreparedCatalogCount, 1);
+
+	const decisionPath = actionableSuggestionDecisionPath(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+	);
+	assert.ok(fixture.db.docs.has(decisionPath));
+});
+
+test("decideActionableSuggestion add requires correctionReason on numeric divergence and writes field deltas", async () => {
+	const fixture = actionableHarness();
+	const missing = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_pending_catalog",
+			expectedFingerprint: FINGERPRINT,
+			item: { ...matchingItem, qty: 3, materialCost: 50, labourCost: 0 },
+		},
+		"user-1",
+	);
+	assert.equal(missing.status, 400);
+	assert.equal(
+		fixture.db.docs.has(
+			actionableSuggestionDecisionPath("boq-1", "run-1", SUGGESTION_ID),
+		),
+		false,
+	);
+
+	const ok = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_pending_catalog",
+			expectedFingerprint: FINGERPRINT,
+			item: { ...matchingItem, qty: 3, materialCost: 50, labourCost: 0 },
+			correctionReason: "Takeoff correction",
+		},
+		"user-1",
+	);
+	assert.equal(ok.status, 200);
+	if (ok.status !== 200) return;
+	const audit = (
+		ok.body as {
+			audit: {
+				fieldDeltas: Array<{ field: string }>;
+				correctionReason: string;
+			};
+		}
+	).audit;
+	assert.equal(audit.correctionReason, "Takeoff correction");
+	assert.ok(audit.fieldDeltas.some((d) => d.field === "quantity"));
+});
+
+test("decideActionableSuggestion dismiss writes audit/status and creates no item", async () => {
+	const fixture = actionableHarness();
+	const before = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
+	const result = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "dismiss",
+			expectedFingerprint: FINGERPRINT,
+			note: "covered elsewhere",
+		},
+		"user-1",
+	);
+	assert.equal(result.status, 200);
+	if (result.status !== 200) return;
+	assert.equal((result.body as { status: string }).status, "dismissed");
+	assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), before);
+	const snap = (result.body as { snapshot: ActionableReview }).snapshot;
+	assert.equal(
+		snap.actionableItemSuggestions.find((s) => s.id === SUGGESTION_ID)?.status,
+		"dismissed",
+	);
+	assert.equal(snap.validationSummary.dismissedCount, 1);
+	const audit = (
+		result.body as { audit: { note: string; humanDecision: string } }
+	).audit;
+	assert.equal(audit.humanDecision, "dismiss");
+	assert.equal(audit.note, "covered elsewhere");
+});
+
+test("decideActionableSuggestion restore returns dismissed to pending and rejects represented rows", async () => {
+	const fixture = actionableHarness();
+	await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{ action: "dismiss", expectedFingerprint: FINGERPRINT },
+		"user-1",
+	);
+	const restored = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{ action: "restore", expectedFingerprint: FINGERPRINT },
+		"user-1",
+	);
+	assert.equal(restored.status, 200);
+	if (restored.status !== 200) return;
+	assert.equal((restored.body as { status: string }).status, "pending");
+	const snap = (restored.body as { snapshot: ActionableReview }).snapshot;
+	assert.equal(
+		snap.actionableItemSuggestions.find((s) => s.id === SUGGESTION_ID)?.status,
+		"pending",
+	);
+
+	// Represented rows cannot restore.
+	const path = fixture.path;
+	const raw = fixture.db.docs.get(path)!;
+	const suggestions = raw.actionableItemSuggestions as Array<
+		Record<string, unknown>
+	>;
+	suggestions[0] = { ...suggestions[0]!, status: "dismissed" };
+	raw.representedRows = [
+		{
+			sourceRowIds: [fixture.firstRow.id],
+			boqItemId: "existing",
+			reason: "source_identity",
+			sourceRefs: [
+				{
+					page: fixture.firstRow.page,
+					table: fixture.firstRow.table,
+					row: fixture.firstRow.row,
+				},
+			],
+		},
+	];
+	const blocked = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{ action: "restore", expectedFingerprint: FINGERPRINT },
+		"user-1",
+	);
+	assert.equal(blocked.status, 409);
+	assert.match(
+		String((blocked.body as { error: string }).error),
+		/represented/i,
+	);
+});
+
+test("decideActionableSuggestion is idempotent and never duplicates items on retry", async () => {
+	const fixture = actionableHarness();
+	const first = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_pending_catalog",
+			expectedFingerprint: FINGERPRINT,
+			item: matchingItem,
+		},
+		"user-1",
+	);
+	assert.equal(first.status, 200);
+	if (first.status !== 200) return;
+	const firstBoq = (first.body as { boq: Boq }).boq;
+	const firstItemId = (first.body as { itemId: string }).itemId;
+
+	const retry = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_pending_catalog",
+			expectedFingerprint: FINGERPRINT,
+			item: matchingItem,
+		},
+		"user-1",
+	);
+	assert.equal(retry.status, 200);
+	assert.equal((retry.body as { idempotent?: boolean }).idempotent, true);
+	assert.equal((retry.body as { itemId: string }).itemId, firstItemId);
+	const stored = fixture.db.docs.get("boqs/boq-1") as unknown as Boq;
+	assert.equal(
+		stored.sections[0].items.length,
+		firstBoq.sections[0].items.length,
+	);
+});
+
+test("decideActionableSuggestion rejects approved, stale fingerprint, changed BOQ fingerprint, non-pending, and invalid fields without partial writes", async () => {
+	const fixture = actionableHarness();
+	const snapshotBefore = structuredClone(fixture.db.docs.get(fixture.path)!);
+	const boqBefore = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
+
+	fixture.db.docs.get("boqs/boq-1")!.status = "approved";
+	const approved = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{ action: "dismiss", expectedFingerprint: FINGERPRINT },
+		"user-1",
+	);
+	assert.equal(approved.status, 409);
+	fixture.db.docs.get("boqs/boq-1")!.status = "draft";
+
+	const staleFp = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "dismiss",
+			expectedFingerprint: "sha256:" + "f".repeat(64),
+		},
+		"user-1",
+	);
+	assert.equal(staleFp.status, 409);
+
+	// Change live BOQ sections fingerprint vs snapshot versions.
+	const boqDoc = fixture.db.docs.get("boqs/boq-1")! as unknown as Boq;
+	boqDoc.sections = [...boqDoc.sections, { header: "Extra", items: [] }];
+	const staleBoq = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{ action: "dismiss", expectedFingerprint: FINGERPRINT },
+		"user-1",
+	);
+	assert.equal(staleBoq.status, 409);
+	// restore boq
+	fixture.db.docs.set("boqs/boq-1", structuredClone(boqBefore));
+
+	// non-pending
+	const raw = fixture.db.docs.get(fixture.path)!;
+	(raw.actionableItemSuggestions as Array<{ status: string }>)[0]!.status =
+		"dismissed";
+	const nonPending = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_pending_catalog",
+			expectedFingerprint: FINGERPRINT,
+			item: matchingItem,
+		},
+		"user-1",
+	);
+	assert.equal(nonPending.status, 409);
+	(raw.actionableItemSuggestions as Array<{ status: string }>)[0]!.status =
+		"pending";
+
+	// invalid fields
+	const invalid = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_pending_catalog",
+			expectedFingerprint: FINGERPRINT,
+			item: { ...matchingItem, sectionIndex: 99 },
+		},
+		"user-1",
+	);
+	assert.equal(invalid.status, 400);
+
+	assert.deepEqual(fixture.db.docs.get(fixture.path), snapshotBefore);
+	assert.equal(
+		fixture.db.docs.has(
+			actionableSuggestionDecisionPath("boq-1", "run-1", SUGGESTION_ID),
+		),
+		false,
+	);
+});
+
+test("decideActionableSuggestion simulated final-write failure leaves no partial writes", async () => {
+	const fixture = actionableHarness();
+	const beforeBoq = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
+	const beforeSnap = structuredClone(fixture.db.docs.get(fixture.path)!);
+	const originalRun = fixture.db.runTransaction.bind(fixture.db);
+	fixture.db.runTransaction = async (callback) => {
+		const result = await originalRun(async (tx) => {
+			const wrapped = {
+				...tx,
+				create: (ref: MemoryDoc, data: RecordData) => {
+					tx.create(ref, data);
+					if (String(ref.path).includes("actionableSuggestionDecisions")) {
+						throw new Error("injected final write failure");
+					}
+				},
+			};
+			return callback(wrapped as never);
 		});
-		const reviewer = body.audit.reviewerPricing as {
-			confirmedBy: string;
-			confirmedAt: string;
-			total: string;
-		};
-		assert.equal(reviewer.confirmedBy, "user-1");
-		assert.equal(reviewer.confirmedAt, "2026-08-08T12:00:00.000Z");
-		assert.equal(reviewer.total, "100");
+		return result;
+	};
 
-		const stored = fixture.db.docs.get("boqs/boq-1") as unknown as Boq;
-		assert.equal(stored.sections[0].items.length, beforeItems + 1);
-		const added = stored.sections[0].items[beforeItems] as BoqPricedItem;
-		assert.equal(added.entryOrigin, "user");
-		assert.equal(added.stdStatus, "unmatched");
-		assert.equal(added.sourceRowId, fixture.firstRow.id);
-		assert.deepEqual(added.sourceRowIds, [fixture.firstRow.id]);
-		assert.ok(added.sourceRef);
+	const result = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_pending_catalog",
+			expectedFingerprint: FINGERPRINT,
+			item: matchingItem,
+		},
+		"user-1",
+	);
+	assert.equal(result.status, 500);
+	assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), beforeBoq);
+	assert.deepEqual(fixture.db.docs.get(fixture.path), beforeSnap);
+	assert.equal(
+		fixture.db.docs.has(
+			actionableSuggestionDecisionPath("boq-1", "run-1", SUGGESTION_ID),
+		),
+		false,
+	);
+});
 
-		const snap = body.snapshot.actionableItemSuggestions.find(
-			(s) => s.id === SUGGESTION_ID,
-		);
-		assert.equal(snap?.status, "added_pending_catalog");
-		assert.equal(body.snapshot.id, FINGERPRINT);
-		assert.equal(
-			body.snapshot.validationSummary.locallyPreparedCatalogCount,
-			1,
-		);
-
-		const decisionPath = actionableSuggestionDecisionPath(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-		);
-		assert.ok(fixture.db.docs.has(decisionPath));
-	},
-);
-
-test("decideActionableSuggestion add requires correctionReason on numeric divergence and writes field deltas",
-	async () => {
-		const fixture = actionableHarness();
-		const missing = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_pending_catalog",
-				expectedFingerprint: FINGERPRINT,
-				item: { ...matchingItem, qty: 3, materialCost: 50, labourCost: 0 },
-			},
-			"user-1",
-		);
-		assert.equal(missing.status, 400);
-		assert.equal(
-			fixture.db.docs.has(
-				actionableSuggestionDecisionPath("boq-1", "run-1", SUGGESTION_ID),
-			),
-			false,
-		);
-
-		const ok = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_pending_catalog",
-				expectedFingerprint: FINGERPRINT,
-				item: { ...matchingItem, qty: 3, materialCost: 50, labourCost: 0 },
-				correctionReason: "Takeoff correction",
-			},
-			"user-1",
-		);
-		assert.equal(ok.status, 200);
-		if (ok.status !== 200) return;
-		const audit = (ok.body as { audit: { fieldDeltas: Array<{ field: string }>; correctionReason: string } }).audit;
-		assert.equal(audit.correctionReason, "Takeoff correction");
-		assert.ok(audit.fieldDeltas.some((d) => d.field === "quantity"));
-	},
-);
-
-test("decideActionableSuggestion dismiss writes audit/status and creates no item",
-	async () => {
-		const fixture = actionableHarness();
-		const before = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
-		const result = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "dismiss",
-				expectedFingerprint: FINGERPRINT,
-				note: "covered elsewhere",
-			},
-			"user-1",
-		);
-		assert.equal(result.status, 200);
-		if (result.status !== 200) return;
-		assert.equal((result.body as { status: string }).status, "dismissed");
-		assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), before);
-		const snap = (result.body as { snapshot: ActionableReview }).snapshot;
-		assert.equal(
-			snap.actionableItemSuggestions.find((s) => s.id === SUGGESTION_ID)
-				?.status,
-			"dismissed",
-		);
-		assert.equal(snap.validationSummary.dismissedCount, 1);
-		const audit = (result.body as { audit: { note: string; humanDecision: string } }).audit;
-		assert.equal(audit.humanDecision, "dismiss");
-		assert.equal(audit.note, "covered elsewhere");
-	},
-);
-
-test("decideActionableSuggestion restore returns dismissed to pending and rejects represented rows",
-	async () => {
-		const fixture = actionableHarness();
-		await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{ action: "dismiss", expectedFingerprint: FINGERPRINT },
-			"user-1",
-		);
-		const restored = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{ action: "restore", expectedFingerprint: FINGERPRINT },
-			"user-1",
-		);
-		assert.equal(restored.status, 200);
-		if (restored.status !== 200) return;
-		assert.equal((restored.body as { status: string }).status, "pending");
-		const snap = (restored.body as { snapshot: ActionableReview }).snapshot;
-		assert.equal(
-			snap.actionableItemSuggestions.find((s) => s.id === SUGGESTION_ID)
-				?.status,
-			"pending",
-		);
-
-		// Represented rows cannot restore.
-		const path = fixture.path;
-		const raw = fixture.db.docs.get(path)!;
-		const suggestions = raw.actionableItemSuggestions as Array<
-			Record<string, unknown>
-		>;
-		suggestions[0] = { ...suggestions[0]!, status: "dismissed" };
-		raw.representedRows = [
-			{
-				sourceRowIds: [fixture.firstRow.id],
-				boqItemId: "existing",
-				reason: "source_identity",
-				sourceRefs: [
-					{
-						page: fixture.firstRow.page,
-						table: fixture.firstRow.table,
-						row: fixture.firstRow.row,
-					},
-				],
-			},
-		];
-		const blocked = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{ action: "restore", expectedFingerprint: FINGERPRINT },
-			"user-1",
-		);
-		assert.equal(blocked.status, 409);
-		assert.match(
-			String((blocked.body as { error: string }).error),
-			/represented/i,
-		);
-	},
-);
-
-test("decideActionableSuggestion is idempotent and never duplicates items on retry",
-	async () => {
-		const fixture = actionableHarness();
-		const first = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_pending_catalog",
-				expectedFingerprint: FINGERPRINT,
-				item: matchingItem,
-			},
-			"user-1",
-		);
-		assert.equal(first.status, 200);
-		if (first.status !== 200) return;
-		const firstBoq = (first.body as { boq: Boq }).boq;
-		const firstItemId = (first.body as { itemId: string }).itemId;
-
-		const retry = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_pending_catalog",
-				expectedFingerprint: FINGERPRINT,
-				item: matchingItem,
-			},
-			"user-1",
-		);
-		assert.equal(retry.status, 200);
-		assert.equal((retry.body as { idempotent?: boolean }).idempotent, true);
-		assert.equal((retry.body as { itemId: string }).itemId, firstItemId);
-		const stored = fixture.db.docs.get("boqs/boq-1") as unknown as Boq;
-		assert.equal(
-			stored.sections[0].items.length,
-			firstBoq.sections[0].items.length,
-		);
-	},
-);
-
-test("decideActionableSuggestion rejects approved, stale fingerprint, changed BOQ fingerprint, non-pending, and invalid fields without partial writes",
-	async () => {
-		const fixture = actionableHarness();
-		const snapshotBefore = structuredClone(fixture.db.docs.get(fixture.path)!);
-		const boqBefore = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
-
-		fixture.db.docs.get("boqs/boq-1")!.status = "approved";
-		const approved = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{ action: "dismiss", expectedFingerprint: FINGERPRINT },
-			"user-1",
-		);
-		assert.equal(approved.status, 409);
-		fixture.db.docs.get("boqs/boq-1")!.status = "draft";
-
-		const staleFp = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "dismiss",
-				expectedFingerprint: "sha256:" + "f".repeat(64),
-			},
-			"user-1",
-		);
-		assert.equal(staleFp.status, 409);
-
-		// Change live BOQ sections fingerprint vs snapshot versions.
-		const boqDoc = fixture.db.docs.get("boqs/boq-1")! as unknown as Boq;
-		boqDoc.sections = [
-			...boqDoc.sections,
-			{ header: "Extra", items: [] },
-		];
-		const staleBoq = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{ action: "dismiss", expectedFingerprint: FINGERPRINT },
-			"user-1",
-		);
-		assert.equal(staleBoq.status, 409);
-		// restore boq
-		fixture.db.docs.set("boqs/boq-1", structuredClone(boqBefore));
-
-		// non-pending
-		const raw = fixture.db.docs.get(fixture.path)!;
-		(raw.actionableItemSuggestions as Array<{ status: string }>)[0]!.status =
-			"dismissed";
-		const nonPending = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_pending_catalog",
-				expectedFingerprint: FINGERPRINT,
-				item: matchingItem,
-			},
-			"user-1",
-		);
-		assert.equal(nonPending.status, 409);
-		(raw.actionableItemSuggestions as Array<{ status: string }>)[0]!.status =
-			"pending";
-
-		// invalid fields
-		const invalid = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_pending_catalog",
-				expectedFingerprint: FINGERPRINT,
-				item: { ...matchingItem, sectionIndex: 99 },
-			},
-			"user-1",
-		);
-		assert.equal(invalid.status, 400);
-
-		assert.deepEqual(fixture.db.docs.get(fixture.path), snapshotBefore);
-		assert.equal(
-			fixture.db.docs.has(
-				actionableSuggestionDecisionPath("boq-1", "run-1", SUGGESTION_ID),
-			),
-			false,
-		);
-	},
-);
-
-test("decideActionableSuggestion simulated final-write failure leaves no partial writes",
-	async () => {
-		const fixture = actionableHarness();
-		const beforeBoq = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
-		const beforeSnap = structuredClone(fixture.db.docs.get(fixture.path)!);
-		const originalRun = fixture.db.runTransaction.bind(fixture.db);
-		fixture.db.runTransaction = async (callback) => {
-			const result = await originalRun(async (tx) => {
-				const wrapped = {
-					...tx,
-					create: (ref: MemoryDoc, data: RecordData) => {
-						tx.create(ref, data);
-						if (String(ref.path).includes("actionableSuggestionDecisions")) {
-							throw new Error("injected final write failure");
-						}
-					},
-				};
-				return callback(wrapped as never);
-			});
-			return result;
-		};
-
-		const result = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_pending_catalog",
-				expectedFingerprint: FINGERPRINT,
-				item: matchingItem,
-			},
-			"user-1",
-		);
-		assert.equal(result.status, 500);
-		assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), beforeBoq);
-		assert.deepEqual(fixture.db.docs.get(fixture.path), beforeSnap);
-		assert.equal(
-			fixture.db.docs.has(
-				actionableSuggestionDecisionPath("boq-1", "run-1", SUGGESTION_ID),
-			),
-			false,
-		);
-	},
-);
-
-test("decideActionableSuggestion rejects changed source checksum without writes",
-	async () => {
-		const fixture = actionableHarness();
-		// Tamper identity inside TX verification without failing outer loadImmutable.
-		const runRecord = fixture.db.docs.get(fixture.runPath)! as {
-			identityFingerprint: string;
-		};
-		runRecord.identityFingerprint = "sha256:tampered-identity";
-		const before = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
-		const beforeSnap = structuredClone(fixture.db.docs.get(fixture.path)!);
-		const result = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{ action: "dismiss", expectedFingerprint: FINGERPRINT },
-			"user-1",
-		);
-		assert.equal(result.status, 409);
-		assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), before);
-		assert.deepEqual(fixture.db.docs.get(fixture.path), beforeSnap);
-	},
-);
+test("decideActionableSuggestion rejects changed source checksum without writes", async () => {
+	const fixture = actionableHarness();
+	// Tamper identity inside TX verification without failing outer loadImmutable.
+	const runRecord = fixture.db.docs.get(fixture.runPath)! as {
+		identityFingerprint: string;
+	};
+	runRecord.identityFingerprint = "sha256:tampered-identity";
+	const before = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
+	const beforeSnap = structuredClone(fixture.db.docs.get(fixture.path)!);
+	const result = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{ action: "dismiss", expectedFingerprint: FINGERPRINT },
+		"user-1",
+	);
+	assert.equal(result.status, 409);
+	assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), before);
+	assert.deepEqual(fixture.db.docs.get(fixture.path), beforeSnap);
+});
 
 const SUGGESTION_ID_B = "sha256:" + "c".repeat(64);
 
@@ -3902,251 +3889,242 @@ const matchingItemB = {
 	labourCost: 0,
 };
 
-test("decideActionableSuggestion add updates BOQ fingerprint in-place so a later decision on B succeeds",
-	async () => {
-		const fixture = actionableHarness();
-		const addA = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_pending_catalog",
-				expectedFingerprint: FINGERPRINT,
-				item: matchingItem,
-			},
-			"user-1",
-		);
-		assert.equal(addA.status, 200);
-		if (addA.status !== 200) return;
+test("decideActionableSuggestion add updates BOQ fingerprint in-place so a later decision on B succeeds", async () => {
+	const fixture = actionableHarness();
+	const addA = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_pending_catalog",
+			expectedFingerprint: FINGERPRINT,
+			item: matchingItem,
+		},
+		"user-1",
+	);
+	assert.equal(addA.status, 200);
+	if (addA.status !== 200) return;
 
-		const bodyA = addA.body as {
-			snapshot: ActionableReview;
-			boq: Boq;
-			audit: { afterSectionsFingerprint: string };
-		};
-		const afterFp = fingerprintCanonicalSections(bodyA.boq.sections);
-		assert.equal(bodyA.snapshot.id, FINGERPRINT);
-		assert.equal(bodyA.snapshot.versions.boqSectionsFingerprint, afterFp);
-		assert.equal(bodyA.audit.afterSectionsFingerprint, afterFp);
-		for (const suggestion of bodyA.snapshot.actionableItemSuggestions) {
-			assert.equal(suggestion.versions.boqSectionsFingerprint, afterFp);
-		}
+	const bodyA = addA.body as {
+		snapshot: ActionableReview;
+		boq: Boq;
+		audit: { afterSectionsFingerprint: string };
+	};
+	const afterFp = fingerprintCanonicalSections(bodyA.boq.sections);
+	assert.equal(bodyA.snapshot.id, FINGERPRINT);
+	assert.equal(bodyA.snapshot.versions.boqSectionsFingerprint, afterFp);
+	assert.equal(bodyA.audit.afterSectionsFingerprint, afterFp);
+	for (const suggestion of bodyA.snapshot.actionableItemSuggestions) {
+		assert.equal(suggestion.versions.boqSectionsFingerprint, afterFp);
+	}
 
-		const dismissB = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID_B,
-			{
-				action: "dismiss",
-				expectedFingerprint: bodyA.snapshot.id,
-			},
-			"user-1",
-		);
-		assert.equal(dismissB.status, 200);
-		if (dismissB.status !== 200) return;
-		assert.equal(
-			(dismissB.body as { status: string }).status,
-			"dismissed",
-		);
+	const dismissB = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID_B,
+		{
+			action: "dismiss",
+			expectedFingerprint: bodyA.snapshot.id,
+		},
+		"user-1",
+	);
+	assert.equal(dismissB.status, 200);
+	if (dismissB.status !== 200) return;
+	assert.equal((dismissB.body as { status: string }).status, "dismissed");
 
-		// Fresh fixture path for add-B after add-A
-		const fixtureAdd = actionableHarness();
-		const firstAdd = await fixtureAdd.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_pending_catalog",
-				expectedFingerprint: FINGERPRINT,
-				item: matchingItem,
-			},
-			"user-1",
-		);
-		assert.equal(firstAdd.status, 200);
-		if (firstAdd.status !== 200) return;
-		const snapAfterA = (firstAdd.body as { snapshot: ActionableReview })
-			.snapshot;
-		const addB = await fixtureAdd.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID_B,
-			{
-				action: "add_pending_catalog",
-				expectedFingerprint: snapAfterA.id,
-				item: matchingItemB,
-			},
-			"user-1",
-		);
-		assert.equal(addB.status, 200);
-		if (addB.status !== 200) return;
-		assert.equal(
-			(addB.body as { status: string }).status,
-			"added_pending_catalog",
-		);
-		const stored = fixtureAdd.db.docs.get("boqs/boq-1") as unknown as Boq;
-		assert.equal(stored.sections[0].items.length >= 2, true);
-	},
-);
+	// Fresh fixture path for add-B after add-A
+	const fixtureAdd = actionableHarness();
+	const firstAdd = await fixtureAdd.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_pending_catalog",
+			expectedFingerprint: FINGERPRINT,
+			item: matchingItem,
+		},
+		"user-1",
+	);
+	assert.equal(firstAdd.status, 200);
+	if (firstAdd.status !== 200) return;
+	const snapAfterA = (firstAdd.body as { snapshot: ActionableReview }).snapshot;
+	const addB = await fixtureAdd.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID_B,
+		{
+			action: "add_pending_catalog",
+			expectedFingerprint: snapAfterA.id,
+			item: matchingItemB,
+		},
+		"user-1",
+	);
+	assert.equal(addB.status, 200);
+	if (addB.status !== 200) return;
+	assert.equal(
+		(addB.body as { status: string }).status,
+		"added_pending_catalog",
+	);
+	const stored = fixtureAdd.db.docs.get("boqs/boq-1") as unknown as Boq;
+	assert.equal(stored.sections[0].items.length >= 2, true);
+});
 
-test("decideActionableSuggestion dismiss/restore lifecycle is append-only and re-decidable",
-	async () => {
-		const fixture = actionableHarness();
-		const decisionPath = actionableSuggestionDecisionPath(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-		);
+test("decideActionableSuggestion dismiss/restore lifecycle is append-only and re-decidable", async () => {
+	const fixture = actionableHarness();
+	const decisionPath = actionableSuggestionDecisionPath(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+	);
 
-		const dismissed = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "dismiss",
-				expectedFingerprint: FINGERPRINT,
-				note: "first dismiss",
-			},
-			"user-1",
-		);
-		assert.equal(dismissed.status, 200);
-		if (dismissed.status !== 200) return;
-		const dismissAudit = (
-			dismissed.body as { audit: { sequence: number; note?: string } }
-		).audit;
-		assert.equal(dismissAudit.sequence, 1);
-		assert.equal(dismissAudit.note, "first dismiss");
-		assert.ok(fixture.db.docs.has(`${decisionPath}/events/1-dismiss`));
+	const dismissed = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "dismiss",
+			expectedFingerprint: FINGERPRINT,
+			note: "first dismiss",
+		},
+		"user-1",
+	);
+	assert.equal(dismissed.status, 200);
+	if (dismissed.status !== 200) return;
+	const dismissAudit = (
+		dismissed.body as { audit: { sequence: number; note?: string } }
+	).audit;
+	assert.equal(dismissAudit.sequence, 1);
+	assert.equal(dismissAudit.note, "first dismiss");
+	assert.ok(fixture.db.docs.has(`${decisionPath}/events/1-dismiss`));
 
-		const restored = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{ action: "restore", expectedFingerprint: FINGERPRINT },
-			"user-1",
-		);
-		assert.equal(restored.status, 200);
-		if (restored.status !== 200) return;
-		const restoreAudit = (restored.body as { audit: { sequence: number } })
-			.audit;
-		assert.equal(restoreAudit.sequence, 2);
-		assert.ok(fixture.db.docs.has(`${decisionPath}/events/2-restore`));
-		// Original dismiss event preserved after restore overwrites head.
-		assert.ok(fixture.db.docs.has(`${decisionPath}/events/1-dismiss`));
-		const headAfterRestore = fixture.db.docs.get(decisionPath) as {
-			humanDecision: string;
-			sequence: number;
-		};
-		assert.equal(headAfterRestore.humanDecision, "restore");
-		assert.equal(headAfterRestore.sequence, 2);
+	const restored = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{ action: "restore", expectedFingerprint: FINGERPRINT },
+		"user-1",
+	);
+	assert.equal(restored.status, 200);
+	if (restored.status !== 200) return;
+	const restoreAudit = (restored.body as { audit: { sequence: number } }).audit;
+	assert.equal(restoreAudit.sequence, 2);
+	assert.ok(fixture.db.docs.has(`${decisionPath}/events/2-restore`));
+	// Original dismiss event preserved after restore overwrites head.
+	assert.ok(fixture.db.docs.has(`${decisionPath}/events/1-dismiss`));
+	const headAfterRestore = fixture.db.docs.get(decisionPath) as {
+		humanDecision: string;
+		sequence: number;
+	};
+	assert.equal(headAfterRestore.humanDecision, "restore");
+	assert.equal(headAfterRestore.sequence, 2);
 
-		const reDismiss = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "dismiss",
-				expectedFingerprint: FINGERPRINT,
-				note: "second dismiss",
-			},
-			"user-1",
-		);
-		assert.equal(reDismiss.status, 200);
-		if (reDismiss.status !== 200) return;
-		const reDismissAudit = (
-			reDismiss.body as { audit: { sequence: number; note?: string } }
-		).audit;
-		assert.equal(reDismissAudit.sequence, 3);
-		assert.equal(reDismissAudit.note, "second dismiss");
-		assert.ok(fixture.db.docs.has(`${decisionPath}/events/3-dismiss`));
-		const head = fixture.db.docs.get(decisionPath) as {
-			humanDecision: string;
-			sequence: number;
-			note?: string;
-		};
-		assert.equal(head.humanDecision, "dismiss");
-		assert.equal(head.sequence, 3);
-		assert.equal(head.note, "second dismiss");
+	const reDismiss = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "dismiss",
+			expectedFingerprint: FINGERPRINT,
+			note: "second dismiss",
+		},
+		"user-1",
+	);
+	assert.equal(reDismiss.status, 200);
+	if (reDismiss.status !== 200) return;
+	const reDismissAudit = (
+		reDismiss.body as { audit: { sequence: number; note?: string } }
+	).audit;
+	assert.equal(reDismissAudit.sequence, 3);
+	assert.equal(reDismissAudit.note, "second dismiss");
+	assert.ok(fixture.db.docs.has(`${decisionPath}/events/3-dismiss`));
+	const head = fixture.db.docs.get(decisionPath) as {
+		humanDecision: string;
+		sequence: number;
+		note?: string;
+	};
+	assert.equal(head.humanDecision, "dismiss");
+	assert.equal(head.sequence, 3);
+	assert.equal(head.note, "second dismiss");
 
-		// Same-terminal retry remains idempotent and does not append.
-		const retry = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "dismiss",
-				expectedFingerprint: FINGERPRINT,
-				note: "second dismiss",
-			},
-			"user-1",
-		);
-		assert.equal(retry.status, 200);
-		assert.equal((retry.body as { idempotent?: boolean }).idempotent, true);
-		assert.equal(
-			[...fixture.db.docs.keys()].filter((path) =>
-				path.startsWith(`${decisionPath}/events/`),
-			).length,
-			3,
-		);
+	// Same-terminal retry remains idempotent and does not append.
+	const retry = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "dismiss",
+			expectedFingerprint: FINGERPRINT,
+			note: "second dismiss",
+		},
+		"user-1",
+	);
+	assert.equal(retry.status, 200);
+	assert.equal((retry.body as { idempotent?: boolean }).idempotent, true);
+	assert.equal(
+		[...fixture.db.docs.keys()].filter((path) =>
+			path.startsWith(`${decisionPath}/events/`),
+		).length,
+		3,
+	);
 
-		// dismiss → restore → add on a fresh fixture
-		const fixtureAdd = actionableHarness();
-		const decisionPathAdd = actionableSuggestionDecisionPath(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-		);
-		assert.equal(
-			(
-				await fixtureAdd.store.decideActionableSuggestion(
-					"boq-1",
-					"run-1",
-					SUGGESTION_ID,
-					{ action: "dismiss", expectedFingerprint: FINGERPRINT },
-					"user-1",
-				)
-			).status,
-			200,
-		);
-		assert.equal(
-			(
-				await fixtureAdd.store.decideActionableSuggestion(
-					"boq-1",
-					"run-1",
-					SUGGESTION_ID,
-					{ action: "restore", expectedFingerprint: FINGERPRINT },
-					"user-1",
-				)
-			).status,
-			200,
-		);
-		const added = await fixtureAdd.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_pending_catalog",
-				expectedFingerprint: FINGERPRINT,
-				item: matchingItem,
-			},
-			"user-1",
-		);
-		assert.equal(added.status, 200);
-		if (added.status !== 200) return;
-		const addAudit = (added.body as { audit: { sequence: number } }).audit;
-		assert.equal(addAudit.sequence, 3);
-		assert.ok(
-			fixtureAdd.db.docs.has(`${decisionPathAdd}/events/3-add_pending_catalog`),
-		);
-		assert.ok(fixtureAdd.db.docs.has(`${decisionPathAdd}/events/1-dismiss`));
-		assert.ok(fixtureAdd.db.docs.has(`${decisionPathAdd}/events/2-restore`));
-		const headAdd = fixtureAdd.db.docs.get(decisionPathAdd) as {
-			humanDecision: string;
-			sequence: number;
-		};
-		assert.equal(headAdd.humanDecision, "add_pending_catalog");
-		assert.equal(headAdd.sequence, 3);
-	},
-);
+	// dismiss → restore → add on a fresh fixture
+	const fixtureAdd = actionableHarness();
+	const decisionPathAdd = actionableSuggestionDecisionPath(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+	);
+	assert.equal(
+		(
+			await fixtureAdd.store.decideActionableSuggestion(
+				"boq-1",
+				"run-1",
+				SUGGESTION_ID,
+				{ action: "dismiss", expectedFingerprint: FINGERPRINT },
+				"user-1",
+			)
+		).status,
+		200,
+	);
+	assert.equal(
+		(
+			await fixtureAdd.store.decideActionableSuggestion(
+				"boq-1",
+				"run-1",
+				SUGGESTION_ID,
+				{ action: "restore", expectedFingerprint: FINGERPRINT },
+				"user-1",
+			)
+		).status,
+		200,
+	);
+	const added = await fixtureAdd.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_pending_catalog",
+			expectedFingerprint: FINGERPRINT,
+			item: matchingItem,
+		},
+		"user-1",
+	);
+	assert.equal(added.status, 200);
+	if (added.status !== 200) return;
+	const addAudit = (added.body as { audit: { sequence: number } }).audit;
+	assert.equal(addAudit.sequence, 3);
+	assert.ok(
+		fixtureAdd.db.docs.has(`${decisionPathAdd}/events/3-add_pending_catalog`),
+	);
+	assert.ok(fixtureAdd.db.docs.has(`${decisionPathAdd}/events/1-dismiss`));
+	assert.ok(fixtureAdd.db.docs.has(`${decisionPathAdd}/events/2-restore`));
+	const headAdd = fixtureAdd.db.docs.get(decisionPathAdd) as {
+		humanDecision: string;
+		sequence: number;
+	};
+	assert.equal(headAdd.humanDecision, "add_pending_catalog");
+	assert.equal(headAdd.sequence, 3);
+});
 
 // ---------------------------------------------------------------------------
 // Task 3: add_and_match atomic transaction
@@ -4324,532 +4302,816 @@ function seedMatchCatalog(
 	};
 }
 
-test("decideActionableSuggestion add_and_match same-unit persists matched item, snapshots, history, and is idempotent",
-	async () => {
-		const fixture = actionableHarness();
-		const seeded = seedMatchCatalog(fixture, { conversion: "none" });
-		const beforeItems = (
-			fixture.db.docs.get("boqs/boq-1") as unknown as Boq
-		).sections[0]!.items.length;
-		const beforeStd = structuredClone(
-			fixture.db.docs.get(`standards/${STD_SAME}`),
-		);
+test("decideActionableSuggestion add_and_match same-unit persists matched item, snapshots, history, and is idempotent", async () => {
+	const fixture = actionableHarness();
+	const seeded = seedMatchCatalog(fixture, { conversion: "none" });
+	const beforeItems = (fixture.db.docs.get("boqs/boq-1") as unknown as Boq)
+		.sections[0]!.items.length;
+	const beforeStd = structuredClone(
+		fixture.db.docs.get(`standards/${STD_SAME}`),
+	);
 
-		const result = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_and_match",
-				expectedFingerprint: FINGERPRINT,
-				catalogId: STD_SAME,
-				item: seeded.sameUnitItem,
-			},
-			"user-1",
-		);
-		assert.equal(result.status, 200);
-		if (result.status !== 200) return;
+	const result = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_SAME,
+			item: seeded.sameUnitItem,
+		},
+		"user-1",
+	);
+	assert.equal(result.status, 200);
+	if (result.status !== 200) return;
 
-		const body = result.body as {
-			status: string;
-			audit: Record<string, unknown>;
-			snapshot: ActionableReview;
-			boq: Boq;
-			itemId: string;
+	const body = result.body as {
+		status: string;
+		audit: Record<string, unknown>;
+		snapshot: ActionableReview;
+		boq: Boq;
+		itemId: string;
+	};
+	assert.equal(body.status, "added_matched");
+	assert.equal(body.audit.humanDecision, "add_and_match");
+	assert.equal(body.audit.suggestionStatus, "added_matched");
+	assert.equal(body.audit.catalogId, STD_SAME);
+	assert.equal(body.audit.actorId, "user-1");
+	assert.notEqual(
+		body.audit.humanDecision,
+		(body.audit.aiAdvice as { decision: string } | undefined)?.decision,
+	);
+	assert.ok(body.audit.reviewerPricing);
+	assert.ok(body.audit.pricingNormalization);
+
+	const stored = fixture.db.docs.get("boqs/boq-1") as unknown as Boq;
+	assert.equal(stored.sections[0]!.items.length, beforeItems + 1);
+	const added = stored.sections[0]!.items[beforeItems]! as BoqPricedItem;
+	assert.equal(added.id, body.itemId);
+	assert.equal(added.stdStatus, "matched");
+	assert.equal(added.stdId, STD_SAME);
+	assert.equal(added.unit, "m3");
+	assert.ok(added.extractedPricing);
+	assert.ok(added.reviewerPricing);
+	assert.ok(added.pricingNormalization);
+	assert.equal(added.pricingNormalization?.catalogId, STD_SAME);
+
+	// Canonical three-snapshot invariants hold on the persisted item.
+	const [section] = parseCanonicalBoqSections([
+		{ header: "S", items: [added] },
+	]);
+	assert.equal((section!.items[0] as BoqPricedItem).stdId, STD_SAME);
+
+	const std = fixture.db.docs.get(`standards/${STD_SAME}`) as {
+		sourceItems: unknown[];
+		sourceBoqCount: number;
+		lastMatched: string;
+	};
+	assert.equal(std.sourceItems.length, 1);
+	assert.equal(std.sourceBoqCount, 1);
+	assert.equal(std.lastMatched, "2026-08-08T12:00:00.000Z");
+	assert.notDeepEqual(std, beforeStd);
+
+	const snapSuggestion = body.snapshot.actionableItemSuggestions.find(
+		(s) => s.id === SUGGESTION_ID,
+	);
+	assert.equal(snapSuggestion?.status, "added_matched");
+
+	// Identical retry does not duplicate item or source history.
+	const retry = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_SAME,
+			item: seeded.sameUnitItem,
+		},
+		"user-1",
+	);
+	assert.equal(retry.status, 200);
+	assert.equal((retry.body as { idempotent?: boolean }).idempotent, true);
+	assert.equal(
+		(fixture.db.docs.get("boqs/boq-1") as unknown as Boq).sections[0]!.items
+			.length,
+		beforeItems + 1,
+	);
+	assert.equal(
+		(fixture.db.docs.get(`standards/${STD_SAME}`) as { sourceItems: unknown[] })
+			.sourceItems.length,
+		1,
+	);
+});
+
+test("decideActionableSuggestion add_and_match global conversion normalizes operational fields", async () => {
+	const fixture = actionableHarness();
+	const seeded = seedMatchCatalog(fixture, { conversion: "global" });
+	const beforeItems = (fixture.db.docs.get("boqs/boq-1") as unknown as Boq)
+		.sections[0]!.items.length;
+
+	const result = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_BOLTS,
+			conversionRuleId: RULE_GLOBAL,
+			item: seeded.boltsItem,
+		},
+		"user-1",
+	);
+	assert.equal(result.status, 200);
+	if (result.status !== 200) return;
+	const body = result.body as {
+		audit: {
+			conversionRuleId?: string;
+			pricingNormalization?: { normalizedQuantity: string };
 		};
-		assert.equal(body.status, "added_matched");
-		assert.equal(body.audit.humanDecision, "add_and_match");
-		assert.equal(body.audit.suggestionStatus, "added_matched");
-		assert.equal(body.audit.catalogId, STD_SAME);
-		assert.equal(body.audit.actorId, "user-1");
-		assert.notEqual(
-			body.audit.humanDecision,
-			(body.audit.aiAdvice as { decision: string } | undefined)?.decision,
-		);
-		assert.ok(body.audit.reviewerPricing);
-		assert.ok(body.audit.pricingNormalization);
+		itemId: string;
+	};
+	assert.equal(body.audit.conversionRuleId, RULE_GLOBAL);
+	assert.equal(body.audit.pricingNormalization?.normalizedQuantity, "100");
 
-		const stored = fixture.db.docs.get("boqs/boq-1") as unknown as Boq;
-		assert.equal(stored.sections[0]!.items.length, beforeItems + 1);
-		const added = stored.sections[0]!.items[beforeItems]! as BoqPricedItem;
-		assert.equal(added.id, body.itemId);
-		assert.equal(added.stdStatus, "matched");
-		assert.equal(added.stdId, STD_SAME);
-		assert.equal(added.unit, "m3");
-		assert.ok(added.extractedPricing);
-		assert.ok(added.reviewerPricing);
-		assert.ok(added.pricingNormalization);
-		assert.equal(added.pricingNormalization?.catalogId, STD_SAME);
+	const added = (fixture.db.docs.get("boqs/boq-1") as unknown as Boq)
+		.sections[0]!.items[beforeItems]! as BoqPricedItem;
+	assert.equal(added.unit, "10ea");
+	assert.equal(added.qty, 100);
+	assert.equal(added.rate, 0.8);
+	assert.equal(added.total, 80);
+	assert.deepEqual(added.costAllocation, {
+		basis: "rate",
+		material: 0.5,
+		labour: 0.3,
+		origin: "manual",
+	});
+	parseCanonicalBoqSections([{ header: "S", items: [added] }]);
+});
 
-		// Canonical three-snapshot invariants hold on the persisted item.
-		const [section] = parseCanonicalBoqSections([
-			{ header: "S", items: [added] },
-		]);
-		assert.equal((section!.items[0] as BoqPricedItem).stdId, STD_SAME);
+test("decideActionableSuggestion add_and_match catalog-item conversion path", async () => {
+	const fixture = actionableHarness();
+	const seeded = seedMatchCatalog(fixture, { conversion: "catalog_item" });
+	const result = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_BOLTS,
+			conversionRuleId: RULE_ITEM,
+			item: seeded.boltsItem,
+		},
+		"user-1",
+	);
+	assert.equal(result.status, 200);
+	if (result.status !== 200) return;
+	assert.equal(
+		(result.body as { audit: { conversionRuleId?: string } }).audit
+			.conversionRuleId,
+		RULE_ITEM,
+	);
+});
 
-		const std = fixture.db.docs.get(`standards/${STD_SAME}`) as {
-			sourceItems: unknown[];
-			sourceBoqCount: number;
-			lastMatched: string;
-		};
-		assert.equal(std.sourceItems.length, 1);
-		assert.equal(std.sourceBoqCount, 1);
-		assert.equal(std.lastMatched, "2026-08-08T12:00:00.000Z");
-		assert.notDeepEqual(std, beforeStd);
+test("decideActionableSuggestion add_and_match rejects catalog fingerprint drift without writes", async () => {
+	const fixture = actionableHarness();
+	seedMatchCatalog(fixture, { conversion: "none" });
+	const beforeBoq = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
+	const beforeSnap = structuredClone(fixture.db.docs.get(fixture.path)!);
+	const beforeStd = structuredClone(
+		fixture.db.docs.get(`standards/${STD_SAME}`),
+	);
 
-		const snapSuggestion = body.snapshot.actionableItemSuggestions.find(
-			(s) => s.id === SUGGESTION_ID,
-		);
-		assert.equal(snapSuggestion?.status, "added_matched");
+	// Drift catalog by mutating stored standard description.
+	const std = fixture.db.docs.get(`standards/${STD_SAME}`)!;
+	std.description = "Changed catalog description";
 
-		// Identical retry does not duplicate item or source history.
-		const retry = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_and_match",
-				expectedFingerprint: FINGERPRINT,
-				catalogId: STD_SAME,
-				item: seeded.sameUnitItem,
+	const result = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_SAME,
+			item: matchingItem,
+		},
+		"user-1",
+	);
+	assert.equal(result.status, 409);
+	assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), beforeBoq);
+	assert.deepEqual(fixture.db.docs.get(fixture.path), beforeSnap);
+	assert.deepEqual(fixture.db.docs.get(`standards/${STD_SAME}`), {
+		...beforeStd,
+		description: "Changed catalog description",
+	});
+	assert.equal(
+		fixture.db.docs.has(
+			actionableSuggestionDecisionPath("boq-1", "run-1", SUGGESTION_ID),
+		),
+		false,
+	);
+});
+
+test("decideActionableSuggestion add_and_match rejects conversion fingerprint drift without writes", async () => {
+	const fixture = actionableHarness();
+	const seeded = seedMatchCatalog(fixture, { conversion: "global" });
+	const beforeBoq = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
+	// Drift conversion version.
+	const rule = fixture.db.docs.get(
+		`${CATALOG_CONVERSION_RULES_COLLECTION}/${RULE_GLOBAL}`,
+	)!;
+	rule.version = 99;
+
+	const result = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_BOLTS,
+			conversionRuleId: RULE_GLOBAL,
+			item: seeded.boltsItem,
+		},
+		"user-1",
+	);
+	assert.equal(result.status, 409);
+	assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), beforeBoq);
+	assert.equal(
+		fixture.db.docs.has(
+			actionableSuggestionDecisionPath("boq-1", "run-1", SUGGESTION_ID),
+		),
+		false,
+	);
+});
+
+test("decideActionableSuggestion add_and_match rejects non-shortlisted catalog without writes", async () => {
+	const fixture = actionableHarness();
+	seedMatchCatalog(fixture, { conversion: "none" });
+	// Add an active standard that is not shortlisted.
+	fixture.db.docs.set("standards/std-other", {
+		id: "std-other",
+		description: "Other",
+		unit: "m3",
+		aliases: [],
+		sourceItems: [],
+		sourceBoqCount: 0,
+		createdAt: "2026-08-01T00:00:00.000Z",
+		updatedAt: "2026-08-01T00:00:00.000Z",
+	});
+	// Keep fingerprint matching the shortlisted-only catalog by restoring fingerprint
+	// after adding the extra standard would drift it — so put it then recompute?
+	// Non-shortlisted check happens after fingerprint. Adding extra std drifts fingerprint.
+	// Instead only request a non-shortlisted id without adding it to catalogCandidates,
+	// while keeping catalog as seeded (STD_SAME only). Request std-other not in shortlist
+	// and not in active catalog → missing catalog 409. Better: include std-other in
+	// active catalog fingerprint.
+	const standards = [
+		fixture.db.docs.get(`standards/${STD_SAME}`) as unknown as StandardEntry,
+		fixture.db.docs.get("standards/std-other") as unknown as StandardEntry,
+	];
+	const fp = buildCatalogFingerprint(standards);
+	const snap = fixture.db.docs.get(fixture.path)! as {
+		versions: Record<string, string>;
+		actionableItemSuggestions: Array<Record<string, unknown>>;
+	};
+	snap.versions.catalogFingerprint = fp;
+	for (const s of snap.actionableItemSuggestions) {
+		(s.versions as Record<string, string>).catalogFingerprint = fp;
+	}
+
+	const beforeBoq = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
+	const result = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: "std-other",
+			item: matchingItem,
+		},
+		"user-1",
+	);
+	assert.equal(result.status, 400);
+	assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), beforeBoq);
+});
+
+test("decideActionableSuggestion add_and_match rejects approved BOQ without writes", async () => {
+	const fixture = actionableHarness();
+	seedMatchCatalog(fixture, { conversion: "none" });
+	fixture.db.docs.get("boqs/boq-1")!.status = "approved";
+	const beforeSnap = structuredClone(fixture.db.docs.get(fixture.path)!);
+	const result = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_SAME,
+			item: matchingItem,
+		},
+		"user-1",
+	);
+	assert.equal(result.status, 409);
+	assert.deepEqual(fixture.db.docs.get(fixture.path), beforeSnap);
+});
+
+test("decideActionableSuggestion add_and_match rejects stale BOQ fingerprint without writes", async () => {
+	const fixture = actionableHarness();
+	seedMatchCatalog(fixture, { conversion: "none" });
+	const boqDoc = fixture.db.docs.get("boqs/boq-1")! as unknown as Boq;
+	boqDoc.sections = [...boqDoc.sections, { header: "Extra", items: [] }];
+	const result = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_SAME,
+			item: matchingItem,
+		},
+		"user-1",
+	);
+	assert.equal(result.status, 409);
+});
+
+test("decideActionableSuggestion add_and_match rejects item id collision without writes", async () => {
+	const fixture = actionableHarness();
+	seedMatchCatalog(fixture, { conversion: "none" });
+	const itemId = `user-ar-${SUGGESTION_ID.replace(/^sha256:/, "").slice(0, 32)}`;
+	const boq = fixture.db.docs.get("boqs/boq-1")! as unknown as Boq;
+	boq.sections[0]!.items.push({
+		id: itemId,
+		desc: "Collision",
+		unit: "m3",
+		qty: 1,
+		rate: 1,
+		total: 1,
+		type: "unit",
+		stdStatus: "unmatched",
+	});
+	// Update snapshot BOQ fingerprint to match the collision-seeded BOQ.
+	const fp = fingerprintCanonicalSections(boq.sections);
+	const snap = fixture.db.docs.get(fixture.path)! as {
+		versions: Record<string, string>;
+		actionableItemSuggestions: Array<Record<string, unknown>>;
+	};
+	snap.versions.boqSectionsFingerprint = fp;
+	for (const s of snap.actionableItemSuggestions) {
+		(s.versions as Record<string, string>).boqSectionsFingerprint = fp;
+	}
+
+	const beforeStd = structuredClone(
+		fixture.db.docs.get(`standards/${STD_SAME}`),
+	);
+	const result = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_SAME,
+			item: matchingItem,
+		},
+		"user-1",
+	);
+	assert.equal(result.status, 409);
+	assert.deepEqual(fixture.db.docs.get(`standards/${STD_SAME}`), beforeStd);
+});
+
+test("decideActionableSuggestion add_and_match conflicting retry fails closed", async () => {
+	const fixture = actionableHarness();
+	seedMatchCatalog(fixture, { conversion: "none" });
+	const first = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_SAME,
+			item: matchingItem,
+		},
+		"user-1",
+	);
+	assert.equal(first.status, 200);
+	const itemsAfter = (fixture.db.docs.get("boqs/boq-1") as unknown as Boq)
+		.sections[0]!.items.length;
+
+	// Conflicting catalog on retry.
+	const conflict = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: "std-other",
+			item: matchingItem,
+		},
+		"user-1",
+	);
+	assert.equal(conflict.status, 409);
+	assert.equal(
+		(fixture.db.docs.get("boqs/boq-1") as unknown as Boq).sections[0]!.items
+			.length,
+		itemsAfter,
+	);
+});
+
+test("decideActionableSuggestion add_and_match conflicting reviewer fields or reason return 409", async () => {
+	const fixture = actionableHarness();
+	seedMatchCatalog(fixture, { conversion: "none" });
+	const first = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_SAME,
+			item: matchingItem,
+			correctionReason: "Initial takeoff",
+		},
+		"user-1",
+	);
+	assert.equal(first.status, 200);
+	if (first.status !== 200) return;
+	const firstBody = first.body as {
+		audit: { sectionIndex?: number; correctionReason?: string };
+		boq: Boq;
+	};
+	assert.equal(firstBody.audit.sectionIndex, 0);
+	assert.equal(firstBody.audit.correctionReason, "Initial takeoff");
+
+	const boqAfter = fixture.db.docs.get("boqs/boq-1")!;
+	const snapAfter = fixture.db.docs.get(fixture.path)!;
+	const stdAfter = fixture.db.docs.get(`standards/${STD_SAME}`)!;
+	const decisionPath = actionableSuggestionDecisionPath(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+	);
+	const decisionAfter = structuredClone(fixture.db.docs.get(decisionPath)!);
+	const itemsAfter = (boqAfter as unknown as Boq).sections[0]!.items.length;
+
+	const changedQty = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_SAME,
+			item: { ...matchingItem, qty: 3 },
+			correctionReason: "Initial takeoff",
+		},
+		"user-1",
+	);
+	assert.equal(changedQty.status, 409);
+
+	// Add empty second section so a different sectionIndex is valid for the request shape.
+	const liveBoq = fixture.db.docs.get("boqs/boq-1")! as unknown as Boq;
+	liveBoq.sections = [...liveBoq.sections, { header: "Extra", items: [] }];
+	const liveFp = fingerprintCanonicalSections(liveBoq.sections);
+	// Keep snapshot BOQ fingerprint aligned so the conflict path (not BOQ stale) is exercised
+	// for the decision-identity check that runs before the BOQ fingerprint gate.
+	const snap = fixture.db.docs.get(fixture.path)! as {
+		versions: Record<string, string>;
+		actionableItemSuggestions: Array<Record<string, unknown>>;
+	};
+	// Do not mutate BOQ fingerprint here: retry identity runs before BOQ gate.
+	void liveFp;
+	void snap;
+
+	const changedSection = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_SAME,
+			item: { ...matchingItem, sectionIndex: 1 },
+			correctionReason: "Initial takeoff",
+		},
+		"user-1",
+	);
+	assert.equal(changedSection.status, 409);
+
+	const changedReason = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_SAME,
+			item: matchingItem,
+			correctionReason: "Different reason",
+		},
+		"user-1",
+	);
+	assert.equal(changedReason.status, 409);
+
+	// Identical full request remains idempotent 200.
+	// Restore BOQ to the post-first state if the section mutation above polluted it.
+	fixture.db.docs.set("boqs/boq-1", structuredClone(boqAfter));
+	fixture.db.docs.set(fixture.path, structuredClone(snapAfter));
+	fixture.db.docs.set(`standards/${STD_SAME}`, structuredClone(stdAfter));
+	fixture.db.docs.set(decisionPath, decisionAfter);
+
+	const identical = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_SAME,
+			item: matchingItem,
+			correctionReason: "Initial takeoff",
+		},
+		"user-1",
+	);
+	assert.equal(identical.status, 200);
+	assert.equal((identical.body as { idempotent?: boolean }).idempotent, true);
+	assert.equal(
+		(fixture.db.docs.get("boqs/boq-1") as unknown as Boq).sections[0]!.items
+			.length,
+		itemsAfter,
+	);
+	assert.deepEqual(fixture.db.docs.get(decisionPath), decisionAfter);
+});
+
+test("decideActionableSuggestion add_and_match rejects item id collision in another section", async () => {
+	const fixture = actionableHarness();
+	seedMatchCatalog(fixture, { conversion: "none" });
+	const itemId = `user-ar-${SUGGESTION_ID.replace(/^sha256:/, "").slice(0, 32)}`;
+	const boq = fixture.db.docs.get("boqs/boq-1")! as unknown as Boq;
+	boq.sections = [
+		...boq.sections,
+		{
+			header: "Other section",
+			items: [
+				{
+					id: itemId,
+					desc: "Collision elsewhere",
+					unit: "m3",
+					qty: 1,
+					rate: 1,
+					total: 1,
+					type: "unit",
+					stdStatus: "unmatched",
+				},
+			],
+		},
+	];
+	const fp = fingerprintCanonicalSections(boq.sections);
+	const snap = fixture.db.docs.get(fixture.path)! as {
+		versions: Record<string, string>;
+		actionableItemSuggestions: Array<Record<string, unknown>>;
+	};
+	snap.versions.boqSectionsFingerprint = fp;
+	for (const s of snap.actionableItemSuggestions) {
+		(s.versions as Record<string, string>).boqSectionsFingerprint = fp;
+	}
+
+	const beforeBoq = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
+	const beforeStd = structuredClone(
+		fixture.db.docs.get(`standards/${STD_SAME}`),
+	);
+	const beforeSnap = structuredClone(fixture.db.docs.get(fixture.path)!);
+	const result = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_SAME,
+			item: matchingItem,
+		},
+		"user-1",
+	);
+	assert.equal(result.status, 409);
+	assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), beforeBoq);
+	assert.deepEqual(fixture.db.docs.get(`standards/${STD_SAME}`), beforeStd);
+	assert.deepEqual(fixture.db.docs.get(fixture.path), beforeSnap);
+	assert.equal(
+		fixture.db.docs.has(
+			actionableSuggestionDecisionPath("boq-1", "run-1", SUGGESTION_ID),
+		),
+		false,
+	);
+});
+
+test("decideActionableSuggestion add_and_match fingerprints include archived catalog and rules", async () => {
+	const fixture = actionableHarness();
+	seedMatchCatalog(fixture, { conversion: "global" });
+
+	// Unrelated archived catalog + rule must be part of the fingerprint universe.
+	fixture.db.docs.set("standards/std-archived", {
+		id: "std-archived",
+		description: "Archived leftover",
+		unit: "kg",
+		aliases: [],
+		sourceItems: [],
+		sourceBoqCount: 0,
+		createdAt: "2026-07-01T00:00:00.000Z",
+		updatedAt: "2026-07-01T00:00:00.000Z",
+		archivedAt: "2026-07-15T00:00:00.000Z",
+	});
+	fixture.db.docs.set(`${CATALOG_CONVERSION_RULES_COLLECTION}/rule-archived`, {
+		id: "rule-archived",
+		sourceUnit: "box",
+		catalogUnit: "ea",
+		catalogUnitsPerSourceUnit: "12",
+		scope: "global",
+		version: 1,
+		approvedBy: "admin",
+		approvedAt: "2026-01-01T00:00:00.000Z",
+		archivedAt: "2026-07-15T00:00:00.000Z",
+	});
+
+	const allStandards = [
+		fixture.db.docs.get(`standards/${STD_SAME}`) as unknown as StandardEntry,
+		fixture.db.docs.get(`standards/${STD_BOLTS}`) as unknown as StandardEntry,
+		fixture.db.docs.get("standards/std-archived") as unknown as StandardEntry,
+	];
+	const allRules = [
+		{
+			id: RULE_GLOBAL,
+			sourceUnit: "ea",
+			catalogUnit: "10ea",
+			catalogUnitsPerSourceUnit: "10",
+			scope: "global" as const,
+			version: 1,
+		},
+		{
+			id: "rule-archived",
+			sourceUnit: "box",
+			catalogUnit: "ea",
+			catalogUnitsPerSourceUnit: "12",
+			scope: "global" as const,
+			version: 1,
+			archivedAt: "2026-07-15T00:00:00.000Z",
+		},
+	];
+	const catalogFp = buildCatalogFingerprint(allStandards);
+	const conversionFp = buildConversionFingerprint(allRules);
+	const snap = fixture.db.docs.get(fixture.path)! as {
+		versions: Record<string, string>;
+		actionableItemSuggestions: Array<Record<string, unknown>>;
+	};
+	snap.versions.catalogFingerprint = catalogFp;
+	snap.versions.conversionFingerprint = conversionFp;
+	for (const entry of snap.actionableItemSuggestions) {
+		const versions = entry.versions as Record<string, string>;
+		versions.catalogFingerprint = catalogFp;
+		versions.conversionFingerprint = conversionFp;
+	}
+
+	const ok = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_BOLTS,
+			conversionRuleId: RULE_GLOBAL,
+			item: {
+				sectionIndex: 0,
+				desc: "Bolts",
+				unit: "ea",
+				qty: 10,
+				materialCost: 5,
+				labourCost: 3,
 			},
-			"user-1",
-		);
-		assert.equal(retry.status, 200);
-		assert.equal((retry.body as { idempotent?: boolean }).idempotent, true);
-		assert.equal(
-			(fixture.db.docs.get("boqs/boq-1") as unknown as Boq).sections[0]!
-				.items.length,
-			beforeItems + 1,
-		);
-		assert.equal(
-			(fixture.db.docs.get(`standards/${STD_SAME}`) as { sourceItems: unknown[] })
-				.sourceItems.length,
-			1,
-		);
-	},
-);
+		},
+		"user-1",
+	);
+	assert.equal(ok.status, 200);
 
-test("decideActionableSuggestion add_and_match global conversion normalizes operational fields",
-	async () => {
-		const fixture = actionableHarness();
-		const seeded = seedMatchCatalog(fixture, { conversion: "global" });
-		const beforeItems = (
-			fixture.db.docs.get("boqs/boq-1") as unknown as Boq
-		).sections[0]!.items.length;
+	// Fresh harness: archiving the selected catalog entry must still reject.
+	const fixture2 = actionableHarness();
+	seedMatchCatalog(fixture2, { conversion: "none" });
+	const selected = fixture2.db.docs.get(`standards/${STD_SAME}`)!;
+	selected.archivedAt = "2026-08-08T00:00:00.000Z";
+	// Fingerprint includes the archived selected entry (universe includes archived).
+	const archivedSelectedFp = buildCatalogFingerprint([
+		selected as unknown as StandardEntry,
+	]);
+	const snap2 = fixture2.db.docs.get(fixture2.path)! as {
+		versions: Record<string, string>;
+		actionableItemSuggestions: Array<Record<string, unknown>>;
+	};
+	// Leave snapshot on the active-only fingerprint so archiving the selected entry
+	// either stales the fingerprint or fails active selection — both are fail-closed.
+	void archivedSelectedFp;
+	void snap2;
+	const beforeBoq2 = structuredClone(fixture2.db.docs.get("boqs/boq-1")!);
+	const rejected = await fixture2.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_SAME,
+			item: matchingItem,
+		},
+		"user-1",
+	);
+	assert.equal(rejected.status, 409);
+	assert.deepEqual(fixture2.db.docs.get("boqs/boq-1"), beforeBoq2);
+});
 
-		const result = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_and_match",
-				expectedFingerprint: FINGERPRINT,
-				catalogId: STD_BOLTS,
-				conversionRuleId: RULE_GLOBAL,
-				item: seeded.boltsItem,
-			},
-			"user-1",
-		);
-		assert.equal(result.status, 200);
-		if (result.status !== 200) return;
-		const body = result.body as {
-			audit: { conversionRuleId?: string; pricingNormalization?: { normalizedQuantity: string } };
-			itemId: string;
-		};
-		assert.equal(body.audit.conversionRuleId, RULE_GLOBAL);
-		assert.equal(body.audit.pricingNormalization?.normalizedQuantity, "100");
-
-		const added = (
-			fixture.db.docs.get("boqs/boq-1") as unknown as Boq
-		).sections[0]!.items[beforeItems]! as BoqPricedItem;
-		assert.equal(added.unit, "10ea");
-		assert.equal(added.qty, 100);
-		assert.equal(added.rate, 0.8);
-		assert.equal(added.total, 80);
-		assert.deepEqual(added.costAllocation, {
-			basis: "rate",
-			material: 0.5,
-			labour: 0.3,
-			origin: "manual",
+test("decideActionableSuggestion add_and_match simulated write failure leaves no partial writes", async () => {
+	const fixture = actionableHarness();
+	seedMatchCatalog(fixture, { conversion: "none" });
+	const beforeBoq = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
+	const beforeSnap = structuredClone(fixture.db.docs.get(fixture.path)!);
+	const beforeStd = structuredClone(
+		fixture.db.docs.get(`standards/${STD_SAME}`),
+	);
+	const originalRun = fixture.db.runTransaction.bind(fixture.db);
+	fixture.db.runTransaction = async (callback) => {
+		const result = await originalRun(async (tx) => {
+			const wrapped = {
+				...tx,
+				create: (ref: MemoryDoc, data: RecordData) => {
+					tx.create(ref, data);
+					if (String(ref.path).includes("actionableSuggestionDecisions")) {
+						throw new Error("injected final write failure");
+					}
+				},
+				update: (ref: MemoryDoc, data: RecordData) => {
+					tx.update(ref, data);
+					if (String(ref.path).includes(`standards/${STD_SAME}`)) {
+						throw new Error("injected standard write failure");
+					}
+				},
+			};
+			return callback(wrapped as never);
 		});
-		parseCanonicalBoqSections([{ header: "S", items: [added] }]);
-	},
-);
+		return result;
+	};
 
-test("decideActionableSuggestion add_and_match catalog-item conversion path",
-	async () => {
-		const fixture = actionableHarness();
-		const seeded = seedMatchCatalog(fixture, { conversion: "catalog_item" });
-		const result = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_and_match",
-				expectedFingerprint: FINGERPRINT,
-				catalogId: STD_BOLTS,
-				conversionRuleId: RULE_ITEM,
-				item: seeded.boltsItem,
-			},
-			"user-1",
-		);
-		assert.equal(result.status, 200);
-		if (result.status !== 200) return;
-		assert.equal(
-			(result.body as { audit: { conversionRuleId?: string } }).audit
-				.conversionRuleId,
-			RULE_ITEM,
-		);
-	},
-);
+	const result = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_SAME,
+			item: matchingItem,
+		},
+		"user-1",
+	);
+	assert.equal(result.status, 500);
+	assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), beforeBoq);
+	assert.deepEqual(fixture.db.docs.get(fixture.path), beforeSnap);
+	assert.deepEqual(fixture.db.docs.get(`standards/${STD_SAME}`), beforeStd);
+	assert.equal(
+		fixture.db.docs.has(
+			actionableSuggestionDecisionPath("boq-1", "run-1", SUGGESTION_ID),
+		),
+		false,
+	);
+});
 
-test("decideActionableSuggestion add_and_match rejects catalog fingerprint drift without writes",
-	async () => {
-		const fixture = actionableHarness();
-		seedMatchCatalog(fixture, { conversion: "none" });
-		const beforeBoq = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
-		const beforeSnap = structuredClone(fixture.db.docs.get(fixture.path)!);
-		const beforeStd = structuredClone(
-			fixture.db.docs.get(`standards/${STD_SAME}`),
-		);
-
-		// Drift catalog by mutating stored standard description.
-		const std = fixture.db.docs.get(`standards/${STD_SAME}`)!;
-		std.description = "Changed catalog description";
-
-		const result = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_and_match",
-				expectedFingerprint: FINGERPRINT,
-				catalogId: STD_SAME,
-				item: matchingItem,
-			},
-			"user-1",
-		);
-		assert.equal(result.status, 409);
-		assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), beforeBoq);
-		assert.deepEqual(fixture.db.docs.get(fixture.path), beforeSnap);
-		assert.deepEqual(fixture.db.docs.get(`standards/${STD_SAME}`), {
-			...beforeStd,
-			description: "Changed catalog description",
-		});
-		assert.equal(
-			fixture.db.docs.has(
-				actionableSuggestionDecisionPath("boq-1", "run-1", SUGGESTION_ID),
-			),
-			false,
-		);
-	},
-);
-
-test("decideActionableSuggestion add_and_match rejects conversion fingerprint drift without writes",
-	async () => {
-		const fixture = actionableHarness();
-		const seeded = seedMatchCatalog(fixture, { conversion: "global" });
-		const beforeBoq = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
-		// Drift conversion version.
-		const rule = fixture.db.docs.get(
-			`${CATALOG_CONVERSION_RULES_COLLECTION}/${RULE_GLOBAL}`,
-		)!;
-		rule.version = 99;
-
-		const result = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_and_match",
-				expectedFingerprint: FINGERPRINT,
-				catalogId: STD_BOLTS,
-				conversionRuleId: RULE_GLOBAL,
-				item: seeded.boltsItem,
-			},
-			"user-1",
-		);
-		assert.equal(result.status, 409);
-		assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), beforeBoq);
-		assert.equal(
-			fixture.db.docs.has(
-				actionableSuggestionDecisionPath("boq-1", "run-1", SUGGESTION_ID),
-			),
-			false,
-		);
-	},
-);
-
-test("decideActionableSuggestion add_and_match rejects non-shortlisted catalog without writes",
-	async () => {
-		const fixture = actionableHarness();
-		seedMatchCatalog(fixture, { conversion: "none" });
-		// Add an active standard that is not shortlisted.
-		fixture.db.docs.set("standards/std-other", {
-			id: "std-other",
-			description: "Other",
-			unit: "m3",
-			aliases: [],
-			sourceItems: [],
-			sourceBoqCount: 0,
-			createdAt: "2026-08-01T00:00:00.000Z",
-			updatedAt: "2026-08-01T00:00:00.000Z",
-		});
-		// Keep fingerprint matching the shortlisted-only catalog by restoring fingerprint
-		// after adding the extra standard would drift it — so put it then recompute?
-		// Non-shortlisted check happens after fingerprint. Adding extra std drifts fingerprint.
-		// Instead only request a non-shortlisted id without adding it to catalogCandidates,
-		// while keeping catalog as seeded (STD_SAME only). Request std-other not in shortlist
-		// and not in active catalog → missing catalog 409. Better: include std-other in
-		// active catalog fingerprint.
-		const standards = [
-			fixture.db.docs.get(`standards/${STD_SAME}`) as unknown as StandardEntry,
-			fixture.db.docs.get("standards/std-other") as unknown as StandardEntry,
-		];
-		const fp = buildCatalogFingerprint(standards);
-		const snap = fixture.db.docs.get(fixture.path)! as {
-			versions: Record<string, string>;
-			actionableItemSuggestions: Array<Record<string, unknown>>;
-		};
-		snap.versions.catalogFingerprint = fp;
-		for (const s of snap.actionableItemSuggestions) {
-			(s.versions as Record<string, string>).catalogFingerprint = fp;
-		}
-
-		const beforeBoq = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
-		const result = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_and_match",
-				expectedFingerprint: FINGERPRINT,
-				catalogId: "std-other",
-				item: matchingItem,
-			},
-			"user-1",
-		);
-		assert.equal(result.status, 400);
-		assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), beforeBoq);
-	},
-);
-
-test("decideActionableSuggestion add_and_match rejects approved BOQ without writes",
-	async () => {
-		const fixture = actionableHarness();
-		seedMatchCatalog(fixture, { conversion: "none" });
-		fixture.db.docs.get("boqs/boq-1")!.status = "approved";
-		const beforeSnap = structuredClone(fixture.db.docs.get(fixture.path)!);
-		const result = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_and_match",
-				expectedFingerprint: FINGERPRINT,
-				catalogId: STD_SAME,
-				item: matchingItem,
-			},
-			"user-1",
-		);
-		assert.equal(result.status, 409);
-		assert.deepEqual(fixture.db.docs.get(fixture.path), beforeSnap);
-	},
-);
-
-test("decideActionableSuggestion add_and_match rejects stale BOQ fingerprint without writes",
-	async () => {
-		const fixture = actionableHarness();
-		seedMatchCatalog(fixture, { conversion: "none" });
-		const boqDoc = fixture.db.docs.get("boqs/boq-1")! as unknown as Boq;
-		boqDoc.sections = [...boqDoc.sections, { header: "Extra", items: [] }];
-		const result = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_and_match",
-				expectedFingerprint: FINGERPRINT,
-				catalogId: STD_SAME,
-				item: matchingItem,
-			},
-			"user-1",
-		);
-		assert.equal(result.status, 409);
-	},
-);
-
-test("decideActionableSuggestion add_and_match rejects item id collision without writes",
-	async () => {
-		const fixture = actionableHarness();
-		seedMatchCatalog(fixture, { conversion: "none" });
-		const itemId = `user-ar-${SUGGESTION_ID.replace(/^sha256:/, "").slice(0, 32)}`;
-		const boq = fixture.db.docs.get("boqs/boq-1")! as unknown as Boq;
-		boq.sections[0]!.items.push({
-			id: itemId,
-			desc: "Collision",
-			unit: "m3",
-			qty: 1,
-			rate: 1,
-			total: 1,
-			type: "unit",
-			stdStatus: "unmatched",
-		});
-		// Update snapshot BOQ fingerprint to match the collision-seeded BOQ.
-		const fp = fingerprintCanonicalSections(boq.sections);
-		const snap = fixture.db.docs.get(fixture.path)! as {
-			versions: Record<string, string>;
-			actionableItemSuggestions: Array<Record<string, unknown>>;
-		};
-		snap.versions.boqSectionsFingerprint = fp;
-		for (const s of snap.actionableItemSuggestions) {
-			(s.versions as Record<string, string>).boqSectionsFingerprint = fp;
-		}
-
-		const beforeStd = structuredClone(
-			fixture.db.docs.get(`standards/${STD_SAME}`),
-		);
-		const result = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_and_match",
-				expectedFingerprint: FINGERPRINT,
-				catalogId: STD_SAME,
-				item: matchingItem,
-			},
-			"user-1",
-		);
-		assert.equal(result.status, 409);
-		assert.deepEqual(fixture.db.docs.get(`standards/${STD_SAME}`), beforeStd);
-	},
-);
-
-test("decideActionableSuggestion add_and_match conflicting retry fails closed",
-	async () => {
-		const fixture = actionableHarness();
-		seedMatchCatalog(fixture, { conversion: "none" });
-		const first = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_and_match",
-				expectedFingerprint: FINGERPRINT,
-				catalogId: STD_SAME,
-				item: matchingItem,
-			},
-			"user-1",
-		);
-		assert.equal(first.status, 200);
-		const itemsAfter = (
-			fixture.db.docs.get("boqs/boq-1") as unknown as Boq
-		).sections[0]!.items.length;
-
-		// Conflicting catalog on retry.
-		const conflict = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_and_match",
-				expectedFingerprint: FINGERPRINT,
-				catalogId: "std-other",
-				item: matchingItem,
-			},
-			"user-1",
-		);
-		assert.equal(conflict.status, 409);
-		assert.equal(
-			(fixture.db.docs.get("boqs/boq-1") as unknown as Boq).sections[0]!
-				.items.length,
-			itemsAfter,
-		);
-	},
-);
-
-test("decideActionableSuggestion add_and_match simulated write failure leaves no partial writes",
-	async () => {
-		const fixture = actionableHarness();
-		seedMatchCatalog(fixture, { conversion: "none" });
-		const beforeBoq = structuredClone(fixture.db.docs.get("boqs/boq-1")!);
-		const beforeSnap = structuredClone(fixture.db.docs.get(fixture.path)!);
-		const beforeStd = structuredClone(
-			fixture.db.docs.get(`standards/${STD_SAME}`),
-		);
-		const originalRun = fixture.db.runTransaction.bind(fixture.db);
-		fixture.db.runTransaction = async (callback) => {
-			const result = await originalRun(async (tx) => {
-				const wrapped = {
-					...tx,
-					create: (ref: MemoryDoc, data: RecordData) => {
-						tx.create(ref, data);
-						if (String(ref.path).includes("actionableSuggestionDecisions")) {
-							throw new Error("injected final write failure");
-						}
-					},
-					update: (ref: MemoryDoc, data: RecordData) => {
-						tx.update(ref, data);
-						if (String(ref.path).includes(`standards/${STD_SAME}`)) {
-							throw new Error("injected standard write failure");
-						}
-					},
-				};
-				return callback(wrapped as never);
-			});
-			return result;
-		};
-
-		const result = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_and_match",
-				expectedFingerprint: FINGERPRINT,
-				catalogId: STD_SAME,
-				item: matchingItem,
-			},
-			"user-1",
-		);
-		assert.equal(result.status, 500);
-		assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), beforeBoq);
-		assert.deepEqual(fixture.db.docs.get(fixture.path), beforeSnap);
-		assert.deepEqual(fixture.db.docs.get(`standards/${STD_SAME}`), beforeStd);
-		assert.equal(
-			fixture.db.docs.has(
-				actionableSuggestionDecisionPath("boq-1", "run-1", SUGGESTION_ID),
-			),
-			false,
-		);
-	},
-);
-
-test("decideActionableSuggestion add_pending_catalog remains valid without pricing snapshots",
-	async () => {
-		const fixture = actionableHarness();
-		const result = await fixture.store.decideActionableSuggestion(
-			"boq-1",
-			"run-1",
-			SUGGESTION_ID,
-			{
-				action: "add_pending_catalog",
-				expectedFingerprint: FINGERPRINT,
-				item: matchingItem,
-			},
-			"user-1",
-		);
-		assert.equal(result.status, 200);
-		if (result.status !== 200) return;
-		const stored = fixture.db.docs.get("boqs/boq-1") as unknown as Boq;
-		const added = stored.sections[0]!.items.at(-1)! as BoqPricedItem;
-		assert.equal(added.stdStatus, "unmatched");
-		assert.equal(added.extractedPricing, undefined);
-		assert.equal(added.reviewerPricing, undefined);
-		assert.equal(added.pricingNormalization, undefined);
-		// Legacy no-snapshot pending items still canonicalize.
-		parseCanonicalBoqSections([{ header: "S", items: [added] }]);
-	},
-);
+test("decideActionableSuggestion add_pending_catalog remains valid without pricing snapshots", async () => {
+	const fixture = actionableHarness();
+	const result = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_pending_catalog",
+			expectedFingerprint: FINGERPRINT,
+			item: matchingItem,
+		},
+		"user-1",
+	);
+	assert.equal(result.status, 200);
+	if (result.status !== 200) return;
+	const stored = fixture.db.docs.get("boqs/boq-1") as unknown as Boq;
+	const added = stored.sections[0]!.items.at(-1)! as BoqPricedItem;
+	assert.equal(added.stdStatus, "unmatched");
+	assert.equal(added.extractedPricing, undefined);
+	assert.equal(added.reviewerPricing, undefined);
+	assert.equal(added.pricingNormalization, undefined);
+	// Legacy no-snapshot pending items still canonicalize.
+	parseCanonicalBoqSections([{ header: "S", items: [added] }]);
+});

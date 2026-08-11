@@ -277,41 +277,87 @@ test("catalog ID mismatch on normalization rejects", () => {
 	);
 });
 
-test("catalog unit mismatch on normalization rejects", () => {
+test("canonical alias normalization may differ from raw standard unit", () => {
+	const extracted = {
+		description: "Door handle",
+		unit: "Pcs",
+		quantity: "100",
+		materialRate: "5",
+		labourRate: "3",
+		total: "800",
+	};
+	const reviewer = {
+		...extracted,
+		confirmedAt: "2026-08-08T12:00:00.000Z",
+		confirmedBy: "user-1",
+	};
+	// Standard stores the raw alias unit; identity normalization uses canonical.
+	const normalization = conversionNormalization({
+		catalogDescription: "Door handle",
+		catalogUnit: "piece",
+		ruleId: "identity:piece:v1",
+		catalogUnitsPerSourceUnit: "1",
+		normalizedQuantity: "100",
+		normalizedMaterialRate: "5",
+		normalizedLabourRate: "3",
+		normalizedTotal: "800",
+	});
+	const result = buildCatalogLinkUpdate({
+		item: pricedItem({
+			id: "item-handle",
+			desc: "Door handle",
+			unit: "Pcs",
+			qty: 100,
+			rate: 8,
+			total: 800,
+			extractedPricing: extracted,
+			reviewerPricing: reviewer,
+			costAllocation: {
+				basis: "rate",
+				material: 5,
+				labour: 3,
+				origin: "manual",
+			},
+		}),
+		standard: standard({
+			description: "Door handle",
+			unit: "Pcs",
+		}),
+		confidence: "manual",
+		sourceItem: sourceItem({
+			itemId: "item-handle",
+			sourceDescription: "Door handle",
+		}),
+		matchedAt: "2026-08-08T12:00:00.000Z",
+		normalization,
+	});
+
+	assert.equal(result.item.unit, "piece");
+	assert.equal(result.item.stdId, "std-1");
+	assert.equal(result.item.qty, 100);
+	assert.equal(result.item.rate, 8);
+	assert.equal(result.item.total, 800);
+	assert.deepEqual(result.item.pricingNormalization, normalization);
+
+	const [section] = parseCanonicalBoqSections([
+		{ header: "Hardware", items: [result.item] },
+	]);
+	const canonical = section!.items[0]! as BoqPricedItem;
+	assert.equal(canonical.unit, "piece");
+	assert.equal(canonical.stdId, "std-1");
+});
+
+test("unit change without normalization still rejects", () => {
 	assert.throws(
 		() =>
 			buildCatalogLinkUpdate({
-				item: pricedItem({
-					unit: "ea",
-					qty: 10,
-					rate: 8,
-					total: 80,
-					extractedPricing: {
-						description: "Bolts",
-						unit: "ea",
-						quantity: "10",
-						materialRate: "5",
-						labourRate: "3",
-						total: "80",
-					},
-					reviewerPricing: {
-						description: "Bolts",
-						unit: "ea",
-						quantity: "10",
-						materialRate: "5",
-						labourRate: "3",
-						total: "80",
-						confirmedAt: "2026-08-08T12:00:00.000Z",
-						confirmedBy: "user-1",
-					},
-				}),
-				standard: standard({ unit: "10ea", description: "Hex bolts" }),
+				item: pricedItem({ unit: "Pcs" }),
+				standard: standard({ unit: "piece", description: "Door handle" }),
 				confidence: "manual",
-				sourceItem: sourceItem(),
+				sourceItem: sourceItem({ sourceDescription: "Door handle" }),
 				matchedAt: "2026-08-08T12:00:00.000Z",
-				normalization: conversionNormalization({ catalogUnit: "box" }),
 			}),
-		/catalogUnit/i,
+		/normalization/i,
 	);
 });
 

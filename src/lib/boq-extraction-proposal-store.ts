@@ -37,6 +37,7 @@ import {
 	buildActionablePricingFieldDeltas,
 	buildActionableSuggestionDecisionAudit,
 	buildReviewerPricingFromSourceBackedItem,
+	decimalStringFromFiniteNumber,
 	isIdempotentActionableDecision,
 	normalizeSourceRowAuditDecisions,
 	proposalMatchesAudit,
@@ -67,9 +68,7 @@ import {
 	parseActionableReviewSnapshotDocument,
 	toSnapshotDocument as toActionableSnapshotDocument,
 } from "./actionable-review-storage";
-import {
-	prepareActionableAddAndMatch,
-} from "./actionable-review-match";
+import { prepareActionableAddAndMatch } from "./actionable-review-match";
 import {
 	buildCatalogLinkUpdate,
 	CatalogLinkError,
@@ -110,7 +109,10 @@ function computeBoqStdStatus(sections: Boq["sections"]): Boq["stdStatus"] {
 
 function isIdenticalAddAndMatchRetry(
 	existing: ActionableSuggestionDecisionAudit,
-	request: Extract<ActionableReviewDecisionRequest, { action: "add_and_match" }>,
+	request: Extract<
+		ActionableReviewDecisionRequest,
+		{ action: "add_and_match" }
+	>,
 ): boolean {
 	if (existing.humanDecision !== "add_and_match") return false;
 	if (existing.suggestionStatus !== "added_matched") return false;
@@ -118,6 +120,36 @@ function isIdenticalAddAndMatchRetry(
 	const existingRule = existing.conversionRuleId;
 	const requestRule = request.conversionRuleId;
 	if ((existingRule ?? undefined) !== (requestRule ?? undefined)) return false;
+
+	// Missing audit fields cannot prove equality with the full client decision.
+	if (existing.sectionIndex === undefined) return false;
+	if (existing.sectionIndex !== request.item.sectionIndex) return false;
+
+	const reviewer = existing.reviewerPricing;
+	if (!reviewer) return false;
+	if (reviewer.description.trim() !== request.item.desc.trim()) return false;
+	if (reviewer.unit !== request.item.unit) return false;
+	if (reviewer.quantity !== decimalStringFromFiniteNumber(request.item.qty)) {
+		return false;
+	}
+	if (
+		reviewer.materialRate !==
+		decimalStringFromFiniteNumber(request.item.materialCost)
+	) {
+		return false;
+	}
+	if (
+		reviewer.labourRate !==
+		decimalStringFromFiniteNumber(request.item.labourCost)
+	) {
+		return false;
+	}
+
+	const existingReason = existing.correctionReason;
+	const requestReason = request.correctionReason;
+	if ((existingReason ?? undefined) !== (requestReason ?? undefined)) {
+		return false;
+	}
 	return true;
 }
 
@@ -3002,25 +3034,16 @@ export function createFirestoreExtractionProposalStore(
 					if (
 						existingAudit &&
 						((request.action === "add_pending_catalog" &&
-							isIdempotentActionableDecision(
-								existingAudit,
-								request.action,
-							) &&
+							isIdempotentActionableDecision(existingAudit, request.action) &&
 							suggestion.status === "added_pending_catalog") ||
 							(request.action === "add_and_match" &&
 								isIdenticalAddAndMatchRetry(existingAudit, request) &&
 								suggestion.status === "added_matched") ||
 							(request.action === "dismiss" &&
-								isIdempotentActionableDecision(
-									existingAudit,
-									request.action,
-								) &&
+								isIdempotentActionableDecision(existingAudit, request.action) &&
 								suggestion.status === "dismissed") ||
 							(request.action === "restore" &&
-								isIdempotentActionableDecision(
-									existingAudit,
-									request.action,
-								) &&
+								isIdempotentActionableDecision(existingAudit, request.action) &&
 								suggestion.status === "pending" &&
 								existingAudit.suggestionStatus === "pending"))
 					) {
@@ -3210,7 +3233,9 @@ export function createFirestoreExtractionProposalStore(
 							]);
 
 						const standardsDocs = (
-							standardsSnap as { docs?: Array<{ id: string; data: () => unknown }> }
+							standardsSnap as {
+								docs?: Array<{ id: string; data: () => unknown }>;
+							}
 						).docs;
 						if (!Array.isArray(standardsDocs)) {
 							return {
@@ -3218,14 +3243,17 @@ export function createFirestoreExtractionProposalStore(
 								body: { error: "Standards catalog could not be loaded" },
 							};
 						}
-						const activeCatalog: StandardEntry[] = standardsDocs
-							.map((doc) =>
-								normalizeStandardEntry({
-									id: doc.id,
-									...(doc.data() as object),
-								} as StandardEntry),
-							)
-							.filter((entry) => entry.archivedAt === undefined);
+						// Fingerprint the full stored universe (including archived) to match
+						// projection; selection/matching still uses active subsets only.
+						const allCatalog: StandardEntry[] = standardsDocs.map((doc) =>
+							normalizeStandardEntry({
+								id: doc.id,
+								...(doc.data() as object),
+							} as StandardEntry),
+						);
+						const activeCatalog = allCatalog.filter(
+							(entry) => entry.archivedAt === undefined,
+						);
 
 						const conversionDocs = (
 							conversionsSnap as {
@@ -3241,16 +3269,14 @@ export function createFirestoreExtractionProposalStore(
 							};
 						}
 
-						const activeRules: HumanApprovedCatalogConversionRule[] = [];
+						const allRules: HumanApprovedCatalogConversionRule[] = [];
 						for (const doc of conversionDocs) {
 							try {
 								const parsed = parseHumanApprovedCatalogConversionRule({
 									id: doc.id,
 									...(doc.data() as object),
 								});
-								if (parsed.archivedAt === undefined) {
-									activeRules.push(parsed);
-								}
+								allRules.push(parsed);
 							} catch {
 								return {
 									status: 409,
@@ -3261,6 +3287,9 @@ export function createFirestoreExtractionProposalStore(
 								};
 							}
 						}
+						const activeRules = allRules.filter(
+							(rule) => rule.archivedAt === undefined,
+						);
 
 						const settingsData = settingsSnap.exists
 							? (settingsSnap.data() as StoredWorkspaceSettings)
@@ -3273,20 +3302,18 @@ export function createFirestoreExtractionProposalStore(
 						}
 						const currencyScale = 2;
 
-						const liveCatalogFingerprint = buildCatalogFingerprint(activeCatalog);
+						const liveCatalogFingerprint =
+							buildCatalogFingerprint(allCatalog);
 						const liveConversionFingerprint =
-							buildConversionFingerprint(activeRules);
+							buildConversionFingerprint(allRules);
 						if (
-							snapshot.versions.catalogFingerprint !==
-								liveCatalogFingerprint ||
-							suggestion.versions.catalogFingerprint !==
-								liveCatalogFingerprint
+							snapshot.versions.catalogFingerprint !== liveCatalogFingerprint ||
+							suggestion.versions.catalogFingerprint !== liveCatalogFingerprint
 						) {
 							return {
 								status: 409,
 								body: {
-									error:
-										"Catalog changed; recheck the actionable review",
+									error: "Catalog changed; recheck the actionable review",
 								},
 							};
 						}
@@ -3362,8 +3389,7 @@ export function createFirestoreExtractionProposalStore(
 								return {
 									status: 400,
 									body: {
-										error:
-											"Conversion rule is not required for this candidate",
+										error: "Conversion rule is not required for this candidate",
 									},
 								};
 							}
@@ -3414,8 +3440,7 @@ export function createFirestoreExtractionProposalStore(
 							return {
 								status: 409,
 								body: {
-									error:
-										"Extraction evidence changed; recheck the suggestion",
+									error: "Extraction evidence changed; recheck the suggestion",
 								},
 							};
 						}
@@ -3477,15 +3502,14 @@ export function createFirestoreExtractionProposalStore(
 								body: { error: "sectionIndex does not exist." },
 							};
 						}
-						const collision = section.items.some(
-							(entry) => entry.id === itemId,
+						const collision = boq.sections.some((candidate) =>
+							candidate.items.some((entry) => entry.id === itemId),
 						);
 						if (collision) {
 							return {
 								status: 409,
 								body: {
-									error:
-										"Item id collision; recheck the actionable review",
+									error: "Item id collision; recheck the actionable review",
 								},
 							};
 						}
@@ -3563,20 +3587,18 @@ export function createFirestoreExtractionProposalStore(
 							sourceRowIds: suggestion.sourceRowIds,
 							sourceRefs,
 							extractedItem: suggestion.extractedItem,
-							...(suggestion.aiAdvice
-								? { aiAdvice: suggestion.aiAdvice }
-								: {}),
+							...(suggestion.aiAdvice ? { aiAdvice: suggestion.aiAdvice } : {}),
 							reviewerPricing: prepared.reviewerPricing,
 							fieldDeltas,
 							...(request.correctionReason
 								? { correctionReason: request.correctionReason }
 								: {}),
 							itemId,
+							sectionIndex: request.item.sectionIndex,
 							catalogId: catalog.id,
 							...(prepared.decision.conversionRuleId
 								? {
-										conversionRuleId:
-											prepared.decision.conversionRuleId,
+										conversionRuleId: prepared.decision.conversionRuleId,
 									}
 								: {}),
 							pricingNormalization: prepared.pricingNormalization,

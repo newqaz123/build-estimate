@@ -124,11 +124,8 @@ export function buildCatalogLinkUpdate(input: {
 				"pricingNormalization.catalogId must equal standard.id.",
 			);
 		}
-		if (normalization.catalogUnit !== standard.unit) {
-			throw new CatalogLinkError(
-				"pricingNormalization.catalogUnit must equal standard.unit.",
-			);
-		}
+		// Canonical alias identity may normalize to a unit that differs from the
+		// raw stored standard.unit (e.g. Pcs → piece). Persist the normalized unit.
 	} else if (itemClone.unit !== standard.unit) {
 		throw new CatalogLinkError(
 			"Unit change requires validated pricing normalization.",

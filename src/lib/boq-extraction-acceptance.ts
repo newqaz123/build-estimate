@@ -849,6 +849,8 @@ export interface ActionableSuggestionDecisionAudit {
 	correctionReason?: string;
 	note?: string;
 	itemId?: string;
+	/** Server-authored destination section for add decisions. */
+	sectionIndex?: number;
 	/** Catalog entry linked by add_and_match. */
 	catalogId?: string;
 	/** Human-approved conversion rule id when a non-identity rule was applied. */
@@ -948,6 +950,7 @@ export function buildActionableSuggestionDecisionAudit(input: {
 	correctionReason?: string;
 	note?: string;
 	itemId?: string;
+	sectionIndex?: number;
 	catalogId?: string;
 	conversionRuleId?: string;
 	pricingNormalization?: PricingNormalization;
@@ -986,6 +989,9 @@ export function buildActionableSuggestionDecisionAudit(input: {
 	}
 	if (input.itemId !== undefined) {
 		audit.itemId = input.itemId;
+	}
+	if (input.sectionIndex !== undefined) {
+		audit.sectionIndex = input.sectionIndex;
 	}
 	if (input.beforeSectionsFingerprint !== undefined) {
 		audit.beforeSectionsFingerprint = input.beforeSectionsFingerprint;
