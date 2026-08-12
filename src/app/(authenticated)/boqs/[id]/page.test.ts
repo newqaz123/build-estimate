@@ -303,15 +303,22 @@ test("focused review read path consumes Task 1 client state instead of null snap
 	const mountEnd = source.indexOf("/>", mountStart);
 	assert.ok(mountEnd > mountStart, "ActionableExtractionReview self-close missing");
 	const actionableMount = source.slice(mountStart, mountEnd + 2);
-	assert.doesNotMatch(actionableMount, /onAddAndMatch\s*:/);
+	assert.match(actionableMount, /onAddAndMatch\s*:/);
 	assert.match(actionableMount, /onAddToBoq\s*:/);
+	assert.match(actionableMount, /onFindAnother\s*:/);
 	assert.match(actionableMount, /onDoNotAdd\s*:/);
 	assert.match(actionableMount, /onRestore\s*:/);
 	assert.match(actionableMount, /actionableReviewClient\.decide/);
 	assert.match(actionableMount, /actionableReviewClient\.restore/);
+	assert.match(actionableMount, /actionableReviewClient\.generate/);
+	assert.match(actionableMount, /action:\s*"add_and_match"/);
 	assert.match(actionableMount, /action:\s*"add_pending_catalog"/);
 	assert.match(actionableMount, /action:\s*"dismiss"/);
 	assert.match(actionableMount, /expectedFingerprint:\s*snap\.id/);
+	assert.match(actionableMount, /catalogId:\s*payload\.catalogId|catalogId:/);
+	assert.match(actionableMount, /conversionRuleId/);
+	// Actionable Add & match must not route through the legacy catalog modal.
+	assert.doesNotMatch(actionableMount, /CatalogMatchModal/);
 });
 
 test("view=compare stays read-only Compare Catalog at every rollout stage", () => {

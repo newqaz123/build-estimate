@@ -612,3 +612,96 @@ test('nextPendingSuggestionId walks forward then wraps to the first pending', ()
   })
   assert.equal(nextPendingSuggestionId(snapshot, 'a'), null)
 })
+
+test('decide serializes bounded add_and_match with catalog and optional conversion ids', async () => {
+  const harness = createHarness({
+    initialState: {
+      ...initialActionableReviewState(),
+      snapshot: validSnapshot(),
+      selectedSuggestionId: 'sug-1',
+    },
+  })
+  harness.transport.setResponse(async () => ({
+    status: 200,
+    json: async () => ({ ok: true }),
+  }))
+  const ok = await harness.client.decide('boq-1', 'run-1', 'sug-1', {
+    action: 'add_and_match',
+    expectedFingerprint: FINGERPRINT,
+    catalogId: 'std-1',
+    conversionRuleId: 'rule-global-1',
+    item: {
+      sectionIndex: 0,
+      desc: 'Ready mix concrete',
+      unit: 'm3',
+      qty: 2,
+      materialCost: 50,
+      labourCost: 0,
+      sourceRowIds: ['should-not-send'],
+      normalizedTotal: '100',
+      conversionFactor: '2',
+    } as never,
+    correctionReason: '  site takeoff  ',
+  })
+  assert.equal(ok, true)
+  assert.deepEqual(harness.transport.calls[0]!.body, {
+    action: 'add_and_match',
+    expectedFingerprint: FINGERPRINT,
+    catalogId: 'std-1',
+    conversionRuleId: 'rule-global-1',
+    item: {
+      sectionIndex: 0,
+      desc: 'Ready mix concrete',
+      unit: 'm3',
+      qty: 2,
+      materialCost: 50,
+      labourCost: 0,
+    },
+    correctionReason: 'site takeoff',
+  })
+})
+
+test('decide omits optional add_and_match conversionRuleId and correctionReason when absent', async () => {
+  const harness = createHarness({
+    initialState: {
+      ...initialActionableReviewState(),
+      snapshot: validSnapshot(),
+      selectedSuggestionId: 'sug-1',
+    },
+  })
+  harness.transport.setResponse(async () => ({
+    status: 200,
+    json: async () => ({ ok: true }),
+  }))
+  const ok = await harness.client.decide('boq-1', 'run-1', 'sug-1', {
+    action: 'add_and_match',
+    expectedFingerprint: FINGERPRINT,
+    catalogId: 'std-1',
+    item: {
+      sectionIndex: 1,
+      desc: 'Concrete',
+      unit: 'm3',
+      qty: 1,
+      materialCost: 10,
+      labourCost: 5,
+    },
+  })
+  assert.equal(ok, true)
+  assert.deepEqual(harness.transport.calls[0]!.body, {
+    action: 'add_and_match',
+    expectedFingerprint: FINGERPRINT,
+    catalogId: 'std-1',
+    item: {
+      sectionIndex: 1,
+      desc: 'Concrete',
+      unit: 'm3',
+      qty: 1,
+      materialCost: 10,
+      labourCost: 5,
+    },
+  })
+  const body = harness.transport.calls[0]!.body as Record<string, unknown>
+  assert.equal('conversionRuleId' in body, false)
+  assert.equal('correctionReason' in body, false)
+  assert.equal('normalizedTotal' in body, false)
+})

@@ -1650,6 +1650,9 @@ function CanonicalBoqWorkspace({
 								rolloutStage={actionableReviewStage}
 								readOnly={isReadOnly}
 								loading={actionableReviewState.loading}
+								submittingSuggestionId={
+									actionableReviewState.submittingSuggestionId
+								}
 								error={actionableReviewState.error}
 								selectedSuggestionId={actionableReviewState.selectedSuggestionId}
 								auditOpen={actionableReviewState.auditOpen}
@@ -1670,14 +1673,32 @@ function CanonicalBoqWorkspace({
 									}))
 								}
 								callbacks={{
-									onAddToBoq: (suggestionId) => {
+									onAddAndMatch: (suggestionId, payload) => {
 										const snap = actionableReviewStateRef.current.snapshot;
 										const runId = boq.activeExtractionRunId;
-										const suggestion = snap?.actionableItemSuggestions.find(
-											(entry) => entry.id === suggestionId,
+										if (!snap || !runId) return;
+										void actionableReviewClient.decide(
+											boq.id,
+											runId,
+											suggestionId,
+											{
+												action: "add_and_match",
+												expectedFingerprint: snap.id,
+												catalogId: payload.catalogId,
+												item: payload.item,
+												...(payload.conversionRuleId
+													? { conversionRuleId: payload.conversionRuleId }
+													: {}),
+												...(payload.correctionReason
+													? { correctionReason: payload.correctionReason }
+													: {}),
+											},
 										);
-										if (!snap || !runId || !suggestion) return;
-										const extracted = suggestion.extractedItem;
+									},
+									onAddToBoq: (suggestionId, payload) => {
+										const snap = actionableReviewStateRef.current.snapshot;
+										const runId = boq.activeExtractionRunId;
+										if (!snap || !runId) return;
 										void actionableReviewClient.decide(
 											boq.id,
 											runId,
@@ -1685,16 +1706,21 @@ function CanonicalBoqWorkspace({
 											{
 												action: "add_pending_catalog",
 												expectedFingerprint: snap.id,
-												item: {
-													sectionIndex: suggestion.suggestedSectionIndex,
-													desc:
-														extracted.description.trim() || "Untitled item",
-													unit: extracted.unit.trim() || "ea",
-													qty: Number(extracted.quantity),
-													materialCost: Number(extracted.materialRate),
-													labourCost: Number(extracted.labourRate),
-												},
+												item: payload.item,
+												...(payload.correctionReason
+													? { correctionReason: payload.correctionReason }
+													: {}),
 											},
+										);
+									},
+									onFindAnother: (_suggestionId) => {
+										const runId = boq.activeExtractionRunId;
+										if (!runId) return;
+										// Server refresh/generation — never invent client candidates.
+										void actionableReviewClient.generate(
+											boq.id,
+											runId,
+											"focused",
 										);
 									},
 									onDoNotAdd: (suggestionId) => {

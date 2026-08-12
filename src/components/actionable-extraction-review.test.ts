@@ -167,3 +167,14 @@ test("shell wires Add to BOQ, Do not add, and restore through capability callbac
   assert.doesNotMatch(source, /createActionableReviewClient/);
   assert.doesNotMatch(source, /decideActionableSuggestion/);
 });
+
+test("shell wires Add & match, Find another, busy, and error into the detail panel", () => {
+  const source = readFileSync(componentUrl, "utf8");
+  assert.match(source, /onAddAndMatch/);
+  assert.match(source, /onFindAnother/);
+  assert.match(source, /busy=\{/);
+  assert.match(source, /submittingSuggestionId|busy/);
+  // Find another stays a capability callback — no client-invented candidates.
+  assert.doesNotMatch(source, /catalogCandidates\.push|inventedCandidate|fakeCandidate/);
+  assert.doesNotMatch(source, /CatalogMatchModal/);
+});

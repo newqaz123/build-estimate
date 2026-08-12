@@ -43,6 +43,14 @@ export type ActionableReviewClientDecisionRequest =
       item: SourceBackedItemRequest
       correctionReason?: string
     }
+  | {
+      action: 'add_and_match'
+      expectedFingerprint: string
+      catalogId: string
+      conversionRuleId?: string
+      item: SourceBackedItemRequest
+      correctionReason?: string
+    }
 
 export interface ActionableReviewClient {
   load(boqId: string, runId: string, fingerprint: string): Promise<ActionableReview | null>
@@ -137,6 +145,17 @@ function applyDecisionSuccess(
   dispatch({ type: 'decision_succeeded', suggestionId })
 }
 
+function boundedItem(item: SourceBackedItemRequest): SourceBackedItemRequest {
+  return {
+    sectionIndex: item.sectionIndex,
+    desc: item.desc,
+    unit: item.unit,
+    qty: item.qty,
+    materialCost: item.materialCost,
+    labourCost: item.labourCost,
+  }
+}
+
 function boundedDecisionRequest(request: ActionableReviewClientDecisionRequest): ActionableReviewClientDecisionRequest {
   if (request.action === 'dismiss') {
     const note = request.note?.trim()
@@ -147,18 +166,23 @@ function boundedDecisionRequest(request: ActionableReviewClientDecisionRequest):
     }
   }
 
-  const item = request.item
+  if (request.action === 'add_and_match') {
+    const conversionRuleId = request.conversionRuleId?.trim()
+    const correctionReason = request.correctionReason?.trim()
+    return {
+      action: 'add_and_match',
+      expectedFingerprint: request.expectedFingerprint,
+      catalogId: request.catalogId,
+      item: boundedItem(request.item),
+      ...(conversionRuleId ? { conversionRuleId } : {}),
+      ...(correctionReason ? { correctionReason: correctionReason.slice(0, 500) } : {}),
+    }
+  }
+
   return {
     action: 'add_pending_catalog',
     expectedFingerprint: request.expectedFingerprint,
-    item: {
-      sectionIndex: item.sectionIndex,
-      desc: item.desc,
-      unit: item.unit,
-      qty: item.qty,
-      materialCost: item.materialCost,
-      labourCost: item.labourCost,
-    },
+    item: boundedItem(request.item),
     ...(request.correctionReason?.trim()
       ? { correctionReason: request.correctionReason.trim().slice(0, 500) }
       : {}),

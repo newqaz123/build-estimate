@@ -4,6 +4,8 @@ import { useMemo, useState } from "react";
 
 import {
   ActionableReviewDetail,
+  type ActionableAddAndMatchPayload,
+  type ActionableAddToBoqPayload,
   type ActionableReviewDetailStage,
 } from "@/components/actionable-review-detail";
 import {
@@ -39,8 +41,14 @@ export function resolveActiveEvidenceKey(
 export type ActionableMobilePane = "queue" | "evidence" | "detail";
 
 export interface ActionableExtractionReviewCallbacks {
-  onAddAndMatch?: (suggestionId: string) => void;
-  onAddToBoq?: (suggestionId: string) => void;
+  onAddAndMatch?: (
+    suggestionId: string,
+    payload: ActionableAddAndMatchPayload,
+  ) => void;
+  onAddToBoq?: (
+    suggestionId: string,
+    payload: ActionableAddToBoqPayload,
+  ) => void;
   onFindAnother?: (suggestionId: string) => void;
   onDoNotAdd?: (suggestionId: string) => void;
   onCreateAndLink?: (suggestionId: string) => void;
@@ -54,6 +62,8 @@ export interface ActionableExtractionReviewProps {
   rolloutStage: ActionableReviewStage;
   readOnly?: boolean;
   loading?: boolean;
+  busy?: boolean;
+  submittingSuggestionId?: string | null;
   error?: string | null;
   selectedSuggestionId?: string | null;
   auditOpen?: boolean;
@@ -89,6 +99,8 @@ export function ActionableExtractionReview({
   rolloutStage,
   readOnly = false,
   loading = false,
+  busy = false,
+  submittingSuggestionId = null,
   error = null,
   selectedSuggestionId: selectedSuggestionIdProp = null,
   auditOpen: auditOpenProp,
@@ -528,6 +540,11 @@ export function ActionableExtractionReview({
             detailStage={detailStage}
             rolloutStage={rolloutStage}
             readOnly={readOnly}
+            busy={
+              busy ||
+              (selected != null &&
+                submittingSuggestionId === selected.id)
+            }
             sectionLabel={
               selected
                 ? sectionLabels[selected.suggestedSectionIndex]

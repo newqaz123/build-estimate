@@ -83,3 +83,10 @@ test('catalog matching closes only after the caller reload promise resolves', ()
     )
   }
 })
+test("catalog match modal stays legacy manual matching and does not own actionable add_and_match", () => {
+  assert.doesNotMatch(source, /add_and_match/);
+  assert.doesNotMatch(source, /ActionableExtractionReview|actionable-review-detail/);
+  assert.doesNotMatch(source, /createActionableReviewClient/);
+  // Modal may create catalog entries for legacy manual matching only.
+  assert.match(source, /Create and link item|handleCreateNew/);
+});

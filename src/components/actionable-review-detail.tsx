@@ -1,8 +1,11 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
 import type { ActionableItemSuggestion } from "@/lib/actionable-review-projection";
+import type { ExtractedPricingSnapshot, PricingNormalization } from "@/lib/actionable-review-types";
+import type { CatalogCandidateSnapshot } from "@/lib/catalog-candidate-shortlist";
+import type { SourceBackedItemRequest } from "@/lib/boq-user-entry";
 import type { ActionableReviewStage } from "@/lib/settings-schema";
 
 export type ActionableReviewDetailStage = "extract" | "catalog";
@@ -19,6 +22,33 @@ export function canAddAndMatch(stage: ActionableReviewStage): boolean {
   return STAGE_RANK[stage] >= STAGE_RANK.add_and_match;
 }
 
+export interface ActionableReviewerDraft {
+  description: string;
+  unit: string;
+  quantity: string;
+  materialRate: string;
+  labourRate: string;
+  correctionReason: string;
+}
+
+export interface ActionableAddAndMatchPayload {
+  catalogId: string;
+  conversionRuleId?: string;
+  item: SourceBackedItemRequest;
+  correctionReason?: string;
+}
+
+export interface ActionableAddToBoqPayload {
+  item: SourceBackedItemRequest;
+  correctionReason?: string;
+}
+
+/** Optional advisory historical pricing — never invented by the UI. */
+export interface ActionableHistoricalAdvisory {
+  median: string;
+  label?: string;
+}
+
 export interface ActionableReviewDetailProps {
   suggestion: ActionableItemSuggestion | null;
   detailStage: ActionableReviewDetailStage;
@@ -26,8 +56,13 @@ export interface ActionableReviewDetailProps {
   readOnly?: boolean;
   sectionLabel?: string;
   busy?: boolean;
-  onAddAndMatch?: (suggestionId: string) => void;
-  onAddToBoq?: (suggestionId: string) => void;
+  /** Server-provided only; when absent the UI shows nothing historical. */
+  historicalAdvisory?: ActionableHistoricalAdvisory | null;
+  onAddAndMatch?: (
+    suggestionId: string,
+    payload: ActionableAddAndMatchPayload,
+  ) => void;
+  onAddToBoq?: (suggestionId: string, payload: ActionableAddToBoqPayload) => void;
   onFindAnother?: (suggestionId: string) => void;
   onDoNotAdd?: (suggestionId: string) => void;
   onCreateAndLink?: (suggestionId: string) => void;
@@ -56,6 +91,253 @@ export function hasAuthoritativeCandidateMatch(
   return suggestion.catalogCandidates.length > 0;
 }
 
+export function draftFromExtracted(
+  extracted: ExtractedPricingSnapshot,
+): ActionableReviewerDraft {
+  return {
+    description: extracted.description,
+    unit: extracted.unit,
+    quantity: extracted.quantity,
+    materialRate: extracted.materialRate,
+    labourRate: extracted.labourRate,
+    correctionReason: "",
+  };
+}
+
+export function requiresCorrectionReason(
+  extracted: ExtractedPricingSnapshot,
+  draft: ActionableReviewerDraft,
+): boolean {
+  return (
+    draft.unit.trim() !== extracted.unit ||
+    draft.quantity.trim() !== extracted.quantity ||
+    draft.materialRate.trim() !== extracted.materialRate ||
+    draft.labourRate.trim() !== extracted.labourRate
+  );
+}
+
+export function conversionScopeFromRuleId(
+  ruleId: string | undefined,
+): "identity" | null {
+  if (typeof ruleId !== "string" || ruleId.trim() === "") return null;
+  return ruleId.startsWith("identity:") ? "identity" : null;
+}
+
+export function isNormalizationAlignedWithCandidate(
+  normalization: PricingNormalization | undefined,
+  candidate: CatalogCandidateSnapshot | null | undefined,
+): boolean {
+  if (!candidate) return false;
+  if (candidate.conversionRuleId) {
+    if (!normalization) return false;
+    if (normalization.catalogId !== candidate.catalogId) return false;
+    if (normalization.ruleId !== candidate.conversionRuleId) return false;
+    return true;
+  }
+  if (!normalization) return true;
+  if (normalization.catalogId !== candidate.catalogId) return false;
+  if (
+    conversionScopeFromRuleId(normalization.ruleId) === "identity" ||
+    normalization.catalogUnitsPerSourceUnit === "1"
+  ) {
+    return true;
+  }
+  // Same-unit candidate must not carry a foreign conversion rule snapshot.
+  return false;
+}
+
+function parseDraftNumber(raw: string): number | null {
+  const trimmed = raw.trim().replace(/,/g, "");
+  if (trimmed === "") return null;
+  const value = Number(trimmed);
+  if (!Number.isFinite(value) || value < 0) return null;
+  return value;
+}
+
+export function buildBoundedItemFromDraft(input: {
+  sectionIndex: number;
+  draft: ActionableReviewerDraft;
+}): SourceBackedItemRequest | null {
+  const desc = input.draft.description.trim();
+  const unit = input.draft.unit.trim();
+  const qty = parseDraftNumber(input.draft.quantity);
+  const materialCost = parseDraftNumber(input.draft.materialRate);
+  const labourCost = parseDraftNumber(input.draft.labourRate);
+  if (!desc || !unit || qty === null || materialCost === null || labourCost === null) {
+    return null;
+  }
+  return {
+    sectionIndex: input.sectionIndex,
+    desc,
+    unit,
+    qty,
+    materialCost,
+    labourCost,
+  };
+}
+
+export function canEnableAddAndMatch(input: {
+  rolloutStage: ActionableReviewStage;
+  readOnly: boolean;
+  busy: boolean;
+  hasCandidate: boolean;
+  candidate: CatalogCandidateSnapshot | null | undefined;
+  normalization: PricingNormalization | undefined;
+  extracted: ExtractedPricingSnapshot;
+  draft: ActionableReviewerDraft;
+}): boolean {
+  if (!canAddAndMatch(input.rolloutStage)) return false;
+  if (input.readOnly || input.busy) return false;
+  if (!input.hasCandidate || !input.candidate) return false;
+  if (!isNormalizationAlignedWithCandidate(input.normalization, input.candidate)) {
+    return false;
+  }
+  if (
+    requiresCorrectionReason(input.extracted, input.draft) &&
+    input.draft.correctionReason.trim() === ""
+  ) {
+    return false;
+  }
+  return buildBoundedItemFromDraft({
+    sectionIndex: 0,
+    draft: input.draft,
+  }) !== null;
+}
+
+export function buildActionableAddAndMatchPayload(input: {
+  sectionIndex: number;
+  draft: ActionableReviewerDraft;
+  candidate: CatalogCandidateSnapshot;
+  normalization?: PricingNormalization;
+}): ActionableAddAndMatchPayload | null {
+  if (!isNormalizationAlignedWithCandidate(input.normalization, input.candidate)) {
+    return null;
+  }
+  const item = buildBoundedItemFromDraft({
+    sectionIndex: input.sectionIndex,
+    draft: input.draft,
+  });
+  if (!item) return null;
+  const correction = input.draft.correctionReason.trim();
+  const payload: ActionableAddAndMatchPayload = {
+    catalogId: input.candidate.catalogId,
+    item,
+  };
+  if (input.candidate.conversionRuleId) {
+    payload.conversionRuleId = input.candidate.conversionRuleId;
+  }
+  if (correction) {
+    payload.correctionReason = correction.slice(0, 500);
+  }
+  return payload;
+}
+
+export function buildActionableAddToBoqPayload(input: {
+  sectionIndex: number;
+  draft: ActionableReviewerDraft;
+}): ActionableAddToBoqPayload | null {
+  const item = buildBoundedItemFromDraft(input);
+  if (!item) return null;
+  const correction = input.draft.correctionReason.trim();
+  return correction
+    ? { item, correctionReason: correction.slice(0, 500) }
+    : { item };
+}
+
+function ReviewerDraftFields({
+  draft,
+  disabled,
+  onChange,
+  requireReason,
+}: {
+  draft: ActionableReviewerDraft;
+  disabled: boolean;
+  onChange: (next: ActionableReviewerDraft) => void;
+  requireReason: boolean;
+}) {
+  return (
+    <div
+      className="actionable-form-grid"
+      data-od-id="reviewer-confirmed-fields"
+    >
+      <p className="actionable-eyebrow" style={{ gridColumn: "1 / -1" }}>
+        Reviewer-confirmed BOQ fields
+      </p>
+      <label className="actionable-field full">
+        <span>Description</span>
+        <input
+          name="desc"
+          value={draft.description}
+          disabled={disabled}
+          onChange={(event) =>
+            onChange({ ...draft, description: event.target.value })
+          }
+        />
+      </label>
+      <label className="actionable-field">
+        <span>Raw unit</span>
+        <input
+          name="unit"
+          value={draft.unit}
+          disabled={disabled}
+          onChange={(event) => onChange({ ...draft, unit: event.target.value })}
+        />
+      </label>
+      <label className="actionable-field">
+        <span>Quantity</span>
+        <input
+          name="qty"
+          inputMode="decimal"
+          value={draft.quantity}
+          disabled={disabled}
+          onChange={(event) =>
+            onChange({ ...draft, quantity: event.target.value })
+          }
+        />
+      </label>
+      <label className="actionable-field">
+        <span>Material rate</span>
+        <input
+          name="materialRate"
+          inputMode="decimal"
+          value={draft.materialRate}
+          disabled={disabled}
+          onChange={(event) =>
+            onChange({ ...draft, materialRate: event.target.value })
+          }
+        />
+      </label>
+      <label className="actionable-field">
+        <span>Labour rate</span>
+        <input
+          name="labourRate"
+          inputMode="decimal"
+          value={draft.labourRate}
+          disabled={disabled}
+          onChange={(event) =>
+            onChange({ ...draft, labourRate: event.target.value })
+          }
+        />
+      </label>
+      <label className="actionable-field full">
+        <span>
+          Correction reason
+          {requireReason ? " (required for numeric edits)" : " (optional)"}
+        </span>
+        <textarea
+          name="correctionReason"
+          value={draft.correctionReason}
+          disabled={disabled}
+          onChange={(event) =>
+            onChange({ ...draft, correctionReason: event.target.value })
+          }
+          rows={2}
+        />
+      </label>
+    </div>
+  );
+}
+
 export function ActionableReviewDetail({
   suggestion,
   detailStage,
@@ -63,6 +345,7 @@ export function ActionableReviewDetail({
   readOnly = false,
   sectionLabel,
   busy = false,
+  historicalAdvisory = null,
   onAddAndMatch,
   onAddToBoq,
   onFindAnother,
@@ -76,6 +359,27 @@ export function ActionableReviewDetail({
 }: ActionableReviewDetailProps) {
   const addAndMatchEnabled = canAddAndMatch(rolloutStage);
   const actionsDisabled = readOnly || busy;
+
+  // Preserve reviewer edits across failed submits; only seed when suggestion id is new.
+  const [draftBySuggestionId, setDraftBySuggestionId] = useState<
+    Record<string, ActionableReviewerDraft>
+  >({});
+
+  const activeDraft = useMemo(() => {
+    if (!suggestion) return null;
+    return (
+      draftBySuggestionId[suggestion.id] ??
+      draftFromExtracted(suggestion.extractedItem)
+    );
+  }, [draftBySuggestionId, suggestion]);
+
+  const updateDraft = (next: ActionableReviewerDraft) => {
+    if (!suggestion) return;
+    setDraftBySuggestionId((current) => ({
+      ...current,
+      [suggestion.id]: next,
+    }));
+  };
 
   if (detailStage === "catalog") {
     if (!suggestion) {
@@ -131,7 +435,9 @@ export function ActionableReviewDetail({
               : "—"}
           </span>
         </div>
-        <h2 className="actionable-detail-title">{item.description || "Untitled"}</h2>
+        <h2 className="actionable-detail-title">
+          {item.description || "Untitled"}
+        </h2>
         <p className="actionable-detail-sub">
           The BOQ line already exists. Resolve only its catalog relationship
           here before approval.
@@ -149,7 +455,9 @@ export function ActionableReviewDetail({
           data-od-id="catalog-ready-form"
           onSubmit={(event) => event.preventDefault()}
         >
-          <p className="actionable-eyebrow">Cached proposal · reviewer editable</p>
+          <p className="actionable-eyebrow">
+            Cached proposal · reviewer editable
+          </p>
           <div className="actionable-form-grid">
             <label className="actionable-field full">
               <span>Proposed name</span>
@@ -219,7 +527,7 @@ export function ActionableReviewDetail({
     );
   }
 
-  if (!suggestion) {
+  if (!suggestion || !activeDraft) {
     return (
       <article
         className="actionable-detail"
@@ -237,16 +545,39 @@ export function ActionableReviewDetail({
   }
 
   const item = suggestion.extractedItem;
+  const draft = activeDraft;
   const candidate = topCandidate(suggestion);
   const safeMatch = hasAuthoritativeCandidateMatch(suggestion);
   const pending = suggestion.status === "pending";
   const catalogPending = suggestion.status === "added_pending_catalog";
   const ref = suggestion.sourceRefs[0];
-  const conversionLabel = suggestion.normalization
-    ? `${suggestion.normalization.catalogUnit} · rule ${suggestion.normalization.ruleId} · ${suggestion.normalization.catalogUnitsPerSourceUnit}:1`
+  const normalization = suggestion.normalization;
+  const ruleId = normalization?.ruleId ?? candidate?.conversionRuleId;
+  const scopeLabel = conversionScopeFromRuleId(ruleId);
+  const reasonNeeded = requiresCorrectionReason(item, draft);
+  const canSubmitAddAndMatch =
+    pending &&
+    canEnableAddAndMatch({
+      rolloutStage,
+      readOnly,
+      busy,
+      hasCandidate: safeMatch,
+      candidate,
+      normalization,
+      extracted: item,
+      draft,
+    }) &&
+    Boolean(onAddAndMatch);
+
+  const conversionLabel = normalization
+    ? `${normalization.catalogUnit} · rule ${normalization.ruleId}${
+        scopeLabel ? ` · scope ${scopeLabel}` : ""
+      } · factor ${normalization.catalogUnitsPerSourceUnit}`
     : candidate?.conversionRuleId
-      ? `Conversion rule ${candidate.conversionRuleId}`
-      : "No conversion required";
+      ? `Conversion rule ${candidate.conversionRuleId}${
+          scopeLabel ? ` · scope ${scopeLabel}` : ""
+        }`
+      : "No conversion required · identity";
 
   let outcome: ReactNode;
   if (!pending) {
@@ -259,17 +590,28 @@ export function ActionableReviewDetail({
             ? `${candidate.catalogId} · ${candidate.description} · source total ${money(item.total)} preserved`
             : `Decision recorded · source total ${money(item.total)} preserved`;
     outcome = (
-      <section className="actionable-decision-card" data-od-id="resolved-decision">
+      <section
+        className="actionable-decision-card"
+        data-od-id="resolved-decision"
+      >
         <h3>{catalogPending ? "Catalog pending" : "Decision recorded"}</h3>
         <p>{decisionText}</p>
         <div className="actionable-card-actions">
           {onOpenAudit ? (
-            <button type="button" className="btn btn-secondary" onClick={onOpenAudit}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={onOpenAudit}
+            >
               Open audit history
             </button>
           ) : null}
           {catalogPending && onGoCatalog ? (
-            <button type="button" className="btn btn-primary" onClick={onGoCatalog}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={onGoCatalog}
+            >
               Go to Stage 2
             </button>
           ) : null}
@@ -289,44 +631,121 @@ export function ActionableReviewDetail({
               {candidate.catalogId} · {candidate.description}
             </h3>
           </div>
-          <span className="actionable-confidence">{Math.round(candidate.score)}</span>
+          <span className="actionable-confidence">
+            {Math.round(candidate.score)}
+          </span>
         </div>
         <p className="actionable-detail-sub">
           <strong>Match reason:</strong> {candidate.matchKind}
         </p>
-        <div className="actionable-definition-grid">
-          <div>
-            <span>Source description</span>
-            <strong>{item.description}</strong>
-          </div>
-          <div>
-            <span>Source values</span>
-            <strong>
-              {item.quantity} {item.unit} · material {money(item.materialRate)} ·
-              labour {money(item.labourRate)}
-            </strong>
-          </div>
-          <div>
-            <span>Existing catalog name / unit</span>
-            <strong>
-              {candidate.description} · {candidate.unit}
-            </strong>
-          </div>
-          <div>
-            <span>Conversion rule</span>
-            <strong>{conversionLabel}</strong>
-          </div>
-          <div>
-            <span>Source total preserved</span>
-            <strong>{money(item.total)}</strong>
-          </div>
-          {suggestion.normalization ? (
+
+        <section
+          className="actionable-evidence-snippet"
+          data-od-id="extracted-evidence"
+        >
+          <p className="actionable-eyebrow">Extracted evidence (immutable)</p>
+          <div className="actionable-definition-grid">
             <div>
-              <span>Normalized total</span>
-              <strong>{money(suggestion.normalization.normalizedTotal)}</strong>
+              <span>Extracted description</span>
+              <strong>{item.description}</strong>
             </div>
-          ) : null}
-        </div>
+            <div>
+              <span>Extracted unit / quantity</span>
+              <strong>
+                {item.unit} · {item.quantity}
+              </strong>
+            </div>
+            <div>
+              <span>Extracted rates</span>
+              <strong>
+                Material {money(item.materialRate)} · labour{" "}
+                {money(item.labourRate)}
+              </strong>
+            </div>
+            <div>
+              <span>Source total (authoritative)</span>
+              <strong>{money(item.total)}</strong>
+            </div>
+          </div>
+        </section>
+
+        <ReviewerDraftFields
+          draft={draft}
+          disabled={actionsDisabled}
+          onChange={updateDraft}
+          requireReason={reasonNeeded}
+        />
+
+        <section
+          className="actionable-evidence-snippet"
+          data-od-id="normalized-evidence"
+        >
+          <p className="actionable-eyebrow">Normalized catalog values</p>
+          <div className="actionable-definition-grid">
+            <div>
+              <span>Existing catalog name / unit</span>
+              <strong>
+                {candidate.description} · {candidate.unit}
+              </strong>
+            </div>
+            <div>
+              <span>Conversion rule</span>
+              <strong>{conversionLabel}</strong>
+            </div>
+            {scopeLabel ? (
+              <div>
+                <span>Conversion scope</span>
+                <strong>{scopeLabel}</strong>
+              </div>
+            ) : null}
+            {normalization ? (
+              <>
+                <div>
+                  <span>Factor (catalog units per source unit)</span>
+                  <strong>{normalization.catalogUnitsPerSourceUnit}</strong>
+                </div>
+                <div>
+                  <span>Normalized quantity</span>
+                  <strong>{normalization.normalizedQuantity}</strong>
+                </div>
+                <div>
+                  <span>Normalized rates</span>
+                  <strong>
+                    Material {money(normalization.normalizedMaterialRate)} ·
+                    labour {money(normalization.normalizedLabourRate)}
+                  </strong>
+                </div>
+                <div>
+                  <span>Normalized total</span>
+                  <strong>{money(normalization.normalizedTotal)}</strong>
+                </div>
+              </>
+            ) : (
+              <div>
+                <span>Normalization</span>
+                <strong>
+                  Same-unit identity will be applied on the server
+                </strong>
+              </div>
+            )}
+            <div>
+              <span>Source total preserved (authoritative)</span>
+              <strong>{money(item.total)}</strong>
+            </div>
+            {historicalAdvisory ? (
+              <div data-od-id="historical-advisory">
+                <span>Historical median (advisory only)</span>
+                <strong>
+                  {money(historicalAdvisory.median)}
+                  {historicalAdvisory.label
+                    ? ` · ${historicalAdvisory.label}`
+                    : ""}
+                </strong>
+              </div>
+            ) : null}
+          </div>
+        </section>
+
         <div className="actionable-card-actions">
           <button
             type="button"
@@ -347,17 +766,45 @@ export function ActionableReviewDetail({
           <button
             type="button"
             className="btn btn-primary"
-            disabled={
-              actionsDisabled || !addAndMatchEnabled || !onAddAndMatch
-            }
-            onClick={() => onAddAndMatch?.(suggestion.id)}
+            disabled={!canSubmitAddAndMatch}
+            aria-disabled={!canSubmitAddAndMatch}
+            onClick={() => {
+              if (!onAddAndMatch || !candidate) return;
+              const payload = buildActionableAddAndMatchPayload({
+                sectionIndex: suggestion.suggestedSectionIndex,
+                draft,
+                candidate,
+                normalization,
+              });
+              if (!payload) return;
+              onAddAndMatch(suggestion.id, payload);
+            }}
           >
-            Add & match
+            {busy ? "Working…" : "Add & match"}
           </button>
         </div>
+        {!addAndMatchEnabled ? (
+          <p className="actionable-detail-sub" role="status">
+            Add & match is available at the add_and_match rollout stage.
+          </p>
+        ) : null}
+        {reasonNeeded && draft.correctionReason.trim() === "" ? (
+          <p className="actionable-detail-sub" role="status">
+            Enter a correction reason before submitting numeric edits.
+          </p>
+        ) : null}
       </section>
     );
   } else {
+    const canSubmitAddToBoq =
+      !actionsDisabled &&
+      Boolean(onAddToBoq) &&
+      (!reasonNeeded || draft.correctionReason.trim() !== "") &&
+      buildBoundedItemFromDraft({
+        sectionIndex: suggestion.suggestedSectionIndex,
+        draft,
+      }) !== null;
+
     outcome = (
       <section className="actionable-risk-card" data-od-id="no-safe-match-card">
         <div className="actionable-risk-head">
@@ -368,28 +815,51 @@ export function ActionableReviewDetail({
             "No catalog candidate met the safe-match threshold."}{" "}
           Catalog linking is handled separately in Stage 2.
         </p>
-        <div className="actionable-definition-grid">
-          <div>
-            <span>Section</span>
-            <strong>{sectionLabel ?? `Section ${suggestion.suggestedSectionIndex + 1}`}</strong>
+
+        <section
+          className="actionable-evidence-snippet"
+          data-od-id="extracted-evidence"
+        >
+          <p className="actionable-eyebrow">Extracted evidence (immutable)</p>
+          <div className="actionable-definition-grid">
+            <div>
+              <span>Section</span>
+              <strong>
+                {sectionLabel ??
+                  `Section ${suggestion.suggestedSectionIndex + 1}`}
+              </strong>
+            </div>
+            <div>
+              <span>Extracted description</span>
+              <strong>{item.description}</strong>
+            </div>
+            <div>
+              <span>Extracted unit / quantity</span>
+              <strong>
+                {item.unit} · {item.quantity}
+              </strong>
+            </div>
+            <div>
+              <span>Extracted rates</span>
+              <strong>
+                Material {money(item.materialRate)} · labour{" "}
+                {money(item.labourRate)}
+              </strong>
+            </div>
+            <div>
+              <span>Source total (authoritative)</span>
+              <strong>{money(item.total)}</strong>
+            </div>
           </div>
-          <div>
-            <span>Description</span>
-            <strong>{item.description}</strong>
-          </div>
-          <div>
-            <span>Unit / quantity</span>
-            <strong>
-              {item.unit} · {item.quantity}
-            </strong>
-          </div>
-          <div>
-            <span>Rates</span>
-            <strong>
-              Material {money(item.materialRate)} · labour {money(item.labourRate)}
-            </strong>
-          </div>
-        </div>
+        </section>
+
+        <ReviewerDraftFields
+          draft={draft}
+          disabled={actionsDisabled}
+          onChange={updateDraft}
+          requireReason={reasonNeeded}
+        />
+
         <div className="actionable-card-actions">
           <button
             type="button"
@@ -402,10 +872,19 @@ export function ActionableReviewDetail({
           <button
             type="button"
             className="btn btn-primary"
-            disabled={actionsDisabled || !onAddToBoq}
-            onClick={() => onAddToBoq?.(suggestion.id)}
+            disabled={!canSubmitAddToBoq}
+            aria-disabled={!canSubmitAddToBoq}
+            onClick={() => {
+              if (!onAddToBoq) return;
+              const payload = buildActionableAddToBoqPayload({
+                sectionIndex: suggestion.suggestedSectionIndex,
+                draft,
+              });
+              if (!payload) return;
+              onAddToBoq(suggestion.id, payload);
+            }}
           >
-            Add to BOQ
+            {busy ? "Working…" : "Add to BOQ"}
           </button>
         </div>
       </section>
