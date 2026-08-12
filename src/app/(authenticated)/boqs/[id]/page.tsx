@@ -1650,6 +1650,7 @@ function CanonicalBoqWorkspace({
 								rolloutStage={actionableReviewStage}
 								readOnly={isReadOnly}
 								loading={actionableReviewState.loading}
+								busy={actionableReviewState.loading}
 								submittingSuggestionId={
 									actionableReviewState.submittingSuggestionId
 								}

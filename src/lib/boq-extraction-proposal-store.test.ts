@@ -4451,6 +4451,33 @@ test("decideActionableSuggestion add_and_match global conversion normalizes oper
 	parseCanonicalBoqSections([{ header: "S", items: [added] }]);
 });
 
+test("decideActionableSuggestion rejects conversion candidates without their shortlisted rule id", async () => {
+	const fixture = actionableHarness();
+	const seeded = seedMatchCatalog(fixture, { conversion: "global" });
+	const snapshot = fixture.db.docs.get(fixture.path)! as {
+		actionableItemSuggestions: Array<{
+			catalogCandidates: Array<Record<string, unknown>>;
+		}>;
+	};
+	const candidate = snapshot.actionableItemSuggestions[0]!.catalogCandidates[0]!;
+	delete candidate.conversionRuleId;
+
+	const result = await fixture.store.decideActionableSuggestion(
+		"boq-1",
+		"run-1",
+		SUGGESTION_ID,
+		{
+			action: "add_and_match",
+			expectedFingerprint: FINGERPRINT,
+			catalogId: STD_BOLTS,
+			conversionRuleId: RULE_GLOBAL,
+			item: seeded.boltsItem,
+		},
+		"user-1",
+	);
+	assert.equal(result.status, 400);
+});
+
 test("decideActionableSuggestion add_and_match catalog-item conversion path", async () => {
 	const fixture = actionableHarness();
 	const seeded = seedMatchCatalog(fixture, { conversion: "catalog_item" });

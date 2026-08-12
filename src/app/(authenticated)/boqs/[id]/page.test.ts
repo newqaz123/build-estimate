@@ -303,6 +303,7 @@ test("focused review read path consumes Task 1 client state instead of null snap
 	const mountEnd = source.indexOf("/>", mountStart);
 	assert.ok(mountEnd > mountStart, "ActionableExtractionReview self-close missing");
 	const actionableMount = source.slice(mountStart, mountEnd + 2);
+	assert.match(actionableMount, /busy=\{actionableReviewState\.loading\}/);
 	assert.match(actionableMount, /onAddAndMatch\s*:/);
 	assert.match(actionableMount, /onAddToBoq\s*:/);
 	assert.match(actionableMount, /onFindAnother\s*:/);

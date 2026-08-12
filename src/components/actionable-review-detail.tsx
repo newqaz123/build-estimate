@@ -176,6 +176,13 @@ export function buildBoundedItemFromDraft(input: {
   };
 }
 
+export function isNormalizationTotalAlignedWithExtracted(
+  normalization: PricingNormalization | undefined,
+  extracted: ExtractedPricingSnapshot,
+): boolean {
+  return !normalization || normalization.normalizedTotal === extracted.total;
+}
+
 export function canEnableAddAndMatch(input: {
   rolloutStage: ActionableReviewStage;
   readOnly: boolean;
@@ -190,6 +197,9 @@ export function canEnableAddAndMatch(input: {
   if (input.readOnly || input.busy) return false;
   if (!input.hasCandidate || !input.candidate) return false;
   if (!isNormalizationAlignedWithCandidate(input.normalization, input.candidate)) {
+    return false;
+  }
+  if (!isNormalizationTotalAlignedWithExtracted(input.normalization, input.extracted)) {
     return false;
   }
   if (
@@ -745,6 +755,12 @@ export function ActionableReviewDetail({
             ) : null}
           </div>
         </section>
+        {reasonNeeded ? (
+          <p className="actionable-detail-sub" role="status">
+            Normalized preview is based on extracted values; the server will
+            recompute it for reviewer-confirmed edits.
+          </p>
+        ) : null}
 
         <div className="actionable-card-actions">
           <button

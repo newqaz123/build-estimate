@@ -11,6 +11,7 @@ import {
   draftFromExtracted,
   hasAuthoritativeCandidateMatch,
   isNormalizationAlignedWithCandidate,
+  isNormalizationTotalAlignedWithExtracted,
   requiresCorrectionReason,
   type ActionableReviewerDraft,
 } from "./actionable-review-detail";
@@ -255,6 +256,21 @@ test("normalization alignment rejects candidate or rule mismatch and missing con
   );
 });
 
+test("normalization total alignment fails closed for mismatched totals", () => {
+  const extracted = baseExtracted();
+  assert.equal(
+    isNormalizationTotalAlignedWithExtracted(baseNormalization(), extracted),
+    true,
+  );
+  assert.equal(
+    isNormalizationTotalAlignedWithExtracted(
+      baseNormalization({ normalizedTotal: "121" }),
+      extracted,
+    ),
+    false,
+  );
+});
+
 test("canEnableAddAndMatch gates stage, authority, alignment, and correction reason", () => {
   const extracted = baseExtracted();
   const draft = draftFromExtracted(extracted);
@@ -295,6 +311,13 @@ test("canEnableAddAndMatch gates stage, authority, alignment, and correction rea
       draft: { ...draft, quantity: "9", correctionReason: "site measure" },
     }),
     true,
+  );
+  assert.equal(
+    canEnableAddAndMatch({
+      ...base,
+      normalization: baseNormalization({ normalizedTotal: "121" }),
+    }),
+    false,
   );
 });
 
@@ -371,6 +394,11 @@ test("no-safe-match offers Add to BOQ not catalog creation", () => {
   assert.ok(noSafeStart >= 0);
   const slice = source.slice(noSafeStart, noSafeStart + 1800);
   assert.doesNotMatch(slice, /Create & link|Create new catalog|Add new catalog/);
+});
+
+test("numeric edits mark the normalized preview as stale until the server recomputes it", () => {
+  const source = readFileSync(componentUrl, "utf8");
+  assert.match(source, /normalized preview|recompute|based on extracted/i);
 });
 
 test("failed submit path preserves local reviewer draft state", () => {

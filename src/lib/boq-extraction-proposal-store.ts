@@ -3359,6 +3359,19 @@ export function createFirestoreExtractionProposalStore(
 						}
 
 						let conversion: HumanApprovedCatalogConversionRule | undefined;
+						const shortlistedRuleId = shortlisted.conversionRuleId;
+						if (
+							shortlisted.matchKind === "conversion" &&
+							shortlistedRuleId === undefined
+						) {
+							return {
+								status: 400,
+								body: {
+									error:
+										"Conversion candidate is missing its shortlisted rule",
+								},
+							};
+						}
 						if (request.conversionRuleId !== undefined) {
 							if (request.conversionRuleId.startsWith("identity:")) {
 								return {
@@ -3370,8 +3383,8 @@ export function createFirestoreExtractionProposalStore(
 								};
 							}
 							if (
-								shortlisted.conversionRuleId !== undefined &&
-								shortlisted.conversionRuleId !== request.conversionRuleId
+								shortlistedRuleId !== undefined &&
+								shortlistedRuleId !== request.conversionRuleId
 							) {
 								return {
 									status: 400,
@@ -3382,7 +3395,7 @@ export function createFirestoreExtractionProposalStore(
 								};
 							}
 							if (
-								shortlisted.conversionRuleId === undefined &&
+								shortlistedRuleId === undefined &&
 								shortlisted.matchKind !== "conversion"
 							) {
 								// Candidate did not require a conversion; reject unexpected rule ids.
@@ -3417,7 +3430,10 @@ export function createFirestoreExtractionProposalStore(
 									},
 								};
 							}
-						} else if (shortlisted.conversionRuleId !== undefined) {
+						} else if (
+							shortlistedRuleId !== undefined ||
+							shortlisted.matchKind === "conversion"
+						) {
 							return {
 								status: 400,
 								body: {
