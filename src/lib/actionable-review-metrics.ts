@@ -310,60 +310,70 @@ export function evaluateActionableReviewRolloutGate(input: {
   }
 
   if (
-    !Number.isFinite(evidence.sampleSize)
+    !Number.isInteger(evidence.sampleSize)
     || evidence.sampleSize < thresholds.minSampleSize
   ) {
     failures.push(
-      `insufficient sample size: need at least ${thresholds.minSampleSize} BOQs`,
+      `invalid or insufficient sample size: need at least ${thresholds.minSampleSize} whole BOQs`,
     )
   }
 
   if (
     !Number.isFinite(evidence.localCatalogPreparationRate)
+    || evidence.localCatalogPreparationRate < 0
+    || evidence.localCatalogPreparationRate > 1
     || evidence.localCatalogPreparationRate < thresholds.minLocalCatalogPreparationRate
   ) {
     failures.push(
-      `local catalog preparation below ${thresholds.minLocalCatalogPreparationRate * 100}%`,
+      `invalid or low local catalog preparation rate; need ${thresholds.minLocalCatalogPreparationRate * 100}% to 100%`,
     )
   }
 
   if (
     !Number.isFinite(evidence.averageInitialAiCallsPerBoq)
+    || evidence.averageInitialAiCallsPerBoq < 0
     || evidence.averageInitialAiCallsPerBoq > thresholds.maxNormalAiCallsPerBoq
   ) {
     failures.push(
-      `normal AI calls per BOQ exceed ${thresholds.maxNormalAiCallsPerBoq} initial call`,
+      `invalid or excessive normal AI calls per BOQ; maximum ${thresholds.maxNormalAiCallsPerBoq} initial call`,
     )
   }
 
   if (
-    !Number.isFinite(evidence.acceptedAiAuthoredNumericValuesOrFactors)
+    !Number.isInteger(evidence.acceptedAiAuthoredNumericValuesOrFactors)
+    || evidence.acceptedAiAuthoredNumericValuesOrFactors < 0
     || evidence.acceptedAiAuthoredNumericValuesOrFactors
       > thresholds.maxAcceptedAiAuthoredNumericValuesOrFactors
   ) {
     failures.push(
-      'accepted AI-authored numeric values or factors must be 0',
+      'accepted AI-authored numeric values or factors must be a non-negative count of 0',
     )
   }
 
   if (
     !Number.isFinite(evidence.projectedReviewerActionReduction)
+    || evidence.projectedReviewerActionReduction < 0
+    || evidence.projectedReviewerActionReduction > 1
     || evidence.projectedReviewerActionReduction
       < thresholds.minProjectedReviewerActionReduction
   ) {
     failures.push(
-      `projected reviewer-action reduction below ${thresholds.minProjectedReviewerActionReduction * 100}%`,
+      `invalid or low projected reviewer-action reduction; need ${thresholds.minProjectedReviewerActionReduction * 100}% to 100%`,
     )
   }
 
   if (
     !Number.isFinite(evidence.sourceTotalMismatchEscapeRate)
     || !Number.isFinite(evidence.baselineSourceTotalMismatchEscapeRate)
+    || evidence.sourceTotalMismatchEscapeRate < 0
+    || evidence.sourceTotalMismatchEscapeRate > 1
+    || evidence.baselineSourceTotalMismatchEscapeRate < 0
+    || evidence.baselineSourceTotalMismatchEscapeRate > 1
     || evidence.sourceTotalMismatchEscapeRate
       > evidence.baselineSourceTotalMismatchEscapeRate
   ) {
     failures.push(
-      'source-total mismatch escape rate exceeds baseline',
+      'invalid or excessive source-total mismatch escape rate versus baseline',
     )
   }
 

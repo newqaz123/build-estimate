@@ -272,6 +272,33 @@ test('each metric threshold failure keeps the current stage', () => {
   }
 })
 
+test('invalid numeric evidence fails closed instead of passing upper-bound checks', () => {
+  const invalidCases: Array<{
+    evidence: Partial<ActionableReviewRolloutAggregateEvidence>
+    pattern: RegExp
+  }> = [
+    { evidence: { sampleSize: 30.5 }, pattern: /sample/ },
+    { evidence: { averageInitialAiCallsPerBoq: -1 }, pattern: /ai call|non-negative|invalid/i },
+    { evidence: { acceptedAiAuthoredNumericValuesOrFactors: -1 }, pattern: /ai-authored|numeric|factor|non-negative|invalid/i },
+    { evidence: { localCatalogPreparationRate: 1.1 }, pattern: /catalog|rate|range|invalid/i },
+    { evidence: { projectedReviewerActionReduction: -0.1 }, pattern: /reviewer-action|reduction|range|invalid/i },
+  ]
+
+  for (const testCase of invalidCases) {
+    const evaluation = evaluateActionableReviewRolloutGate({
+      currentStage: 'focused',
+      targetStage: 'add_and_match',
+      evidence: passingEvidence(testCase.evidence),
+    })
+    assert.equal(evaluation.advanceAllowed, false)
+    assert.equal(evaluation.retainedStage, 'focused')
+    assert.ok(
+      evaluation.failures.some((failure: string) => testCase.pattern.test(failure)),
+      `expected invalid evidence failure in ${evaluation.failures.join('; ')}`,
+    )
+  }
+})
+
 test('stage-order violations reject skips and unknown reverse jumps', () => {
   const skips: Array<{
     current: ActionableReviewRolloutStage
