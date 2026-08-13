@@ -183,4 +183,68 @@ The exact combined RED for findings 1 and 2 is retained in `/tmp/task1-fix1-fina
 
 ### Fix commit
 
-- See the current `fix: harden source quote summary extraction` commit (`git log -1 --oneline`); the final hash is reported in the completion response.
+- `f60468d` — `fix: harden source quote summary extraction`
+
+## Fix Round 2
+
+### Status and finding
+
+Fixed the remaining Important finding regression-first: exact high-precision `sourceQuoteSummary` strings could not pass `ParseResponseV3` after the compatible legacy `sourceTotal` JSON number rounded at the float boundary.
+
+### Changed code and coverage
+
+- `py-sidecar/boq_contract.py`
+  - preserves exact canonical summary validation and exact direct + overhead = quoted arithmetic;
+  - converts the exact quoted subtotal through the same checked legacy float round trip only for the final `sourceTotal` comparison and reconciliation representation;
+  - compares at `RECONCILIATION_TOLERANCE` only at that final legacy boundary;
+  - continues rejecting a real one-minor-unit (`0.01`) currency mismatch.
+- `py-sidecar/test_main.py`
+  - adds `test_build_parse_response_preserves_exact_summary_across_rounded_legacy_total`, exercising `build_parse_response` with exact quoted subtotal `9007199254740993` and rounded legacy JSON number `9007199254740992.0`.
+- `py-sidecar/test_boq_parser.py`
+  - adds `test_source_quote_summary_allows_only_legacy_float_rounding_at_boundary`, covering accepted unavoidable float rounding and explicit rejection of `120` versus `120.01`.
+- `.superpowers/sdd/2026-08-09-source-quote-summary/task-1-report.md`
+  - records this fix round.
+
+No parser extraction rules, TypeScript file, fixture, percentage/gap inference, or unrelated product surface changed.
+
+### RED evidence
+
+Command, run after the two regressions and before production changes:
+
+```bash
+PYTHONPATH=py-sidecar .venv-docling/bin/python -m unittest \
+  py-sidecar.test_main.SelectedPageTests.test_build_parse_response_preserves_exact_summary_across_rounded_legacy_total \
+  py-sidecar.test_boq_parser.ContractV3InvariantTest.test_source_quote_summary_allows_only_legacy_float_rounding_at_boundary
+```
+
+Output: `Ran 2 tests`; `FAILED (errors=2)`. Both failed with `Value error, sourceTotal must match sourceQuoteSummary.quotedSubtotal`. Exact output: `/tmp/task1-fix2-red.txt`.
+
+### GREEN and validation evidence
+
+- Focused command above: PASS, `Ran 2 tests ... OK` (`/tmp/task1-fix2-green-focused-final-3.txt`).
+- `.venv-docling/bin/python -m unittest py-sidecar.test_boq_parser`
+  - PASS: 151 tests.
+- `PYTHONPATH=py-sidecar .venv-docling/bin/python -m unittest py-sidecar/test_main.py`
+  - PASS: 8 tests; expected OCR fallback warning only.
+- `npx tsx --test src/lib/boq-extraction-proposal-store.test.ts`
+  - PASS: 84 tests.
+- `npx tsc --noEmit`
+  - PASS, no output.
+- `npm run check`
+  - KNOWN UNRELATED FAILURE: lint and TypeScript compilation completed; test result remains exactly `1,568 pass / 12 fail`. The same unrelated extraction-review UI tests fail: 341, 348–350, 358, 361, 365, 367, 370–372, and 374.
+- `graphify update .`
+  - PASS: rebuilt 4,059 nodes / 9,757 edges / 256 communities; no tracked graph diff.
+- `git diff --check`
+  - PASS.
+
+### Residual risk and dirty-tree safety
+
+- Full `npm run check` remains red only on the unchanged 12 unrelated UI tests.
+- Exact summary strings and all internal summary arithmetic remain strict; tolerance is confined to the legacy numeric response boundary.
+- `src/lib/boq-extraction-proposal-store.test.ts` retains its pre-existing unstaged formatting change and was neither touched nor staged.
+- All unrelated dirty work remains unstaged and uncommitted.
+- `Quotation example/` was not inspected.
+
+### Fix commit
+
+- See current `fix: preserve quote summary precision at boundary` commit; final hash is reported in the completion response.

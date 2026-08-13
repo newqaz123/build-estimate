@@ -1477,6 +1477,56 @@ class ContractV3InvariantTest(unittest.TestCase):
                     source_quote_summary=summary,
                 ))
 
+    def test_source_quote_summary_allows_only_legacy_float_rounding_at_boundary(self):
+        summary = {
+            "directWorkTotal": "9007199254740992",
+            "overheadProfitAmount": "1",
+            "quotedSubtotal": "9007199254740993",
+        }
+        sections = [{"header": "Works", "items": [self._item(
+            total=9007199254740992.0,
+        )]}]
+        rounded_source_total = float(summary["quotedSubtotal"])
+        total_items, reconciliation = build_reconciliation(
+            sections, rounded_source_total, summary,
+        )
+
+        response = ParseResponseV3(**self._response(
+            sections=sections,
+            source_total=rounded_source_total,
+            item_total=reconciliation["itemTotal"],
+            difference=reconciliation["difference"],
+            reconciled=reconciliation["reconciled"],
+            total_items=total_items,
+            source_quote_summary=summary,
+        ))
+        self.assertIsNotNone(response.sourceQuoteSummary)
+        source_quote_summary = response.sourceQuoteSummary
+        if source_quote_summary is None:
+            self.fail("sourceQuoteSummary was not preserved")
+        self.assertEqual(source_quote_summary.quotedSubtotal, "9007199254740993")
+
+        currency_summary = {
+            "directWorkTotal": "100",
+            "overheadProfitAmount": "20",
+            "quotedSubtotal": "120",
+        }
+        currency_sections = [{"header": "Works", "items": [self._item()]}]
+        meaningful_mismatch = 120.01
+        currency_total_items, mismatched_reconciliation = build_reconciliation(
+            currency_sections, meaningful_mismatch, currency_summary,
+        )
+        with self.assertRaises(ValidationError):
+            ParseResponseV3(**self._response(
+                sections=currency_sections,
+                source_total=meaningful_mismatch,
+                item_total=mismatched_reconciliation["itemTotal"],
+                difference=mismatched_reconciliation["difference"],
+                reconciled=mismatched_reconciliation["reconciled"],
+                total_items=currency_total_items,
+                source_quote_summary=currency_summary,
+            ))
+
     def test_source_quote_summary_serializes_unchanged_and_counts_direct_items_only(self):
         summary = {
             "directWorkTotal": "100", "overheadProfitAmount": "20",

@@ -298,7 +298,16 @@ class ParseResponseV3(ContractModel):
                 raise ValueError(
                     "sourceQuoteSummary does not reconcile direct work to quoted subtotal"
                 )
-            if response_source != quoted:
+            if response_source is None:
+                raise ValueError("sourceTotal must match sourceQuoteSummary.quotedSubtotal")
+            legacy_quoted_float, legacy_quoted_representation = _checked_float_round_trip(
+                quoted, "sourceQuoteSummary.quotedSubtotal"
+            )
+            if (
+                self.sourceTotal != legacy_quoted_float
+                or abs(response_source - legacy_quoted_representation)
+                > RECONCILIATION_TOLERANCE
+            ):
                 raise ValueError("sourceTotal must match sourceQuoteSummary.quotedSubtotal")
 
             if (summary.discountAmount is None) != (summary.payableTotal is None):
@@ -329,7 +338,7 @@ class ParseResponseV3(ContractModel):
                     raise ValueError(
                         f"sourceQuoteSummary.{name} references an unknown source row"
                     )
-            comparison_total = quoted
+            comparison_total = legacy_quoted_representation
 
         expected_difference = comparison_total - response_source if response_source is not None else Decimal(0)
         _, serialized_difference = _checked_float_round_trip(
@@ -416,12 +425,15 @@ def build_reconciliation(
     comparison_total = item_total_representation
     if source_quote_summary is not None:
         quoted_subtotal = (
-            source_quote_summary.quotedSubtotal
-            if hasattr(source_quote_summary, "quotedSubtotal")
-            else source_quote_summary["quotedSubtotal"]
+            source_quote_summary["quotedSubtotal"]
+            if isinstance(source_quote_summary, dict)
+            else source_quote_summary.quotedSubtotal
         )
-        comparison_total = _canonical_nonnegative_decimal(
+        exact_quoted_total = _canonical_nonnegative_decimal(
             quoted_subtotal, "sourceQuoteSummary.quotedSubtotal"
+        )
+        _, comparison_total = _checked_float_round_trip(
+            exact_quoted_total, "sourceQuoteSummary.quotedSubtotal"
         )
     difference = comparison_total - source if source is not None else Decimal(0)
     serialized_difference, difference_representation = _checked_float_round_trip(

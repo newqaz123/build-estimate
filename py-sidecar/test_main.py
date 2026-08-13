@@ -149,6 +149,55 @@ class SelectedPageTests(unittest.TestCase):
         self.assertEqual(response.reconciliation.itemTotal, 100.0)
         self.assertTrue(response.reconciliation.reconciled)
 
+    def test_build_parse_response_preserves_exact_summary_across_rounded_legacy_total(self):
+        document = FakeDocument([])
+        source_row = SourceRow(
+            id="row-1", page=1, table=1, row=1,
+            section=None, headers=[], rawCells=[], rawText="",
+            classification="unknown", confidence=1.0, warnings=[],
+        ).model_dump()
+        direct = 9007199254740992.0
+        quoted = "9007199254740993"
+        legacy_source_total = float(quoted)
+        summary = {
+            "directWorkTotal": "9007199254740992",
+            "overheadProfitAmount": "1",
+            "quotedSubtotal": quoted,
+            "overheadProfitSourceRef": {"page": 1, "table": 1, "row": 1},
+            "subtotalSourceRef": {"page": 1, "table": 1, "row": 1},
+        }
+        item = {
+            "id": "item-1", "desc": "Direct work", "pricingRole": "standard",
+            "sourceRowIds": ["row-1"], "entryOrigin": "docling",
+            "costComponent": "lump_sum", "unit": "L/S",
+            "qty": 1.0, "rate": direct, "total": direct,
+        }
+        with patch.object(main, 'build_source_rows', return_value=[source_row]), \
+             patch.object(main, 'extract_boq_document', return_value={
+                 'metadata': {
+                     'vendor': {'value': '', 'confidence': 0, 'source': ''},
+                     'project': {'value': '', 'confidence': 0, 'source': ''},
+                     'date': {'value': '', 'confidence': 0, 'source': ''},
+                     'workType': {'value': 'Unclassified', 'confidence': 0, 'source': ''},
+                 },
+                 'warnings': [], 'sourceTotal': None,
+             }), \
+             patch.object(main, 'derive_document', return_value={
+                 'sourceRows': [source_row],
+                 'sections': [{'header': 'Works', 'items': [item]}],
+                 'warnings': [], 'sourceTotal': legacy_source_total,
+                 'sourceQuoteSummary': summary,
+             }):
+            response = main.build_parse_response('source.pdf', document)
+
+        self.assertEqual(response.sourceTotal, legacy_source_total)
+        self.assertIsNotNone(response.sourceQuoteSummary)
+        source_quote_summary = response.sourceQuoteSummary
+        if source_quote_summary is None:
+            self.fail("sourceQuoteSummary was not preserved")
+        self.assertEqual(source_quote_summary.quotedSubtotal, quoted)
+        self.assertTrue(response.reconciliation.reconciled)
+
     def test_build_parse_response_keeps_docling_table_identity_when_exposed(self):
         document = FakeDocument([1, 2])
         document.tables[0].table_no = 9
