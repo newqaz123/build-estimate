@@ -478,7 +478,7 @@ function surasakHarness(
 		reconciliation: fixture.expectedReconciliation,
 		warnings: [],
 		sections: fixture.expectedSections,
-		totalItems: 19,
+		totalItems: 18,
 		aiReviewStatus: "queued",
 		reviewTargeting: {
 			candidateRowIds: [],
@@ -490,7 +490,6 @@ function surasakHarness(
 	const retainedIds = new Set([
 		"di-sr-surasak-7-combined-1",
 		"di-sr-surasak-8-combined-1",
-		"di-sr-surasak-24-standard-1",
 	]);
 	const toCanonical = (
 		candidate: ReturnType<typeof buildExtractionCandidates> extends Map<
@@ -2766,7 +2765,7 @@ test("batch acceptance atomically restores multiple targetless source-backed ins
 	);
 });
 
-test("Surasak stale 3-item draft atomically accepts 16 inserts into 19 source-ordered items totaling 47,000", async () => {
+test("Surasak stale 2-item draft atomically accepts 16 inserts into 18 source-ordered items totaling 40,620", async () => {
 	const fixture = surasakHarness();
 	const canonicalSourceRows = new Set(
 		fixture.staleSections
@@ -2846,8 +2845,8 @@ test("Surasak stale 3-item draft atomically accepts 16 inserts into 19 source-or
 	assert.equal(result.status, 200);
 	assert.equal(fixture.db.transactionCount - transactionsBefore, 1);
 	const accepted = fixture.db.docs.get("boqs/boq-surasak")! as unknown as Boq;
-	assert.equal(accepted.totalItems, 19);
-	assert.equal(accepted.grandTotal, 47000);
+	assert.equal(accepted.totalItems, 18);
+	assert.equal(accepted.grandTotal, 40620);
 	assert.deepEqual(
 		accepted.sections
 			.flatMap((section) => section.items)
@@ -2873,8 +2872,8 @@ test("Surasak stale 3-item draft atomically accepts 16 inserts into 19 source-or
 		assert.equal(Array.isArray(audit.beforeSections), true);
 		assert.equal(Array.isArray(audit.afterSections), true);
 		assert.equal((audit.batchProposalIds as string[]).length, 16);
-		assert.equal((audit.resultBoq as Boq).totalItems, 19);
-		assert.equal((audit.resultBoq as Boq).grandTotal, 47000);
+		assert.equal((audit.resultBoq as Boq).totalItems, 18);
+		assert.equal((audit.resultBoq as Boq).grandTotal, 40620);
 	}
 	const beforeUnsafeUndo = structuredClone(
 		fixture.db.docs.get("boqs/boq-surasak"),

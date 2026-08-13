@@ -93,12 +93,62 @@ class SelectedPageTests(unittest.TestCase):
              }), \
              patch.object(main, 'derive_document', side_effect=lambda rows: {
                  'sourceRows': rows, 'sections': [], 'warnings': [], 'sourceTotal': None,
+                 'sourceQuoteSummary': None,
              }):
             response = main.build_parse_response(
                 'source.pdf', document, original_page_map=[2, 4], original_page_count=4,
             )
         self.assertEqual(response.pageCount, 4)
         self.assertEqual({(row.page, row.table, row.row) for row in response.sourceRows}, {(2, 1, 4), (4, 1, 8)})
+
+    def test_build_parse_response_preserves_deterministic_source_quote_summary(self):
+        document = FakeDocument([])
+        source_row = SourceRow(
+            id="row-1", page=1, table=1, row=1,
+            section=None, headers=[], rawCells=[], rawText="",
+            classification="unknown", confidence=1.0, warnings=[],
+        ).model_dump()
+        summary = {
+            "directWorkTotal": "100",
+            "overheadProfitAmount": "20",
+            "quotedSubtotal": "120",
+            "overheadProfitSourceRef": {"page": 1, "table": 1, "row": 1},
+            "subtotalSourceRef": {"page": 1, "table": 1, "row": 1},
+        }
+        item = {
+            "id": "item-1", "desc": "Direct work", "pricingRole": "standard",
+            "sourceRowIds": ["row-1"], "entryOrigin": "docling",
+            "costComponent": "lump_sum", "unit": "L/S",
+            "qty": 1.0, "rate": 100.0, "total": 100.0,
+        }
+        with patch.object(main, 'build_source_rows', return_value=[source_row]), \
+             patch.object(main, 'extract_boq_document', return_value={
+                 'metadata': {
+                     'vendor': {'value': '', 'confidence': 0, 'source': ''},
+                     'project': {'value': '', 'confidence': 0, 'source': ''},
+                     'date': {'value': '', 'confidence': 0, 'source': ''},
+                     'workType': {'value': 'Unclassified', 'confidence': 0, 'source': ''},
+                 },
+                 'warnings': [], 'sourceTotal': None,
+             }), \
+             patch.object(main, 'derive_document', return_value={
+                 'sourceRows': [source_row],
+                 'sections': [{'header': 'Works', 'items': [item]}],
+                 'warnings': [], 'sourceTotal': 120.0,
+                 'sourceQuoteSummary': summary,
+             }):
+            response = main.build_parse_response('source.pdf', document)
+
+        self.assertIsNotNone(response.sourceQuoteSummary)
+        source_quote_summary = response.sourceQuoteSummary
+        if source_quote_summary is None:
+            self.fail("sourceQuoteSummary was not preserved")
+        self.assertEqual(
+            source_quote_summary.model_dump(exclude_none=True), summary
+        )
+        self.assertEqual(response.reconciliation.itemTotal, 100.0)
+        self.assertTrue(response.reconciliation.reconciled)
+
     def test_build_parse_response_keeps_docling_table_identity_when_exposed(self):
         document = FakeDocument([1, 2])
         document.tables[0].table_no = 9
@@ -122,6 +172,7 @@ class SelectedPageTests(unittest.TestCase):
              }), \
              patch.object(main, 'derive_document', side_effect=lambda rows: {
                  'sourceRows': rows, 'sections': [], 'warnings': [], 'sourceTotal': None,
+                 'sourceQuoteSummary': None,
              }):
             response = main.build_parse_response('source.pdf', document, original_page_map=[2, 4], original_page_count=4)
         self.assertEqual([(row.page, row.table) for row in response.sourceRows], [(2, 9), (4, 11)])

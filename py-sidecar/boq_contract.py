@@ -1,5 +1,6 @@
 from decimal import Decimal, InvalidOperation
 import math
+import re
 import sys
 from typing import Annotated, Any, Literal
 
@@ -10,6 +11,7 @@ Confidence = Annotated[FiniteFloat, Field(ge=0.0, le=1.0)]
 NonNegativeFinite = Annotated[FiniteFloat, Field(ge=0.0)]
 RECONCILIATION_TOLERANCE = Decimal("0.01")
 MAX_FINITE_FLOAT = Decimal(str(sys.float_info.max))
+CANONICAL_DECIMAL = re.compile(r"^(?:0|[1-9]\d*)(?:\.\d*[1-9])?$")
 
 
 class ContractModel(BaseModel):
@@ -204,6 +206,18 @@ class Reconciliation(ContractModel):
     difference: FiniteFloat
 
 
+class SourceQuoteSummary(ContractModel):
+    directWorkTotal: str
+    overheadProfitAmount: str | None = None
+    quotedSubtotal: str
+    discountAmount: str | None = None
+    payableTotal: str | None = None
+    overheadProfitSourceRef: SourceRef | None = None
+    discountSourceRef: SourceRef | None = None
+    subtotalSourceRef: SourceRef | None = None
+    payableTotalSourceRef: SourceRef | None = None
+
+
 class ParseResponseV3(ContractModel):
     contractVersion: Literal[3] = 3
     documentName: str
@@ -214,6 +228,7 @@ class ParseResponseV3(ContractModel):
     metadata: Metadata
     warnings: list[ExtractionWarning]
     sourceTotal: NonNegativeFinite | None = None
+    sourceQuoteSummary: SourceQuoteSummary | None = None
     reconciliation: Reconciliation
     totalItems: Annotated[int, Field(ge=0)]
 
@@ -262,7 +277,61 @@ class ParseResponseV3(ContractModel):
         if response_source != reconciliation_source:
             raise ValueError("sourceTotal must match reconciliation.sourceTotal")
 
-        expected_difference = serialized_total - response_source if response_source is not None else Decimal(0)
+        comparison_total = serialized_total
+        summary = self.sourceQuoteSummary
+        if summary is not None:
+            direct = _canonical_nonnegative_decimal(
+                summary.directWorkTotal, "sourceQuoteSummary.directWorkTotal"
+            )
+            quoted = _canonical_nonnegative_decimal(
+                summary.quotedSubtotal, "sourceQuoteSummary.quotedSubtotal"
+            )
+            overhead = (
+                Decimal(0)
+                if summary.overheadProfitAmount is None
+                else _canonical_nonnegative_decimal(
+                    summary.overheadProfitAmount,
+                    "sourceQuoteSummary.overheadProfitAmount",
+                )
+            )
+            if direct != serialized_total or direct + overhead != quoted:
+                raise ValueError(
+                    "sourceQuoteSummary does not reconcile direct work to quoted subtotal"
+                )
+            if response_source != quoted:
+                raise ValueError("sourceTotal must match sourceQuoteSummary.quotedSubtotal")
+
+            if (summary.discountAmount is None) != (summary.payableTotal is None):
+                raise ValueError(
+                    "sourceQuoteSummary discount and payable total must both be present or absent"
+                )
+            if summary.discountAmount is not None and summary.payableTotal is not None:
+                discount = _canonical_nonnegative_decimal(
+                    summary.discountAmount, "sourceQuoteSummary.discountAmount"
+                )
+                payable = _canonical_nonnegative_decimal(
+                    summary.payableTotal, "sourceQuoteSummary.payableTotal"
+                )
+                if quoted - discount != payable:
+                    raise ValueError(
+                        "sourceQuoteSummary discount does not reconcile to payable total"
+                    )
+
+            known_source_locations = set(source_locations)
+            for name in (
+                "overheadProfitSourceRef", "discountSourceRef",
+                "subtotalSourceRef", "payableTotalSourceRef",
+            ):
+                source_ref = getattr(summary, name)
+                if source_ref is not None and (
+                    source_ref.page, source_ref.table, source_ref.row
+                ) not in known_source_locations:
+                    raise ValueError(
+                        f"sourceQuoteSummary.{name} references an unknown source row"
+                    )
+            comparison_total = quoted
+
+        expected_difference = comparison_total - response_source if response_source is not None else Decimal(0)
         _, serialized_difference = _checked_float_round_trip(
             expected_difference, "reconciliation difference"
         )
@@ -274,6 +343,15 @@ class ParseResponseV3(ContractModel):
         if self.reconciliation.reconciled is not expected_reconciled:
             raise ValueError("reconciliation.reconciled is inconsistent")
         return self
+
+
+def _canonical_nonnegative_decimal(value: Any, name: str) -> Decimal:
+    if not isinstance(value, str) or not CANONICAL_DECIMAL.fullmatch(value):
+        raise ValueError(f"{name} must be a canonical nonnegative decimal string")
+    parsed = Decimal(value)
+    if not parsed.is_finite() or parsed < 0:
+        raise ValueError(f"{name} must be a canonical nonnegative decimal string")
+    return parsed
 
 
 def _decimal(value: Any, name: str) -> Decimal:
@@ -320,7 +398,11 @@ def checked_contributing_total(items: list[Any]) -> Decimal:
     return total
 
 
-def build_reconciliation(sections: list[Any], source_total: float | None) -> tuple[int, dict[str, Any]]:
+def build_reconciliation(
+    sections: list[Any],
+    source_total: float | None,
+    source_quote_summary: SourceQuoteSummary | dict[str, Any] | None = None,
+) -> tuple[int, dict[str, Any]]:
     items = [
         item
         for section in sections
@@ -331,7 +413,17 @@ def build_reconciliation(sections: list[Any], source_total: float | None) -> tup
         item_total, "contributing item total"
     )
     source = _optional_decimal(source_total, "sourceTotal")
-    difference = item_total_representation - source if source is not None else Decimal(0)
+    comparison_total = item_total_representation
+    if source_quote_summary is not None:
+        quoted_subtotal = (
+            source_quote_summary.quotedSubtotal
+            if hasattr(source_quote_summary, "quotedSubtotal")
+            else source_quote_summary["quotedSubtotal"]
+        )
+        comparison_total = _canonical_nonnegative_decimal(
+            quoted_subtotal, "sourceQuoteSummary.quotedSubtotal"
+        )
+    difference = comparison_total - source if source is not None else Decimal(0)
     serialized_difference, difference_representation = _checked_float_round_trip(
         difference, "reconciliation difference"
     )

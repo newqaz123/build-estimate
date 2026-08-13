@@ -1929,30 +1929,15 @@
           "qty": 1.0,
           "rate": 4000.0,
           "total": 4000.0
-        },
-        {
-          "id": "di-sr-surasak-24-standard-1",
-          "desc": "OVERHEAD&EXPENSES",
-          "pricingRole": "standard",
-          "sourceRowIds": [
-            "sr-surasak-24"
-          ],
-          "entryOrigin": "docling",
-          "costComponent": "lump_sum",
-          "unit": "L/S",
-          "qty": 1.0,
-          "rate": 6380.0,
-          "total": 6380.0
         }
       ]
     }
   ],
   "expectedWarningCodes": [
-    "unsupported_row",
     "unsupported_row"
   ],
   "expectedReconciliation": {
-    "itemTotal": 47000.0,
+    "itemTotal": 40620.0,
     "sourceTotal": 47000.0,
     "reconciled": true,
     "difference": 0.0

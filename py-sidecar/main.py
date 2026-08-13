@@ -278,7 +278,10 @@ def build_parse_response(
     source_total = deterministic["sourceTotal"]
     if source_total is None:
         source_total = normalized["sourceTotal"]
-    total_items, reconciliation = build_reconciliation(sections, source_total)
+    source_quote_summary = deterministic.get("sourceQuoteSummary")
+    total_items, reconciliation = build_reconciliation(
+        sections, source_total, source_quote_summary
+    )
     return ParseResponseV3(
         contractVersion=3,
         documentName=filename,
@@ -290,6 +293,7 @@ def build_parse_response(
         # Helpers return dict-shaped payloads; cast keeps pyright aligned without runtime change.
         warnings=cast(Any, [*extraction_warnings, *deterministic_warnings]),
         sourceTotal=source_total,
+        sourceQuoteSummary=cast(Any, source_quote_summary),
         reconciliation=cast(Any, reconciliation),
         totalItems=total_items,
     )

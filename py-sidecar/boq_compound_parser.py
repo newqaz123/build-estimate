@@ -28,6 +28,10 @@ OPTION_CONTEXT = re.compile(r"\b(?:options?|alternates?|alternatives?|remarks?|s
 CONTINUATION_PREFIX = re.compile(r"^(?:including|continued|comprising|consisting|together with|complete with)\b", re.I)
 NON_NUMBER = {"", "-", "—", "–", "n/a", "N/A"}
 NUMBER_TOKEN = re.compile(r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$")
+OVERHEAD_RE = re.compile(
+    r"\boverhead\b.*\bprofit\b|\boverhead\s*&\s*(?:profit|expenses)\b",
+    re.I,
+)
 
 
 def _normal(value: Any) -> str:
@@ -863,6 +867,107 @@ def _source_total(
     return _finite_float(derived), evidence_warnings
 
 
+def _row_label(row: dict[str, Any]) -> str:
+    """Join nonnumeric label cells, including merged description cells."""
+    labels: list[str] = []
+    for cell in _anchor_cells(row):
+        text = str(cell.get("rawText") or "").strip()
+        if text and _decimal(text) is None:
+            labels.append(text)
+    return " ".join(labels)
+
+
+def _amount_decimal(row: dict[str, Any], *, adjustment: bool = False) -> Decimal | None:
+    roles = _find_columns(row)
+    raw = _value(row, roles.get("amount"))
+    return _adjustment_decimal(raw) if adjustment else _decimal(raw)
+
+
+def _canonical_decimal_string(value: Decimal) -> str:
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _source_ref(row: dict[str, Any]) -> dict[str, int]:
+    return {"page": row["page"], "table": row["table"], "row": row["row"]}
+
+
+def _quote_summary(
+    rows: list[dict[str, Any]], direct_total: Decimal, source_total: float | None,
+) -> tuple[dict[str, Any] | None, set[str]]:
+    """Return a closed fixed-amount quote summary and its consumed row IDs."""
+    if source_total is None:
+        return None, set()
+    source_decimal = Decimal(str(source_total))
+    overhead_rows = [row for row in rows if OVERHEAD_RE.search(_row_label(row))]
+    if len(overhead_rows) != 1:
+        return None, set()
+    overhead_row = overhead_rows[0]
+    overhead = _amount_decimal(overhead_row)
+    if overhead is None or direct_total + overhead != source_decimal:
+        return None, set()
+
+    subtotal_rows: list[dict[str, Any]] = []
+    discount_rows: list[dict[str, Any]] = []
+    payable_rows: list[dict[str, Any]] = []
+    for row in rows:
+        label = _normal(_row_label(row))
+        kind = _total_kind(label)
+        if kind in {"subtotal", "pre_discount", "pre_vat"}:
+            value = _amount_decimal(row)
+            if value == source_decimal:
+                subtotal_rows.append(row)
+        elif kind == "discount":
+            discount_rows.append(row)
+        elif kind == "grand":
+            payable_rows.append(row)
+
+    subtotal_row = subtotal_rows[-1] if subtotal_rows else None
+    if subtotal_row is None:
+        # Some retained Docling rows are amount-only and cannot carry a label.
+        # Accept one such row only when it exactly repeats the selected subtotal
+        # and immediately follows the explicit overhead row.
+        overhead_index = rows.index(overhead_row)
+        if overhead_index + 1 < len(rows):
+            candidate = rows[overhead_index + 1]
+            if not _row_label(candidate) and _amount_decimal(candidate) == source_decimal:
+                subtotal_row = candidate
+    if subtotal_row is None:
+        # A grand/payable row is also the subtotal only when no discount exists.
+        matching_grand = [
+            row for row in payable_rows if _amount_decimal(row) == source_decimal
+        ]
+        if not discount_rows and len(matching_grand) == 1:
+            subtotal_row = matching_grand[0]
+    if subtotal_row is None:
+        return None, set()
+
+    summary: dict[str, Any] = {
+        "directWorkTotal": _canonical_decimal_string(direct_total),
+        "overheadProfitAmount": _canonical_decimal_string(overhead),
+        "quotedSubtotal": _canonical_decimal_string(source_decimal),
+        "overheadProfitSourceRef": _source_ref(overhead_row),
+        "subtotalSourceRef": _source_ref(subtotal_row),
+    }
+    consumed = {overhead_row["id"], subtotal_row["id"]}
+    if discount_rows:
+        if len(discount_rows) != 1 or len(payable_rows) != 1:
+            return None, set()
+        discount_row, payable_row = discount_rows[0], payable_rows[0]
+        discount = _amount_decimal(discount_row, adjustment=True)
+        payable = _amount_decimal(payable_row)
+        if discount is None or payable is None or source_decimal - discount != payable:
+            return None, set()
+        summary.update({
+            "discountAmount": _canonical_decimal_string(discount),
+            "payableTotal": _canonical_decimal_string(payable),
+            "discountSourceRef": _source_ref(discount_row),
+            "payableTotalSourceRef": _source_ref(payable_row),
+        })
+        consumed.update({discount_row["id"], payable_row["id"]})
+    return summary, consumed
+
+
 def _section_total_warnings(
     section_items: dict[int, list[dict[str, Any]]],
     row_instances: dict[str, int],
@@ -898,6 +1003,7 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     sections_by_instance: dict[int, dict[str, Any]] = {}
     warnings: list[dict[str, Any]] = []
     review_ids: list[str] = []
+    overhead_row_ids: set[str] = set()
     cumulative_contribution = Decimal(0)
 
     def section_for(row: dict[str, Any]) -> dict[str, Any]:
@@ -916,6 +1022,9 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             warning = _warning(row, "unsupported_row", "The source row was retained but could not be deterministically classified.")
             warnings.append(warning)
             review_ids.append(row["id"])
+            continue
+        if OVERHEAD_RE.search(_row_label(row)):
+            overhead_row_ids.add(row["id"])
             continue
         section = section_for(row)
         items, row_warnings = _derive_row(row, continuation_map.get(row["id"], []))
@@ -937,6 +1046,19 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     )
     warnings.extend(source_warnings)
     review_ids.extend(warning["sourceRowId"] for warning in source_warnings)
+    direct_items = [item for section in sections for item in section["items"]]
+    direct_total = checked_contributing_total(direct_items)
+    source_quote_summary, summary_row_ids = _quote_summary(
+        evidence, direct_total, source_total
+    )
+    if source_quote_summary is None:
+        review_ids.extend(overhead_row_ids)
+    else:
+        review_ids = [row_id for row_id in review_ids if row_id not in summary_row_ids]
+        warnings = [
+            warning for warning in warnings
+            if warning.get("sourceRowId") not in summary_row_ids
+        ]
     section_warnings = _section_total_warnings(
         {instance: section["items"] for instance, section in sections_by_instance.items()},
         row_instances,
@@ -944,7 +1066,9 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     )
     warnings.extend(section_warnings)
     review_ids.extend(warning["sourceRowId"] for warning in section_warnings)
-    _total_items, reconciliation = build_reconciliation(sections, source_total)
+    _total_items, reconciliation = build_reconciliation(
+        sections, source_total, source_quote_summary
+    )
     if source_total is not None and not reconciliation["reconciled"]:
         warnings.append({
             "code": "document_total_mismatch",
@@ -973,6 +1097,7 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "warningCodes": [warning["code"] for warning in warnings],
         "reviewCandidateRowIds": list(dict.fromkeys(review_ids)),
         "sourceTotal": source_total,
+        "sourceQuoteSummary": source_quote_summary,
         "reconciliation": reconciliation,
         "totalItems": _total_items,
     }

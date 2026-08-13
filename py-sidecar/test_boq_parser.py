@@ -1289,8 +1289,9 @@ class ContractV3InvariantTest(unittest.TestCase):
         return item
 
     def _response(self, *, rows=None, sections=None, source_total=100.0,
-                  item_total=100.0, difference=0.0, reconciled=True, total_items=1):
-        return {
+                  item_total=100.0, difference=0.0, reconciled=True, total_items=1,
+                  source_quote_summary=None):
+        response = {
             "documentName": "fixture.pdf", "pageCount": 1, "documentText": "",
             "sourceRows": rows or [self._row()],
             "sections": sections or [{"header": "Works", "items": [self._item()]}],
@@ -1299,6 +1300,9 @@ class ContractV3InvariantTest(unittest.TestCase):
                                "difference": difference, "reconciled": reconciled},
             "totalItems": total_items,
         }
+        if source_quote_summary is not None:
+            response["sourceQuoteSummary"] = source_quote_summary
+        return response
 
     def test_response_rejects_duplicate_source_and_item_ids(self):
         with self.assertRaises(ValidationError):
@@ -1445,6 +1449,52 @@ class ContractV3InvariantTest(unittest.TestCase):
                     "labour": {"qty": 12.0, "unit": "Db", "rate": 260.0, "total": 3120.0},
                 },
             ))
+
+    def test_source_quote_summary_rejects_noncanonical_and_inconsistent_values(self):
+        invalid_summaries = [
+            {"directWorkTotal": "0100", "quotedSubtotal": "100"},
+            {"directWorkTotal": "100", "quotedSubtotal": "120"},
+            {"directWorkTotal": "100", "overheadProfitAmount": "19", "quotedSubtotal": "120"},
+            {
+                "directWorkTotal": "100", "overheadProfitAmount": "20",
+                "quotedSubtotal": "120", "discountAmount": "10", "payableTotal": "111",
+            },
+            {
+                "directWorkTotal": "100", "overheadProfitAmount": "20",
+                "quotedSubtotal": "120",
+                "overheadProfitSourceRef": {"page": 99, "table": 1, "row": 1},
+            },
+            {
+                "directWorkTotal": "100", "overheadProfitAmount": "20",
+                "quotedSubtotal": "120", "percentage": "20",
+            },
+        ]
+        for summary in invalid_summaries:
+            with self.subTest(summary=summary), self.assertRaises(ValidationError):
+                ParseResponseV3(**self._response(
+                    source_total=120.0, difference=0.0, reconciled=True,
+                    source_quote_summary=summary,
+                ))
+
+    def test_source_quote_summary_serializes_unchanged_and_counts_direct_items_only(self):
+        summary = {
+            "directWorkTotal": "100", "overheadProfitAmount": "20",
+            "quotedSubtotal": "120", "discountAmount": "10", "payableTotal": "110",
+            "overheadProfitSourceRef": {"page": 1, "table": 1, "row": 1},
+            "discountSourceRef": {"page": 1, "table": 1, "row": 1},
+            "subtotalSourceRef": {"page": 1, "table": 1, "row": 1},
+            "payableTotalSourceRef": {"page": 1, "table": 1, "row": 1},
+        }
+        response = ParseResponseV3(**self._response(
+            source_total=120.0, difference=0.0, reconciled=True,
+            source_quote_summary=summary,
+        ))
+        self.assertIsNotNone(response.sourceQuoteSummary)
+        source_quote_summary = response.sourceQuoteSummary
+        if source_quote_summary is None:
+            self.fail("sourceQuoteSummary was not serialized")
+        self.assertEqual(source_quote_summary.model_dump(exclude_none=True), summary)
+        self.assertEqual(response.totalItems, 1)
 
     def test_response_rejects_reconciliation_contradictions(self):
         contradictions = [
@@ -1921,10 +1971,17 @@ class CompoundDerivationTest(unittest.TestCase):
         original_rows = json.loads(json.dumps(fixture["sourceRows"]))
         result = derive_document(fixture["sourceRows"])
         items = [item for section in result["sections"] for item in section["items"]]
-        self.assertEqual(result["totalItems"], 19)
+        self.assertEqual(result["totalItems"], 18)
         self.assertEqual(result["sourceTotal"], 47000.0)
+        self.assertEqual(result["sourceQuoteSummary"], {
+            "directWorkTotal": "40620",
+            "overheadProfitAmount": "6380",
+            "quotedSubtotal": "47000",
+            "overheadProfitSourceRef": {"page": 2, "table": 2, "row": 24},
+            "subtotalSourceRef": {"page": 2, "table": 2, "row": 25},
+        })
         self.assertEqual(result["reconciliation"], {
-            "itemTotal": 47000.0, "sourceTotal": 47000.0,
+            "itemTotal": 40620.0, "sourceTotal": 47000.0,
             "reconciled": True, "difference": 0.0,
         })
         self.assertEqual([item["desc"] for item in items], [
@@ -1934,18 +1991,13 @@ class CompoundDerivationTest(unittest.TestCase):
             "Reducer Tee3Bx3Bx2BxSch10", "Stub End 2Bx Sch10", "Loose Flange 2B x 10K",
             "Gasket 2B x 10Kx 3t RF", 'Boll & Nut 5/8"x 2 1/2"',
             "BallValve 2Bx 10K(Existing)", "PipeFabricaiton", "SafetyControl",
-            "4 MaterialPreparation", "OVERHEAD&EXPENSES",
+            "4 MaterialPreparation",
         ])
-        overhead = items[-1]
-        self.assertEqual(
-            {key: overhead[key] for key in ("desc", "unit", "qty", "rate", "total", "costComponent")},
-            {"desc": "OVERHEAD&EXPENSES", "unit": "L/S", "qty": 1.0,
-             "rate": 6380.0, "total": 6380.0, "costComponent": "lump_sum"},
-        )
         combined = next(item for item in items if item["desc"] == "Fabrication&Installation")
         self.assertEqual(combined["sourceCosts"]["material"]["total"], 1500.0)
         self.assertEqual(combined["sourceCosts"]["labour"]["total"], 12000.0)
         self.assertEqual(combined["total"], 13500.0)
+        self.assertNotIn("OVERHEAD&EXPENSES", [item["desc"] for item in items])
         self.assertNotIn("40,620.00", [item["desc"] for item in items])
         self.assertNotIn("47,000.00", [item["desc"] for item in items])
         self.assertNotIn(40620.0, [item["total"] for item in items])
@@ -1961,16 +2013,16 @@ class CompoundDerivationTest(unittest.TestCase):
             if warning["code"] == "incomplete_component_evidence"
         }
         self.assertEqual(incomplete_ids, set())
-        # Amount-only summary rows remain evidence-only review candidates.
+        # Amount-only section subtotal remains an evidence-only review candidate.
         self.assertIn("sr-surasak-23", result["reviewCandidateRowIds"])
-        self.assertIn("sr-surasak-25", result["reviewCandidateRowIds"])
-        # OVERHEAD&EXPENSES is now a derived lump_sum item, not a review candidate.
+        # Validated quote-summary evidence is not reviewable item evidence.
         self.assertNotIn("sr-surasak-24", result["reviewCandidateRowIds"])
+        self.assertNotIn("sr-surasak-25", result["reviewCandidateRowIds"])
         self.assertEqual(
             [warning["code"] for warning in result["sourceRows"]
-             if warning["id"] in {"sr-surasak-23", "sr-surasak-25"}
+             if warning["id"] == "sr-surasak-23"
              for warning in warning["warnings"]],
-            ["unsupported_row", "unsupported_row"],
+            ["unsupported_row"],
         )
         self.assertEqual(fixture["sourceRows"], original_rows)
 
@@ -2409,6 +2461,57 @@ class CompoundDerivationTest(unittest.TestCase):
         mismatched[-1]["rawText"] = "TOTAL | 90"
         audited = derive_document(mismatched)
         self.assertIn("section_total_mismatch", audited["warningCodes"])
+
+    def test_merged_overhead_profit_builds_fixed_quote_summary_without_item(self):
+        cell = LosslessContractV3Test._cell
+        columns = ("Description", "Qty", "Unit", "Rate", "Amount")
+        table = LosslessContractV3Test._table(
+            page=1,
+            table=1,
+            num_rows=7,
+            num_cols=5,
+            cells=[
+                *[cell(value, 0, column, column_header=True)
+                  for column, value in enumerate(columns)],
+                *[cell(value, 1, column)
+                  for column, value in enumerate(("Direct work A", "1", "L/S", "100000", "100000"))],
+                *[cell(value, 2, column)
+                  for column, value in enumerate(("Direct work B", "1", "L/S", "79400", "79400"))],
+                cell("OVERHEAD & PROFIT", 3, 0, col_span=4, end_col_offset_idx=4),
+                cell("35,880.00", 3, 4),
+                cell("TOTAL", 4, 0, col_span=4, end_col_offset_idx=4),
+                cell("215,280.00", 4, 4),
+                cell("DISCOUNT", 5, 0, col_span=4, end_col_offset_idx=4),
+                cell("(1,280.00)", 5, 4),
+                cell("GRAND TOTAL", 6, 0, col_span=4, end_col_offset_idx=4),
+                cell("214,000.00", 6, 4),
+            ],
+        )
+        source_rows = build_source_rows([table])
+
+        result = derive_document(source_rows)
+        items = [item for section in result["sections"] for item in section["items"]]
+        self.assertEqual(sum(item["total"] for item in items), 179400.0)
+        self.assertNotIn("OVERHEAD & PROFIT", [item["desc"] for item in items])
+        self.assertEqual(result["totalItems"], len(items))
+        self.assertEqual(result["sourceQuoteSummary"], {
+            "directWorkTotal": "179400",
+            "overheadProfitAmount": "35880",
+            "quotedSubtotal": "215280",
+            "discountAmount": "1280",
+            "payableTotal": "214000",
+            "overheadProfitSourceRef": {"page": 1, "table": 1, "row": 4},
+            "discountSourceRef": {"page": 1, "table": 1, "row": 6},
+            "subtotalSourceRef": {"page": 1, "table": 1, "row": 5},
+            "payableTotalSourceRef": {"page": 1, "table": 1, "row": 7},
+        })
+        self.assertEqual(result["reconciliation"], {
+            "itemTotal": 179400.0,
+            "sourceTotal": 215280.0,
+            "reconciled": True,
+            "difference": 0.0,
+        })
+        self.assertNotIn("document_total_mismatch", result["warningCodes"])
 
     def test_adjusted_grand_totals_and_cross_table_cumulative_subtotal(self):
         fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/merged-and-repeated-headers.json").read_text())
