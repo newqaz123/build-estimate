@@ -757,7 +757,7 @@ def _source_total(
     rows: list[dict[str, Any]],
     row_instances: dict[str, int],
     instance_names: dict[int, str],
-) -> tuple[float | None, list[dict[str, Any]]]:
+) -> tuple[Decimal | None, list[dict[str, Any]]]:
     evidence_warnings: list[dict[str, Any]] = []
     candidates: dict[str, list[dict[str, Any]]] = {
         kind: [] for kind in (
@@ -806,7 +806,7 @@ def _source_total(
 
     if candidates["pre_vat"]:
         value = candidates["pre_vat"][-1]["value"]
-        return _finite_float(value), evidence_warnings
+        return value, evidence_warnings
 
     base_candidates = sorted(
         [*candidates["subtotal"], *candidates["pre_discount"]],
@@ -816,7 +816,7 @@ def _source_total(
         candidate for candidate in base_candidates if candidate["documentSummary"]
     ]
     if document_summaries:
-        return _finite_float(document_summaries[-1]["value"]), evidence_warnings
+        return document_summaries[-1]["value"], evidence_warnings
     if base_candidates:
         latest_by_instance: dict[int, dict[str, Any]] = {}
         for candidate in base_candidates:
@@ -830,7 +830,7 @@ def _source_total(
                 selected[-1]["row"], "numeric_overflow",
                 "Aggregated source totals exceed the finite response range.",
             )]
-        return _finite_float(combined), evidence_warnings
+        return combined, evidence_warnings
 
     grand = candidates["grand"][-1] if candidates["grand"] else None
     if invalid_adjustment:
@@ -864,7 +864,7 @@ def _source_total(
             grand_row, "numeric_overflow",
             "Derived pre-adjustment source total exceeds the finite response range.",
         )]
-    return _finite_float(derived), evidence_warnings
+    return derived, evidence_warnings
 
 
 def _row_label(row: dict[str, Any]) -> str:
@@ -893,12 +893,11 @@ def _source_ref(row: dict[str, Any]) -> dict[str, int]:
 
 
 def _quote_summary(
-    rows: list[dict[str, Any]], direct_total: Decimal, source_total: float | None,
+    rows: list[dict[str, Any]], direct_total: Decimal, source_decimal: Decimal | None,
 ) -> tuple[dict[str, Any] | None, set[str]]:
     """Return a closed fixed-amount quote summary and its consumed row IDs."""
-    if source_total is None:
+    if source_decimal is None:
         return None, set()
-    source_decimal = Decimal(str(source_total))
     overhead_rows = [row for row in rows if OVERHEAD_RE.search(_row_label(row))]
     if len(overhead_rows) != 1:
         return None, set()
@@ -965,6 +964,10 @@ def _quote_summary(
             "payableTotalSourceRef": _source_ref(payable_row),
         })
         consumed.update({discount_row["id"], payable_row["id"]})
+    elif payable_rows:
+        if any(_amount_decimal(row) != source_decimal for row in payable_rows):
+            return None, set()
+        consumed.update(row["id"] for row in payable_rows)
     return summary, consumed
 
 
@@ -1016,15 +1019,15 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     for row in evidence:
         classification = row.get("classification")
+        if OVERHEAD_RE.search(_row_label(row)):
+            overhead_row_ids.add(row["id"])
+            continue
         if classification in {"header", "section", "total", "note"} or row["id"] in consumed:
             continue
         if classification not in {"item", "option"}:
             warning = _warning(row, "unsupported_row", "The source row was retained but could not be deterministically classified.")
             warnings.append(warning)
             review_ids.append(row["id"])
-            continue
-        if OVERHEAD_RE.search(_row_label(row)):
-            overhead_row_ids.add(row["id"])
             continue
         section = section_for(row)
         items, row_warnings = _derive_row(row, continuation_map.get(row["id"], []))
@@ -1041,15 +1044,20 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         warnings.extend(row_warnings)
         if row_warnings:
             review_ids.append(row["id"])
-    source_total, source_warnings = _source_total(
+    source_total_decimal, source_warnings = _source_total(
         evidence, row_instances, instance_names
+    )
+    source_total = (
+        _finite_float(source_total_decimal)
+        if source_total_decimal is not None
+        else None
     )
     warnings.extend(source_warnings)
     review_ids.extend(warning["sourceRowId"] for warning in source_warnings)
     direct_items = [item for section in sections for item in section["items"]]
     direct_total = checked_contributing_total(direct_items)
     source_quote_summary, summary_row_ids = _quote_summary(
-        evidence, direct_total, source_total
+        evidence, direct_total, source_total_decimal
     )
     if source_quote_summary is None:
         review_ids.extend(overhead_row_ids)

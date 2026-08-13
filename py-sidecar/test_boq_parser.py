@@ -5,6 +5,7 @@ import math
 import re
 import sys
 import unittest
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
@@ -2512,6 +2513,92 @@ class CompoundDerivationTest(unittest.TestCase):
             "difference": 0.0,
         })
         self.assertNotIn("document_total_mismatch", result["warningCodes"])
+
+    def test_summary_rejects_incompatible_payable_without_explicit_discount(self):
+        cell = LosslessContractV3Test._cell
+        columns = ("Description", "Qty", "Unit", "Rate", "Amount")
+        table = LosslessContractV3Test._table(
+            page=1, table=1, num_rows=5, num_cols=5, cells=[
+                *[cell(value, 0, column, column_header=True)
+                  for column, value in enumerate(columns)],
+                *[cell(value, 1, column)
+                  for column, value in enumerate(("Direct work", "1", "L/S", "100", "100"))],
+                cell("OVERHEAD & PROFIT", 2, 0, col_span=4, end_col_offset_idx=4),
+                cell("20", 2, 4),
+                cell("TOTAL", 3, 0, col_span=4, end_col_offset_idx=4),
+                cell("120", 3, 4),
+                cell("GRAND TOTAL", 4, 0, col_span=4, end_col_offset_idx=4),
+                cell("110", 4, 4),
+            ],
+        )
+
+        result = derive_document(build_source_rows([table]))
+
+        self.assertIsNone(result["sourceQuoteSummary"])
+        self.assertIn("document_total_mismatch", result["warningCodes"])
+        review_ids = result["reviewCandidateRowIds"]
+        self.assertIn(
+            next(row["id"] for row in result["sourceRows"] if row["row"] == 3),
+            review_ids,
+        )
+        self.assertNotIn(
+            next(row["id"] for row in result["sourceRows"] if row["row"] == 5),
+            review_ids,
+        )
+
+    def test_quote_summary_preserves_high_precision_subtotal_decimal(self):
+        cell = LosslessContractV3Test._cell
+        columns = ("Description", "Qty", "Unit", "Rate", "Amount")
+        table = LosslessContractV3Test._table(
+            page=1, table=1, num_rows=4, num_cols=5, cells=[
+                *[cell(value, 0, column, column_header=True)
+                  for column, value in enumerate(columns)],
+                *[cell(value, 1, column)
+                  for column, value in enumerate((
+                      "Direct work", "1", "L/S", "9007199254740992",
+                      "9007199254740992",
+                  ))],
+                cell("OVERHEAD & PROFIT", 2, 0, col_span=4, end_col_offset_idx=4),
+                cell("1", 2, 4),
+                cell("TOTAL", 3, 0, col_span=4, end_col_offset_idx=4),
+                cell("9007199254740993", 3, 4),
+            ],
+        )
+
+        result = derive_document(build_source_rows([table]))
+
+        self.assertEqual(result["sourceQuoteSummary"]["directWorkTotal"], "9007199254740992")
+        self.assertEqual(result["sourceQuoteSummary"]["overheadProfitAmount"], "1")
+        self.assertEqual(result["sourceQuoteSummary"]["quotedSubtotal"], "9007199254740993")
+        self.assertEqual(result["sourceTotal"], float(Decimal("9007199254740993")))
+
+    def test_unresolved_total_classified_overhead_is_reviewable(self):
+        cell = LosslessContractV3Test._cell
+        columns = ("Description", "Qty", "Unit", "Rate", "Amount")
+        table = LosslessContractV3Test._table(
+            page=1, table=1, num_rows=4, num_cols=5, cells=[
+                *[cell(value, 0, column, column_header=True)
+                  for column, value in enumerate(columns)],
+                *[cell(value, 1, column)
+                  for column, value in enumerate(("Direct work", "1", "L/S", "100", "100"))],
+                cell("TOTAL OVERHEAD & PROFIT", 2, 0, col_span=4, end_col_offset_idx=4),
+                cell("100", 2, 4),
+                cell("TOTAL", 3, 0, col_span=4, end_col_offset_idx=4),
+                cell("130", 3, 4),
+            ],
+        )
+        source_rows = build_source_rows([table])
+        overhead_row = next(row for row in source_rows if row["row"] == 3)
+        self.assertEqual(overhead_row["classification"], "total")
+
+        result = derive_document(source_rows)
+
+        self.assertIsNone(result["sourceQuoteSummary"])
+        self.assertIn(overhead_row["id"], result["reviewCandidateRowIds"])
+        self.assertNotIn(
+            "TOTAL OVERHEAD & PROFIT",
+            [item["desc"] for section in result["sections"] for item in section["items"]],
+        )
 
     def test_adjusted_grand_totals_and_cross_table_cumulative_subtotal(self):
         fixture = json.loads((Path(__file__).resolve().parent / "fixtures/compound/merged-and-repeated-headers.json").read_text())
