@@ -300,12 +300,11 @@ class ParseResponseV3(ContractModel):
                 )
             if response_source is None:
                 raise ValueError("sourceTotal must match sourceQuoteSummary.quotedSubtotal")
-            legacy_quoted_float, legacy_quoted_representation = _checked_float_round_trip(
+            _, legacy_quoted_representation = _checked_float_round_trip(
                 quoted, "sourceQuoteSummary.quotedSubtotal"
             )
             if (
-                self.sourceTotal != legacy_quoted_float
-                or abs(response_source - legacy_quoted_representation)
+                abs(response_source - legacy_quoted_representation)
                 > RECONCILIATION_TOLERANCE
             ):
                 raise ValueError("sourceTotal must match sourceQuoteSummary.quotedSubtotal")

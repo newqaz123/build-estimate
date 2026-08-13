@@ -247,4 +247,68 @@ Output: `Ran 2 tests`; `FAILED (errors=2)`. Both failed with `Value error, sourc
 
 ### Fix commit
 
-- See current `fix: preserve quote summary precision at boundary` commit; final hash is reported in the completion response.
+- `67c4061` — `fix: preserve quote summary precision at boundary`
+
+## Fix Round 3
+
+### Status and finding
+
+Fixed the remaining narrow Important finding regression-first: `ParseResponseV3` still had a dead exact-float equality guard ahead of the intended final currency-tolerance comparison.
+
+### Changed code and coverage
+
+- `py-sidecar/boq_contract.py`
+  - removes only `self.sourceTotal != legacy_quoted_float` from the final summary-to-legacy-number boundary;
+  - retains `abs(response_source - legacy_quoted_representation) > RECONCILIATION_TOLERANCE`;
+  - leaves exact canonical summary parsing, direct/item equality, direct + overhead = quoted arithmetic, and discount/payable arithmetic unchanged.
+- `py-sidecar/test_boq_parser.py`
+  - extends `test_source_quote_summary_allows_only_legacy_float_rounding_at_boundary` to accept `sourceTotal=120.005` for exact `quotedSubtotal="120"`;
+  - preserves the high-precision `9007199254740993` case;
+  - preserves meaningful one-minor-unit rejection using the next representable float above `120.01` (`120.01000000000002`), avoiding the established inclusive `0.01` tolerance edge.
+- `.superpowers/sdd/2026-08-09-source-quote-summary/task-1-report.md`
+  - records this fix round.
+
+No extraction rules, response plumbing, TypeScript, fixture, percentage/gap inference, or unrelated product code changed.
+
+### RED evidence
+
+Command, run after adding the `120.005` assertion and before production changes:
+
+```bash
+.venv-docling/bin/python -m unittest \
+  py-sidecar.test_boq_parser.ContractV3InvariantTest.test_source_quote_summary_allows_only_legacy_float_rounding_at_boundary
+```
+
+Output: `Ran 1 test`; `FAILED (errors=1)` with `Value error, sourceTotal must match sourceQuoteSummary.quotedSubtotal`. Exact output: `/tmp/task1-fix3-red.txt`.
+
+### GREEN and validation evidence
+
+- Focused regression above: PASS, `Ran 1 test ... OK` (`/tmp/task1-fix3-green-focused-2.txt`).
+- `.venv-docling/bin/python -m unittest py-sidecar.test_boq_parser.ContractV3InvariantTest`
+  - PASS: 16 tests.
+- `.venv-docling/bin/python -m unittest py-sidecar.test_boq_parser`
+  - PASS: 151 tests.
+- `PYTHONPATH=py-sidecar .venv-docling/bin/python -m unittest py-sidecar/test_main.py`
+  - PASS: 8 tests; expected OCR fallback warning only.
+- `npx tsx --test src/lib/boq-extraction-proposal-store.test.ts`
+  - PASS: 84 tests.
+- `npx tsc --noEmit`
+  - PASS, no output.
+- `npm run check`
+  - KNOWN UNRELATED FAILURE: lint and TypeScript compilation completed; tests remain exactly `1,568 pass / 12 fail`. The same extraction-review UI tests fail: 341, 348–350, 358, 361, 365, 367, 370–372, and 374.
+- `graphify update .`
+  - PASS: rebuilt 4,066 nodes / 9,760 edges / 254 communities; no tracked graph diff.
+- `git diff --check`
+  - PASS.
+
+### Residual risk and dirty-tree safety
+
+- Full `npm run check` remains red only on the unchanged 12 unrelated UI failures.
+- The established tolerance is inclusive (`<= 0.01`); the regression verifies rejection immediately beyond a one-minor-unit difference.
+- `src/lib/boq-extraction-proposal-store.test.ts` retains its pre-existing unstaged formatting change and was neither touched nor staged.
+- All unrelated dirty work remains unstaged and uncommitted.
+- `Quotation example/` was not inspected.
+
+### Fix commit
+
+- See current `fix: apply quote boundary currency tolerance` commit; final hash is reported in the completion response.

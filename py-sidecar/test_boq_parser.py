@@ -1512,7 +1512,22 @@ class ContractV3InvariantTest(unittest.TestCase):
             "quotedSubtotal": "120",
         }
         currency_sections = [{"header": "Works", "items": [self._item()]}]
-        meaningful_mismatch = 120.01
+        benign_boundary_difference = 120.005
+        currency_total_items, tolerated_reconciliation = build_reconciliation(
+            currency_sections, benign_boundary_difference, currency_summary,
+        )
+        tolerated = ParseResponseV3(**self._response(
+            sections=currency_sections,
+            source_total=benign_boundary_difference,
+            item_total=tolerated_reconciliation["itemTotal"],
+            difference=tolerated_reconciliation["difference"],
+            reconciled=tolerated_reconciliation["reconciled"],
+            total_items=currency_total_items,
+            source_quote_summary=currency_summary,
+        ))
+        self.assertTrue(tolerated.reconciliation.reconciled)
+
+        meaningful_mismatch = 120.01000000000002
         currency_total_items, mismatched_reconciliation = build_reconciliation(
             currency_sections, meaningful_mismatch, currency_summary,
         )
