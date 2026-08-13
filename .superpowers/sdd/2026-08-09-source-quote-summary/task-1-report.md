@@ -312,3 +312,69 @@ Output: `Ran 1 test`; `FAILED (errors=1)` with `Value error, sourceTotal must ma
 ### Fix commit
 
 - See current `fix: apply quote boundary currency tolerance` commit; final hash is reported in the completion response.
+
+## Fix Round 4
+
+### Status and finding
+
+Fixed the remaining exact-boundary Important finding regression-first: a `sourceTotal` exactly one currency minor unit away from the quote summary (`120.01` versus `120`) was still accepted because both final validation and reconciliation used an inclusive `0.01` tolerance.
+
+### Changed code and coverage
+
+- `py-sidecar/boq_contract.py`
+  - adds one named `_is_sub_minor_unit_difference` predicate using strict `Decimal` comparison (`difference < RECONCILIATION_TOLERANCE`);
+  - uses that predicate consistently for the final summary-to-legacy `sourceTotal` validation and summary-aware reconciliation semantics in both `ParseResponseV3` and `build_reconciliation`;
+  - leaves canonical summary parsing and all internal exact `Decimal` arithmetic unchanged;
+  - leaves legacy no-summary reconciliation tolerance unchanged.
+- `py-sidecar/test_boq_parser.py`
+  - restores the direct `sourceTotal=120.01` regression and asserts reconciliation is false before contract rejection;
+  - keeps the benign `sourceTotal=120.005` passing regression.
+- `.superpowers/sdd/2026-08-09-source-quote-summary/task-1-report.md`
+  - records Fix Round 4 evidence.
+
+No extraction rules, response plumbing, TypeScript source/test, fixture, or unrelated product code changed.
+
+### RED evidence
+
+Command, run after restoring `120.01` and before production changes:
+
+```bash
+.venv-docling/bin/python -m unittest \
+  py-sidecar.test_boq_parser.ContractV3InvariantTest.test_source_quote_summary_allows_only_legacy_float_rounding_at_boundary
+```
+
+Output: `Ran 1 test`; `FAILED (failures=1)`. The direct assertion proved `build_reconciliation(..., sourceTotal=120.01, quotedSubtotal="120")` returned `reconciled=True`, where exact one-minor-unit mismatch must be false. Exact output: `/tmp/task1-fix4-red.txt`.
+
+### GREEN and validation evidence
+
+- Focused boundary regression above: PASS, `Ran 1 test ... OK` (`/tmp/task1-fix4-green-focused.txt`).
+- `.venv-docling/bin/python -m unittest py-sidecar.test_boq_parser.ContractV3InvariantTest`
+  - PASS: 16 tests (`/tmp/task1-fix4-contract-v3.txt`).
+- `.venv-docling/bin/python -m unittest py-sidecar.test_boq_parser.CompoundDerivationTest py-sidecar.test_boq_parser.ContractV3InvariantTest py-sidecar.test_boq_parser.BoqParserTest.test_normalizes_actual_np_civil_headers_and_uses_pre_discount_total_for_reconciliation`
+  - PASS: 76 tests (`/tmp/task1-fix4-focused-regression-contract.txt`).
+- `.venv-docling/bin/python -m unittest py-sidecar.test_boq_parser`
+  - PASS: 151 tests (`/tmp/task1-fix4-parser-full.txt`).
+- `PYTHONPATH=py-sidecar .venv-docling/bin/python -m unittest py-sidecar/test_main.py`
+  - PASS: 8 tests; expected OCR fallback warning only (`/tmp/task1-fix4-main-full.txt`).
+- `npx tsx --test src/lib/boq-extraction-proposal-store.test.ts`
+  - PASS: 84 tests (`/tmp/task1-fix4-ts-proposal-store.txt`).
+- `npx tsc --noEmit`
+  - PASS, no output (`/tmp/task1-fix4-tsc.txt`).
+- `npm run check`
+  - KNOWN UNRELATED FAILURE: lint and TypeScript compilation completed; tests remain exactly `1,568 pass / 12 fail`. The same unrelated extraction-review UI tests fail: 341, 348–350, 358, 361, 365, 367, 370–372, and 374 (`/tmp/task1-fix4-npm-check.txt`).
+- `graphify update .`
+  - PASS: rebuilt 4,074 nodes / 9,767 edges / 266 communities; no tracked graph diff (`/tmp/task1-fix4-graphify.txt`).
+- `git diff --check`
+  - PASS.
+
+### Residual risk and dirty-tree safety
+
+- Full `npm run check` remains red only on the unchanged 12 unrelated UI failures.
+- Summary-aware final-boundary semantics are now strict below one minor unit; pre-existing no-summary reconciliation remains inclusive to avoid widening this narrow fix.
+- `src/lib/boq-extraction-proposal-store.test.ts` retains its pre-existing unstaged edit and was neither touched nor staged.
+- All unrelated dirty work remains unstaged and uncommitted.
+- `Quotation example/` was not inspected.
+
+### Fix commit
+
+- See `fix: reject one-cent quote boundary mismatch`; final hash is reported in the completion response.

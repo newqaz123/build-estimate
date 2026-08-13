@@ -303,9 +303,8 @@ class ParseResponseV3(ContractModel):
             _, legacy_quoted_representation = _checked_float_round_trip(
                 quoted, "sourceQuoteSummary.quotedSubtotal"
             )
-            if (
-                abs(response_source - legacy_quoted_representation)
-                > RECONCILIATION_TOLERANCE
+            if not _is_sub_minor_unit_difference(
+                response_source, legacy_quoted_representation
             ):
                 raise ValueError("sourceTotal must match sourceQuoteSummary.quotedSubtotal")
 
@@ -345,8 +344,10 @@ class ParseResponseV3(ContractModel):
         )
         if _decimal(self.reconciliation.difference, "reconciliation.difference") != serialized_difference:
             raise ValueError("reconciliation.difference is inconsistent")
-        expected_reconciled = (
-            response_source is not None and abs(serialized_difference) <= RECONCILIATION_TOLERANCE
+        expected_reconciled = response_source is not None and (
+            _is_sub_minor_unit_difference(response_source, comparison_total)
+            if summary is not None
+            else abs(serialized_difference) <= RECONCILIATION_TOLERANCE
         )
         if self.reconciliation.reconciled is not expected_reconciled:
             raise ValueError("reconciliation.reconciled is inconsistent")
@@ -374,6 +375,10 @@ def _decimal(value: Any, name: str) -> Decimal:
 
 def _optional_decimal(value: Any, name: str) -> Decimal | None:
     return None if value is None else _decimal(value, name)
+
+
+def _is_sub_minor_unit_difference(left: Decimal, right: Decimal) -> bool:
+    return abs(left - right) < RECONCILIATION_TOLERANCE
 
 
 def _ensure_float_representable(value: Decimal, name: str) -> None:
@@ -442,9 +447,14 @@ def build_reconciliation(
         (item.pricingRole if hasattr(item, "pricingRole") else item["pricingRole"]) != "bundle_child"
         for item in items
     )
+    reconciled = source is not None and (
+        _is_sub_minor_unit_difference(source, comparison_total)
+        if source_quote_summary is not None
+        else abs(difference_representation) <= RECONCILIATION_TOLERANCE
+    )
     return priced_count, {
         "itemTotal": serialized_item_total,
         "sourceTotal": source_total,
-        "reconciled": source is not None and abs(difference_representation) <= RECONCILIATION_TOLERANCE,
+        "reconciled": reconciled,
         "difference": serialized_difference,
     }

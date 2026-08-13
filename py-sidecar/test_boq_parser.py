@@ -1527,10 +1527,11 @@ class ContractV3InvariantTest(unittest.TestCase):
         ))
         self.assertTrue(tolerated.reconciliation.reconciled)
 
-        meaningful_mismatch = 120.01000000000002
+        meaningful_mismatch = 120.01
         currency_total_items, mismatched_reconciliation = build_reconciliation(
             currency_sections, meaningful_mismatch, currency_summary,
         )
+        self.assertFalse(mismatched_reconciliation["reconciled"])
         with self.assertRaises(ValidationError):
             ParseResponseV3(**self._response(
                 sections=currency_sections,
