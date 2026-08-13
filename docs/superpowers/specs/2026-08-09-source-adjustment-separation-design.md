@@ -1,382 +1,340 @@
-# Source Adjustment Separation and Extraction Notes Design
+# Source Quote Summary and Extraction Notes Design
 
 **Date:** 2026-08-09
 
-**Status:** Approved design
+**Status:** Approved revision
 
-**Scope:** Source-backed overhead/profit and discount handling from BOQ extraction through Estimator, plus concise extraction-note presentation
+**Scope:** Preserve source overhead/profit and discount as a read-only quote summary, keep them out of BOQ item comparison, and simplify extraction notes.
 
 ## 1. Problem
 
-The BOQ review for `2b93901e-b2c8-4931-a5f9-10ab0737d3f1` shows a blocking total mismatch:
+BOQ `2b93901e-b2c8-4931-a5f9-10ab0737d3f1` is blocked from approval because its direct items total ฿179,400 while the source subtotal is ฿215,280.
 
-- Direct BOQ work: ฿179,400
-- Source subtotal: ฿215,280
-- Difference: ฿35,880
-- Source discount: ฿1,280
-- Quoted payable total: ฿214,000
+The exact difference, ฿35,880, is the source row **OVERHEAD & PROFIT**. The source then applies a ฿1,280 discount, producing a final payable amount of ฿214,000.
 
-The missing ฿35,880 is the source row **OVERHEAD & PROFIT**, equal to 20% of the direct-work subtotal. Its label occupies a merged source cell. The parser does not find a normal description cell, classifies the row as unsupported, and excludes the amount from deterministic reconciliation.
+The parser retains the overhead row but does not derive it because its label is in a merged cell. The current verifier therefore sees an unexplained total gap.
 
-Treating this row as a normal BOQ item would make it catalog-matchable and pollute future unit-rate and vendor comparisons. Ignoring it would lose quoted commercial terms and prevent an auditable bridge from direct work to the source total.
+Overhead and profit are not useful as catalog items:
 
-The same review displays 29 warning occurrences as an expanded list. Multiple warnings can refer to the same source row, two emitted warning codes lack friendly labels, and every source location is shown inline. The result is technically accurate but noisy and difficult to act on.
+- they should not be matched to catalog entries;
+- they should not affect historical unit rates;
+- they should not appear in line-item vendor comparison;
+- they should not be imported into Estimator automatically.
 
-## 2. Product decisions
+The review also shows 29 extraction-warning occurrences as a long expanded list. Several warnings refer to the same source row, and some emitted codes have no friendly labels.
 
-1. BOQ comparison represents **direct work only**.
-2. Overhead, profit, discount, and similar commercial adjustments never become catalog items.
-3. Source adjustments remain immutable source evidence and participate in quote-total reconciliation.
-4. Estimator receives source adjustments separately from imported BOQ items.
-5. Percentage overhead/profit recalculates when the estimate's direct-work subtotal changes while retaining the original source snapshot.
-6. The source discount is imported as a separate fixed negative adjustment.
-7. Existing BOQs are not silently rewritten. A BOQ must be re-extracted to gain the new adjustment evidence.
-8. Extraction notes summarize unique affected rows and separate actionable review from document information. Exact parser evidence remains available under Technical details.
+## 2. Approved product decisions
 
-## 3. Domain boundaries
+1. BOQ items represent direct construction work only.
+2. Overhead/profit and discount remain source quote information, not BOQ items.
+3. Add a small, fixed quote-summary model rather than a generic adjustment engine.
+4. Quote-summary amounts are read-only evidence extracted from the source document.
+5. Approval may use the quote summary to explain and reconcile the difference between direct items and source totals.
+6. Catalog, comparison, and historical pricing ignore quote-summary amounts.
+7. Estimator does not import overhead/profit or discount. Users create estimate adjustments independently when building an estimate.
+8. No percentage is stored or recalculated. The UI may show only the fixed source amount.
+9. Existing BOQs are not silently rewritten; re-extraction is required.
+10. Extraction notes become concise and task-oriented while retaining full technical evidence.
 
-### 3.1 Direct BOQ items
+## 3. Minimal data model
 
-Direct BOQ items continue to drive:
-
-- catalog matching and catalog readiness;
-- historical unit-rate comparison;
-- cross-vendor BOQ comparison;
-- material/labour allocation;
-- direct-work BOQ subtotal;
-- actionable extraction decisions for missing work items.
-
-No source adjustment is converted into `BoqPricedItem` merely to make arithmetic reconcile.
-
-### 3.2 Source adjustments
-
-Introduce a separate additive `sourceAdjustments` collection on extraction results and canonical BOQs. Each adjustment is source-backed and not catalog-addressable.
-
-Conceptual shape:
+Add one optional object to extraction results and canonical BOQs:
 
 ```ts
-interface BoqSourceAdjustment {
-  id: string
-  label: string
-  kind: 'overhead_profit' | 'discount' | 'other'
-  operation: 'add' | 'subtract'
-  stage: 'subtotal' | 'payable'
-  basis:
-    | { kind: 'percentage'; rate: string; baseAmount: string }
-    | { kind: 'fixed' }
-  amount: string
-  sourceRef: BoqSourceRef
-  sourceRowIds: string[]
+interface BoqSourceQuoteSummary {
+  directWorkTotal: string
+  overheadProfitAmount?: string
+  quotedSubtotal: string
+  discountAmount?: string
+  payableTotal?: string
+  overheadProfitSourceRef?: BoqSourceRef
+  discountSourceRef?: BoqSourceRef
+  subtotalSourceRef?: BoqSourceRef
+  payableTotalSourceRef?: BoqSourceRef
 }
 ```
 
 Rules:
 
-- `amount`, percentage `rate`, and `baseAmount` are canonical nonnegative decimal strings. `operation` supplies the sign.
-- `sourceRowIds` and `sourceRef` preserve immutable provenance.
-- `kind` is determined only from explicit source language and layout evidence. Ambiguous rows remain review notes; the parser must not infer a commercial category from an amount alone.
-- `stage: 'subtotal'` adjusts direct work to the quoted pre-discount subtotal.
-- `stage: 'payable'` adjusts the quoted subtotal to the final payable total.
-- The parser preserves source order for adjustments applied at the same stage.
-- Adjustments do not carry `stdId`, `stdStatus`, cost component, unit normalization, or catalog candidates.
+- Amounts are canonical nonnegative decimal strings.
+- The model has no percentage, formula, ordering engine, arbitrary adjustment type, catalog identity, or editable state.
+- `directWorkTotal` is the sum of contributing BOQ items.
+- `quotedSubtotal` remains equivalent to the existing `sourceTotal`.
+- `payableTotal` is the final source amount after the source discount, when identifiable.
+- Source references are retained when available.
+- Missing optional amounts remain absent; the parser never invents them from unexplained differences alone.
 
-The example becomes:
+For the current document:
 
 ```text
-Direct work                              179,400.00
-+ OVERHEAD & PROFIT (20%)                 35,880.00
-= sourceTotal / quoted subtotal          215,280.00
-- Discount                                1,280.00
-= sourcePayableTotal                     214,000.00
+Direct work              ฿179,400
+Overhead & profit         +฿35,880
+Quoted subtotal           ฿215,280
+Discount                   −฿1,280
+Payable total             ฿214,000
 ```
-
-### 3.3 Existing total fields
-
-Preserve additive compatibility:
-
-- `Boq.grandTotal` remains the direct-work total calculated from contributing BOQ items.
-- Existing `Boq.sourceTotal` remains the quoted pre-discount subtotal used by current documents.
-- Add optional `Boq.sourcePayableTotal` for the final quoted amount after payable-stage adjustments.
-- Add optional `Boq.sourceAdjustments`.
-
-Legacy BOQs without these fields continue to load and retain current verification behavior.
 
 ## 4. Parser behavior
 
-### 4.1 Adjustment-row recognition
+### 4.1 Recognize the source quote rows
 
-The deterministic parser recognizes an adjustment only when all of the following are present:
+The deterministic parser recognizes the current quote summary only when explicit source evidence exists:
 
-1. A nonblank label is retained in the row, including a merged cell spanning the ordinary description columns.
-2. A valid amount is retained in the row's amount/total column.
-3. The label contains explicit adjustment language supported by a closed, tested classifier, such as overhead, profit, discount, rebate, or equivalent approved terms.
-4. The row is not a document grand-total or section-total row.
-5. Percentage classification is used only when an explicit percentage is present or when the exact rate can be deterministically derived from a clearly identified base and source amount. The derivation and original values are retained.
+- a merged or ordinary row label clearly identifies `OVERHEAD & PROFIT`;
+- the same row contains a valid amount in the source amount column;
+- an explicit discount row contains a valid discount amount;
+- subtotal and payable-total rows are identifiable from source labels and layout.
 
-For the current source, the parser reads the merged label `OVERHEAD & PROFIT`, the amount `35,880.00`, and derives the exact rate `0.20` from direct work `179,400.00`.
+Merged cells spanning the usual description columns are valid label evidence.
 
-### 4.2 Fail-closed behavior
+### 4.2 Fail closed
 
-- A merged label without a valid amount remains a review note.
-- An amount without a deterministic label is never silently converted into an adjustment.
-- An ambiguous base prevents percentage derivation; the adjustment may remain fixed only if its amount and commercial role are explicit.
-- Conflicting totals remain blocking.
-- Parser warnings and source rows are append-only evidence; no raw evidence is discarded when a row becomes a recognized adjustment.
+- An unlabeled amount does not become overhead or discount.
+- An unexplained gap does not create a quote-summary amount.
+- Ambiguous commercial rows remain extraction notes and continue blocking reconciliation.
+- The parser stores fixed source amounts only; it does not derive or store `20%`.
+- Original source rows and warning evidence remain available.
 
-### 4.3 Contract and ingestion
+### 4.3 Contract validation
 
-The extraction contract gains optional `sourceAdjustments` and `sourcePayableTotal`. Validation checks:
+The extraction contract accepts an optional `sourceQuoteSummary` and validates:
 
 - exact allowed keys;
-- unique deterministic adjustment IDs;
-- known source-row bindings;
-- valid source locations;
 - canonical decimal strings;
-- valid operation, stage, kind, and basis combinations;
-- exact percentage arithmetic at the configured currency scale;
-- exact ordered reconciliation.
+- nonnegative values;
+- source references that point to known rows;
+- `directWorkTotal` equals the deterministic contributing-item total;
+- `directWorkTotal + overheadProfitAmount = quotedSubtotal` when overhead is present;
+- `quotedSubtotal - discountAmount = payableTotal` when both are present;
+- existing `sourceTotal` equals `quotedSubtotal`.
 
-Ingestion copies validated adjustments into the BOQ without converting them into sections or line items.
+Validation uses exact decimal arithmetic and the existing currency tolerance only at the final comparison boundary.
 
-## 5. Reconciliation and approval
+## 5. Canonical BOQ and compatibility
 
-Verification computes three layers:
+Add optional `sourceQuoteSummary` to `Boq`.
 
-1. **Direct total** = sum of contributing BOQ items.
-2. **Quoted subtotal** = direct total plus ordered `subtotal` adjustments.
-3. **Quoted payable total** = quoted subtotal plus ordered `payable` adjustments.
+Existing fields retain their meaning:
 
-Approval rules:
+- `grandTotal`: direct BOQ item total;
+- `sourceTotal`: quoted source subtotal before discount;
+- `sections`: direct comparable work only.
 
-- If `sourceTotal` exists, the computed quoted subtotal must equal it within the existing currency tolerance.
-- If `sourcePayableTotal` exists, the computed payable total must equal it within the existing currency tolerance.
-- Invalid, ambiguous, or unbound source adjustments are blocking.
-- Source adjustments never affect catalog readiness.
-- All direct priced items retain the existing matched-or-excluded catalog requirement.
-- Approved BOQs reject every adjustment mutation, like every other canonical mutation.
-- Exact existing **Exclude** wording and semantics remain unchanged.
+Legacy BOQs without `sourceQuoteSummary` load unchanged and retain current verification behavior.
 
-The current generic blocker, “Normalized item total does not match the source document total,” becomes a layer-specific message. Examples:
+No production or local migration is required. Re-extraction is the explicit upgrade path for existing documents.
 
-- `Direct items plus source adjustments are ฿35,880 below the quoted subtotal.`
-- `Quoted subtotal and source discount do not reconcile to the payable total.`
+## 6. Verification and approval
 
-No unit-normalization language is shown unless a pricing normalization actually caused the mismatch.
+When a valid quote summary exists, verification checks two separate layers:
 
-## 6. BOQ review UI
+1. Direct BOQ items equal `sourceQuoteSummary.directWorkTotal`.
+2. The fixed quote-summary arithmetic reconciles to `sourceTotal` and, when present, `payableTotal`.
 
-### 6.1 Source totals bridge
+For the current BOQ:
 
-Show a compact, read-only totals bridge near the direct BOQ total:
+```text
+179,400 + 35,880 = 215,280
+215,280 - 1,280 = 214,000
+```
+
+Approval behavior:
+
+- A valid, reconciled quote summary resolves the current document-total mismatch.
+- Direct BOQ items still require the existing catalog matched-or-excluded readiness.
+- Quote-summary amounts create no catalog-readiness tasks.
+- Missing or invalid quote-summary evidence remains blocking.
+- Approved BOQs expose the summary read-only and reject every canonical mutation.
+- Existing exact **Exclude** wording and semantics remain unchanged.
+
+Replace the misleading normalization blocker with layer-specific copy, for example:
+
+- `Direct BOQ items do not reconcile with the source quote summary.`
+- `Source overhead/profit does not reconcile with the quoted subtotal.`
+- `Source discount does not reconcile with the payable total.`
+
+Do not mention normalization unless a real unit normalization is involved.
+
+## 7. BOQ review UI
+
+Show a compact read-only **Source quote summary** near the direct BOQ total:
 
 ```text
 Direct work                         ฿179,400
-Overhead & profit · 20%             +฿35,880
+Overhead & profit                  +฿35,880
 Quoted subtotal                     ฿215,280
-Discount                             −฿1,280
-Quoted payable total                ฿214,000
+Discount                            −฿1,280
+Payable total                       ฿214,000
 ```
 
-Interaction rules:
+UI rules:
 
-- Adjustment rows use source-evidence styling, not catalog badges.
-- A source-location action highlights the originating PDF row.
-- No Match, Add & match, Find match, or Exclude control appears for adjustments.
-- Editing direct BOQ items updates the computed bridge and exposes any resulting mismatch, but never rewrites immutable source snapshots.
-- In approved/read-only state, the bridge remains visible and immutable.
+- Direct work remains the table's grand total.
+- Quote-summary rows are visually separate from BOQ items.
+- Source-location controls highlight the corresponding PDF rows when references exist.
+- Quote-summary rows have no Match, Add & match, Find match, Exclude, unit, quantity, rate, material, or labour controls.
+- Quote-summary amounts are not editable in BOQ review.
+- Approved/read-only BOQs retain the same summary.
 
-### 6.2 Compare surfaces
+## 8. Catalog, comparison, and Estimator boundaries
 
-Catalog comparison and cross-vendor line-item comparison consume direct BOQ items only. A quote-level summary may show source adjustments separately, but it must not rank or match them as equivalent work items.
+### Catalog and historical pricing
 
-## 7. Estimator transfer
+`sourceQuoteSummary` is never read by catalog matching, catalog readiness, standard-item history, or rate calculations.
 
-### 7.1 First-class estimate adjustments
+### BOQ and vendor comparison
 
-Do not represent signed discounts as `EstimateItem`, because estimate items are nonnegative work rows. Add an ordered `EstimateAdjustment[]` beside `Estimate.items`.
+Line-item comparisons use direct BOQ items only. A future quote-level summary may display commercial totals, but this implementation does not add comparison behavior for overhead or discount.
 
-Conceptual shape:
+### Estimator
 
-```ts
-interface EstimateAdjustment {
-  id: string
-  label: string
-  operation: 'add' | 'subtract'
-  calculation:
-    | { kind: 'percentage'; rate: string; base: 'direct_items' }
-    | { kind: 'fixed'; amount: string }
-  source: 'imported' | 'manual'
-  sourceSnapshot?: {
-    boqId: string
-    adjustmentId: string
-    label: string
-    operation: 'add' | 'subtract'
-    amount: string
-    basisKind: 'percentage' | 'fixed'
-    rate?: string
-    baseAmount?: string
-    sourceRef: BoqSourceRef
-  }
-}
-```
+No automatic transfer occurs.
 
-### 7.2 Import behavior
+- Direct BOQ items may continue to be imported using existing behavior.
+- Source overhead/profit and discount are not imported.
+- Estimator users create their own manual adjustments according to the new estimate they are building.
+- No Estimator schema or calculation changes are required for this feature.
 
-Creating an estimate from this BOQ imports:
+## 9. Extraction notes presentation
 
-- seven direct BOQ items as `source: 'imported'` items;
-- overhead/profit as an imported 20% additive adjustment;
-- discount as an imported fixed subtractive adjustment.
+### 9.1 User-facing count
 
-Percentage adjustments recalculate from the estimate's current direct-item subtotal. The source snapshot retains the original 20%, ฿179,400 base, and ฿35,880 amount for audit. The fixed discount remains ฿1,280 unless the estimator explicitly edits it.
+Replace occurrence-led copy such as `29 extraction notes need review` with a count of unique source rows requiring review.
 
-Estimate totals are calculated in stable adjustment order:
+Multiple warnings on one source row count as one affected row. Document-level information without a row is counted separately. The raw warning occurrence count remains visible only in Technical details.
+
+### 9.2 Sections
+
+Render two concise sections:
+
+1. **Needs review** — incomplete, unreadable, ambiguous, or unreconciled evidence requiring action.
+2. **Document information** — recognized source facts such as discount information that do not require correction.
+
+Once overhead/profit is recognized in the quote summary, its row no longer appears as an incomplete item. Once arithmetic reconciles, stale section/document mismatch warnings are not regenerated.
+
+### 9.3 Friendly labels
+
+Add labels for codes currently shown as `Other extraction note`:
+
+- `invalid_numeric_format` → `Unrecognized number format`
+- `section_total_mismatch` → `Section total did not reconcile`
+
+Unknown warning codes retain the neutral `Other extraction note` label but remain distinct groups by code.
+
+### 9.4 Compact source locations
+
+Group locations by page and table and compress consecutive rows:
 
 ```text
-items subtotal
-→ percentage/fixed additive adjustments
-→ fixed or percentage subtractive adjustments
-→ estimate total
+Page 2 · rows 3, 6–9, 11–19
 ```
 
-Manual adjustment edits do not mutate the BOQ or its source evidence.
+Show a bounded preview with `+ N more` when needed.
 
-## 8. Extraction notes presentation
-
-### 8.1 Summary counts
-
-Replace occurrence-led copy such as `29 extraction notes need review` with counts that match user work:
-
-- unique source rows needing review;
-- document-level information notes without a source row.
-
-Multiple warning codes on one row count as one affected row. The exact raw warning occurrence count remains available in Technical details.
-
-### 8.2 Sections
-
-Render two sections:
-
-1. **Needs review** — warnings that require correction, confirmation, or source inspection.
-2. **Document information** — recognized discounts, adjustments, and other non-blocking source facts.
-
-Once overhead/profit is recovered as a valid adjustment, it is shown in the totals bridge and not as an incomplete row. Once totals reconcile, stale section/document mismatch warnings are not regenerated.
-
-### 8.3 Group labels and locations
-
-- Map the actual emitted code `invalid_numeric_format` to `Unrecognized number format`.
-- Map `section_total_mismatch` to `Section total did not reconcile`.
-- Preserve existing friendly labels for known codes.
-- Unknown codes remain `Other extraction note` but are grouped by code, never merged across distinct unknown codes.
-- Compress source locations by page/table into row ranges, for example `Page 2 · rows 3, 6–9, 11–19`.
-- Show a bounded location preview and `+ N more` where needed.
-
-### 8.4 Technical details
+### 9.5 Technical details
 
 A collapsed **Technical details** disclosure preserves:
 
-- raw warning code;
+- raw occurrence count;
+- warning code;
 - original parser message;
-- exact source location;
-- total raw occurrence count.
+- exact source location.
 
-This is audit evidence, not the primary task list.
+No evidence is deleted or rewritten for presentation.
 
-## 9. Data flow
+## 10. Data flow
 
 ```text
 PDF/source table
   → lossless source rows
-  → deterministic direct-item derivation
-  → deterministic source-adjustment derivation
-  → extraction contract validation
+  → direct BOQ item derivation
+  → fixed source quote-summary extraction
+  → strict contract validation
   → canonical BOQ {
-       sections: direct items,
-       sourceAdjustments,
+       sections,
        grandTotal,
        sourceTotal,
-       sourcePayableTotal
+       sourceQuoteSummary
      }
-  → review verification + totals bridge
+  → review verification and read-only summary
   → approved BOQ
-  → create estimate
-       ├─ direct items → Estimate.items
-       └─ source adjustments → Estimate.adjustments
 ```
 
-The source row is the immutable root of both derived branches.
+Estimator consumes only existing direct-item import paths. It does not consume `sourceQuoteSummary`.
 
-## 10. Error handling and compatibility
+## 11. Error handling
 
-- All new BOQ and extraction fields are optional for legacy reads.
-- New extraction writes use the expanded validated contract.
-- Existing warning readers remain compatible.
-- Existing BOQs are not backfilled or migrated locally; re-extraction is the explicit upgrade path.
-- A failed adjustment parse leaves evidence and a blocking review note rather than manufacturing a row.
-- A failed Estimator transfer creates neither partial items nor partial adjustments.
-- Retrying estimate creation/import is idempotent by BOQ ID plus source item/adjustment identity.
-- No production migration runs as part of implementation or validation.
+- Invalid quote-summary arithmetic rejects the extraction contract.
+- Ambiguous rows stay visible as review notes.
+- Failed re-extraction leaves the current canonical BOQ unchanged.
+- Failed persistence writes neither partial items nor a partial summary.
+- Legacy reads remain additive and compatible.
+- Approved BOQs reject mutations.
+- No production migration runs locally.
 
-## 11. Testing strategy
+## 12. Testing strategy
 
-Strict RED → GREEN tests cover:
+Use strict RED → GREEN tests.
 
 ### Parser and contract
 
-- merged `OVERHEAD & PROFIT` label plus amount produces a separate 20% subtotal adjustment;
-- direct items remain unchanged and catalog-addressable;
-- fixed and percentage adjustments validate exact arithmetic;
-- discount becomes a payable-stage subtractive adjustment;
-- unlabeled amounts and ambiguous percentage bases fail closed;
-- source provenance is preserved;
-- quoted subtotal and payable total reconcile exactly;
-- adjustment rows do not increase `totalItems`.
+- A merged `OVERHEAD & PROFIT` label plus ฿35,880 becomes fixed quote-summary evidence.
+- The overhead row does not become a BOQ item and does not increase `totalItems`.
+- Discount becomes fixed quote-summary evidence.
+- Direct items remain unchanged.
+- Exact summary arithmetic validates.
+- Unlabeled amounts and ambiguous rows fail closed.
+- Source references are preserved.
+- No percentage field is produced.
 
-### BOQ verification and persistence
+### BOQ verification
 
-- direct items plus subtotal adjustments reconcile to `sourceTotal`;
-- payable adjustments reconcile to `sourcePayableTotal`;
-- missing or altered adjustments block approval;
-- adjustments do not create catalog-readiness blockers;
-- approved BOQs reject adjustment mutation;
-- legacy BOQs retain current behavior.
+- Direct items plus fixed overhead reconcile to `sourceTotal`.
+- Discount reconciles quoted subtotal to payable total.
+- Missing or altered summary evidence blocks approval.
+- Valid summary evidence resolves the current false normalization message.
+- Quote summary creates no catalog-readiness blocker.
+- Legacy BOQs retain existing verification.
+- Approved BOQs reject summary mutation.
 
-### Compare and Estimator
+### Feature boundaries
 
-- catalog and vendor item comparisons exclude source adjustments;
-- estimate import creates direct items and separate ordered adjustments atomically;
-- 20% overhead recalculates after direct-item edits;
-- the original source snapshot remains unchanged;
-- fixed discount remains negative and fixed;
-- retry does not duplicate imported adjustments.
+- Catalog matching ignores quote summary.
+- Historical pricing ignores quote summary.
+- Vendor line-item comparison ignores quote summary.
+- Existing Estimator import includes direct items only.
+- No Estimator schema change is introduced.
 
 ### Extraction notes and UI
 
-- summary counts unique affected source rows rather than warning occurrences;
-- actionable and informational notes are separated;
-- actual emitted warning codes receive friendly labels;
-- compact row ranges are correct and bounded;
-- Technical details retain every distinct original message and location;
-- totals bridge is responsive and read-only after approval;
-- no catalog action is rendered for an adjustment.
+- Summary counts unique affected rows, not warning occurrences.
+- Needs-review and document-information notes are separated.
+- Actual emitted warning codes receive friendly labels.
+- Row ranges compress correctly.
+- Technical details retain exact messages and locations.
+- Source quote summary renders without catalog or editing controls.
+- Summary is responsive and read-only after approval.
 
 ### Browser QA
 
 Use sanitized synthetic digital and scanned PDFs at `1280×800` and `390×844`. Verify:
 
-- the direct-item table remains focused on comparable work;
-- the totals bridge reconciles direct, subtotal, discount, and payable layers;
-- PDF source highlighting reaches the adjustment row;
+- direct items remain the only comparable rows;
+- fixed source quote summary reconciles visibly;
+- source highlighting reaches overhead and discount rows;
 - extraction notes are concise by default and complete when expanded;
-- Estimator receives a recalculating percentage overhead and fixed discount;
-- approval and read-only safeguards remain intact.
+- approval and read-only safeguards remain intact;
+- Estimator receives no automatic overhead or discount.
 
 Never use `Quotation example/` or unsanitized customer documents.
 
-## 12. Out of scope
+## 13. Out of scope
 
-- Adding overhead/profit to the catalog.
-- Comparing overhead percentages as standard work items.
-- Automatically inventing adjustments from unexplained total gaps.
-- Rewriting existing BOQs without re-extraction.
-- General tax, retention, escalation, contingency, or multi-currency engines beyond the source-backed adjustment primitives required here.
-- Changing current catalog Exclude semantics.
+- A generic adjustment engine.
+- Percentage storage or recalculation.
+- Automatic Estimator adjustment import.
+- Cataloging or comparing overhead/profit.
+- Inventing commercial terms from unexplained total differences.
+- Tax, retention, contingency, escalation, or multi-currency calculations.
+- Backfilling existing BOQs without re-extraction.
+- Changing existing catalog Exclude behavior.
