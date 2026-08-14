@@ -417,6 +417,105 @@ test("the unified table renders only catalog-pending rows when focused", () => {
 	assert.match(source, /pendingRows=\{/);
 });
 
+test("review panel renders the read-only source quote summary between Extraction notes and Parsed Items", () => {
+	assert.match(source, /SourceQuoteSummary/);
+	assert.match(source, /displayBoq\.sourceQuoteSummary/);
+	assert.match(source, /setPdfEvidenceFocus/);
+	const reviewPanel = sourceSection(
+		'id="boq-review-panel"',
+		'id="boq-compare-panel"',
+	);
+	const notesIndex = reviewPanel.indexOf('title="Extraction notes"');
+	const summaryIndex = reviewPanel.indexOf("<SourceQuoteSummary");
+	const parsedIndex = reviewPanel.indexOf("Parsed Items");
+	assert.ok(notesIndex >= 0, "Extraction notes must stay in the review panel");
+	assert.ok(
+		summaryIndex > notesIndex,
+		"summary must render after Extraction notes",
+	);
+	assert.ok(
+		parsedIndex > summaryIndex,
+		"summary must render before the Parsed Items heading",
+	);
+	// The mount is gated on the persisted canonical summary.
+	assert.match(reviewPanel, /displayBoq\.sourceQuoteSummary \? \(/);
+	// Read-only mount: no editing, catalog matching, exclusion, or transfer.
+	const summaryMount = reviewPanel.slice(
+		summaryIndex,
+		reviewPanel.indexOf("/>", summaryIndex) + 2,
+	);
+	assert.match(summaryMount, /onNavigateToSource=\{\(sourceRef\) =>/);
+	assert.match(summaryMount, /page: sourceRef\.page/);
+	assert.match(summaryMount, /table: sourceRef\.table/);
+	assert.match(summaryMount, /row: sourceRef\.row/);
+	assert.doesNotMatch(summaryMount, /onExclude|onFindMatch|onAiSuggest/);
+	assert.doesNotMatch(summaryMount, /Estimator/i);
+});
+
+test("source navigation passes page, table, and row evidence focus to the PDF viewer", () => {
+	const focusState = sourceSection(
+		"const [pdfEvidenceFocus",
+		"const [invalidDraftKeys",
+	);
+	assert.match(focusState, /page: number;/);
+	assert.match(focusState, /table: number;/);
+	assert.match(focusState, /row: number;/);
+	assert.match(focusState, /key: number;/);
+	const viewer = sourceSection("<PdfReviewViewer", "/>");
+	assert.match(viewer, /requestedPage=\{pdfEvidenceFocus\.page\}/);
+	assert.match(viewer, /requestedPageKey=\{pdfEvidenceFocus\.key\}/);
+	assert.match(viewer, /evidenceFocus=\{pdfEvidenceFocusTarget\}/);
+	assert.match(source, /pdfEvidenceFocusTarget/);
+	assert.match(source, /cells: \[\]/);
+});
+
+test("compare panel never renders the source quote summary and catalog actions stay in review", () => {
+	const comparePanel = sourceSection(
+		'id="boq-compare-panel"',
+		"</ReviewWorkspace>",
+	);
+	assert.doesNotMatch(comparePanel, /SourceQuoteSummary/);
+	assert.doesNotMatch(comparePanel, /sourceQuoteSummary/);
+	const reviewPanel = sourceSection(
+		'id="boq-review-panel"',
+		'id="boq-compare-panel"',
+	);
+	assert.match(reviewPanel, /onFindMatch=/);
+	assert.match(reviewPanel, /onExclude=/);
+});
+
+test("quote summary blockers render verbatim and legacy BOQs keep the formatted total message", () => {
+	const reason = sourceSection(
+		"const documentMismatchReason",
+		"const approvalDisabledReason",
+	);
+	const gateMatch = /displayBoq\.sourceQuoteSummary\s*\?/.exec(reason);
+	assert.ok(
+		gateMatch !== null,
+		"the quote branch must gate on the persisted summary",
+	);
+	const gateIndex = gateMatch.index;
+	const quoteIndex = reason.indexOf("selectTotalMismatchMessage(");
+	const legacyIndex = reason.indexOf("documentTotalMismatchMessage(");
+	assert.ok(
+		quoteIndex > gateIndex,
+		"summary-backed BOQs must use the layered quote issue messages verbatim",
+	);
+	assert.ok(
+		legacyIndex > quoteIndex,
+		"legacy formatted message must stay behind the summary gate and never be forced for summary-backed BOQs",
+	);
+	assert.match(
+		reason,
+		/selectTotalMismatchMessage\(\s*displayBoq\.sourceTotal,\s*grandTotal,\s*blockingIssues,\s*\)/,
+	);
+});
+
+test("page contains no Estimator transfer logic for summary amounts", () => {
+	assert.doesNotMatch(source, /Estimator/);
+	assert.doesNotMatch(source, /addToEstimate|add-to-estimate/);
+});
+
 function actionableStageGateInComparePanel(): RegExp {
 	return /actionableReviewStage|useActionableFocusedReview/;
 }

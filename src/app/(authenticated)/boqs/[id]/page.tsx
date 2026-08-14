@@ -45,6 +45,7 @@ import {
 import { CatalogMatchModal } from "@/components/catalog-match-modal";
 import { ExtractionReview } from "@/components/extraction-review";
 import { ExtractionWarnings } from "@/components/extraction-warnings";
+import { SourceQuoteSummary } from "@/components/source-quote-summary";
 import { ProtoBadge } from "@/components/proto-badge";
 import { ReviewWorkspace } from "@/components/review-workspace";
 import dynamic from "next/dynamic";
@@ -87,6 +88,7 @@ import {
 import {
 	documentTotalMismatchMessage,
 	reconcileBoqMutation,
+	selectTotalMismatchMessage,
 	type BoqDetailEdits,
 } from "@/lib/boq-detail-state";
 import { getBoqItemRequestIdentity } from "@/lib/boq-item-identity";
@@ -365,8 +367,10 @@ function CanonicalBoqWorkspace({
 	const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("items");
 	const [pdfEvidenceFocus, setPdfEvidenceFocus] = useState<{
 		page: number;
+		table: number;
+		row: number;
 		key: number;
-	}>({ page: 1, key: 0 });
+	}>({ page: 1, table: 0, row: 0, key: 0 });
 	const [invalidDraftKeys, setInvalidDraftKeys] = useState<Set<string>>(
 		new Set(),
 	);
@@ -753,6 +757,21 @@ function CanonicalBoqWorkspace({
 		[displayBoq],
 	);
 	const [catalogPendingFocus, setCatalogPendingFocus] = useState(false);
+	// Row-level PDF focus derived from the last source navigation. Source refs are
+	// 1-based, so the initial table 0 / row 0 state means "no navigation yet" and
+	// no focus marker is claimed before the operator asks for one.
+	const pdfEvidenceFocusTarget = useMemo(
+		() =>
+			pdfEvidenceFocus.key > 0
+				? {
+						page: pdfEvidenceFocus.page,
+						table: pdfEvidenceFocus.table,
+						row: pdfEvidenceFocus.row,
+						cells: [],
+					}
+				: undefined,
+		[pdfEvidenceFocus],
+	);
 	const verification = useMemo(
 		() =>
 			buildReviewVerification(displayBoq, {
@@ -773,11 +792,18 @@ function CanonicalBoqWorkspace({
 	const editsCount = Object.keys(edits).length;
 	const metadataEditCount = Object.keys(metadataEdits).length;
 	const pendingChanges = editsCount + metadataEditCount;
-	const documentMismatchReason = verification.issues.some(
-		(issue) => issue.code === "document_total_mismatch",
-	)
-		? documentTotalMismatchMessage(displayBoq.sourceTotal, grandTotal)
-		: null;
+	const documentMismatchReason = displayBoq.sourceQuoteSummary
+		? // Summary-backed BOQs surface the layered quote issue messages verbatim.
+			selectTotalMismatchMessage(
+				displayBoq.sourceTotal,
+				grandTotal,
+				blockingIssues,
+			)
+		: verification.issues.some(
+				(issue) => issue.code === "document_total_mismatch",
+			)
+			? documentTotalMismatchMessage(displayBoq.sourceTotal, grandTotal)
+			: null;
 	const approvalDisabledReason = mutationBusy
 		? approving
 			? "Approving BOQ…"
@@ -1426,6 +1452,7 @@ function CanonicalBoqWorkspace({
 								resetKey={boq.id}
 								requestedPage={pdfEvidenceFocus.page}
 								requestedPageKey={pdfEvidenceFocus.key}
+								evidenceFocus={pdfEvidenceFocusTarget}
 							/>
 						) : null
 					}
@@ -1486,6 +1513,20 @@ function CanonicalBoqWorkspace({
 							<ExtractionWarnings
 								warnings={boq.extractionWarnings}
 								title="Extraction notes"
+							/>
+						) : null}
+
+						{displayBoq.sourceQuoteSummary ? (
+							<SourceQuoteSummary
+								summary={displayBoq.sourceQuoteSummary}
+								onNavigateToSource={(sourceRef) =>
+									setPdfEvidenceFocus((current) => ({
+										page: sourceRef.page,
+										table: sourceRef.table,
+										row: sourceRef.row,
+										key: current.key + 1,
+									}))
+								}
 							/>
 						) : null}
 
@@ -1670,6 +1711,8 @@ function CanonicalBoqWorkspace({
 								onNavigateToEvidence={(focus) =>
 									setPdfEvidenceFocus((current) => ({
 										page: focus.page,
+										table: focus.table,
+										row: focus.row,
 										key: current.key + 1,
 									}))
 								}
@@ -1766,6 +1809,8 @@ function CanonicalBoqWorkspace({
 							onNavigateToEvidence={(focus) =>
 								setPdfEvidenceFocus((current) => ({
 									page: focus.page,
+									table: focus.table,
+									row: focus.row,
 									key: current.key + 1,
 								}))
 							}
