@@ -3,51 +3,89 @@
 import { useMemo } from "react"
 
 import {
+  compactExtractionWarningLocations,
   extractionWarningSourceLabel,
-  groupExtractionWarnings,
+  summarizeExtractionWarnings,
   type ExtractionWarningGroup,
 } from "@/lib/boq-extraction-warnings"
-import type { BoqExtractionWarning } from "@/lib/boq-schema"
+import type { BoqExtractionWarning, BoqSourceRef } from "@/lib/boq-schema"
 
-function SourceLabel({ group }: { group: ExtractionWarningGroup }) {
-  const locations = group.details
-    .map((detail) => extractionWarningSourceLabel(detail.sourceRef))
-    .filter((label): label is string => label !== null)
-  if (locations.length === 0) return null
-  const unique = [...new Set(locations)]
-  return <small className="extraction-warning-group-locations">Source: {unique.join("; ")}</small>
+function GroupLocations({ group }: { group: ExtractionWarningGroup }) {
+  const refs = group.details
+    .map((detail) => detail.sourceRef)
+    .filter((ref): ref is BoqSourceRef => ref !== undefined)
+  if (refs.length === 0) return null
+  const { label, hiddenCount } = compactExtractionWarningLocations(refs)
+  return (
+    <small className="extraction-warning-group-locations">
+      Source: {label}
+      {hiddenCount > 0 ? <span className="extraction-warning-group-more"> + {hiddenCount} more</span> : null}
+    </small>
+  )
 }
 
-/** Concise grouped summary of document extraction notes, with an accessible
- *  native disclosure that preserves the exact original warning messages and
- *  source locations. Replaces the flat repetitive list. */
+function WarningGroups({ groups }: { groups: ReadonlyArray<ExtractionWarningGroup> }) {
+  return (
+    <ul className="extraction-warning-groups">
+      {groups.map((group) => (
+        <li key={group.code} className="extraction-warning-group">
+          <span className="extraction-warning-group-count">{group.count}</span>
+          <span className="extraction-warning-group-label">{group.label}</span>
+          <GroupLocations group={group} />
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/** Concise task summary of document extraction notes: unique affected rows that
+ *  need review, document information the operator merely needs to know, and a
+ *  single native disclosure preserving the exact original warning codes,
+ *  messages, and source locations. */
 export function ExtractionWarnings({ warnings, title = "Extraction notes" }: {
   warnings: ReadonlyArray<BoqExtractionWarning>
   title?: string
 }) {
-  const groups = useMemo(() => groupExtractionWarnings(warnings), [warnings])
-  const occurrenceCount = warnings.length
-  if (groups.length === 0) return null
+  const summary = useMemo(() => summarizeExtractionWarnings(warnings), [warnings])
+  if (summary.needsReview.length === 0 && summary.documentInformation.length === 0) return null
+
+  // Review warnings without a source row are document-level issues, not rows.
+  const documentReviewIssues = summary.needsReview.reduce(
+    (total, group) => total + group.details.filter((detail) => !detail.sourceRef).length,
+    0,
+  )
+  let needsReviewLine: string
+  if (summary.affectedRowCount > 0) {
+    needsReviewLine =
+      summary.affectedRowCount === 1
+        ? "1 source row needs review."
+        : `${summary.affectedRowCount} source rows need review.`
+  } else if (documentReviewIssues === 1) {
+    needsReviewLine = "1 document-level issue needs review."
+  } else {
+    needsReviewLine = `${documentReviewIssues} document-level issues need review.`
+  }
 
   return (
     <div className="review-warning-list extraction-warnings" role="status" aria-label={title}>
       <strong>{title}</strong>
-      <p className="extraction-warnings-summary">
-        {occurrenceCount} extraction {occurrenceCount === 1 ? "note" : "notes"} {occurrenceCount === 1 ? "needs" : "need"} review.
-      </p>
-      <ul className="extraction-warning-groups">
-        {groups.map((group) => (
-          <li key={group.code} className="extraction-warning-group">
-            <span className="extraction-warning-group-count">{group.count}</span>
-            <span className="extraction-warning-group-label">{group.label}</span>
-            <SourceLabel group={group} />
-          </li>
-        ))}
-      </ul>
+      {summary.needsReview.length > 0 ? (
+        <p className="extraction-warnings-summary">{needsReviewLine}</p>
+      ) : null}
+      {summary.needsReview.length > 0 ? (
+        <section aria-label="Needs review" className="extraction-warning-section">
+          <WarningGroups groups={summary.needsReview} />
+        </section>
+      ) : null}
+      {summary.documentInformation.length > 0 ? (
+        <section aria-label="Document information" className="extraction-warning-section extraction-warning-section-info">
+          <WarningGroups groups={summary.documentInformation} />
+        </section>
+      ) : null}
       <details className="extraction-warning-details">
-        <summary className="extraction-warning-details-summary">Technical details</summary>
+        <summary className="extraction-warning-details-summary">Technical details · {summary.rawOccurrenceCount} raw notes</summary>
         <ul>
-          {groups.flatMap((group) =>
+          {[...summary.needsReview, ...summary.documentInformation].flatMap((group) =>
             group.details.map((detail, index) => {
               const location = extractionWarningSourceLabel(detail.sourceRef)
               return (

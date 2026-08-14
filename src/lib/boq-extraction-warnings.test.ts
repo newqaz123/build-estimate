@@ -1,10 +1,13 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import {
+  compactExtractionWarningLocations,
   extractionWarningLabel,
   extractionWarningCount,
+  extractionWarningSection,
   extractionWarningSourceLabel,
   groupExtractionWarnings,
+  summarizeExtractionWarnings,
 } from "./boq-extraction-warnings"
 import type { BoqExtractionWarning } from "./boq-schema"
 
@@ -96,4 +99,121 @@ test("detail key distinguishes identical text only when source location differs"
   const groups = groupExtractionWarnings(sameTextDifferentLoc)
   assert.equal(groups[0].count, 2)
   assert.equal(groups[0].details.length, 2)
+})
+
+test("summary counts unique affected review rows, document information, and raw occurrences", () => {
+  const summary = summarizeExtractionWarnings([
+    warning("unsupported_row", "Incomplete", { page: 2, table: 1, row: 3 }),
+    warning("unparsed_row", "Unreadable", { page: 2, table: 1, row: 3 }),
+    warning("unsupported_row", "Incomplete", { page: 2, table: 1, row: 7 }),
+    warning("source_discount", "Discount 1,280"),
+    warning("document_total_mismatch", "Mismatch"),
+  ])
+  assert.equal(summary.affectedRowCount, 2)
+  assert.equal(summary.documentInformationCount, 1)
+  assert.equal(summary.rawOccurrenceCount, 5)
+  // Row 3 is flagged by two distinct codes but still counts once.
+  assert.deepEqual(
+    summary.needsReview.map((group) => group.code).sort(),
+    ["document_total_mismatch", "unparsed_row", "unsupported_row"],
+  )
+  assert.deepEqual(
+    summary.documentInformation.map((group) => group.code),
+    ["source_discount"],
+  )
+})
+
+test("summary never claims document-level information notes represent rows", () => {
+  const summary = summarizeExtractionWarnings([
+    warning("source_discount", "Discount 1,280"),
+    warning("source_discount", "Discount 1,280"),
+    warning("document_total_mismatch", "Mismatch"),
+  ])
+  assert.equal(summary.affectedRowCount, 0)
+  assert.equal(summary.documentInformationCount, 2)
+  assert.equal(summary.rawOccurrenceCount, 3)
+  assert.equal(summary.needsReview.length, 1)
+  assert.equal(summary.documentInformation.length, 1)
+})
+
+test("source discount is document information; review codes and unknowns are not", () => {
+  assert.equal(extractionWarningSection("source_discount"), "document_information")
+  assert.equal(extractionWarningSection("unsupported_row"), "needs_review")
+  assert.equal(extractionWarningSection("unparsed_row"), "needs_review")
+  assert.equal(extractionWarningSection("document_total_mismatch"), "needs_review")
+  assert.equal(extractionWarningSection("section_total_mismatch"), "needs_review")
+  // Unknown codes fail safe into needs review.
+  assert.equal(extractionWarningSection("brand_new_code_q9"), "needs_review")
+})
+
+test("distinct unknown codes stay in separate stable groups inside needs review", () => {
+  const summary = summarizeExtractionWarnings([
+    warning("first_unknown_code", "A readable message."),
+    warning("second_unknown_code", "Another readable message."),
+    warning("first_unknown_code", "A readable message."),
+  ])
+  assert.equal(summary.documentInformation.length, 0)
+  assert.equal(summary.needsReview.length, 2)
+  // Larger group first, then first-seen order; identical label, distinct codes.
+  assert.equal(summary.needsReview[0].code, "first_unknown_code")
+  assert.equal(summary.needsReview[0].label, "Other extraction note")
+  assert.equal(summary.needsReview[1].code, "second_unknown_code")
+  assert.equal(summary.needsReview[1].label, "Other extraction note")
+})
+
+test("extractionWarningLabel covers emitted parser codes missing friendly labels", () => {
+  assert.equal(extractionWarningLabel("invalid_numeric_format"), "Unrecognized number format")
+  assert.equal(extractionWarningLabel("section_total_mismatch"), "Section total did not reconcile")
+})
+
+test("compact locations compress consecutive rows per page and table", () => {
+  assert.deepEqual(
+    compactExtractionWarningLocations([
+      { page: 2, table: 1, row: 3 },
+      { page: 2, table: 1, row: 6 },
+      { page: 2, table: 1, row: 7 },
+      { page: 2, table: 1, row: 8 },
+      { page: 2, table: 1, row: 9 },
+      { page: 2, table: 1, row: 11 },
+    ]),
+    { label: "Page 2 · rows 3, 6–9, 11", hiddenCount: 0 },
+  )
+})
+
+test("compact locations dedupe refs, sort them, and join segments", () => {
+  assert.deepEqual(
+    compactExtractionWarningLocations([
+      { page: 3, table: 2, row: 5 },
+      { page: 2, table: 1, row: 9 },
+      { page: 2, table: 1, row: 3 },
+      { page: 2, table: 1, row: 3 },
+      { page: 2, table: 1, row: 4 },
+    ]),
+    { label: "Page 2 · rows 3–4, 9; Page 3, table 2 · row 5", hiddenCount: 0 },
+  )
+})
+
+test("compact locations bound the preview to whole segments and report hidden rows", () => {
+  const refs = [
+    { page: 1, table: 1, row: 1 },
+    { page: 2, table: 1, row: 2 },
+    { page: 2, table: 1, row: 3 },
+    { page: 3, table: 1, row: 4 },
+    { page: 3, table: 1, row: 5 },
+  ]
+  const bounded = compactExtractionWarningLocations(refs, 2)
+  assert.deepEqual(bounded, {
+    label: "Page 1 · row 1; Page 2 · rows 2–3",
+    hiddenCount: 2,
+  })
+  // An explicit generous bound shows every segment.
+  assert.equal(compactExtractionWarningLocations(refs, 10).hiddenCount, 0)
+  // The default preview stays bounded so long lists stay concise.
+  assert.equal(compactExtractionWarningLocations(refs).hiddenCount, 2)
+  // Displayed segments never drop interior rows to fit the bound.
+  assert.equal(bounded.label.includes("rows 2–3"), true)
+})
+
+test("compact locations returns an empty label for no refs", () => {
+  assert.deepEqual(compactExtractionWarningLocations([]), { label: "", hiddenCount: 0 })
 })
