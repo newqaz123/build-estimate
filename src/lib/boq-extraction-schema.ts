@@ -5,6 +5,12 @@ import type {
   BoqSourceRef,
   WorkType,
 } from './boq-schema'
+import {
+  canonicalDecimalFromFloat,
+  isSubMinorUnitDifference,
+  parseSourceQuoteSummary,
+  type BoqSourceQuoteSummary,
+} from './boq-source-quote-summary'
 
 const WORK_TYPES: readonly WorkType[] = ['Structural', 'MEP', 'Finishing', 'Unclassified']
 const V2_ITEM_TYPES = ['unit', 'lump_sum'] as const
@@ -262,6 +268,7 @@ export interface DoclingResultV3 {
   metadata: DoclingMetadata
   warnings: DoclingWarningV3[]
   sourceTotal?: number | null
+  sourceQuoteSummary?: BoqSourceQuoteSummary
   reconciliation: DoclingReconciliationV3
   totalItems: number
 }
@@ -645,7 +652,7 @@ function locationKey(ref: BoqSourceRef): string {
 function parseV3(value: Record<string, unknown>): DoclingResultV3 {
   exactKeys(value, [
     'contractVersion', 'documentName', 'pageCount', 'documentText', 'sourceRows',
-    'sections', 'metadata', 'warnings', 'sourceTotal', 'reconciliation', 'totalItems',
+    'sections', 'metadata', 'warnings', 'sourceTotal', 'sourceQuoteSummary', 'reconciliation', 'totalItems',
   ], 'result')
   const sourceRows = array(value.sourceRows, 'sourceRows').map((row, index) => parseSourceRow(row, `sourceRows[${index}]`))
   const rowIds = sourceRows.map((row) => row.id)
@@ -719,16 +726,36 @@ function parseV3(value: Record<string, unknown>): DoclingResultV3 {
   } else if (reconciliation.sourceTotal === null || !numbersExactlyEqual(sourceTotal, reconciliation.sourceTotal)) {
     invalid('reconciliation.sourceTotal', 'match sourceTotal')
   }
+
+  // A fixed quote summary re-anchors the document comparison from the quoted
+  // subtotal while itemTotal stays the direct contributing-item total.
+  let comparisonTotal: ExactDecimal = serializedTotal.decimal
+  let sourceQuoteSummary: BoqSourceQuoteSummary | undefined
+  if (value.sourceQuoteSummary !== undefined) {
+    if (sourceTotal === undefined || sourceTotal === null) {
+      invalid('sourceTotal', 'match sourceQuoteSummary.quotedSubtotal')
+    }
+    sourceQuoteSummary = parseSourceQuoteSummary(value.sourceQuoteSummary, {
+      directWorkTotal: canonicalDecimalFromFloat(serializedTotal.number, 'sourceQuoteSummary.directWorkTotal'),
+      sourceTotal: canonicalDecimalFromFloat(sourceTotal, 'sourceTotal'),
+      knownLocations,
+    })
+    // Mirror the sidecar: comparison uses the legacy float representation of
+    // the exact quoted subtotal, tolerating only sub-minor-unit float drift.
+    comparisonTotal = exactDecimal(Number(sourceQuoteSummary.quotedSubtotal))
+  }
   const expectedDifference = sourceTotal === undefined || sourceTotal === null
     ? { coefficient: BIGINT_ZERO, scale: 0 }
-    : subtractDecimals(serializedTotal.decimal, exactDecimal(sourceTotal))
+    : subtractDecimals(comparisonTotal, exactDecimal(sourceTotal))
   const serializedDifference = checkedFloatRoundTrip(expectedDifference, 'reconciliation.difference')
   if (!decimalsEqual(exactDecimal(reconciliation.difference), serializedDifference.decimal)) {
     invalid('reconciliation.difference', 'match the checked itemTotal minus sourceTotal')
   }
   const expectedReconciled = sourceTotal !== undefined
     && sourceTotal !== null
-    && absoluteWithinTolerance(serializedDifference.decimal)
+    && (sourceQuoteSummary !== undefined
+      ? isSubMinorUnitDifference(canonicalDecimalFromFloat(sourceTotal, 'sourceTotal'), canonicalDecimalFromFloat(Number(sourceQuoteSummary.quotedSubtotal), 'sourceQuoteSummary.quotedSubtotal'))
+      : absoluteWithinTolerance(serializedDifference.decimal))
   if (reconciliation.reconciled !== expectedReconciled) invalid('reconciliation.reconciled', 'match deterministic reconciliation')
 
   return {
@@ -741,6 +768,7 @@ function parseV3(value: Record<string, unknown>): DoclingResultV3 {
     metadata: metadata(value.metadata, 'metadata', true),
     warnings,
     ...(sourceTotal === undefined ? {} : { sourceTotal }),
+    ...(sourceQuoteSummary === undefined ? {} : { sourceQuoteSummary }),
     reconciliation,
     totalItems,
   }

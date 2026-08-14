@@ -76,6 +76,81 @@ function makeBoq(overrides: Partial<Boq> = {}): Boq {
   }
 }
 
+function quoteSourceRow(
+  id: string,
+  page: number,
+  table: number,
+  row: number,
+  rawText: string,
+  classification = 'item',
+) {
+  return {
+    id, page, table, row, section: 'Direct Works', headers: ['Description'],
+    rawCells: [{
+      column: 0, rawText, lines: rawText.split('\n'), rowSpan: 1, columnSpan: 1,
+      startRowOffset: row - 1, endRowOffset: row,
+      startColumnOffset: 0, endColumnOffset: 1,
+      columnHeader: false, rowHeader: false, rowSection: false, carried: false,
+    }],
+    rawText, classification, confidence: 0.95, warnings: [],
+  }
+}
+
+function quoteItem(id: string, rowId: string, desc: string, rate: number) {
+  return {
+    id, desc, pricingRole: 'standard', sourceRowIds: [rowId], parentBundleId: null,
+    optional: false, excludedFromTotal: false, exclusionReason: null,
+    entryOrigin: 'docling', costComponent: 'combined', sourceCosts: null,
+    unit: 'item', qty: 1, rate, total: rate,
+  }
+}
+
+function quoteSummaryPayload() {
+  const direct = [
+    ['row-q1', 'Concrete work', 25_000],
+    ['row-q2', 'Formwork', 25_000],
+    ['row-q3', 'Rebar', 25_000],
+    ['row-q4', 'Excavation', 25_000],
+    ['row-q5', 'Backfilling', 25_000],
+    ['row-q6', 'Drainage', 25_000],
+    ['row-q7', 'Finishing work', 29_400],
+  ] as const
+  return {
+    contractVersion: 3,
+    documentName: 'quote-summary.pdf',
+    pageCount: 2,
+    documentText: 'quote summary evidence',
+    sourceRows: [
+      ...direct.map(([rowId, desc, total]) =>
+        quoteSourceRow(rowId, 1, 1, Number(rowId.slice(-1)), `${desc} | ${total}`)),
+      quoteSourceRow('row-q25', 2, 1, 25, 'Overhead and profit | 35880', 'total'),
+    ],
+    sections: [{
+      header: 'Direct Works',
+      items: direct.map(([rowId, desc, total]) =>
+        quoteItem(rowId.replace('row-', 'item-'), rowId, desc, total)),
+    }],
+    metadata: {
+      vendor: { value: 'Vendor', confidence: 0.9, source: 'header' },
+      project: { value: 'Project', confidence: 0.8, source: 'header' },
+      date: { value: '2026-07-19', confidence: 0.7, source: 'header' },
+      workType: { value: 'MEP', confidence: 0.95, source: 'keywords' },
+    },
+    warnings: [],
+    sourceTotal: 215_280,
+    sourceQuoteSummary: {
+      directWorkTotal: '179400',
+      overheadProfitAmount: '35880',
+      quotedSubtotal: '215280',
+      discountAmount: '1280',
+      payableTotal: '214000',
+      overheadProfitSourceRef: { page: 2, table: 1, row: 25 },
+    },
+    reconciliation: { itemTotal: 179_400, sourceTotal: 215_280, reconciled: true, difference: 0 },
+    totalItems: 7,
+  }
+}
+
 test('parseDoclingResult accepts contract version 2 and preserves source fields', () => {
   const payload = validPayload()
   const parsed = parseDoclingResult(payload)
@@ -272,6 +347,59 @@ test('v3 run IDs are caller-supplied, non-empty, and deterministic', () => {
   const parsed = parseDoclingResult(v3Fixture())
   assert.throws(() => buildDraftImport('boq-v3', 'source.pdf', parsed, ''), /runId/i)
   assert.equal(buildDraftImport('boq-v3', 'source.pdf', parsed, 'stable-id').run?.id, 'stable-id')
+})
+
+test('v3 quote summary persists on the draft BOQ and detached run seed', () => {
+  const payload = quoteSummaryPayload()
+  const parsed = parseDoclingResult(payload)
+  assert(parsed.contractVersion === 3)
+  assert.deepEqual(parsed.sourceQuoteSummary, payload.sourceQuoteSummary)
+
+  const draft = buildDraftImport('boq-quote', 'boqs/boq-quote/source.pdf', parsed, 'run-quote')
+
+  assert.deepEqual(draft.boq.sourceQuoteSummary, payload.sourceQuoteSummary)
+  assert.deepEqual(draft.run?.sourceQuoteSummary, payload.sourceQuoteSummary)
+  assert.equal(draft.boq.grandTotal, 179_400)
+  assert.equal(draft.boq.sourceTotal, 215_280)
+  assert.equal(draft.boq.totalItems, 7)
+
+  ;(payload.sourceQuoteSummary as { overheadProfitAmount: string }).overheadProfitAmount = '0'
+  parsed.sourceQuoteSummary!.quotedSubtotal = '0'
+  draft.boq.sourceQuoteSummary!.discountAmount = '999'
+  assert.notEqual(draft.boq.sourceQuoteSummary!.overheadProfitAmount, '0')
+  assert.notEqual(draft.run?.sourceQuoteSummary?.discountAmount, '999')
+  assert.notEqual(draft.run?.sourceQuoteSummary?.quotedSubtotal, '0')
+})
+
+test('v3 rejects a quote summary with extra keys such as percentage', () => {
+  const payload = quoteSummaryPayload()
+  ;(payload.sourceQuoteSummary as Record<string, unknown>).percentage = '20'
+  assert.throws(() => parseDoclingResult(payload), /percentage/i)
+})
+
+test('v3 rejects numeric rather than string quote-summary amounts', () => {
+  const payload = quoteSummaryPayload()
+  ;(payload.sourceQuoteSummary as Record<string, unknown>).directWorkTotal = 179_400
+  assert.throws(() => parseDoclingResult(payload), /canonical nonnegative decimal/i)
+})
+
+test('v3 rejects a quote summary with a dangling source ref', () => {
+  const payload = quoteSummaryPayload()
+  payload.sourceQuoteSummary!.overheadProfitSourceRef = { page: 9, table: 1, row: 25 }
+  assert.throws(() => parseDoclingResult(payload), /known source/i)
+})
+
+test('v3 rejects quote-summary arithmetic that does not close', () => {
+  const payload = quoteSummaryPayload()
+  payload.sourceQuoteSummary!.overheadProfitAmount = '35881'
+  assert.throws(() => parseDoclingResult(payload), /direct work plus overhead/i)
+})
+
+test('v3 rejects a quote summary that mismatches the parsed sourceTotal', () => {
+  const payload = quoteSummaryPayload()
+  payload.sourceTotal = 215_280.01
+  payload.reconciliation = { itemTotal: 179_400, sourceTotal: 215_280.01, reconciled: false, difference: -0.01 }
+  assert.throws(() => parseDoclingResult(payload), /sourceQuoteSummary\.quotedSubtotal/i)
 })
 
 test('local verification reports a line arithmetic mismatch', () => {

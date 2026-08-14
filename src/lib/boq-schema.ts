@@ -3,6 +3,7 @@ import type {
   PricingNormalization,
   ReviewerPricingSnapshot,
 } from './actionable-review-types'
+import type { BoqSourceQuoteSummary } from './boq-source-quote-summary'
 
 export interface BoqSection {
   header: string
@@ -120,6 +121,7 @@ export interface Boq {
   sourceAvailable?: boolean
   sourcePageCount?: number
   sourceTotal?: number
+  sourceQuoteSummary?: BoqSourceQuoteSummary
   activeExtractionRunId?: string
   extractionWarnings?: BoqExtractionWarning[]
   metadataConfidence?: BoqMetadataConfidence

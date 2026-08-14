@@ -11,6 +11,27 @@ import {
   stableCanonicalJson,
 } from './boq-extraction-run'
 
+test('quote-summary evidence persists on the run and changes its identity', () => {
+  const payload = v3Fixture()
+  payload.sourceQuoteSummary = { directWorkTotal: '95300', quotedSubtotal: '95300' }
+  const parsed = parseDoclingResult(payload)
+  assert.equal(parsed.contractVersion, 3)
+  const draft = buildDraftImport('boq-1', 'source.pdf', parsed, 'run-1')
+  const run = buildExtractionRun({
+    seed: draft.run!, sourceDigest: 'digest', parserConfigFingerprint: 'config',
+    now: new Date('2026-07-19T00:00:00Z'),
+  })
+  assert.deepEqual(run.sourceQuoteSummary, { directWorkTotal: '95300', quotedSubtotal: '95300' })
+  assert.notEqual(
+    extractionRunIdentityFingerprint(run),
+    extractionRunIdentityFingerprint({ ...run, sourceQuoteSummary: undefined }),
+  )
+  assert.notEqual(
+    extractionRunIdentityFingerprint(run),
+    extractionRunIdentityFingerprint({ ...run, sourceQuoteSummary: { ...run.sourceQuoteSummary!, discountAmount: '1200', payableTotal: '94100' } }),
+  )
+})
+
 test('canonical JSON and row checksum are stable across key and row order', () => {
   assert.equal(stableCanonicalJson({ b: 2, a: { d: 4, c: 3 } }), '{"a":{"c":3,"d":4},"b":2}')
   const parsed = parseDoclingResult(v3Fixture())

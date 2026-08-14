@@ -25,6 +25,14 @@ function fixture(count = 3) {
     headers: [], rawCells: [], rawText: `row ${index}`, classification: 'item',
     confidence: 1, warnings: [],
   })) as BoqSourceRowV3[]
+  const sourceQuoteSummary = {
+    directWorkTotal: '179400',
+    overheadProfitAmount: '35880',
+    quotedSubtotal: '215280',
+    discountAmount: '1280',
+    payableTotal: '214000',
+    overheadProfitSourceRef: { page: 2, table: 1, row: 25 },
+  }
   const run = {
     id: 'run-1', boqId: 'boq-1', contractVersion: 3, status: 'staging',
     createdAt: '2026-07-19T00:00:00Z', updatedAt: '2026-07-19T00:00:00Z',
@@ -34,8 +42,9 @@ function fixture(count = 3) {
     sourceRowChecksum: 'checksum', reconciliation: { itemTotal: 0, sourceTotal: null, reconciled: true, difference: 0 },
     warnings: [], sections: [], totalItems: 0, aiReviewStatus: 'not_required',
     reviewTargeting: { candidateRowIds: [], candidateCount: 0, unreconciled: false },
+    sourceQuoteSummary,
   } as unknown as BoqExtractionRun
-  const boq = { id: 'boq-1', sections: [] } as unknown as Omit<Boq, 'createdAt' | 'updatedAt'>
+  const boq = { id: 'boq-1', sections: [], sourceQuoteSummary } as unknown as Omit<Boq, 'createdAt' | 'updatedAt'>
   return { rows, run, boq }
 }
 
@@ -229,6 +238,34 @@ test('an unknown finalize outcome can be retried after preserving evidence', asy
   await assert.rejects(() => persistStagedRun(harness, harness.store), ExtractionCleanupUncertainError)
   assert.equal(harness.events.includes('run:delete'), false)
   assert.equal(await persistStagedRun(harness, harness.store), ready)
+})
+
+test('staged persistence round-trips the quote summary without altering it', async () => {
+  const seen: Array<Record<string, unknown> | undefined> = []
+  const harness = storeHarness({
+    createRun: async (run) => { seen.push(run.sourceQuoteSummary as Record<string, unknown> | undefined); return 'created' },
+    finalizeBoqAndRun: async (boq, run) => {
+      seen.push((boq as { sourceQuoteSummary?: Record<string, unknown> }).sourceQuoteSummary)
+      seen.push(run.sourceQuoteSummary as Record<string, unknown> | undefined)
+      return 'finalized'
+    },
+  })
+  const summary = harness.run.sourceQuoteSummary
+  await persistStagedRun(harness, harness.store)
+  const expected: Record<string, unknown> = {
+    directWorkTotal: '179400',
+    overheadProfitAmount: '35880',
+    quotedSubtotal: '215280',
+    discountAmount: '1280',
+    payableTotal: '214000',
+    overheadProfitSourceRef: { page: 2, table: 1, row: 25 },
+  }
+  assert.deepEqual(summary, expected)
+  assert.equal(seen.length, 3)
+  for (const observed of seen) {
+    assert.deepEqual(observed, expected)
+    assert.equal(observed === summary, true)
+  }
 })
 
 test('section snapshot merge preserves duplicate headers while joining split chunks', () => {

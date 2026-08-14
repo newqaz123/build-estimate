@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { BoqExtractionRunSeed } from './boq-ingestion'
+import type { BoqSourceQuoteSummary } from './boq-source-quote-summary'
 import type {
   BoqSourceRowV3,
   DoclingMetadata,
@@ -33,6 +34,7 @@ export interface BoqExtractionRun {
   sourceRowCount: number
   sourceRowChecksum: string
   reconciliation: DoclingReconciliationV3
+  sourceQuoteSummary?: BoqSourceQuoteSummary
   warnings: DoclingWarningV3[]
   sections: DoclingSectionV3[]
   totalItems: number
@@ -79,6 +81,7 @@ export interface BoqExtractionRunIdentity {
   sourceRowCount: number
   sourceRowChecksum: string
   reconciliation: BoqExtractionRun['reconciliation']
+  sourceQuoteSummary?: BoqSourceQuoteSummary
   warnings: BoqExtractionRun['warnings']
   sectionsChecksum: string
   totalItems: number
@@ -96,6 +99,7 @@ export function extractionRunIdentity(run: BoqExtractionRun): BoqExtractionRunId
     sourceRowCount: run.sourceRowCount,
     sourceRowChecksum: run.sourceRowChecksum,
     reconciliation: structuredClone(run.reconciliation),
+    ...(run.sourceQuoteSummary === undefined ? {} : { sourceQuoteSummary: structuredClone(run.sourceQuoteSummary) }),
     warnings: structuredClone(run.warnings),
     sectionsChecksum: fingerprintParserConfig(run.sections),
     totalItems: run.totalItems,
@@ -217,6 +221,7 @@ export function buildExtractionRun(input: {
     sourceRowCount: input.seed.sourceRows.length,
     sourceRowChecksum: checksumSourceRows(input.seed.sourceRows),
     reconciliation: structuredClone(input.seed.reconciliation),
+    ...(input.seed.sourceQuoteSummary === undefined ? {} : { sourceQuoteSummary: structuredClone(input.seed.sourceQuoteSummary) }),
     warnings: structuredClone(input.seed.warnings),
     sections: structuredClone(input.seed.sections),
     totalItems: input.seed.totalItems,

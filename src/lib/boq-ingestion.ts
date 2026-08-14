@@ -6,6 +6,7 @@ import type {
 } from './boq-schema'
 import { deriveSourceCostAllocation } from './boq-cost-allocation'
 import { calculateBoqTotals } from './boq-pricing'
+import type { BoqSourceQuoteSummary } from './boq-source-quote-summary'
 import {
   type BoqSourceRowV3,
   type DoclingMetadata,
@@ -129,6 +130,7 @@ export interface BoqExtractionRunSeed {
   warnings: DoclingWarningV3[]
   reconciliation: DoclingReconciliationV3
   sourceTotal?: number | null
+  sourceQuoteSummary?: BoqSourceQuoteSummary
   totalItems: number
 }
 
@@ -230,6 +232,7 @@ function buildV3Draft(
     sourceStoragePath: sourcePath,
     sourcePageCount: parsed.pageCount,
     ...(typeof parsed.sourceTotal === 'number' ? { sourceTotal: parsed.sourceTotal } : {}),
+    ...(parsed.sourceQuoteSummary === undefined ? {} : { sourceQuoteSummary: structuredClone(parsed.sourceQuoteSummary) }),
     activeExtractionRunId: runId,
     extractionWarnings: canonicalWarnings(parsed.warnings),
     metadataConfidence: metadataConfidence(parsed),
@@ -248,6 +251,7 @@ function buildV3Draft(
     warnings: parsed.warnings,
     reconciliation: parsed.reconciliation,
     ...(parsed.sourceTotal === undefined ? {} : { sourceTotal: parsed.sourceTotal }),
+    ...(parsed.sourceQuoteSummary === undefined ? {} : { sourceQuoteSummary: parsed.sourceQuoteSummary }),
     totalItems: parsed.totalItems,
   })
   return { boq, run }
