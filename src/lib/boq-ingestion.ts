@@ -395,25 +395,41 @@ export function verifyBoqLocally(
     issue(issues, 'grand_total_mismatch', 'blocking', 'Persisted grand total does not match normalized line-item totals')
   }
 
+  const hasSummary =
+    isRecord(candidate.sourceQuoteSummary)
+    && boq.sourceQuoteSummary !== undefined
+  let canonicalSourceTotal: string | undefined
+  if (
+    typeof candidate.sourceTotal === 'number'
+    && Number.isFinite(candidate.sourceTotal)
+    && candidate.sourceTotal >= 0
+  ) {
+    canonicalSourceTotal = canonicalDecimalFromFloat(candidate.sourceTotal, 'sourceTotal')
+  }
+
+  // Quote-summary layers are verified whenever a summary exists, independent
+  // of sourceTotal presence; the stored document total only anchors the quoted
+  // subtotal when it is itself a valid amount.
+  if (hasSummary && allItemTotalsValid && Number.isFinite(itemTotalSum)) {
+    for (const summaryIssue of verifySourceQuoteSummary({
+      directItemTotal: canonicalDecimalFromFloat(itemTotalSum, 'itemTotalSum'),
+      ...(canonicalSourceTotal === undefined ? {} : { sourceTotal: canonicalSourceTotal }),
+      summary: boq.sourceQuoteSummary,
+    })) {
+      issue(issues, summaryIssue.code, 'blocking', summaryIssue.message)
+    }
+  }
+
   if (candidate.sourceTotal !== undefined) {
     if (typeof candidate.sourceTotal !== 'number' || !Number.isFinite(candidate.sourceTotal)) {
       issue(issues, 'invalid_number', 'blocking', 'sourceTotal must be a finite number')
     } else if (candidate.sourceTotal < 0) {
       issue(issues, 'invalid_number', 'blocking', 'sourceTotal cannot be negative')
     } else if (
-      isRecord(candidate.sourceQuoteSummary)
-      && boq.sourceQuoteSummary !== undefined
+      !hasSummary
+      && allItemTotalsValid
+      && Math.abs(itemTotalSum - candidate.sourceTotal) > TOLERANCE
     ) {
-      if (allItemTotalsValid && Number.isFinite(itemTotalSum)) {
-        for (const summaryIssue of verifySourceQuoteSummary({
-          directItemTotal: canonicalDecimalFromFloat(itemTotalSum, 'itemTotalSum'),
-          sourceTotal: canonicalDecimalFromFloat(candidate.sourceTotal, 'sourceTotal'),
-          summary: boq.sourceQuoteSummary,
-        })) {
-          issue(issues, summaryIssue.code, 'blocking', summaryIssue.message)
-        }
-      }
-    } else if (allItemTotalsValid && Math.abs(itemTotalSum - candidate.sourceTotal) > TOLERANCE) {
       issue(issues, 'document_total_mismatch', 'blocking', 'Normalized item total does not match the source document total')
     }
   }

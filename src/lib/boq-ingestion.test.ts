@@ -496,6 +496,31 @@ test('legacy verification without a summary still reports the document total mis
   assert.deepEqual(result.issues.map((issue) => issue.code), ['document_total_mismatch'])
 })
 
+test('summary verification runs without a sourceTotal and still blocks tampered layers', () => {
+  const valid = verifyBoqLocally(summaryBoq({ sourceTotal: undefined }))
+  assert.deepEqual(valid.issues.map((issue) => issue.code), [])
+  assert.equal(valid.hasBlockingIssues, false)
+
+  const tamperedDirect = verifyBoqLocally(
+    summaryBoq({
+      sourceTotal: undefined,
+      grandTotal: 179_401,
+      sections: [{ header: 'Direct Works', items: [directWorkItem(179_401)] }],
+    }),
+  )
+  assert.deepEqual(tamperedDirect.issues.map((issue) => issue.code), ['quote_direct_total_mismatch'])
+  assert.equal(tamperedDirect.hasBlockingIssues, true)
+
+  const tamperedSummary = verifyBoqLocally(
+    summaryBoq({
+      sourceTotal: undefined,
+      sourceQuoteSummary: { ...quoteSummaryFixture(), overheadProfitAmount: '35881' },
+    }),
+  )
+  assert.deepEqual(tamperedSummary.issues.map((issue) => issue.code), ['quote_subtotal_mismatch'])
+  assert.equal(tamperedSummary.hasBlockingIssues, true)
+})
+
 test('suspicious zero warnings and bundle children keep their behavior beside a quote summary', () => {
   const child: BoqItem = {
     id: 'child',
