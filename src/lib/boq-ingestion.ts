@@ -6,7 +6,12 @@ import type {
 } from './boq-schema'
 import { deriveSourceCostAllocation } from './boq-cost-allocation'
 import { calculateBoqTotals } from './boq-pricing'
-import type { BoqSourceQuoteSummary } from './boq-source-quote-summary'
+import {
+  canonicalDecimalFromFloat,
+  verifySourceQuoteSummary,
+  type BoqSourceQuoteSummary,
+  type SourceQuoteSummaryIssueCode,
+} from './boq-source-quote-summary'
 import {
   type BoqSourceRowV3,
   type DoclingMetadata,
@@ -39,6 +44,7 @@ export type VerificationIssueCode =
   | 'line_total_mismatch'
   | 'grand_total_mismatch'
   | 'document_total_mismatch'
+  | SourceQuoteSummaryIssueCode
 
 export interface VerificationIssue {
   code: VerificationIssueCode
@@ -284,7 +290,17 @@ function issue(
 }
 
 export function verifyBoqLocally(
-  boq: Pick<Boq, 'vendor' | 'project' | 'workType' | 'date' | 'sections' | 'grandTotal' | 'sourceTotal'>,
+  boq: Pick<
+    Boq,
+    | 'vendor'
+    | 'project'
+    | 'workType'
+    | 'date'
+    | 'sections'
+    | 'grandTotal'
+    | 'sourceTotal'
+    | 'sourceQuoteSummary'
+  >,
 ): VerificationResult {
   const issues: VerificationIssue[] = []
   const candidate: Record<string, unknown> = isRecord(boq) ? boq : {}
@@ -384,6 +400,19 @@ export function verifyBoqLocally(
       issue(issues, 'invalid_number', 'blocking', 'sourceTotal must be a finite number')
     } else if (candidate.sourceTotal < 0) {
       issue(issues, 'invalid_number', 'blocking', 'sourceTotal cannot be negative')
+    } else if (
+      isRecord(candidate.sourceQuoteSummary)
+      && boq.sourceQuoteSummary !== undefined
+    ) {
+      if (allItemTotalsValid && Number.isFinite(itemTotalSum)) {
+        for (const summaryIssue of verifySourceQuoteSummary({
+          directItemTotal: canonicalDecimalFromFloat(itemTotalSum, 'itemTotalSum'),
+          sourceTotal: canonicalDecimalFromFloat(candidate.sourceTotal, 'sourceTotal'),
+          summary: boq.sourceQuoteSummary,
+        })) {
+          issue(issues, summaryIssue.code, 'blocking', summaryIssue.message)
+        }
+      }
     } else if (allItemTotalsValid && Math.abs(itemTotalSum - candidate.sourceTotal) > TOLERANCE) {
       issue(issues, 'document_total_mismatch', 'blocking', 'Normalized item total does not match the source document total')
     }

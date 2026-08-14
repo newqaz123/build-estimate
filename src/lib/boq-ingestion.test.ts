@@ -2,8 +2,9 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { buildDraftBoq, buildDraftImport, parseDoclingResult, verifyBoqLocally } from './boq-ingestion'
+import { getBoqCatalogReadiness } from './boq-catalog-readiness'
 import { buildBoqCsv } from './boq-csv'
-import type { Boq } from './boq-schema'
+import type { Boq, BoqItem, BoqPricedItem } from './boq-schema'
 import { isPricedBoqItem } from './boq-pricing'
 import { v3Fixture } from './boq-extraction-test-fixtures'
 
@@ -419,11 +420,151 @@ test('local verification reports a line arithmetic mismatch', () => {
   assert.equal(result.hasBlockingIssues, true)
 })
 
+function quoteSummaryFixture() {
+  return {
+    directWorkTotal: '179400',
+    overheadProfitAmount: '35880',
+    quotedSubtotal: '215280',
+    discountAmount: '1280',
+    payableTotal: '214000',
+  }
+}
+
+function directWorkItem(total: number): BoqPricedItem {
+  return {
+    id: 'item-1',
+    code: '',
+    desc: 'Concrete',
+    unit: 'm3',
+    qty: 1,
+    rate: total,
+    total,
+    type: 'unit',
+    stdStatus: 'unmatched',
+  }
+}
+
+function summaryBoq(overrides: Partial<Boq> = {}): Boq {
+  return makeBoq({
+    totalItems: 1,
+    grandTotal: 179_400,
+    sourceTotal: 215_280,
+    sourceQuoteSummary: quoteSummaryFixture(),
+    sections: [{ header: 'Direct Works', items: [directWorkItem(179_400)] }],
+    ...overrides,
+  })
+}
+
 test('local verification reports a source document total mismatch outside 0.01 tolerance', () => {
   const result = verifyBoqLocally(makeBoq({ sourceTotal: 299.98 }))
 
   assert.deepEqual(result.issues.map((issue) => issue.code), ['document_total_mismatch'])
   assert.equal(result.issues[0].severity, 'blocking')
+})
+
+test('summary-aware verification reconciles direct items through the quote summary', () => {
+  const result = verifyBoqLocally(summaryBoq())
+
+  assert.deepEqual(result.issues, [])
+  assert.equal(result.hasBlockingIssues, false)
+})
+
+test('summary-aware verification reports a direct layer mismatch for edited direct items', () => {
+  const result = verifyBoqLocally(
+    summaryBoq({
+      grandTotal: 179_401,
+      sections: [{ header: 'Direct Works', items: [directWorkItem(179_401)] }],
+    }),
+  )
+
+  assert.deepEqual(result.issues.map((issue) => issue.code), ['quote_direct_total_mismatch'])
+  assert.equal(result.issues[0]?.severity, 'blocking')
+  assert.equal(result.hasBlockingIssues, true)
+  const mismatch = result.issues[0]
+  assert.ok(mismatch)
+  assert.match(mismatch.message, /direct/i)
+  assert.match(mismatch.message, /179,401\.00/)
+  assert.doesNotMatch(mismatch.message, /Normalized item total/)
+})
+
+test('legacy verification without a summary still reports the document total mismatch', () => {
+  const legacy = summaryBoq()
+  delete legacy.sourceQuoteSummary
+
+  const result = verifyBoqLocally(legacy)
+
+  assert.deepEqual(result.issues.map((issue) => issue.code), ['document_total_mismatch'])
+})
+
+test('suspicious zero warnings and bundle children keep their behavior beside a quote summary', () => {
+  const child: BoqItem = {
+    id: 'child',
+    pricingRole: 'bundle_child',
+    parentBundleId: 'item-1',
+    desc: 'Pump body',
+    stdStatus: 'pending',
+  }
+  const allowance: BoqPricedItem = {
+    id: 'allowance',
+    code: '',
+    desc: 'Allowance',
+    unit: 'L/S',
+    qty: 0,
+    rate: 0,
+    total: 0,
+    type: 'unit',
+    stdStatus: 'unmatched',
+  }
+
+  const result = verifyBoqLocally(
+    summaryBoq({
+      totalItems: 3,
+      sections: [{ header: 'Direct Works', items: [directWorkItem(179_400), allowance, child] }],
+    }),
+  )
+
+  assert.equal(result.hasBlockingIssues, false)
+  assert.ok(result.issues.some((issue) => issue.severity === 'warning' && /zero/i.test(issue.message)))
+  assert.equal(result.issues.some((issue) => issue.itemId === 'child'), false)
+})
+
+test('catalog readiness counts are unchanged with or without a quote summary', () => {
+  const sections: Boq['sections'] = [
+    {
+      header: 'Direct Works',
+      items: [
+        { ...directWorkItem(179_400), stdStatus: 'matched', stdId: 'std-1' },
+        { ...directWorkItem(100), id: 'item-2', stdStatus: 'pending' },
+        {
+          id: 'child',
+          pricingRole: 'bundle_child',
+          parentBundleId: 'item-1',
+          desc: 'Pump body',
+          stdStatus: 'pending',
+        } satisfies BoqItem,
+      ],
+    },
+  ]
+  const base = summaryBoq({ sections, totalItems: 2, grandTotal: 179_500 })
+
+  const withSummary = getBoqCatalogReadiness(base)
+  delete base.sourceQuoteSummary
+  const withoutSummary = getBoqCatalogReadiness(base)
+
+  assert.deepEqual(withSummary, withoutSummary)
+  assert.deepEqual(withSummary, {
+    total: 2,
+    resolved: 1,
+    blocking: 1,
+    items: [
+      {
+        sectionIndex: 0,
+        itemId: 'item-2',
+        description: 'Concrete',
+        reason: 'Catalog match is required',
+      },
+    ],
+  })
 })
 
 test('local verification blocks a BOQ with no line items', () => {

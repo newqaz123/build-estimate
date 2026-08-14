@@ -3,6 +3,7 @@ import test from "node:test";
 import {
 	documentTotalMismatchMessage,
 	reconcileBoqMutation,
+	selectTotalMismatchMessage,
 } from "./boq-detail-state";
 import { isPricedBoqItem } from "./boq-pricing";
 import type { Boq, BoqPricedItem } from "./boq-schema";
@@ -160,5 +161,56 @@ test("documentTotalMismatchMessage returns null without a meaningful mismatch", 
 	assert.equal(
 		documentTotalMismatchMessage(80, 100),
 		"Source total ฿80.00; BOQ items ฿100.00; difference ฿20.00.",
+	);
+});
+
+test("selectTotalMismatchMessage surfaces the exact quote-summary layer message", () => {
+	const exact =
+		"Source quote subtotal ฿215,280.00 does not equal direct work ฿179,400.00 plus overhead and profit ฿35,881.00.";
+	const issues = [
+		{ code: "quote_subtotal_mismatch", severity: "blocking", message: exact },
+		{
+			code: "quote_direct_total_mismatch",
+			severity: "warning",
+			message: "ignored warning copy",
+		},
+	] as const;
+
+	assert.equal(selectTotalMismatchMessage(215_280, 179_400, issues), exact);
+	assert.equal(
+		selectTotalMismatchMessage(215_280, 179_401, [
+			{
+				code: "quote_direct_total_mismatch",
+				severity: "blocking",
+				message:
+					"BOQ direct items total ฿179,401.00 and do not match the source quote direct work total ฿179,400.00.",
+			},
+		] as const),
+		"BOQ direct items total ฿179,401.00 and do not match the source quote direct work total ฿179,400.00.",
+	);
+});
+
+test("selectTotalMismatchMessage keeps the legacy formatted message for legacy BOQs", () => {
+	assert.equal(
+		selectTotalMismatchMessage(478_000, 80_584, [
+			{
+				code: "document_total_mismatch",
+				severity: "blocking",
+				message:
+					"Normalized item total does not match the source document total",
+			},
+		] as const),
+		"Source total ฿478,000.00; BOQ items ฿80,584.00; difference ฿397,416.00.",
+	);
+	assert.equal(selectTotalMismatchMessage(100, 100, [] as const), null);
+	assert.equal(
+		selectTotalMismatchMessage(100, 100, [
+			{
+				code: "line_total_mismatch",
+				severity: "blocking",
+				message: "unrelated blocker",
+			},
+		] as const),
+		null,
 	);
 });

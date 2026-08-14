@@ -41,6 +41,39 @@ export function documentTotalMismatchMessage(
 	)}; difference ${formatBaht(difference)}.`;
 }
 
+const QUOTE_TOTAL_MISMATCH_CODES = new Set([
+	"quote_direct_total_mismatch",
+	"quote_subtotal_mismatch",
+	"quote_payable_total_mismatch",
+]);
+
+export interface TotalMismatchIssue {
+	code: string;
+	severity: string;
+	message: string;
+}
+
+/**
+ * Select the exact blocking mismatch message for the approval surface. A
+ * source quote summary carries immutable layered amounts, so its layer-specific
+ * issue copy wins verbatim over any recomputed legacy formatting. Legacy BOQs
+ * keep the formatted source-versus-items message.
+ */
+export function selectTotalMismatchMessage(
+	sourceTotal: number | undefined,
+	itemTotal: number,
+	issues: ReadonlyArray<TotalMismatchIssue>,
+): string | null {
+	const quoteIssue = issues.find(
+		(issue) => issue.severity === "blocking" && QUOTE_TOTAL_MISMATCH_CODES.has(issue.code),
+	);
+	if (quoteIssue) return quoteIssue.message;
+	if (issues.some((issue) => issue.code === "document_total_mismatch")) {
+		return documentTotalMismatchMessage(sourceTotal, itemTotal);
+	}
+	return null;
+}
+
 function matchedStandardizationChanged(
 	previous: Boq["sections"][number]["items"][number],
 	incoming: Boq["sections"][number]["items"][number],

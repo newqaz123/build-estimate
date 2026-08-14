@@ -1,5 +1,10 @@
 import type { BoqSourceRef } from './boq-schema'
-import { addDecimal, parseDecimalString, type DecimalString } from './decimal-string'
+import {
+  addDecimal,
+  divideDecimalExact,
+  parseDecimalString,
+  type DecimalString,
+} from './decimal-string'
 
 /**
  * Fixed commercial evidence lifted verbatim from the source quotation.
@@ -216,4 +221,148 @@ export function quoteSummaryReconciliation(
     quotedSubtotal: summary.quotedSubtotal,
     ...(summary.payableTotal === undefined ? {} : { payableTotal: summary.payableTotal }),
   }
+}
+
+export type SourceQuoteSummaryIssueCode =
+  | 'quote_direct_total_mismatch'
+  | 'quote_subtotal_mismatch'
+  | 'quote_payable_total_mismatch'
+
+export interface SourceQuoteSummaryIssue {
+  code: SourceQuoteSummaryIssueCode
+  message: string
+}
+
+function canonicalAmountOrUndefined(value: unknown): DecimalString | undefined {
+  return typeof value === 'string' && CANONICAL_NONNEGATIVE_DECIMAL.test(value)
+    ? parseDecimalString(value)
+    : undefined
+}
+
+/**
+ * Round a canonical decimal amount to the currency minor unit for display
+ * only. Reconciliation logic never rounds: tolerances are decided on the
+ * exact decimal strings before any amount reaches a message.
+ */
+function formatDisplayBaht(value: DecimalString): string {
+  const rounded = divideDecimalExact(value, '1', 2)
+  const negative = rounded.startsWith('-')
+  const unsigned = negative ? rounded.slice(1) : rounded
+  const point = unsigned.indexOf('.')
+  const whole = point === -1 ? unsigned : unsigned.slice(0, point)
+  const fraction = (point === -1 ? '' : unsigned.slice(point + 1)).padEnd(2, '0')
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  return `${negative ? '-' : ''}฿${grouped}.${fraction}`
+}
+
+/**
+ * Reconcile approval against the source quote summary layer by layer. The
+ * direct layer compares the recalculated direct item total against the
+ * quoted direct work total at the legacy float boundary (strictly
+ * sub-minor-unit differences pass). The subtotal layer requires exact decimal
+ * closing — direct work plus overhead or profit equals the quoted subtotal —
+ * and the quoted subtotal must still anchor the stored source document total
+ * within a sub-minor-unit difference. The payable layer requires the closed
+ * discount to carry the quoted subtotal to the payable total exactly. The
+ * summary is never mutated and no unexplained gap is ever inferred.
+ */
+export function verifySourceQuoteSummary(input: {
+  directItemTotal: DecimalString
+  sourceTotal?: DecimalString
+  summary?: BoqSourceQuoteSummary
+}): SourceQuoteSummaryIssue[] {
+  const issues: SourceQuoteSummaryIssue[] = []
+  if (!isRecord(input.summary)) return issues
+  const summary = input.summary as Record<string, unknown>
+
+  const directItemTotal = canonicalAmountOrUndefined(input.directItemTotal)
+  const directWorkTotal = canonicalAmountOrUndefined(summary.directWorkTotal)
+  const overheadProfitAmount = canonicalAmountOrUndefined(summary.overheadProfitAmount)
+  const quotedSubtotal = canonicalAmountOrUndefined(summary.quotedSubtotal)
+  const discountAmount = canonicalAmountOrUndefined(summary.discountAmount)
+  const payableTotal = canonicalAmountOrUndefined(summary.payableTotal)
+  const sourceTotal = canonicalAmountOrUndefined(input.sourceTotal)
+
+  if (directWorkTotal === undefined) {
+    issues.push({
+      code: 'quote_direct_total_mismatch',
+      message: `Source quote direct work total is missing or malformed; BOQ direct items total ${
+        directItemTotal === undefined ? 'an unverified amount' : formatDisplayBaht(directItemTotal)
+      }.`,
+    })
+  } else if (
+    directItemTotal === undefined ||
+    !isSubMinorUnitDifference(directItemTotal, directWorkTotal)
+  ) {
+    issues.push({
+      code: 'quote_direct_total_mismatch',
+      message: `BOQ direct items ${
+        directItemTotal === undefined
+          ? 'total an unverified amount'
+          : `total ${formatDisplayBaht(directItemTotal)}`
+      } and do not match the source quote direct work total ${formatDisplayBaht(directWorkTotal)}.`,
+    })
+  }
+
+  if (quotedSubtotal === undefined) {
+    issues.push({
+      code: 'quote_subtotal_mismatch',
+      message: 'Source quote subtotal is missing or malformed and cannot be reconciled.',
+    })
+  } else {
+    const hasOverhead = 'overheadProfitAmount' in summary
+    if (hasOverhead && overheadProfitAmount === undefined) {
+      issues.push({
+        code: 'quote_subtotal_mismatch',
+        message: 'Source quote overhead or profit amount is not a canonical decimal amount.',
+      })
+    } else if (
+      directWorkTotal !== undefined &&
+      addDecimal(directWorkTotal, overheadProfitAmount ?? '0') !== quotedSubtotal
+    ) {
+      issues.push({
+        code: 'quote_subtotal_mismatch',
+        message: `Source quote subtotal ${formatDisplayBaht(quotedSubtotal)} does not equal direct work ${formatDisplayBaht(
+          directWorkTotal,
+        )} plus overhead and profit ${formatDisplayBaht(overheadProfitAmount ?? '0')}.`,
+      })
+    } else if (
+      sourceTotal !== undefined &&
+      !isSubMinorUnitDifference(quotedSubtotal, sourceTotal)
+    ) {
+      issues.push({
+        code: 'quote_subtotal_mismatch',
+        message: `Source document total ${formatDisplayBaht(sourceTotal)} does not match the source quote subtotal ${formatDisplayBaht(
+          quotedSubtotal,
+        )}.`,
+      })
+    }
+  }
+
+  const hasDiscount = 'discountAmount' in summary
+  const hasPayable = 'payableTotal' in summary
+  if (
+    hasDiscount !== hasPayable ||
+    (hasDiscount && (discountAmount === undefined || payableTotal === undefined))
+  ) {
+    issues.push({
+      code: 'quote_payable_total_mismatch',
+      message:
+        'Source quote discount and payable total must be canonical amounts present together.',
+    })
+  } else if (
+    discountAmount !== undefined &&
+    payableTotal !== undefined &&
+    quotedSubtotal !== undefined &&
+    addDecimal(quotedSubtotal, `-${discountAmount}`) !== payableTotal
+  ) {
+    issues.push({
+      code: 'quote_payable_total_mismatch',
+      message: `Source quote payable total ${formatDisplayBaht(payableTotal)} does not equal the quoted subtotal ${formatDisplayBaht(
+        quotedSubtotal,
+      )} minus the discount ${formatDisplayBaht(discountAmount)}.`,
+    })
+  }
+
+  return issues
 }

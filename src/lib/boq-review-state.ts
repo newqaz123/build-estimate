@@ -61,6 +61,7 @@ export function buildReviewVerification(boq: Boq, edits: ReviewEdits): Verificat
     sections: [{ header: 'Parsed Items', items: pricedItems }],
     grandTotal,
     sourceTotal: boq.sourceTotal,
+    ...(boq.sourceQuoteSummary ? { sourceQuoteSummary: boq.sourceQuoteSummary } : {}),
   })
 }
 

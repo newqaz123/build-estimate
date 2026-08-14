@@ -4,6 +4,8 @@ import {
   canonicalDecimalFromFloat,
   parseSourceQuoteSummary,
   quoteSummaryReconciliation,
+  verifySourceQuoteSummary,
+  type BoqSourceQuoteSummary,
 } from './boq-source-quote-summary'
 
 function validSummary() {
@@ -201,6 +203,138 @@ test('quoteSummaryReconciliation projects the quoted and payable totals', () => 
     )),
     { quotedSubtotal: '179400' },
   )
+})
+
+test('verifySourceQuoteSummary accepts the reconciled closed summary', () => {
+  assert.deepEqual(
+    verifySourceQuoteSummary({
+      directItemTotal: '179400',
+      sourceTotal: '215280',
+      summary: validSummary(),
+    }),
+    [],
+  )
+})
+
+test('verifySourceQuoteSummary reports a direct layer mismatch with exact amounts', () => {
+  const issues = verifySourceQuoteSummary({
+    directItemTotal: '179401',
+    sourceTotal: '215280',
+    summary: validSummary(),
+  })
+
+  assert.deepEqual(issues.map((issue) => issue.code), ['quote_direct_total_mismatch'])
+  assert.match(issues[0]!.message, /direct/i)
+  assert.match(issues[0]!.message, /179,401\.00/)
+  assert.match(issues[0]!.message, /179,400\.00/)
+  assert.doesNotMatch(issues[0]!.message, /Normalized item total/)
+})
+
+test('verifySourceQuoteSummary reports tampered overhead closing as a subtotal mismatch', () => {
+  const issues = verifySourceQuoteSummary({
+    directItemTotal: '179400',
+    sourceTotal: '215280',
+    summary: { ...validSummary(), overheadProfitAmount: '35881' },
+  })
+
+  assert.deepEqual(issues.map((issue) => issue.code), ['quote_subtotal_mismatch'])
+  assert.match(issues[0]!.message, /subtotal/i)
+  assert.match(issues[0]!.message, /215,280\.00/)
+  assert.match(issues[0]!.message, /35,881\.00/)
+  assert.doesNotMatch(issues[0]!.message, /Normalized item total/)
+})
+
+test('verifySourceQuoteSummary reports tampered discount arithmetic as a payable mismatch', () => {
+  for (const [tampered, expectedAmount] of [
+    [{ ...validSummary(), payableTotal: '214001' }, /214,001\.00/],
+    [{ ...validSummary(), discountAmount: '1281' }, /1,281\.00/],
+  ] as const) {
+    const issues = verifySourceQuoteSummary({
+      directItemTotal: '179400',
+      sourceTotal: '215280',
+      summary: tampered,
+    })
+
+    assert.deepEqual(issues.map((issue) => issue.code), ['quote_payable_total_mismatch'])
+    assert.match(issues[0]!.message, /payable/i)
+    assert.match(issues[0]!.message, expectedAmount)
+    assert.match(issues[0]!.message, /215,280\.00/)
+    assert.doesNotMatch(issues[0]!.message, /Normalized item total/)
+  }
+})
+
+test('verifySourceQuoteSummary anchors the quoted subtotal to the source total at the float boundary', () => {
+  assert.deepEqual(
+    verifySourceQuoteSummary({
+      directItemTotal: '179400',
+      sourceTotal: '215280.005',
+      summary: validSummary(),
+    }),
+    [],
+  )
+
+  const issues = verifySourceQuoteSummary({
+    directItemTotal: '179400',
+    sourceTotal: '215280.01',
+    summary: validSummary(),
+  })
+  assert.deepEqual(issues.map((issue) => issue.code), ['quote_subtotal_mismatch'])
+  assert.match(issues[0]!.message, /215,280\.01/)
+  assert.match(issues[0]!.message, /215,280\.00/)
+})
+
+test('verifySourceQuoteSummary tolerates only sub-minor-unit direct drift', () => {
+  assert.deepEqual(
+    verifySourceQuoteSummary({
+      directItemTotal: '179400.005',
+      sourceTotal: '215280',
+      summary: validSummary(),
+    }),
+    [],
+  )
+})
+
+test('verifySourceQuoteSummary reconciles a minimal summary without optional layers', () => {
+  assert.deepEqual(
+    verifySourceQuoteSummary({
+      directItemTotal: '179400',
+      sourceTotal: '179400',
+      summary: { directWorkTotal: '179400', quotedSubtotal: '179400' },
+    }),
+    [],
+  )
+})
+
+test('verifySourceQuoteSummary returns no issues without a summary', () => {
+  assert.deepEqual(verifySourceQuoteSummary({ directItemTotal: '179400', sourceTotal: '215280' }), [])
+})
+
+test('verifySourceQuoteSummary flags malformed summary layers without throwing', () => {
+  const malformed = verifySourceQuoteSummary({
+    directItemTotal: '179400',
+    sourceTotal: '215280',
+    summary: {
+      quotedSubtotal: '215280',
+      overheadProfitAmount: 'not-a-number',
+    } as unknown as BoqSourceQuoteSummary,
+  })
+
+  assert.deepEqual(malformed.map((issue) => issue.code).sort(), [
+    'quote_direct_total_mismatch',
+    'quote_subtotal_mismatch',
+  ])
+})
+
+test('verifySourceQuoteSummary flags a discount without its payable counterpart', () => {
+  const withoutPayable = validSummary()
+  delete (withoutPayable as Record<string, unknown>).payableTotal
+  const issues = verifySourceQuoteSummary({
+    directItemTotal: '179400',
+    sourceTotal: '215280',
+    summary: withoutPayable,
+  })
+
+  assert.deepEqual(issues.map((issue) => issue.code), ['quote_payable_total_mismatch'])
 })
 
 test('canonicalDecimalFromFloat expands exponent notation and rejects unsafe numbers', () => {

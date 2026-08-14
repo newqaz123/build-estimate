@@ -186,6 +186,50 @@ function detailHarness(existing: Boq = detailBoq()) {
 
 const detailContext = { params: Promise.resolve({ id: 'boq-1' }) }
 
+function quoteSummaryFixture() {
+  return {
+    directWorkTotal: '179400',
+    overheadProfitAmount: '35880',
+    quotedSubtotal: '215280',
+    discountAmount: '1280',
+    payableTotal: '214000',
+  }
+}
+
+function quoteSummaryDirectItems(): BoqPricedItem[] {
+  const direct: Array<[string, string, number]> = [
+    ['item-1', 'Concrete work', 25_000],
+    ['item-2', 'Formwork', 25_000],
+    ['item-3', 'Rebar', 25_000],
+    ['item-4', 'Excavation', 25_000],
+    ['item-5', 'Backfilling', 25_000],
+    ['item-6', 'Drainage', 25_000],
+    ['item-7', 'Finishing work', 29_400],
+  ]
+  return direct.map(([id, desc, total], index) =>
+    item({
+      id,
+      desc,
+      unit: 'item',
+      qty: 1,
+      rate: total,
+      total,
+      stdId: `std-${index + 1}`,
+    }),
+  )
+}
+
+function quoteSummaryBoq(overrides: Partial<Boq> = {}): Boq {
+  return detailBoq({
+    sections: [{ header: 'Direct Works', items: quoteSummaryDirectItems() }],
+    totalItems: 7,
+    grandTotal: 179_400,
+    sourceTotal: 215_280,
+    sourceQuoteSummary: quoteSummaryFixture(),
+    ...overrides,
+  })
+}
+
 test('approval builds and verifies the candidate while recomputing section totals', async () => {
   const harness = detailHarness()
   const sections = [{ header: 'Concrete', items: [item()] }]
@@ -199,6 +243,108 @@ test('approval builds and verifies the candidate while recomputing section total
   const body = await response.json()
   assert.equal('sourceStoragePath' in body, false)
   assert.equal(body.sourceAvailable, true)
+})
+
+test('approval accepts a reconciled source quote summary', async () => {
+  const harness = detailHarness(quoteSummaryBoq())
+
+  const response = await harness.handlers.PUT(new Request('http://localhost/api/boqs/boq-1', {
+    method: 'PUT',
+    body: JSON.stringify({ status: 'approved' }),
+  }), detailContext)
+
+  assert.equal(response.status, 200)
+  assert.equal(harness.updates[0]?.status, 'approved')
+  assert.equal(harness.updates[0]?.grandTotal, 179_400)
+  const body = await response.json()
+  assert.deepEqual(body.sourceQuoteSummary, quoteSummaryFixture())
+})
+
+test('approval rejects a tampered source quote summary', async () => {
+  const harness = detailHarness(
+    quoteSummaryBoq({
+      sourceQuoteSummary: { ...quoteSummaryFixture(), overheadProfitAmount: '35881' },
+    }),
+  )
+
+  const response = await harness.handlers.PUT(new Request('http://localhost/api/boqs/boq-1', {
+    method: 'PUT',
+    body: JSON.stringify({ status: 'approved' }),
+  }), detailContext)
+  const body = await response.json()
+
+  assert.equal(response.status, 400)
+  assert.equal(body.error, 'Resolve required BOQ fields before approval')
+  assert.equal(body.verification.hasBlockingIssues, true)
+  assert.ok(body.verification.issues.some(
+    (issue: { code: string }) => issue.code === 'quote_subtotal_mismatch',
+  ))
+  assert.equal(harness.updates.length, 0)
+})
+
+test('draft PUT cannot replace immutable sourceQuoteSummary', async () => {
+  const harness = detailHarness(quoteSummaryBoq())
+
+  const response = await harness.handlers.PUT(new Request('http://localhost/api/boqs/boq-1', {
+    method: 'PUT',
+    body: JSON.stringify({
+      status: 'draft',
+      project: 'Edited project',
+      sourceQuoteSummary: { directWorkTotal: '1', quotedSubtotal: '1' },
+    }),
+  }), detailContext)
+
+  assert.equal(response.status, 200)
+  assert.equal(harness.updates.some((update) => 'sourceQuoteSummary' in update), false)
+  const body = await response.json()
+  assert.equal(body.project, 'Edited project')
+  assert.deepEqual(body.sourceQuoteSummary, quoteSummaryFixture())
+})
+
+test('approval still requires catalog matches for direct priced items beside a quote summary', async () => {
+  const items = quoteSummaryDirectItems()
+  const withPending = items.map((priced, index) =>
+    index === items.length - 1
+      ? { ...priced, stdStatus: 'pending' as const, stdId: undefined }
+      : priced,
+  )
+  const harness = detailHarness(
+    quoteSummaryBoq({ sections: [{ header: 'Direct Works', items: withPending }] }),
+  )
+
+  const response = await harness.handlers.PUT(new Request('http://localhost/api/boqs/boq-1', {
+    method: 'PUT',
+    body: JSON.stringify({ status: 'approved' }),
+  }), detailContext)
+  const body = await response.json()
+
+  assert.equal(response.status, 400)
+  assert.equal(body.error, 'Resolve catalog items before approval')
+  assert.equal(body.catalogReadiness.blocking, 1)
+  assert.equal(body.catalogReadiness.items[0]?.itemId, 'item-7')
+  assert.equal(harness.updates.length, 0)
+})
+
+test('approved quote-summary BOQs still return 409 for attempted updates', async () => {
+  const stored = quoteSummaryBoq({ status: 'approved', project: 'Approved project' })
+  const handlers = createBoqDetailHandlers({
+    authenticate: async () => ({ user: {} }),
+    getBoq: async () => stored,
+    updateBoq: async () => 'approved',
+    deleteBoq: async () => {},
+    loadSource: async () => Buffer.from('%PDF'),
+    deleteSource: async () => {},
+    saveSource: async () => {},
+    logError: () => {},
+  })
+
+  const response = await handlers.PUT(new Request('http://localhost/api/boqs/boq-1', {
+    method: 'PUT',
+    body: JSON.stringify({ status: 'draft', project: 'Stale draft project' }),
+  }), detailContext)
+
+  assert.equal(response.status, 409)
+  assert.deepEqual(await response.json(), { error: 'Approved BOQs are read-only' })
 })
 
 test('approval validates the transaction snapshot after a concurrent draft mutation', async () => {
