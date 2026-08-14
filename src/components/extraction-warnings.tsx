@@ -50,8 +50,9 @@ export function ExtractionWarnings({ warnings, title = "Extraction notes" }: {
   if (summary.needsReview.length === 0 && summary.documentInformation.length === 0) return null
 
   // Review warnings without a source row are document-level issues, not rows.
+  // Counted per raw occurrence so duplicate failures pluralize correctly.
   const documentReviewIssues = summary.needsReview.reduce(
-    (total, group) => total + group.details.filter((detail) => !detail.sourceRef).length,
+    (total, group) => total + group.occurrences.filter((occurrence) => !occurrence.sourceRef).length,
     0,
   )
   let needsReviewLine: string
@@ -86,7 +87,9 @@ export function ExtractionWarnings({ warnings, title = "Extraction notes" }: {
         <summary className="extraction-warning-details-summary">Technical details · {summary.rawOccurrenceCount} raw notes</summary>
         <ul>
           {[...summary.needsReview, ...summary.documentInformation].flatMap((group) =>
-            group.details.map((detail, index) => {
+            // One entry per raw occurrence: never deduplicated, so the entry
+            // count equals rawOccurrenceCount with exact message and location.
+            group.occurrences.map((detail, index) => {
               const location = extractionWarningSourceLabel(detail.sourceRef)
               return (
                 <li key={`${group.code}-${index}`} className="extraction-warning-detail">

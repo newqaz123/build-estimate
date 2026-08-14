@@ -37,14 +37,54 @@ test("groups warnings by code with counts and dedupes identical messages", () =>
   assert.equal(groups[1].count, 1)
 })
 
-test("truly identical warnings (same message and location) collapse to one detail but keep the count", () => {
+test("truly identical warnings collapse in the concise view but keep every raw occurrence", () => {
   const warnings = [
     warning("unsupported_row", "Pricing evidence was incomplete.", { page: 1, table: 1, row: 4 }),
     warning("unsupported_row", "Pricing evidence was incomplete.", { page: 1, table: 1, row: 4 }),
   ]
   const groups = groupExtractionWarnings(warnings)
+  // Concise default view dedupes identical message + location...
   assert.equal(groups[0].count, 2)
   assert.equal(groups[0].details.length, 1)
+  // ...but technical details keep every raw occurrence individually.
+  assert.equal(groups[0].occurrences.length, 2)
+})
+
+test("every raw warning occurrence is preserved individually with its exact message and location", () => {
+  const warnings = [
+    warning("unsupported_row", "Incomplete.", { page: 1, table: 1, row: 4 }),
+    warning("unsupported_row", "Incomplete.", { page: 1, table: 1, row: 4 }),
+    warning("unparsed_row", "Unreadable.", { page: 1, table: 1, row: 4 }),
+  ]
+  const groups = groupExtractionWarnings(warnings)
+  const unsupported = groups.find((group) => group.code === "unsupported_row")!
+  assert.equal(unsupported.count, 2)
+  assert.equal(unsupported.occurrences.length, 2)
+  const expected = { message: "Incomplete.", sourceRef: { page: 1, table: 1, row: 4 } }
+  assert.deepEqual(unsupported.occurrences[0], expected)
+  assert.deepEqual(unsupported.occurrences[1], expected)
+  // Distinct codes keep their own occurrence lists in input order.
+  const unparsed = groups.find((group) => group.code === "unparsed_row")!
+  assert.equal(unparsed.occurrences.length, 1)
+  assert.deepEqual(unparsed.occurrences[0], { message: "Unreadable.", sourceRef: { page: 1, table: 1, row: 4 } })
+})
+
+test("summary preserves one occurrence entry per raw warning across both sections", () => {
+  const summary = summarizeExtractionWarnings([
+    warning("unsupported_row", "Incomplete", { page: 2, table: 1, row: 3 }),
+    warning("unsupported_row", "Incomplete", { page: 2, table: 1, row: 3 }),
+    warning("source_discount", "Discount 1,280"),
+    warning("source_discount", "Discount 1,280"),
+    warning("document_total_mismatch", "Mismatch"),
+  ])
+  assert.equal(summary.rawOccurrenceCount, 5)
+  assert.equal(
+    [...summary.needsReview, ...summary.documentInformation].reduce(
+      (total, group) => total + group.occurrences.length,
+      0,
+    ),
+    5,
+  )
 })
 
 test("group label is plain actionable copy, not the raw code", () => {

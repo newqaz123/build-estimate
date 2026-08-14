@@ -37,6 +37,11 @@ export interface ExtractionWarningGroup {
   count: number
   /** Exact original messages, deduplicated, with their source locations preserved. */
   details: ExtractionWarningDetail[]
+  /** Every raw occurrence in this group, one entry per warning in input order,
+   *  each with its exact message and exact source location. Never deduplicated:
+   *  occurrences.length === count, so technical details can render every raw
+   *  warning exactly once while the concise default view uses details. */
+  occurrences: ExtractionWarningDetail[]
 }
 
 export function extractionWarningLabel(code: string): string {
@@ -53,19 +58,20 @@ function detailKey(detail: ExtractionWarningDetail): string {
   return `${detail.message}\u0000${extractionWarningSourceLabel(detail.sourceRef) ?? ''}`
 }
 
-/** Groups extraction warnings by stable code, deduplicates identical messages
- *  (same text + same source location), and counts total occurrences so the
- *  default UI stays concise while the exact original messages remain available
- *  for an expandable details section. Group order is stable: by descending
- *  count, then by first-seen order. */
+/** Groups extraction warnings by stable code and counts total occurrences.
+ *  details deduplicates identical messages (same text + same source location)
+ *  so the default UI stays concise, while occurrences preserves every raw
+ *  warning individually — one entry per occurrence, exact message and exact
+ *  location each — so technical details can render every raw note. Group order
+ *  is stable: by descending count, then by first-seen order. */
 export function groupExtractionWarnings(warnings: ReadonlyArray<BoqExtractionWarning>): ExtractionWarningGroup[] {
   if (warnings.length === 0) return []
-  type Accumulator = { code: string; count: number; details: Map<string, ExtractionWarningDetail> }
+  type Accumulator = { code: string; count: number; details: Map<string, ExtractionWarningDetail>; occurrences: ExtractionWarningDetail[] }
   const order: string[] = []
   const groups = new Map<string, Accumulator>()
   for (const warning of warnings) {
     if (groups.has(warning.code)) continue
-    groups.set(warning.code, { code: warning.code, count: 0, details: new Map() })
+    groups.set(warning.code, { code: warning.code, count: 0, details: new Map(), occurrences: [] })
     order.push(warning.code)
   }
   for (const warning of warnings) {
@@ -75,6 +81,7 @@ export function groupExtractionWarnings(warnings: ReadonlyArray<BoqExtractionWar
       message: warning.message,
       ...(warning.sourceRef ? { sourceRef: warning.sourceRef } : {}),
     }
+    group.occurrences.push(detail)
     const key = detailKey(detail)
     if (!group.details.has(key)) group.details.set(key, detail)
   }
@@ -86,6 +93,7 @@ export function groupExtractionWarnings(warnings: ReadonlyArray<BoqExtractionWar
         label: extractionWarningLabel(group.code),
         count: group.count,
         details: [...group.details.values()],
+        occurrences: group.occurrences,
       }
     })
     .sort((a, b) => b.count - a.count)

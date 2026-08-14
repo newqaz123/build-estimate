@@ -1,6 +1,10 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { existsSync, readFileSync } from "node:fs"
+import { createElement } from "react"
+import { renderToStaticMarkup } from "react-dom/server"
+
+import { ExtractionWarnings } from "./extraction-warnings"
 
 const componentUrl = new URL("./extraction-warnings.tsx", import.meta.url)
 const warningsLibUrl = new URL("../lib/boq-extraction-warnings.ts", import.meta.url)
@@ -42,7 +46,7 @@ test("ExtractionWarnings uses a single native details/summary disclosure with no
   assert.match(source, /<details className="extraction-warning-details">/)
   assert.match(
     source,
-    /<summary className="extraction-warning-details-summary">Technical details · \{summary\.rawOccurrenceCount\} raw notes<\/summary>/,
+    /<summary className="extraction-warning-details-summary">\s*Technical details · \{summary\.rawOccurrenceCount\} raw notes\s*<\/summary>/,
   )
   // No custom toggle state — useState removed from the component
   assert.doesNotMatch(source, /useState/)
@@ -57,7 +61,7 @@ test("ExtractionWarnings returns null for empty warnings so it never renders an 
   const source = readFileSync(componentUrl, "utf8")
   assert.match(
     source,
-    /if \(summary\.needsReview\.length === 0 && summary\.documentInformation\.length === 0\) return null/,
+    /if \(\s*summary\.needsReview\.length === 0 &&\s*summary\.documentInformation\.length === 0\s*\)\s*return null/,
   )
 })
 
@@ -66,4 +70,47 @@ test("grouping module never echoes raw internal codes in user-facing labels", ()
   // Unknown-code fallback is neutral, not the code itself
   assert.match(libSource, /Other extraction note/)
   assert.match(libSource, /EXTRACTION_WARNING_LABELS\[code\] \?\? UNKNOWN_CODE_LABEL/)
+})
+
+function technicalDetailEntries(html: string): number {
+  return (html.match(/class="extraction-warning-detail"/g) ?? []).length
+}
+
+test("Technical details renders one entry per raw warning occurrence, including identical duplicates", () => {
+  const warnings = [
+    { code: "unsupported_row", message: "Incomplete.", sourceRef: { page: 2, table: 1, row: 3 } },
+    { code: "unsupported_row", message: "Incomplete.", sourceRef: { page: 2, table: 1, row: 3 } },
+  ]
+  const html = renderToStaticMarkup(createElement(ExtractionWarnings, { warnings }))
+  assert.match(html, /2 raw notes/)
+  // Entry count must equal rawOccurrenceCount: duplicates are not collapsed.
+  assert.equal(technicalDetailEntries(html), 2)
+  // Every occurrence keeps its exact code, message, and exact location.
+  assert.equal((html.match(/Incomplete\./g) ?? []).length, 2)
+  assert.equal((html.match(/p\. 2 · table 1 · row 3/g) ?? []).length, 2)
+})
+
+test("Technical details entry count equals rawOccurrenceCount across mixed warnings", () => {
+  const warnings = [
+    { code: "unsupported_row", message: "A", sourceRef: { page: 2, table: 1, row: 3 } },
+    { code: "unsupported_row", message: "A", sourceRef: { page: 2, table: 1, row: 3 } },
+    { code: "source_discount", message: "Discount 1,280" },
+    { code: "source_discount", message: "Discount 1,280" },
+    { code: "document_total_mismatch", message: "Mismatch" },
+  ]
+  const html = renderToStaticMarkup(createElement(ExtractionWarnings, { warnings }))
+  assert.match(html, /5 raw notes/)
+  assert.equal(technicalDetailEntries(html), 5)
+  // Concise headline view is unchanged: one unique affected row.
+  assert.match(html, /1 source row needs review\./)
+})
+
+test("duplicate document-level review failures render plural wording driven by raw occurrences", () => {
+  const warnings = [
+    { code: "document_total_mismatch", message: "Mismatch" },
+    { code: "document_total_mismatch", message: "Mismatch" },
+  ]
+  const html = renderToStaticMarkup(createElement(ExtractionWarnings, { warnings }))
+  assert.match(html, /2 document-level issues need review\./)
+  assert.doesNotMatch(html, /1 document-level issue needs review/)
 })
