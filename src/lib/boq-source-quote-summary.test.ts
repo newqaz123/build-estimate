@@ -283,15 +283,18 @@ test('verifySourceQuoteSummary anchors the quoted subtotal to the source total a
   assert.match(issues[0]!.message, /215,280\.00/)
 })
 
-test('verifySourceQuoteSummary tolerates only sub-minor-unit direct drift', () => {
-  assert.deepEqual(
-    verifySourceQuoteSummary({
-      directItemTotal: '179400.005',
-      sourceTotal: '215280',
-      summary: validSummary(),
-    }),
-    [],
-  )
+test('verifySourceQuoteSummary requires exact direct-item reconciliation', () => {
+  const issues = verifySourceQuoteSummary({
+    directItemTotal: '179400.005',
+    sourceTotal: '215280',
+    summary: validSummary(),
+  })
+
+  assert.deepEqual(issues.map((issue) => issue.code), ['quote_direct_total_mismatch'])
+  assert.match(issues[0]!.message, /BOQ direct items total/)
+  assert.match(issues[0]!.message, /179,400\.01/)
+  assert.match(issues[0]!.message, /source quote direct work total/)
+  assert.match(issues[0]!.message, /179,400\.00/)
 })
 
 test('verifySourceQuoteSummary reconciles a minimal summary without optional layers', () => {

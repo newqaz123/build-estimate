@@ -258,11 +258,11 @@ function formatDisplayBaht(value: DecimalString): string {
 /**
  * Reconcile approval against the source quote summary layer by layer. The
  * direct layer compares the recalculated direct item total against the
- * quoted direct work total at the legacy float boundary (strictly
- * sub-minor-unit differences pass). The subtotal layer requires exact decimal
- * closing — direct work plus overhead or profit equals the quoted subtotal —
- * and the quoted subtotal must still anchor the stored source document total
- * within a sub-minor-unit difference. The payable layer requires the closed
+ * quoted direct work total with exact decimal equality. The subtotal layer
+ * requires exact decimal closing — direct work plus overhead or profit equals
+ * the quoted subtotal — and the quoted subtotal must still anchor the stored
+ * source document total within a sub-minor-unit difference at that legacy
+ * float boundary only. The payable layer requires the closed
  * discount to carry the quoted subtotal to the payable total exactly. The
  * summary is never mutated and no unexplained gap is ever inferred.
  */
@@ -292,7 +292,7 @@ export function verifySourceQuoteSummary(input: {
     })
   } else if (
     directItemTotal === undefined ||
-    !isSubMinorUnitDifference(directItemTotal, directWorkTotal)
+    directItemTotal !== directWorkTotal
   ) {
     issues.push({
       code: 'quote_direct_total_mismatch',
