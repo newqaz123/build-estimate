@@ -39,7 +39,7 @@ Explicitly unchanged:
 - `py-sidecar/boq_parser.py`
 - legacy N.P. Civil v2 test
 - TypeScript production code
-- `Quotation example/` was not inspected, staged, or committed
+- the customer quotation sample directory was not inspected, staged, or committed
 
 ## Plan inaccuracies resolved
 
@@ -179,7 +179,7 @@ The exact combined RED for findings 1 and 2 is retained in `/tmp/task1-fix1-fina
 - Full `npm run check` remains red only on the same 12 unrelated extraction-review UI failures.
 - `src/lib/boq-extraction-proposal-store.test.ts` retains its pre-existing unstaged formatting hunk and was not touched or staged in this round.
 - All other unrelated dirty edits remain unstaged and uncommitted.
-- `Quotation example/` was not inspected.
+- the customer quotation sample directory was not inspected.
 
 ### Fix commit
 
@@ -243,7 +243,7 @@ Output: `Ran 2 tests`; `FAILED (errors=2)`. Both failed with `Value error, sourc
 - Exact summary strings and all internal summary arithmetic remain strict; tolerance is confined to the legacy numeric response boundary.
 - `src/lib/boq-extraction-proposal-store.test.ts` retains its pre-existing unstaged formatting change and was neither touched nor staged.
 - All unrelated dirty work remains unstaged and uncommitted.
-- `Quotation example/` was not inspected.
+- the customer quotation sample directory was not inspected.
 
 ### Fix commit
 
@@ -307,7 +307,7 @@ Output: `Ran 1 test`; `FAILED (errors=1)` with `Value error, sourceTotal must ma
 - The established tolerance is inclusive (`<= 0.01`); the regression verifies rejection immediately beyond a one-minor-unit difference.
 - `src/lib/boq-extraction-proposal-store.test.ts` retains its pre-existing unstaged formatting change and was neither touched nor staged.
 - All unrelated dirty work remains unstaged and uncommitted.
-- `Quotation example/` was not inspected.
+- the customer quotation sample directory was not inspected.
 
 ### Fix commit
 
@@ -373,7 +373,7 @@ Output: `Ran 1 test`; `FAILED (failures=1)`. The direct assertion proved `build_
 - Summary-aware final-boundary semantics are now strict below one minor unit; pre-existing no-summary reconciliation remains inclusive to avoid widening this narrow fix.
 - `src/lib/boq-extraction-proposal-store.test.ts` retains its pre-existing unstaged edit and was neither touched nor staged.
 - All unrelated dirty work remains unstaged and uncommitted.
-- `Quotation example/` was not inspected.
+- the customer quotation sample directory was not inspected.
 
 ### Fix commit
 
