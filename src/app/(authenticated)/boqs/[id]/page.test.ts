@@ -224,8 +224,9 @@ test("workspace command bar embeds the view switch without redundant compare nav
   assert.ok(headerStart >= 0);
   assert.ok(headerEnd > headerStart);
   assert.match(header, /<BoqWorkspaceTabs/);
-  assert.match(header, /Extraction Suggestions/);
-  assert.match(header, /BOQ Items/);
+  assert.match(header, /Missed rows/);
+  assert.match(header, /BOQ items/);
+  assert.doesNotMatch(header, /Extraction Suggestions/);
   assert.doesNotMatch(header, /boq-back-link/);
   assert.doesNotMatch(header, /Back to Compare|Back to comparison/);
   assert.match(source, /safeCompareReturnPath\(rawReturnTo\)/);

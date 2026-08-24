@@ -42,7 +42,7 @@ import {
   type ExtractionProposalAction,
   type ExtractionReviewFilter,
 } from "@/lib/boq-extraction-review-state"
-import { extractionReviewOutcomeMessage, extractionReviewOutcomeTitle, proposalCanBeAccepted, proposalCanBeReviewedAndAdded, proposalIsHighConfidence, proposalManualAddMode, rejectionLabelGroups, selectExtractionReviewOutcome, selectExtractionReviewProgress, sourceReferenceLabel } from "@/lib/boq-extraction-review-ui"
+import { extractionReviewOutcomeMessage, extractionReviewOutcomeTitle, inboxPendingCount, proposalCanBeAccepted, proposalCanBeReviewedAndAdded, proposalIsHighConfidence, proposalManualAddMode, rejectionLabelGroups, selectExtractionReviewOutcome, selectExtractionReviewProgress, sourceReferenceLabel } from "@/lib/boq-extraction-review-ui"
 import { isReviewActionableOperation, type ValidatedProposal } from "@/lib/boq-extraction-proposals"
 import type { Boq } from "@/lib/boq-schema"
 import { safeReviewReturnPath } from "@/lib/auth-return-url"
@@ -66,6 +66,7 @@ interface ExtractionReviewProps {
   sourceAvailable: boolean
   readOnly?: boolean
   mutationBlockedReason?: string
+  onInboxCountChange?: (count: number) => void
 }
 
 async function readError(response: Response, fallback: string): Promise<string> {
@@ -180,7 +181,7 @@ const REVIEW_FILTERS: Array<{ value: ExtractionReviewFilter; label: string }> = 
   { value: "ai-pending", label: "AI pending" },
 ]
 
-export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNavigateToEvidence, sourceAvailable, readOnly = false, mutationBlockedReason }: ExtractionReviewProps) {
+export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInboxCountChange, onNavigateToEvidence, sourceAvailable, readOnly = false, mutationBlockedReason }: ExtractionReviewProps) {
   const pathname = usePathname()
   const [extractionRunId, setExtractionRunId] = useState(boq.activeExtractionRunId)
   const [state, dispatch] = useReducer(extractionReviewReducer, undefined, initialExtractionReviewState)
@@ -194,6 +195,10 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onNav
   const canonicalRevisionRef = useRef(canonicalRevisionKey)
   const reviewSnapshotGenerationRef = useRef(0)
   const { review, loading, requestedSourceRowId, error, proposalActions: actions, proposalStatuses: statuses } = state
+
+  useEffect(() => {
+    onInboxCountChange?.(review ? inboxPendingCount(review.proposals, statuses) : 0)
+  }, [onInboxCountChange, review, statuses])
 
   const runReview = useCallback(async ({ sourceRowId, force = false, notify = false }: { sourceRowId?: string; force?: boolean; notify?: boolean } = {}) => {
     if (!extractionRunId) {

@@ -365,6 +365,7 @@ function CanonicalBoqWorkspace({
 	const [deleting, setDeleting] = useState(false);
 	const [addingItem, setAddingItem] = useState(false);
 	const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("items");
+	const [missedRowCount, setMissedRowCount] = useState(0);
 	const [pdfEvidenceFocus, setPdfEvidenceFocus] = useState<{
 		page: number;
 		table: number;
@@ -1350,12 +1351,14 @@ function CanonicalBoqWorkspace({
 								{rightPaneMode === "items" ? (
 									<>
 										<Sparkles aria-hidden="true" />
-										Extraction Suggestions
+										{missedRowCount > 0
+											? `Missed rows · ${missedRowCount}`
+											: "Missed rows"}
 									</>
 								) : (
 									<>
 										<FileSearch aria-hidden="true" />
-										BOQ Items
+										BOQ items
 									</>
 								)}
 							</Button>
@@ -1806,6 +1809,7 @@ function CanonicalBoqWorkspace({
 							}
 							sourceAvailable={hasSource}
 							onBoqChange={applyMutationBoq}
+							onInboxCountChange={setMissedRowCount}
 							onNavigateToEvidence={(focus) =>
 								setPdfEvidenceFocus((current) => ({
 									page: focus.page,
