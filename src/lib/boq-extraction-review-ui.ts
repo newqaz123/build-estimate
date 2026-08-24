@@ -1,5 +1,5 @@
 import { isReviewActionableOperation, type ProposalOperation, type ProposalValidationFailureCode, type ProposalValidationSummary, type ValidatedProposal } from './boq-extraction-proposals'
-import type { ExtractionReviewResponse } from './boq-extraction-ai-review'
+import type { ExtractionReviewResponse, ExtractionReviewSourceRow } from './boq-extraction-ai-review'
 
 export { selectReviewTab } from './boq-extraction-review-state'
 export type { ReviewTab } from './boq-extraction-review-state'
@@ -229,4 +229,130 @@ export function rejectionLabelGroups(summary: ProposalValidationSummary | null):
     groups.set(label, (groups.get(label) ?? 0) + count)
   }
   return [...groups.entries()].map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count)
+}
+
+/* ------------------------------------------------------------------
+ * Exception inbox projection
+ * Pure helpers that classify leftover extraction suggestions into inbox
+ * chips for the exception inbox. Rendering stays in the components; the
+ * only gate reused here is the manual-add eligibility predicate.
+ * ------------------------------------------------------------------ */
+
+export type InboxChip =
+  | 'quote_total'
+  | 'already_in_boq'
+  | 'missing_item'
+  | 'no_price'
+  | 'needs_a_look'
+
+export const INBOX_CHIP_LABEL: Record<InboxChip, string> = {
+  quote_total: 'Quote total',
+  already_in_boq: 'Already in BOQ',
+  missing_item: 'Missing item',
+  no_price: 'No price',
+  needs_a_look: 'Needs a look',
+}
+
+export type InboxSourceRow = Pick<
+  ExtractionReviewSourceRow,
+  'sourceRowId' | 'rawText' | 'classification' | 'page' | 'table' | 'row'
+>
+
+const INBOX_SENTENCE_MAX_CHARS = 160
+const INBOX_SENTENCE_BOUNDARY = /[.!?](?:\s|$)/
+const QUOTE_TOTAL_TEXT_PATTERN = /overhead|profit|discount|sub-?total|payable|grand total|amount in words|\bvat\b/i
+const UNPRICED_TEXT_PATTERN = /unpriced|incomplete pricing|no priced candidate|no numeric|lacks deterministic candidate/i
+
+/** First sentence of an inbox row's text, capped at maxChars (default 160). */
+export function firstInboxSentence(text: string, maxChars: number = INBOX_SENTENCE_MAX_CHARS): string {
+  const trimmed = text.trim()
+  const boundary = trimmed.search(INBOX_SENTENCE_BOUNDARY)
+  const sentence = boundary === -1 ? trimmed : trimmed.slice(0, boundary + 1)
+  return sentence.slice(0, Math.max(0, maxChars))
+}
+
+function backingInboxRows(
+  sourceRowIds: readonly string[],
+  sourceRows: readonly InboxSourceRow[],
+): InboxSourceRow[] {
+  const wanted = new Set(sourceRowIds)
+  return sourceRows.filter((row) => wanted.has(row.sourceRowId))
+}
+
+/** True when the proposal points at a commercial summary/tax row instead of a
+ *  priced work item, so it must not be mislabeled "No price" or "Missing item". */
+export function isQuoteTotalProposal(
+  proposal: Pick<ValidatedProposal, 'explanation' | 'sourceRowIds' | 'sourceRowSuggestions'>,
+  sourceRows: readonly InboxSourceRow[],
+): boolean {
+  if (proposal.sourceRowSuggestions?.some((suggestion) => suggestion.reasonCode === 'summary_or_tax')) return true
+  const rows = backingInboxRows(proposal.sourceRowIds, sourceRows)
+  if (rows.some((row) => row.classification === 'total')) return true
+  if (QUOTE_TOTAL_TEXT_PATTERN.test(proposal.explanation)) return true
+  return rows.some((row) => QUOTE_TOTAL_TEXT_PATTERN.test(row.rawText))
+}
+
+function hasUnpricedInboxText(
+  proposal: Pick<ValidatedProposal, 'explanation' | 'sourceRowIds'>,
+  sourceRows: readonly InboxSourceRow[],
+): boolean {
+  if (UNPRICED_TEXT_PATTERN.test(proposal.explanation)) return true
+  return backingInboxRows(proposal.sourceRowIds, sourceRows)
+    .some((row) => UNPRICED_TEXT_PATTERN.test(row.rawText))
+}
+
+/** Single chip for an inbox row. Precedence: quote totals and mapped targets
+ *  first; unpriced text then beats the add gate so unpriced leftovers default
+ *  to "No price" instead of inviting a manual add. */
+export function inboxChipForProposal(
+  proposal: Pick<
+    ValidatedProposal,
+    'operation' | 'reviewDraft' | 'sourceRowIds' | 'targetItemIds' | 'stale' | 'explanation' | 'sourceRowSuggestions'
+  >,
+  status: ProposalReviewLifecycleStatus | undefined,
+  readOnly: boolean,
+  sourceRows: readonly InboxSourceRow[],
+): InboxChip {
+  if (isQuoteTotalProposal(proposal, sourceRows)) return 'quote_total'
+  if (proposal.targetItemIds.length > 0) return 'already_in_boq'
+  const canAdd = proposalCanBeReviewedAndAdded(proposal, status, readOnly)
+  if (hasUnpricedInboxText(proposal, sourceRows) || (proposal.operation === 'needs_human_review' && !canAdd)) return 'no_price'
+  if (canAdd) return 'missing_item'
+  return 'needs_a_look'
+}
+
+/** Inbox row title: the backing source row's raw text when available, else the
+ *  capped first sentence of the AI explanation. */
+export function inboxRowTitle(
+  proposal: Pick<ValidatedProposal, 'explanation' | 'sourceRowIds'>,
+  sourceRows: readonly InboxSourceRow[],
+): string {
+  const backingRawText = backingInboxRows(proposal.sourceRowIds, sourceRows)
+    .map((row) => row.rawText.trim())
+    .find((rawText) => rawText.length > 0)
+  return backingRawText ?? firstInboxSentence(proposal.explanation)
+}
+
+export function inboxPendingCount(
+  proposals: readonly Pick<ValidatedProposal, 'id'>[],
+  statuses: Readonly<Record<string, { status?: string } | string | undefined>>,
+): number {
+  return proposals.filter((proposal) => !isResolvedInboxStatus(statuses[proposal.id])).length
+}
+
+function isResolvedInboxStatus(entry: { status?: string } | string | undefined): boolean {
+  if (entry === undefined) return false
+  if (typeof entry === 'string') return entry.length > 0
+  return typeof entry.status === 'string' && entry.status.length > 0
+}
+
+/** Ids of rows eligible for the shared unpriced grouping; only meaningful
+ *  when at least two rows share the condition, otherwise []. */
+export function unpricedInboxGroupIds(
+  rows: readonly { id: string; chip: InboxChip }[],
+): string[] {
+  const ids = rows
+    .filter((row) => row.chip === 'no_price' || row.chip === 'quote_total')
+    .map((row) => row.id)
+  return ids.length >= 2 ? ids : []
 }

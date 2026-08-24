@@ -3,6 +3,10 @@ import test from 'node:test'
 import {
   extractionReviewOutcomeMessage,
   extractionReviewOutcomeTitle,
+  firstInboxSentence,
+  inboxChipForProposal,
+  inboxPendingCount,
+  inboxRowTitle,
   proposalCanBeAccepted,
   proposalCanBeReviewedAndAdded,
   proposalManualAddMode,
@@ -12,6 +16,7 @@ import {
   selectExtractionReviewOutcome,
   selectExtractionReviewProgress,
   sourceReferenceLabel,
+  unpricedInboxGroupIds,
 } from './boq-extraction-review-ui'
 import type { ExtractionReviewResponse } from './boq-extraction-ai-review'
 import { PROPOSAL_VALIDATION_FAILURE_CODES, type ProposalValidationFailureCode, type ProposalValidationSummary, type ValidatedProposal } from './boq-extraction-proposals'
@@ -389,4 +394,132 @@ test('validation-blocked message is grammatically correct for multiple rejected 
   })
   const message = extractionReviewOutcomeMessage(review, 'validation-blocked')
   assert.match(message, /3 AI responses did not pass safety checks/)
+})
+
+/* ------------------------------------------------------------------
+ * Exception inbox projection: chips, titles, pending counts, and
+ * unpriced grouping for leftover extraction suggestions.
+ * ------------------------------------------------------------------ */
+
+test('firstInboxSentence keeps the first sentence and caps length', () => {
+  assert.equal(
+    firstInboxSentence('No price on this row. Extra detail follows.'),
+    'No price on this row.',
+  )
+  assert.equal(firstInboxSentence('x'.repeat(200)).length, 160)
+})
+
+test('inbox chips follow quote / target / add-gate / unpriced precedence', () => {
+  const rows = [
+    {
+      sourceRowId: 'row-1',
+      rawText: 'A.1 Concrete Curb',
+      classification: 'item' as const,
+      page: 2,
+      table: 1,
+      row: 3,
+    },
+  ]
+  const human = proposal({
+    operation: 'needs_human_review',
+    targetItemIds: [],
+    reviewDraft: undefined,
+    explanation: 'The row is an unpriced layer entry.',
+  })
+  assert.equal(inboxChipForProposal(human, undefined, false, rows), 'no_price')
+
+  assert.equal(
+    inboxChipForProposal(
+      proposal({
+        operation: 'needs_human_review',
+        targetItemIds: [],
+        reviewDraft: undefined,
+        explanation: 'Missing priced line.',
+      }),
+      undefined,
+      false,
+      rows,
+    ),
+    'missing_item',
+  )
+
+  assert.equal(
+    inboxChipForProposal(
+      { ...human, targetItemIds: ['item-1'] },
+      undefined,
+      false,
+      rows,
+    ),
+    'already_in_boq',
+  )
+
+  assert.equal(
+    inboxChipForProposal(
+      proposal({
+        operation: 'needs_human_review',
+        targetItemIds: [],
+        explanation: 'OVERHEAD & PROFIT commercial total.',
+        sourceRowSuggestions: [
+          {
+            sourceRowId: 'row-1',
+            suggestedAction: 'ignore',
+            reasonCode: 'summary_or_tax',
+            reason: 'summary',
+            confidence: 0.9,
+          },
+        ],
+      }),
+      undefined,
+      false,
+      rows,
+    ),
+    'quote_total',
+  )
+})
+
+test('inboxRowTitle prefers source rawText over the AI explanation', () => {
+  assert.equal(
+    inboxRowTitle(
+      proposal({
+        explanation: 'The reviewed source row is an ordinary item label.',
+        sourceRowIds: ['row-1'],
+      }),
+      [
+        {
+          sourceRowId: 'row-1',
+          rawText: 'A.1 | Concrete Curb NaOCL Tank',
+          classification: 'item',
+          page: 2,
+          table: 1,
+          row: 3,
+        },
+      ],
+    ),
+    'A.1 | Concrete Curb NaOCL Tank',
+  )
+})
+
+test('inboxPendingCount counts only unresolved proposals', () => {
+  assert.equal(
+    inboxPendingCount(
+      [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
+      { b: { status: 'skipped' }, c: 'accepted' },
+    ),
+    1,
+  )
+})
+
+test('unpricedInboxGroupIds requires two or more no-price or quote-total rows', () => {
+  assert.deepEqual(
+    unpricedInboxGroupIds([{ id: 'a', chip: 'no_price' }]),
+    [],
+  )
+  assert.deepEqual(
+    unpricedInboxGroupIds([
+      { id: 'a', chip: 'no_price' },
+      { id: 'b', chip: 'quote_total' },
+      { id: 'c', chip: 'missing_item' },
+    ]),
+    ['a', 'b'],
+  )
 })
