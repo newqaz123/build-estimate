@@ -418,7 +418,7 @@ test("the unified table renders only catalog-pending rows when focused", () => {
 	assert.match(source, /pendingRows=\{/);
 });
 
-test("review panel renders the read-only source quote summary between Extraction notes and Parsed Items", () => {
+test("review panel renders the quote summary before Parsed Items and parser details after them", () => {
 	assert.match(source, /SourceQuoteSummary/);
 	assert.match(source, /displayBoq\.sourceQuoteSummary/);
 	assert.match(source, /setPdfEvidenceFocus/);
@@ -427,13 +427,12 @@ test("review panel renders the read-only source quote summary between Extraction
 		'id="boq-compare-panel"',
 	);
 	const notesIndex = reviewPanel.indexOf('title="Extraction notes"');
+	const parserIndex = reviewPanel.indexOf('title="Parser details"');
 	const summaryIndex = reviewPanel.indexOf("<SourceQuoteSummary");
 	const parsedIndex = reviewPanel.indexOf("Parsed Items");
-	assert.ok(notesIndex >= 0, "Extraction notes must stay in the review panel");
-	assert.ok(
-		summaryIndex > notesIndex,
-		"summary must render after Extraction notes",
-	);
+	assert.equal(notesIndex, -1, "Extraction notes must not sit above the items table");
+	assert.ok(parserIndex > parsedIndex, "parser details must sit after Parsed Items");
+	assert.match(reviewPanel, /compact/);
 	assert.ok(
 		parsedIndex > summaryIndex,
 		"summary must render before the Parsed Items heading",

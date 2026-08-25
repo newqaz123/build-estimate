@@ -111,6 +111,16 @@ test("SourceQuoteSummary formats fractional amounts at the currency minor unit",
 	assert.match(html, /฿215,280\.75/);
 });
 
+test("source buttons sit on the amount row, not under the label", () => {
+	const html = renderSummary({ onNavigateToSource: () => {} });
+	assert.match(html, /<dt>Overhead &amp; profit<\/dt>/);
+	assert.match(
+		html,
+		/<dd>[^]*?฿35,880\.00[^]*?aria-label="View source: Overhead/,
+	);
+	assert.doesNotMatch(html, /<dt>[^<]*<button/);
+});
+
 test("SourceQuoteSummary shows source buttons only for rows with refs, with View source accessible names", () => {
 	const html = renderSummary({ onNavigateToSource: () => {} });
 	assert.equal(

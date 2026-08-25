@@ -42,9 +42,10 @@ function WarningGroups({ groups }: { groups: ReadonlyArray<ExtractionWarningGrou
  *  need review, document information the operator merely needs to know, and a
  *  single native disclosure preserving the exact original warning codes,
  *  messages, and source locations. */
-export function ExtractionWarnings({ warnings, title = "Extraction notes" }: {
+export function ExtractionWarnings({ warnings, title = "Extraction notes", compact = false }: {
   warnings: ReadonlyArray<BoqExtractionWarning>
   title?: string
+  compact?: boolean
 }) {
   const summary = useMemo(() => summarizeExtractionWarnings(warnings), [warnings])
   if (summary.needsReview.length === 0 && summary.documentInformation.length === 0) return null
@@ -67,6 +68,35 @@ export function ExtractionWarnings({ warnings, title = "Extraction notes" }: {
     needsReviewLine = `${documentReviewIssues} document-level issues need review.`
   }
 
+  const technicalDetails = (
+    <details className="extraction-warning-details">
+      <summary className="extraction-warning-details-summary">Technical details · {summary.rawOccurrenceCount} raw notes</summary>
+      <ul>
+        {[...summary.needsReview, ...summary.documentInformation].flatMap((group) =>
+          group.occurrences.map((detail, index) => {
+            const location = extractionWarningSourceLabel(detail.sourceRef)
+            return (
+              <li key={`${group.code}-${index}`} className="extraction-warning-detail">
+                <code>{group.code}</code>
+                <span>{detail.message}</span>
+                {location ? <small>{location}</small> : null}
+              </li>
+            )
+          }),
+        )}
+      </ul>
+    </details>
+  )
+
+  if (compact) {
+    return (
+      <details className="extraction-warnings extraction-warnings-compact" aria-label={title}>
+        <summary>{title}</summary>
+        {technicalDetails}
+      </details>
+    )
+  }
+
   return (
     <div className="review-warning-list extraction-warnings" role="status" aria-label={title}>
       <strong>{title}</strong>
@@ -83,25 +113,7 @@ export function ExtractionWarnings({ warnings, title = "Extraction notes" }: {
           <WarningGroups groups={summary.documentInformation} />
         </section>
       ) : null}
-      <details className="extraction-warning-details">
-        <summary className="extraction-warning-details-summary">Technical details · {summary.rawOccurrenceCount} raw notes</summary>
-        <ul>
-          {[...summary.needsReview, ...summary.documentInformation].flatMap((group) =>
-            // One entry per raw occurrence: never deduplicated, so the entry
-            // count equals rawOccurrenceCount with exact message and location.
-            group.occurrences.map((detail, index) => {
-              const location = extractionWarningSourceLabel(detail.sourceRef)
-              return (
-                <li key={`${group.code}-${index}`} className="extraction-warning-detail">
-                  <code>{group.code}</code>
-                  <span>{detail.message}</span>
-                  {location ? <small>{location}</small> : null}
-                </li>
-              )
-            }),
-          )}
-        </ul>
-      </details>
+      {technicalDetails}
     </div>
   )
 }

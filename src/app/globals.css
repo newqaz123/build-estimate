@@ -1565,11 +1565,14 @@
 .source-quote-summary dl { display: grid; gap: 2px; margin: 0; }
 .source-quote-summary-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 var(--space-3); align-items: baseline; }
 .source-quote-summary-row dt { color: var(--muted-text); font-size: 11px; }
-.source-quote-summary-row dd { margin: 0; color: var(--fg-2); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.source-quote-summary-row dd { display: inline-flex; align-items: baseline; gap: var(--space-2); margin: 0; color: var(--fg-2); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .source-quote-summary-row-subtotal, .source-quote-summary-row-payable { margin-top: var(--space-1); padding-top: var(--space-1); border-top: 1px solid var(--border); }
 .source-quote-summary-row-subtotal dd, .source-quote-summary-row-payable dd { font-weight: 650; }
-.source-quote-summary-source { display: block; margin-top: 2px; padding: 0; border: none; background: none; color: var(--accent); font-size: 10px; cursor: pointer; text-decoration: underline; }
+.source-quote-summary-source { display: inline; margin: 0; padding: 0; border: none; background: none; color: var(--accent); font-size: 10px; font-weight: 500; cursor: pointer; text-decoration: none; }
+.source-quote-summary-source:hover { text-decoration: underline; }
 .source-quote-summary-source:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.extraction-warnings-compact { margin-top: var(--space-3); color: var(--muted-text); font-size: 11px; }
+.extraction-warnings-compact > summary { cursor: pointer; color: var(--muted-text); font-size: 11px; }
 @media (max-width: 480px) {
   .source-quote-summary-row { grid-template-columns: minmax(0, 1fr); }
   .source-quote-summary-row dd { text-align: left; }

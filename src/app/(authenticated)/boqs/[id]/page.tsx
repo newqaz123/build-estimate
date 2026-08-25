@@ -1512,13 +1512,6 @@ function CanonicalBoqWorkspace({
 							</div>
 						</div>
 
-						{boq.extractionWarnings?.length ? (
-							<ExtractionWarnings
-								warnings={boq.extractionWarnings}
-								title="Extraction notes"
-							/>
-						) : null}
-
 						{displayBoq.sourceQuoteSummary ? (
 							<SourceQuoteSummary
 								summary={displayBoq.sourceQuoteSummary}
@@ -1681,6 +1674,14 @@ function CanonicalBoqWorkspace({
 									))}
 								</ul>
 							</div>
+						) : null}
+
+						{boq.extractionWarnings?.length ? (
+							<ExtractionWarnings
+								warnings={boq.extractionWarnings}
+								title="Parser details"
+								compact
+							/>
 						) : null}
 					</div>
 					<div

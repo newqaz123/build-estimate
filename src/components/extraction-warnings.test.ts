@@ -105,6 +105,28 @@ test("Technical details entry count equals rawOccurrenceCount across mixed warni
   assert.match(html, /1 source row needs review\./)
 })
 
+test("compact Parser details is a closed disclosure without the review headline", () => {
+  const html = renderToStaticMarkup(
+    createElement(ExtractionWarnings, {
+      warnings: [
+        {
+          code: "unsupported_row",
+          message: "Incomplete.",
+          sourceRef: { page: 2, table: 1, row: 3 },
+        },
+      ],
+      compact: true,
+      title: "Parser details",
+    }),
+  )
+  assert.match(html, /extraction-warnings-compact/)
+  assert.match(html, /<details/)
+  assert.doesNotMatch(html, /<details[^>]*\sopen/)
+  assert.match(html, />Parser details</)
+  assert.doesNotMatch(html, /1 source row needs review/)
+  assert.match(html, /Technical details/)
+})
+
 test("duplicate document-level review failures render plural wording driven by raw occurrences", () => {
   const warnings = [
     { code: "document_total_mismatch", message: "Mismatch" },

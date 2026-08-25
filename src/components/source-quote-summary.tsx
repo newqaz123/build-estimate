@@ -118,8 +118,10 @@ export function SourceQuoteSummary({
 						key={row.key}
 						className={`source-quote-summary-row source-quote-summary-row-${row.key} source-quote-summary-operation-${row.operation}`}
 					>
-						<dt>
-							{row.label}
+						<dt>{row.label}</dt>
+						<dd>
+							{OPERATION_PREFIX[row.operation]}
+							{formatBaht(row.amount)}
 							{onNavigateToSource && sourceRef ? (
 								<button
 									type="button"
@@ -130,10 +132,6 @@ export function SourceQuoteSummary({
 									View source
 								</button>
 							) : null}
-						</dt>
-						<dd>
-							{OPERATION_PREFIX[row.operation]}
-							{formatBaht(row.amount)}
 						</dd>
 					</div>
 				);
