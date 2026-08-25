@@ -666,7 +666,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
                         </> : status !== "accepted" ? <span className="extraction-action-status">{status === "rejected" ? "Rejected" : status === "skipped" ? "Skipped" : "Undone"}</span> : null}
                       </div>
                     </div>
-                    {editingProposalId === proposal.id && humanReview && canReviewAndAdd ? (
+                    {editingProposalId === proposal.id && humanReview && canReviewAndAdd && chipAllowsAdd ? (
                       manualAddMode === "batch" ? (
                         <EvidenceOnlyBatchItemEditor
                           boq={boq}
@@ -692,9 +692,9 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
                   </article>
                 )
               })()}
-              {unpricedGroupIds.length > 0 ? (
+              {state.tab === "needs-review" && unpricedGroupIds.length > 0 ? (
                 // eslint-disable-next-line react-hooks/refs -- Pure projected arrays from imported helpers; the compiler cannot resolve those imports and misreads the values as refs.
-                <button type="button" data-od-id="inbox-mark-unpriced" className="btn btn-secondary btn-sm" onClick={() => void skipUnpricedGroup(inboxRows, unpricedGroupIds)} disabled={busy}>Mark all as not items</button>
+                <button type="button" data-od-id="inbox-mark-unpriced" className="btn btn-secondary btn-sm" onClick={() => void skipUnpricedGroup(inboxRows, unpricedGroupIds)} disabled={busy || readOnly}>Mark all as not items</button>
               ) : null}
               {nextRows.length ? <>
                 <span className="review-eyebrow">NEXT</span>

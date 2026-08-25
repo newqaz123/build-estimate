@@ -56,3 +56,21 @@ test("grouped not-an-item uses sequential existing skip posts", () => {
 	assert.match(review, /executeAction\([^,]+,\s*"skip"\)/);
 	assert.doesNotMatch(review, /skip-batch/);
 });
+
+test("inbox editor mount requires the same chipAllowsAdd gate as the Add to BOQ button", () => {
+	assert.match(
+		review,
+		/editingProposalId === proposal\.id\s*&&\s*humanReview\s*&&\s*canReviewAndAdd\s*&&\s*chipAllowsAdd\s*\?/,
+	);
+});
+
+test("Mark all as not items renders only on the needs-review tab and disables read-only", () => {
+	assert.match(
+		review,
+		/state\.tab === "needs-review"\s*&&\s*unpricedGroupIds\.length > 0/,
+	);
+	assert.match(
+		review,
+		/data-od-id="inbox-mark-unpriced"[\s\S]*?disabled=\{busy \|\| readOnly\}/,
+	);
+});
