@@ -536,7 +536,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
         <div>
           <span className="review-eyebrow">Evidence review</span>
           <h2 id="focused-extraction-title">Missed rows</h2>
-          <p>{inboxPending > 0 ? `${inboxPending} source lines are not in this BOQ yet.` : "No missed rows. Every leftover source line is marked not an item or already represented."}</p>
+          <p>{inboxPending > 0 ? `${inboxPending} source lines are not in this BOQ yet.` : review && inboxPending === 0 ? "No missed rows. Every leftover source line is marked not an item or already represented." : "Loading review…"}</p>
         </div>
         <div className="extraction-review-heading-actions">
           {bulkProposalIds.length > 0 && !readOnly ? <Button type="button" size="sm" onClick={() => void acceptAll()} disabled={busy || Boolean(mutationBlockedReason)}><Check aria-hidden="true" />Accept all validated high-confidence</Button> : null}

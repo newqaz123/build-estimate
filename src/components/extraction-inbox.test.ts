@@ -97,6 +97,10 @@ test("empty inbox shows the no missed rows copy", () => {
 	);
 });
 
+test("no missed rows copy is gated on a loaded review", () => {
+	assert.match(review, /review && inboxPending === 0\s*\?/);
+});
+
 test("mobile CSS hides one inbox pane at a time via data-pane", () => {
 	assert.match(
 		css,
