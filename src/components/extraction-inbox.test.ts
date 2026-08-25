@@ -10,6 +10,7 @@ const page = readFileSync(
 	new URL("../app/(authenticated)/boqs/[id]/page.tsx", import.meta.url),
 	"utf8",
 );
+const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
 
 test("extraction review reports pending inbox count to the page", () => {
 	assert.match(review, /onInboxCountChange\?/);
@@ -72,5 +73,37 @@ test("Mark all as not items renders only on the needs-review tab and disables re
 	assert.match(
 		review,
 		/data-od-id="inbox-mark-unpriced"[\s\S]*?disabled=\{busy \|\| readOnly\}/,
+	);
+});
+
+test("mobile inbox switches between list and detail panes via Back to list", () => {
+	assert.match(
+		review,
+		/const \[inboxPane, setInboxPane\] = useState<"list" \| "detail">\("list"\)/,
+	);
+	assert.match(review, /data-pane=\{inboxPane\}/);
+	assert.match(review, /setInboxPane\("detail"\)/);
+	assert.match(review, /setInboxPane\("list"\)/);
+	assert.match(review, />\s*Back to list\s*</);
+	assert.match(review, /className="extraction-inbox-list"/);
+	assert.match(review, /className="extraction-inbox-detail"/);
+});
+
+test("empty inbox shows the no missed rows copy", () => {
+	assert.match(review, /No missed rows\./);
+	assert.match(
+		review,
+		/Every leftover source line is marked not an item or already represented\./,
+	);
+});
+
+test("mobile CSS hides one inbox pane at a time via data-pane", () => {
+	assert.match(
+		css,
+		/\.extraction-inbox\[data-pane="list"\]\s*\.extraction-inbox-detail\s*\{\s*display:\s*none;\s*\}/,
+	);
+	assert.match(
+		css,
+		/\.extraction-inbox\[data-pane="detail"\]\s*\.extraction-inbox-list\s*\{\s*display:\s*none;\s*\}/,
 	);
 });

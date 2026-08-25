@@ -191,6 +191,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
   const [rejectConfirmProposalId, setRejectConfirmProposalId] = useState<string | null>(null)
   const [sessionExpired, setSessionExpired] = useState(false)
   const [selectedInboxId, setSelectedInboxId] = useState<string | null>(null)
+  const [inboxPane, setInboxPane] = useState<"list" | "detail">("list")
   const autoReviewedRunRef = useRef<string | null>(null)
   const recoveryAttemptRef = useRef<string | null>(null)
   const canonicalRevisionRef = useRef(canonicalRevisionKey)
@@ -535,7 +536,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
         <div>
           <span className="review-eyebrow">Evidence review</span>
           <h2 id="focused-extraction-title">Missed rows</h2>
-          <p>{inboxPending > 0 ? `${inboxPending} source lines are not in this BOQ yet.` : "No missed rows."}</p>
+          <p>{inboxPending > 0 ? `${inboxPending} source lines are not in this BOQ yet.` : "No missed rows. Every leftover source line is marked not an item or already represented."}</p>
         </div>
         <div className="extraction-review-heading-actions">
           {bulkProposalIds.length > 0 && !readOnly ? <Button type="button" size="sm" onClick={() => void acceptAll()} disabled={busy || Boolean(mutationBlockedReason)}><Check aria-hidden="true" />Accept all validated high-confidence</Button> : null}
@@ -614,16 +615,20 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
           const openRow = inboxRows.find((row) => row.id === selectedInboxId) ?? inboxRows[0]
           const nextRows = inboxRows.filter((row) => row.id !== openRow.id)
           const renderInboxRow = (row: (typeof inboxRows)[number]) => (
-            <button type="button" key={row.id} data-od-id="extraction-inbox-item" data-unpriced-group={unpricedGroupIds.includes(row.id) ? "true" : undefined} className={`extraction-inbox-item${row.id === openRow.id ? " is-now" : ""}`} onClick={() => { setSelectedInboxId(row.id); if (row.sourceRef) onNavigateToEvidence({ page: row.sourceRef.page, table: row.sourceRef.table, row: row.sourceRef.row, cells: [] }) }}>
+            <button type="button" key={row.id} data-od-id="extraction-inbox-item" data-unpriced-group={unpricedGroupIds.includes(row.id) ? "true" : undefined} className={`extraction-inbox-item${row.id === openRow.id ? " is-now" : ""}`} onClick={() => { setSelectedInboxId(row.id); setInboxPane("detail"); if (row.sourceRef) onNavigateToEvidence({ page: row.sourceRef.page, table: row.sourceRef.table, row: row.sourceRef.row, cells: [] }) }}>
               <strong>{inboxRowTitle(row.proposal, review.sourceRows)}</strong>
               <span className="extraction-inbox-meta">p.{row.sourceRef?.page} · {INBOX_CHIP_LABEL[row.chip]}</span>
             </button>
           )
           return (
-            <div className="extraction-inbox" aria-label="Extraction review proposals">
-              <span className="review-eyebrow">NOW</span>
-              {renderInboxRow(openRow)}
-              {(() => {
+            <div className="extraction-inbox" data-pane={inboxPane} aria-label="Extraction review proposals">
+              <div className="extraction-inbox-list">
+                <span className="review-eyebrow">NOW</span>
+                {renderInboxRow(openRow)}
+              </div>
+              <div className="extraction-inbox-detail">
+                <button type="button" className="btn btn-ghost btn-sm extraction-inbox-back" onClick={() => setInboxPane("list")}>Back to list</button>
+                {(() => {
                 const proposal = openRow.proposal
                 const status = statuses[proposal.id]
                 const action = actions[proposal.id]
@@ -692,14 +697,15 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
                   </article>
                 )
               })()}
-              {state.tab === "needs-review" && unpricedGroupIds.length > 0 ? (
-                // eslint-disable-next-line react-hooks/refs -- Pure projected arrays from imported helpers; the compiler cannot resolve those imports and misreads the values as refs.
-                <button type="button" data-od-id="inbox-mark-unpriced" className="btn btn-secondary btn-sm" onClick={() => void skipUnpricedGroup(inboxRows, unpricedGroupIds)} disabled={busy || readOnly}>Mark all as not items</button>
-              ) : null}
-              {nextRows.length ? <>
+                {state.tab === "needs-review" && unpricedGroupIds.length > 0 ? (
+                  // eslint-disable-next-line react-hooks/refs -- Pure projected arrays from imported helpers; the compiler cannot resolve those imports and misreads the values as refs.
+                  <button type="button" data-od-id="inbox-mark-unpriced" className="btn btn-secondary btn-sm" onClick={() => void skipUnpricedGroup(inboxRows, unpricedGroupIds)} disabled={busy || readOnly}>Mark all as not items</button>
+                ) : null}
+              </div>
+              {nextRows.length ? <div className="extraction-inbox-list">
                 <span className="review-eyebrow">NEXT</span>
                 {nextRows.map((row) => renderInboxRow(row))}
-              </> : null}
+              </div> : null}
             </div>
           )
         })()

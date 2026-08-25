@@ -1607,8 +1607,14 @@
 .extraction-inbox-item.is-now { border-color: color-mix(in oklab, var(--accent) 40%, var(--border)); }
 .extraction-inbox-meta { color: var(--muted-text); font-size: 11px; }
 .extraction-inbox-details summary { cursor: pointer; color: var(--muted-text); font-size: 11px; }
+.extraction-inbox-list { display: grid; gap: var(--space-2); }
+.extraction-inbox-detail { display: grid; gap: var(--space-2); }
+.extraction-inbox-back { display: none; }
 @media (max-width: 480px) {
   .extraction-inbox-item { min-height: 44px; }
+  .extraction-inbox[data-pane="list"] .extraction-inbox-detail { display: none; }
+  .extraction-inbox[data-pane="detail"] .extraction-inbox-list { display: none; }
+  .extraction-inbox-back { display: inline-flex; }
 }
 .extraction-review-filters { display: flex; gap: var(--space-1); margin-top: var(--space-3); overflow-x: auto; padding-bottom: 2px; }
 .extraction-review-filters .filter-chip { flex: 0 0 auto; background: var(--surface); }
