@@ -387,6 +387,21 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
     }
   }, [boq.id, extractionRunId, mutationBlockedReason, onBoqChange, readOnly, refreshStoredReview])
 
+  /** Marks every unpriced-group row as not an item by reusing the per-proposal
+   *  skip POST sequentially. Stops at the first failure so a mid-group error
+   *  never silently drops the remaining rows. */
+  const skipUnpricedGroup = useCallback(async (rows: ReadonlyArray<{ id: string; proposal: ValidatedProposal }>, ids: readonly string[]) => {
+    let skipped = 0
+    for (const id of ids) {
+      const row = rows.find((candidate) => candidate.id === id)
+      if (!row) continue
+      const ok = await executeAction(row.proposal, "skip")
+      if (!ok) break
+      skipped += 1
+    }
+    if (skipped > 1) toast.success(`${skipped} source labels marked as not items`)
+  }, [executeAction])
+
   const handleReject = useCallback((proposal: ValidatedProposal) => {
     setRejectConfirmProposalId(proposal.id)
   }, [])
@@ -524,7 +539,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
         </div>
         <div className="extraction-review-heading-actions">
           {bulkProposalIds.length > 0 && !readOnly ? <Button type="button" size="sm" onClick={() => void acceptAll()} disabled={busy || Boolean(mutationBlockedReason)}><Check aria-hidden="true" />Accept all validated high-confidence</Button> : null}
-          <Button type="button" variant="outline" size="sm" onClick={() => void runReview({ force: true, notify: true })} disabled={readOnly || !extractionRunId || busy}>{loading || reviewRunStatus === "running" ? <Loader2 className="animate-spin" /> : <Sparkles aria-hidden="true" />}{reviewRunStatus === "running" ? "AI review running" : "Review all flagged rows with AI"}</Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => void runReview({ force: true, notify: true })} disabled={readOnly || !extractionRunId || busy}>{loading || reviewRunStatus === "running" ? <Loader2 className="animate-spin" /> : <Sparkles aria-hidden="true" />}{reviewRunStatus === "running" ? "AI review running" : "Recheck with AI"}</Button>
         </div>
       </header>
 
@@ -620,13 +635,14 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
                 const isIncomplete = humanReview && !canAccept
                 const nonActionable = !isReviewActionableOperation(proposal.operation)
                 const isComplete = canAccept || (!humanReview && !nonActionable && proposal.stale !== true)
+                const chipAllowsAdd = openRow.chip === "missing_item" || openRow.chip === "needs_a_look"
                 return (
                   <article key={proposal.id} className={`extraction-proposal focused ${status ? `is-${status}` : ""}`}>
                     <div className="extraction-proposal-labels">
                       <span className={`extraction-operation ${proposal.operation}`}>{OPERATION_LABELS[proposal.operation] ?? proposal.operation.replaceAll("_", " ")}</span>
                       <span className="extraction-validated">{isComplete ? "Validated suggestion — ready for your approval" : "More information needed"}</span>
                     </div>
-                    <p>{firstInboxSentence(proposal.explanation)}</p>
+                    <p>{openRow.chip === "no_price" || openRow.chip === "quote_total" ? "This source line has no usable price. Mark it as not an item, or type numbers only if you can see them on the PDF." : firstInboxSentence(proposal.explanation)}</p>
                     <details className="extraction-inbox-details">
                       <summary>Details</summary>
                       <div className="extraction-structure-grid">
@@ -640,12 +656,13 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
                       <div className="extraction-proposal-actions">
                         {status === "accepted" && state.proposalCanUndo[proposal.id] && !readOnly ? <Button type="button" variant="outline" size="sm" onClick={() => void executeAction(proposal, "undo")} disabled={Boolean(action) || Boolean(mutationBlockedReason)}>Undo{action === "undoing" ? <Loader2 className="animate-spin" /> : <Undo2 aria-hidden="true" />}</Button> : null}
                         {!status ? <>
+                          {openRow.sourceRef ? <Button type="button" variant="ghost" size="sm" onClick={() => { const sourceRef = openRow.sourceRef; if (!sourceRef) return; onNavigateToEvidence({ page: sourceRef.page, table: sourceRef.table, row: sourceRef.row, cells: [] }) }}><FileSearch aria-hidden="true" />Show on PDF</Button> : null}
                           {isComplete && canAccept ? <Button type="button" size="sm" onClick={() => void executeAction(proposal, "accept")} disabled={readOnly || Boolean(mutationBlockedReason) || Boolean(action)}>Accept{action === "accepting" ? <Loader2 className="animate-spin" /> : <Check aria-hidden="true" />}</Button> : null}
                           {isComplete ? <Button type="button" variant="ghost" size="sm" onClick={() => handleReject(proposal)} disabled={readOnly || Boolean(action)}>Reject{action === "rejecting" ? <Loader2 className="animate-spin" /> : <X aria-hidden="true" />}</Button> : null}
-                          {isIncomplete && humanReview && canReviewAndAdd ? (
-                            <Button type="button" variant="outline" size="sm" onClick={() => { setEditingProposalId(proposal.id); setSourceBackedError(null) }} disabled={Boolean(action)}>Review &amp; add</Button>
+                          {isIncomplete && humanReview && canReviewAndAdd && chipAllowsAdd ? (
+                            <Button type="button" variant="outline" size="sm" onClick={() => { setEditingProposalId(proposal.id); setSourceBackedError(null) }} disabled={Boolean(action)}>Add to BOQ</Button>
                           ) : null}
-                          {isIncomplete ? <Button type="button" variant="ghost" size="sm" onClick={() => void executeAction(proposal, "skip")} disabled={readOnly || Boolean(action)}>Skip{action === "skipping" ? <Loader2 className="animate-spin" /> : null}</Button> : null}
+                          <Button type="button" variant="ghost" size="sm" onClick={() => void executeAction(proposal, "skip")} disabled={readOnly || Boolean(action)}>Not an item{action === "skipping" ? <Loader2 className="animate-spin" /> : null}</Button>
                         </> : status !== "accepted" ? <span className="extraction-action-status">{status === "rejected" ? "Rejected" : status === "skipped" ? "Skipped" : "Undone"}</span> : null}
                       </div>
                     </div>
@@ -675,6 +692,10 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
                   </article>
                 )
               })()}
+              {unpricedGroupIds.length > 0 ? (
+                // eslint-disable-next-line react-hooks/refs -- Pure projected arrays from imported helpers; the compiler cannot resolve those imports and misreads the values as refs.
+                <button type="button" data-od-id="inbox-mark-unpriced" className="btn btn-secondary btn-sm" onClick={() => void skipUnpricedGroup(inboxRows, unpricedGroupIds)} disabled={busy}>Mark all as not items</button>
+              ) : null}
               {nextRows.length ? <>
                 <span className="review-eyebrow">NEXT</span>
                 {nextRows.map((row) => renderInboxRow(row))}

@@ -307,8 +307,8 @@ test("detail page renders the grouped extraction notes component instead of a fl
 test("needs_human_review proposals expose Review & add but never render Accept", () => {
 	const source = readFileSync(componentUrl, "utf8");
 	// A focused editor opens for source-backed needs_human_review proposals.
-	// JSX escapes the ampersand as &amp; in source; accept either form.
-	assert.match(source, /Review &amp; add|Review & add/);
+	// The submit control is now labeled "Add to BOQ" (was "Review & add").
+	assert.match(source, /Add to BOQ/);
 	assert.match(source, /setEditingProposalId/);
 	assert.match(source, /editingProposalId/);
 	assert.match(source, /SourceBackedItemEditor/);
@@ -494,8 +494,8 @@ test("Task 8: skip posts to durable skip endpoint and moves to History", () => {
 
 test("Task 8: renamed recheck buttons use new wording", () => {
 	const source = readFileSync(componentUrl, "utf8");
-	// Global recheck button is now "Review all flagged rows with AI"
-	assert.match(source, /Review all flagged rows with AI/);
+	// Global recheck button is now "Recheck with AI"
+	assert.match(source, /Recheck with AI/);
 	// Per-row recheck is now "Review this row with AI"
 	assert.match(source, /Review this row with AI/);
 	// Remaining rows group is now "Rows needing review"

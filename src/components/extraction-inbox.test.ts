@@ -41,3 +41,18 @@ test("proposal evidence grid is behind a closed Details disclosure", () => {
 test("NOW article is keyed by proposal id so Details remounts closed", () => {
 	assert.match(review, /<article\s+key=\{proposal\.id\}/);
 });
+
+test("Add to BOQ is gated by proposalCanBeReviewedAndAdded and Skip is labeled Not an item", () => {
+	assert.match(review, /Add to BOQ/);
+	assert.match(review, /Not an item/);
+	assert.match(review, /Mark all as not items/);
+	assert.match(review, /unpricedInboxGroupIds/);
+	assert.match(review, /This source line has no usable price/);
+	assert.doesNotMatch(review, />Skip</);
+	assert.doesNotMatch(review, /Review & add/);
+});
+
+test("grouped not-an-item uses sequential existing skip posts", () => {
+	assert.match(review, /executeAction\([^,]+,\s*"skip"\)/);
+	assert.doesNotMatch(review, /skip-batch/);
+});
