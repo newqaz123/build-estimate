@@ -621,7 +621,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
                 const nonActionable = !isReviewActionableOperation(proposal.operation)
                 const isComplete = canAccept || (!humanReview && !nonActionable && proposal.stale !== true)
                 return (
-                  <article className={`extraction-proposal focused ${status ? `is-${status}` : ""}`}>
+                  <article key={proposal.id} className={`extraction-proposal focused ${status ? `is-${status}` : ""}`}>
                     <div className="extraction-proposal-labels">
                       <span className={`extraction-operation ${proposal.operation}`}>{OPERATION_LABELS[proposal.operation] ?? proposal.operation.replaceAll("_", " ")}</span>
                       <span className="extraction-validated">{isComplete ? "Validated suggestion — ready for your approval" : "More information needed"}</span>

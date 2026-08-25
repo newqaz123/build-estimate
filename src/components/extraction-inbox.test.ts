@@ -37,3 +37,7 @@ test("proposal evidence grid is behind a closed Details disclosure", () => {
 	assert.match(review, />Details</);
 	assert.doesNotMatch(review, /Hide evidence/);
 });
+
+test("NOW article is keyed by proposal id so Details remounts closed", () => {
+	assert.match(review, /<article\s+key=\{proposal\.id\}/);
+});
