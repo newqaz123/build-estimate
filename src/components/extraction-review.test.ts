@@ -94,7 +94,7 @@ test("extraction review filters derive per-chip counts from displayed results an
 	assert.match(source, /extractionReviewOutcomeTitle/);
 	assert.match(source, /extractionReviewOutcomeMessage/);
 	assert.match(source, /rejectionLabelGroups/);
-	assert.match(source, /reviewProgress\.progressText/);
+	assert.match(source, /leftovers cleared/);
 	assert.doesNotMatch(source, /reviewTitle/);
 });
 
@@ -455,8 +455,8 @@ test("Task 8: tabs render as Needs your review and History only", () => {
 	// Set tab action exists
 	assert.match(source, /set_tab.*tab/);
 	// Tabs render with specific labels
-	assert.match(source, /Needs your review/);
-	assert.match(source, /History/);
+	assert.match(source, />Inbox</);
+	assert.match(source, />Done</);
 	// Tab switching uses set_tab
 	assert.match(source, /onClick=\{.*\(\) => dispatch\(\{ type: "set_tab"/);
 });

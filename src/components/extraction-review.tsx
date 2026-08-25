@@ -42,7 +42,7 @@ import {
   type ExtractionProposalAction,
   type ExtractionReviewFilter,
 } from "@/lib/boq-extraction-review-state"
-import { extractionReviewOutcomeMessage, extractionReviewOutcomeTitle, inboxPendingCount, proposalCanBeAccepted, proposalCanBeReviewedAndAdded, proposalIsHighConfidence, proposalManualAddMode, rejectionLabelGroups, selectExtractionReviewOutcome, selectExtractionReviewProgress, sourceReferenceLabel } from "@/lib/boq-extraction-review-ui"
+import { extractionReviewOutcomeMessage, extractionReviewOutcomeTitle, firstInboxSentence, INBOX_CHIP_LABEL, inboxChipForProposal, inboxPendingCount, inboxRowTitle, proposalCanBeAccepted, proposalCanBeReviewedAndAdded, proposalManualAddMode, rejectionLabelGroups, selectExtractionReviewOutcome, sourceReferenceLabel, unpricedInboxGroupIds } from "@/lib/boq-extraction-review-ui"
 import { isReviewActionableOperation, type ValidatedProposal } from "@/lib/boq-extraction-proposals"
 import type { Boq } from "@/lib/boq-schema"
 import { safeReviewReturnPath } from "@/lib/auth-return-url"
@@ -190,15 +190,17 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
   const [sourceBackedError, setSourceBackedError] = useState<string | null>(null)
   const [rejectConfirmProposalId, setRejectConfirmProposalId] = useState<string | null>(null)
   const [sessionExpired, setSessionExpired] = useState(false)
+  const [selectedInboxId, setSelectedInboxId] = useState<string | null>(null)
   const autoReviewedRunRef = useRef<string | null>(null)
   const recoveryAttemptRef = useRef<string | null>(null)
   const canonicalRevisionRef = useRef(canonicalRevisionKey)
   const reviewSnapshotGenerationRef = useRef(0)
   const { review, loading, requestedSourceRowId, error, proposalActions: actions, proposalStatuses: statuses } = state
 
+  const inboxPending = useMemo(() => review ? inboxPendingCount(review.proposals, statuses) : 0, [review, statuses])
   useEffect(() => {
-    onInboxCountChange?.(review ? inboxPendingCount(review.proposals, statuses) : 0)
-  }, [onInboxCountChange, review, statuses])
+    onInboxCountChange?.(inboxPending)
+  }, [onInboxCountChange, inboxPending])
 
   const runReview = useCallback(async ({ sourceRowId, force = false, notify = false }: { sourceRowId?: string; force?: boolean; notify?: boolean } = {}) => {
     if (!extractionRunId) {
@@ -490,7 +492,6 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
   const visibleProposals = visibility.proposals
   const visibleSourceRows = visibility.sourceRows
   const reviewOutcome = useMemo(() => review ? selectExtractionReviewOutcome(review) : null, [review])
-  const reviewProgress = useMemo(() => review ? selectExtractionReviewProgress(review) : null, [review])
   const blockedGroups = useMemo(() => review ? rejectionLabelGroups(review.reviewRun?.validationSummary ?? null) : [], [review])
   const filterCounts = useMemo(() => {
     const counts: Partial<Record<ExtractionReviewFilter, number>> = {}
@@ -518,8 +519,8 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
       <header className="focused-extraction-header">
         <div>
           <span className="review-eyebrow">Evidence review</span>
-          <h2 id="focused-extraction-title">Compound-cell extraction</h2>
-          <p>Nothing changes until you accept a validated correction.</p>
+          <h2 id="focused-extraction-title">Missed rows</h2>
+          <p>{inboxPending > 0 ? `${inboxPending} source lines are not in this BOQ yet.` : "No missed rows."}</p>
         </div>
         <div className="extraction-review-heading-actions">
           {bulkProposalIds.length > 0 && !readOnly ? <Button type="button" size="sm" onClick={() => void acceptAll()} disabled={busy || Boolean(mutationBlockedReason)}><Check aria-hidden="true" />Accept all validated high-confidence</Button> : null}
@@ -539,7 +540,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
         <div className={`extraction-review-result ${review.mode} ${reviewOutcome === "validation-blocked" || reviewOutcome === "proposals-partially-blocked" || reviewOutcome === "legacy-partial" ? "is-blocked" : ""}`} role="status">
           <div className="extraction-review-result-copy"><strong>{reviewOutcome ? extractionReviewOutcomeTitle(reviewOutcome) : ""}</strong><span>{reviewOutcome ? extractionReviewOutcomeMessage(review, reviewOutcome) : review.message}</span></div>
           <div className="extraction-review-result-counts">
-            {reviewProgress && reviewProgress.candidateCount > 0 ? <small>{reviewProgress.progressText}</small> : null}
+            {review && review.proposals.length > 0 ? <small>{`${review.proposals.length - inboxPending} of ${review.proposals.length} leftovers cleared`}</small> : null}
           </div>
         </div>
       ) : null}
@@ -580,84 +581,107 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
 
       {review && (review.proposals.length > 0 || review.sourceRows.length > 0) ? (
         <div className="extraction-review-tabs" role="tablist" aria-label="Review proposals">
-          <button type="button" className={state.tab === "needs-review" ? "tab active" : "tab"} role="tab" aria-selected={state.tab === "needs-review"} onClick={() => dispatch({ type: "set_tab", tab: "needs-review" })}>Needs your review</button>
-          <button type="button" className={state.tab === "history" ? "tab active" : "tab"} role="tab" aria-selected={state.tab === "history"} onClick={() => dispatch({ type: "set_tab", tab: "history" })}>History</button>
+          <button type="button" className={state.tab === "needs-review" ? "tab active" : "tab"} role="tab" aria-selected={state.tab === "needs-review"} onClick={() => dispatch({ type: "set_tab", tab: "needs-review" })}>Inbox</button>
+          <button type="button" className={state.tab === "history" ? "tab active" : "tab"} role="tab" aria-selected={state.tab === "history"} onClick={() => dispatch({ type: "set_tab", tab: "history" })}>Done</button>
         </div>
       ) : null}
 
       {review?.proposals.length ? (
-        <div className="extraction-proposal-list" aria-label="Extraction review proposals">
-          {(() => {
-            const tabState = selectReviewTab({ review, proposalStatuses: statuses }, state.tab)
-            const tabProposals = tabState.proposals
-            return tabProposals.map((proposal) => {
-              const status = statuses[proposal.id]
-              const action = actions[proposal.id]
-              const sourceRows = review.sourceRows.filter((row) => proposal.sourceRowIds.includes(row.sourceRowId))
-              const canAccept = proposalCanBeAccepted(proposal) && !status
-              const canReviewAndAdd = proposalCanBeReviewedAndAdded(proposal, status, readOnly)
-              const humanReview = proposal.operation === "needs_human_review"
-              const manualAddMode = canReviewAndAdd ? proposalManualAddMode(proposal) : null
-              const isIncomplete = humanReview && !canAccept
-              const nonActionable = !isReviewActionableOperation(proposal.operation)
-              const expanded = state.expandedProposalIds[proposal.id] !== false
-              const isComplete = canAccept || (!humanReview && !nonActionable && proposal.stale !== true)
-              return (
-                <article className={`extraction-proposal focused ${status ? `is-${status}` : ""}`} key={proposal.id}>
-                  <div className="extraction-proposal-labels">
-                    <span className={`extraction-operation ${proposal.operation}`}>{OPERATION_LABELS[proposal.operation] ?? proposal.operation.replaceAll("_", " ")}</span>
-                    <span className={proposalIsHighConfidence(proposal) ? "extraction-confidence high" : "extraction-confidence"}>{Math.round(proposal.confidence * 100)}% confidence</span>
-                    <span className="extraction-validated">{isComplete ? "Validated suggestion — ready for your approval" : "More information needed"}</span>
-                  </div>
-                  <p>{proposal.explanation}</p>
-                  <button type="button" className="extraction-proposal-expand" aria-expanded={expanded} onClick={() => dispatch({ type: "toggle_expanded", proposalId: proposal.id })}>{expanded ? "Hide evidence" : "Compare source and proposal"}</button>
-                  {expanded ? <div className="extraction-structure-grid">
-                    <div className="extraction-original-list">{sourceRows.map((source) => <SourceEvidence key={source.sourceRowId} source={source} onNavigateToEvidence={onNavigateToEvidence} onRecheck={(sourceRowId) => void runReview({ sourceRowId, force: true, notify: true })} disabled={readOnly || busy} checking={requestedSourceRowId === source.sourceRowId} />)}<CurrentStructure boq={boq} proposal={proposal} /></div>
-                    <ProposedStructure proposal={proposal} />
-                  </div> : null}
-                  <div className="extraction-validation-summary"><strong>Validation & reconciliation</strong>{humanReview ? <span><TriangleAlert aria-hidden="true" />No safe automatic correction; manual review required</span> : <><span><Check aria-hidden="true" />Source evidence valid</span><span><Check aria-hidden="true" />Arithmetic reconciled</span></>}{proposal.stale ? <span><X aria-hidden="true" />Proposal is stale</span> : null}</div>
-                  <div className="extraction-proposal-footer">
-                    {nonActionable ? <span className="extraction-human-review"><TriangleAlert aria-hidden="true" />{humanReview ? "Needs human review · acceptance disabled" : "Legacy suggestion · acceptance disabled"}</span> : <span />}
-                    <div className="extraction-proposal-actions">
-                      {status === "accepted" && state.proposalCanUndo[proposal.id] && !readOnly ? <Button type="button" variant="outline" size="sm" onClick={() => void executeAction(proposal, "undo")} disabled={Boolean(action) || Boolean(mutationBlockedReason)}>Undo{action === "undoing" ? <Loader2 className="animate-spin" /> : <Undo2 aria-hidden="true" />}</Button> : null}
-                      {!status ? <>
-                        {isComplete && canAccept ? <Button type="button" size="sm" onClick={() => void executeAction(proposal, "accept")} disabled={readOnly || Boolean(mutationBlockedReason) || Boolean(action)}>Accept{action === "accepting" ? <Loader2 className="animate-spin" /> : <Check aria-hidden="true" />}</Button> : null}
-                        {isComplete ? <Button type="button" variant="ghost" size="sm" onClick={() => handleReject(proposal)} disabled={readOnly || Boolean(action)}>Reject{action === "rejecting" ? <Loader2 className="animate-spin" /> : <X aria-hidden="true" />}</Button> : null}
-                        {isIncomplete && humanReview && canReviewAndAdd ? (
-                          <Button type="button" variant="outline" size="sm" onClick={() => { setEditingProposalId(proposal.id); setSourceBackedError(null) }} disabled={Boolean(action)}>Review &amp; add</Button>
-                        ) : null}
-                        {isIncomplete ? <Button type="button" variant="ghost" size="sm" onClick={() => void executeAction(proposal, "skip")} disabled={readOnly || Boolean(action)}>Skip{action === "skipping" ? <Loader2 className="animate-spin" /> : null}</Button> : null}
-                      </> : status !== "accepted" ? <span className="extraction-action-status">{status === "rejected" ? "Rejected" : status === "skipped" ? "Skipped" : "Undone"}</span> : null}
+        (() => {
+          const tabState = selectReviewTab({ review, proposalStatuses: statuses }, state.tab)
+          const tabProposals = tabState.proposals
+          if (tabProposals.length === 0) return null
+          const inboxRows = tabProposals.map((proposal) => {
+            const sourceRef = review.sourceRefs.find((ref) => proposal.sourceRowIds.includes(ref.sourceRowId))
+            return { id: proposal.id, proposal, chip: inboxChipForProposal(proposal, statuses[proposal.id], readOnly, review.sourceRows), sourceRef }
+          })
+          const unpricedGroupIds = unpricedInboxGroupIds(inboxRows)
+          const openRow = inboxRows.find((row) => row.id === selectedInboxId) ?? inboxRows[0]
+          const nextRows = inboxRows.filter((row) => row.id !== openRow.id)
+          const renderInboxRow = (row: (typeof inboxRows)[number]) => (
+            <button type="button" key={row.id} data-od-id="extraction-inbox-item" data-unpriced-group={unpricedGroupIds.includes(row.id) ? "true" : undefined} className={`extraction-inbox-item${row.id === openRow.id ? " is-now" : ""}`} onClick={() => { setSelectedInboxId(row.id); if (row.sourceRef) onNavigateToEvidence({ page: row.sourceRef.page, table: row.sourceRef.table, row: row.sourceRef.row, cells: [] }) }}>
+              <strong>{inboxRowTitle(row.proposal, review.sourceRows)}</strong>
+              <span className="extraction-inbox-meta">p.{row.sourceRef?.page} · {INBOX_CHIP_LABEL[row.chip]}</span>
+            </button>
+          )
+          return (
+            <div className="extraction-inbox" aria-label="Extraction review proposals">
+              <span className="review-eyebrow">NOW</span>
+              {renderInboxRow(openRow)}
+              {(() => {
+                const proposal = openRow.proposal
+                const status = statuses[proposal.id]
+                const action = actions[proposal.id]
+                const sourceRows = review.sourceRows.filter((row) => proposal.sourceRowIds.includes(row.sourceRowId))
+                const canAccept = proposalCanBeAccepted(proposal) && !status
+                const canReviewAndAdd = proposalCanBeReviewedAndAdded(proposal, status, readOnly)
+                const humanReview = proposal.operation === "needs_human_review"
+                const manualAddMode = canReviewAndAdd ? proposalManualAddMode(proposal) : null
+                const isIncomplete = humanReview && !canAccept
+                const nonActionable = !isReviewActionableOperation(proposal.operation)
+                const isComplete = canAccept || (!humanReview && !nonActionable && proposal.stale !== true)
+                return (
+                  <article className={`extraction-proposal focused ${status ? `is-${status}` : ""}`}>
+                    <div className="extraction-proposal-labels">
+                      <span className={`extraction-operation ${proposal.operation}`}>{OPERATION_LABELS[proposal.operation] ?? proposal.operation.replaceAll("_", " ")}</span>
+                      <span className="extraction-validated">{isComplete ? "Validated suggestion — ready for your approval" : "More information needed"}</span>
                     </div>
-                  </div>
-                  {editingProposalId === proposal.id && humanReview && canReviewAndAdd ? (
-                    manualAddMode === "batch" ? (
-                      <EvidenceOnlyBatchItemEditor
-                        boq={boq}
-                        proposal={proposal}
-                        sourceRows={sourceRows}
-                        busy={action === "adding"}
-                        serverError={sourceBackedError}
-                        onCancel={() => { setEditingProposalId(null); setSourceBackedError(null) }}
-                        onSubmit={(payload) => submitSourceBackedItem(proposal, payload)}
-                      />
-                    ) : (
-                      <SourceBackedItemEditor
-                        boq={boq}
-                        proposal={proposal}
-                        sourceRows={sourceRows}
-                        busy={action === "adding"}
-                        serverError={sourceBackedError}
-                        onCancel={() => { setEditingProposalId(null); setSourceBackedError(null) }}
-                        onSubmit={(payload) => submitSourceBackedItem(proposal, payload)}
-                      />
-                    )
-                  ) : null}
-                </article>
-              )
-            })
-          })()}
-        </div>
+                    <p>{firstInboxSentence(proposal.explanation)}</p>
+                    <details className="extraction-inbox-details">
+                      <summary>Details</summary>
+                      <div className="extraction-structure-grid">
+                        <div className="extraction-original-list">{sourceRows.map((source) => <SourceEvidence key={source.sourceRowId} source={source} onNavigateToEvidence={onNavigateToEvidence} onRecheck={(sourceRowId) => void runReview({ sourceRowId, force: true, notify: true })} disabled={readOnly || busy} checking={requestedSourceRowId === source.sourceRowId} />)}<CurrentStructure boq={boq} proposal={proposal} /></div>
+                        <ProposedStructure proposal={proposal} />
+                      </div>
+                    </details>
+                    <div className="extraction-validation-summary"><strong>Validation & reconciliation</strong>{humanReview ? <span><TriangleAlert aria-hidden="true" />No safe automatic correction; manual review required</span> : <><span><Check aria-hidden="true" />Source evidence valid</span><span><Check aria-hidden="true" />Arithmetic reconciled</span></>}{proposal.stale ? <span><X aria-hidden="true" />Proposal is stale</span> : null}</div>
+                    <div className="extraction-proposal-footer">
+                      {nonActionable ? <span className="extraction-human-review"><TriangleAlert aria-hidden="true" />{humanReview ? "Needs human review · acceptance disabled" : "Legacy suggestion · acceptance disabled"}</span> : <span />}
+                      <div className="extraction-proposal-actions">
+                        {status === "accepted" && state.proposalCanUndo[proposal.id] && !readOnly ? <Button type="button" variant="outline" size="sm" onClick={() => void executeAction(proposal, "undo")} disabled={Boolean(action) || Boolean(mutationBlockedReason)}>Undo{action === "undoing" ? <Loader2 className="animate-spin" /> : <Undo2 aria-hidden="true" />}</Button> : null}
+                        {!status ? <>
+                          {isComplete && canAccept ? <Button type="button" size="sm" onClick={() => void executeAction(proposal, "accept")} disabled={readOnly || Boolean(mutationBlockedReason) || Boolean(action)}>Accept{action === "accepting" ? <Loader2 className="animate-spin" /> : <Check aria-hidden="true" />}</Button> : null}
+                          {isComplete ? <Button type="button" variant="ghost" size="sm" onClick={() => handleReject(proposal)} disabled={readOnly || Boolean(action)}>Reject{action === "rejecting" ? <Loader2 className="animate-spin" /> : <X aria-hidden="true" />}</Button> : null}
+                          {isIncomplete && humanReview && canReviewAndAdd ? (
+                            <Button type="button" variant="outline" size="sm" onClick={() => { setEditingProposalId(proposal.id); setSourceBackedError(null) }} disabled={Boolean(action)}>Review &amp; add</Button>
+                          ) : null}
+                          {isIncomplete ? <Button type="button" variant="ghost" size="sm" onClick={() => void executeAction(proposal, "skip")} disabled={readOnly || Boolean(action)}>Skip{action === "skipping" ? <Loader2 className="animate-spin" /> : null}</Button> : null}
+                        </> : status !== "accepted" ? <span className="extraction-action-status">{status === "rejected" ? "Rejected" : status === "skipped" ? "Skipped" : "Undone"}</span> : null}
+                      </div>
+                    </div>
+                    {editingProposalId === proposal.id && humanReview && canReviewAndAdd ? (
+                      manualAddMode === "batch" ? (
+                        <EvidenceOnlyBatchItemEditor
+                          boq={boq}
+                          proposal={proposal}
+                          sourceRows={sourceRows}
+                          busy={action === "adding"}
+                          serverError={sourceBackedError}
+                          onCancel={() => { setEditingProposalId(null); setSourceBackedError(null) }}
+                          onSubmit={(payload) => submitSourceBackedItem(proposal, payload)}
+                        />
+                      ) : (
+                        <SourceBackedItemEditor
+                          boq={boq}
+                          proposal={proposal}
+                          sourceRows={sourceRows}
+                          busy={action === "adding"}
+                          serverError={sourceBackedError}
+                          onCancel={() => { setEditingProposalId(null); setSourceBackedError(null) }}
+                          onSubmit={(payload) => submitSourceBackedItem(proposal, payload)}
+                        />
+                      )
+                    ) : null}
+                  </article>
+                )
+              })()}
+              {nextRows.length ? <>
+                <span className="review-eyebrow">NEXT</span>
+                {nextRows.map((row) => renderInboxRow(row))}
+              </> : null}
+            </div>
+          )
+        })()
       ) : null}
 
       {visibleSourceRows.length ? <div className="extraction-reviewed-source-list" aria-label="Visible source rows without proposals"><strong>{effectiveFilter === "all" ? "Candidate source rows without proposals" : "Source rows matching this filter"}</strong>{visibleSourceRows.map((source) => <SourceEvidence key={source.sourceRowId} source={source} onNavigateToEvidence={onNavigateToEvidence} onRecheck={(sourceRowId) => void runReview({ sourceRowId, force: true, notify: true })} disabled={readOnly || busy} checking={requestedSourceRowId === source.sourceRowId} />)}</div> : null}

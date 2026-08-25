@@ -21,3 +21,19 @@ test("page header uses Missed rows and BOQ items", () => {
 	assert.match(page, /BOQ items/);
 	assert.doesNotMatch(page, /Extraction Suggestions/);
 });
+
+test("inbox uses Inbox/Done labels and a compact NOW/NEXT list", () => {
+	assert.match(review, />Inbox</);
+	assert.match(review, />Done</);
+	assert.match(review, /NOW/);
+	assert.match(review, /NEXT/);
+	assert.match(review, /Missed rows/);
+	assert.doesNotMatch(review, /Compound-cell extraction/);
+	assert.match(review, /source lines are not in this BOQ yet/);
+});
+
+test("proposal evidence grid is behind a closed Details disclosure", () => {
+	assert.match(review, /<details/);
+	assert.match(review, />Details</);
+	assert.doesNotMatch(review, /Hide evidence/);
+});

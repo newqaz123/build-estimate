@@ -1602,6 +1602,14 @@
 .extraction-review-result strong { color: var(--fg-2); font-size: 11px; }
 .extraction-review-result small { color: #9a6b00; font-size: 10px; text-align: right; }
 .extraction-proposal-list { display: grid; gap: var(--space-2); margin-top: var(--space-3); }
+.extraction-inbox { display: grid; gap: var(--space-2); margin-top: var(--space-3); }
+.extraction-inbox-item { display: grid; gap: 2px; width: 100%; text-align: left; padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); cursor: pointer; }
+.extraction-inbox-item.is-now { border-color: color-mix(in oklab, var(--accent) 40%, var(--border)); }
+.extraction-inbox-meta { color: var(--muted-text); font-size: 11px; }
+.extraction-inbox-details summary { cursor: pointer; color: var(--muted-text); font-size: 11px; }
+@media (max-width: 480px) {
+  .extraction-inbox-item { min-height: 44px; }
+}
 .extraction-review-filters { display: flex; gap: var(--space-1); margin-top: var(--space-3); overflow-x: auto; padding-bottom: 2px; }
 .extraction-review-filters .filter-chip { flex: 0 0 auto; background: var(--surface); }
 .extraction-review-filters .filter-chip.active { background: color-mix(in oklab, var(--accent) 12%, var(--surface)); color: var(--fg); border-color: var(--accent); }
