@@ -158,18 +158,6 @@ function CurrentStructure({ boq, proposal }: { boq: Boq; proposal: ValidatedProp
   )
 }
 
-const OPERATION_LABELS: Record<string, string> = {
-  insert_missing_item: "Add missing item",
-  replace_item: "Replace item",
-  remove_spurious_item: "Remove non-item row",
-  needs_human_review: "Needs human review",
-  keep: "Keep",
-  split: "Split",
-  merge: "Merge",
-  separate_components: "Separate components",
-  create_bundle: "Create bundle",
-}
-
 const REVIEW_FILTERS: Array<{ value: ExtractionReviewFilter; label: string }> = [
   { value: "all", label: "All" },
   { value: "pending", label: "Pending" },
@@ -387,6 +375,26 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
       return false
     }
   }, [boq.id, extractionRunId, mutationBlockedReason, onBoqChange, readOnly, refreshStoredReview])
+
+  const restoreProposal = useCallback(async (proposal: ValidatedProposal) => {
+    if (!extractionRunId || readOnly) return false
+    dispatch({ type: "proposal_action_started", proposalId: proposal.id, action: "reopening" })
+    try {
+      const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/extraction-runs/${encodeURIComponent(extractionRunId)}/proposals/${encodeURIComponent(proposal.id)}/reopen`, { method: "POST" })
+      if (response.status === 401) {
+        setSessionExpired(true)
+        dispatch({ type: "proposal_action_failed", proposalId: proposal.id, error: "Session expired. Please sign in again." })
+        return false
+      }
+      if (!response.ok) throw new Error(await readError(response, "Suggestion could not be restored."))
+      await refreshStoredReview()
+      toast.success("Suggestion restored to inbox")
+      return true
+    } catch (cause) {
+      dispatch({ type: "proposal_action_failed", proposalId: proposal.id, error: cause instanceof Error ? cause.message : "Suggestion could not be restored." })
+      return false
+    }
+  }, [boq.id, extractionRunId, readOnly, refreshStoredReview])
 
   /** Marks every unpriced-group row as not an item by reusing the per-proposal
    *  skip POST sequentially. Stops at the first failure so a mid-group error
@@ -607,10 +615,11 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
           const tabState = selectReviewTab({ review, proposalStatuses: statuses }, state.tab)
           const tabProposals = tabState.proposals
           if (tabProposals.length === 0) return null
-          const inboxRows = tabProposals.map((proposal) => {
+          const inboxRows = tabProposals.filter((proposal) => state.tab !== "needs-review" || proposal.stale !== true).map((proposal) => {
             const sourceRef = review.sourceRefs.find((ref) => proposal.sourceRowIds.includes(ref.sourceRowId))
             return { id: proposal.id, proposal, chip: inboxChipForProposal(proposal, statuses[proposal.id], readOnly, review.sourceRows), sourceRef }
           })
+          if (inboxRows.length === 0) return null
           const unpricedGroupIds = unpricedInboxGroupIds(inboxRows)
           const openRow = inboxRows.find((row) => row.id === selectedInboxId) ?? inboxRows[0]
           const nextRows = inboxRows.filter((row) => row.id !== openRow.id)
@@ -644,8 +653,8 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
                 return (
                   <article key={proposal.id} className={`extraction-proposal focused ${status ? `is-${status}` : ""}`}>
                     <div className="extraction-proposal-labels">
-                      <span className={`extraction-operation ${proposal.operation}`}>{OPERATION_LABELS[proposal.operation] ?? proposal.operation.replaceAll("_", " ")}</span>
-                      <span className="extraction-validated">{isComplete ? "Validated suggestion — ready for your approval" : "More information needed"}</span>
+                      <span className="extraction-operation">{INBOX_CHIP_LABEL[openRow.chip]}</span>
+                      <span className="extraction-validated">{canAccept ? "Validated suggestion — ready for your approval" : null}</span>
                     </div>
                     <p>{openRow.chip === "no_price" || openRow.chip === "quote_total" ? "This source line has no usable price. Mark it as not an item, or type numbers only if you can see them on the PDF." : firstInboxSentence(proposal.explanation)}</p>
                     <details className="extraction-inbox-details">
@@ -654,10 +663,10 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
                         <div className="extraction-original-list">{sourceRows.map((source) => <SourceEvidence key={source.sourceRowId} source={source} onNavigateToEvidence={onNavigateToEvidence} onRecheck={(sourceRowId) => void runReview({ sourceRowId, force: true, notify: true })} disabled={readOnly || busy} checking={requestedSourceRowId === source.sourceRowId} />)}<CurrentStructure boq={boq} proposal={proposal} /></div>
                         <ProposedStructure proposal={proposal} />
                       </div>
+                      <div className="extraction-validation-summary"><strong>Validation & reconciliation</strong>{humanReview ? <span><TriangleAlert aria-hidden="true" />No safe automatic correction; manual review required</span> : <><span><Check aria-hidden="true" />Source evidence valid</span><span><Check aria-hidden="true" />Arithmetic reconciled</span></>}{proposal.stale ? <span><X aria-hidden="true" />Proposal is stale</span> : null}</div>
                     </details>
-                    <div className="extraction-validation-summary"><strong>Validation & reconciliation</strong>{humanReview ? <span><TriangleAlert aria-hidden="true" />No safe automatic correction; manual review required</span> : <><span><Check aria-hidden="true" />Source evidence valid</span><span><Check aria-hidden="true" />Arithmetic reconciled</span></>}{proposal.stale ? <span><X aria-hidden="true" />Proposal is stale</span> : null}</div>
                     <div className="extraction-proposal-footer">
-                      {nonActionable ? <span className="extraction-human-review"><TriangleAlert aria-hidden="true" />{humanReview ? "Needs human review · acceptance disabled" : "Legacy suggestion · acceptance disabled"}</span> : <span />}
+                      <span />
                       <div className="extraction-proposal-actions">
                         {status === "accepted" && state.proposalCanUndo[proposal.id] && !readOnly ? <Button type="button" variant="outline" size="sm" onClick={() => void executeAction(proposal, "undo")} disabled={Boolean(action) || Boolean(mutationBlockedReason)}>Undo{action === "undoing" ? <Loader2 className="animate-spin" /> : <Undo2 aria-hidden="true" />}</Button> : null}
                         {!status ? <>
@@ -668,7 +677,10 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
                             <Button type="button" variant="outline" size="sm" onClick={() => { setEditingProposalId(proposal.id); setSourceBackedError(null) }} disabled={Boolean(action)}>Add to BOQ</Button>
                           ) : null}
                           <Button type="button" variant="ghost" size="sm" onClick={() => void executeAction(proposal, "skip")} disabled={readOnly || Boolean(action)}>Not an item{action === "skipping" ? <Loader2 className="animate-spin" /> : null}</Button>
-                        </> : status !== "accepted" ? <span className="extraction-action-status">{status === "rejected" ? "Rejected" : status === "skipped" ? "Skipped" : "Undone"}</span> : null}
+                        </> : status !== "accepted" ? <>
+                          <span className="extraction-action-status">{status === "rejected" ? "Rejected" : status === "skipped" ? "Skipped" : "Undone"}</span>
+                          {status === "skipped" ? <Button type="button" variant="outline" size="sm" onClick={() => void restoreProposal(proposal)} disabled={readOnly || Boolean(action)}>Restore{action === "reopening" ? <Loader2 className="animate-spin" /> : <Undo2 aria-hidden="true" />}</Button> : null}
+                        </> : null}
                       </div>
                     </div>
                     {editingProposalId === proposal.id && humanReview && canReviewAndAdd && chipAllowsAdd ? (

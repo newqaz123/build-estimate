@@ -477,6 +477,62 @@ test('inbox chips follow quote / target / add-gate / unpriced precedence', () =>
   )
 })
 
+test('unpriced price wording beats the manual add gate', () => {
+  const rows = [{
+    sourceRowId: 'row-1',
+    rawText: 'A.1 Concrete Curb',
+    classification: 'item' as const,
+    page: 2,
+    table: 1,
+    row: 3,
+  }]
+  const draft: SourceBackedReviewDraft = {
+    mapping: { sourceRowIds: ['row-1'] },
+    resolvedValues: {},
+    missingFields: [],
+    sourceRowIds: ['row-1'],
+    sourceRefs: [{ page: 2, table: 1, row: 3 }],
+    section: null,
+  }
+  for (const explanation of ['Missing source price.', 'No price is shown.', 'Incomplete price data.']) {
+    assert.equal(
+      inboxChipForProposal(
+        proposal({ operation: 'needs_human_review', targetItemIds: [], reviewDraft: draft, explanation }),
+        undefined,
+        false,
+        rows,
+      ),
+      'no_price',
+      explanation,
+    )
+  }
+})
+
+test('missing price fields mark a source-backed draft as no price', () => {
+  const draft: SourceBackedReviewDraft = {
+    mapping: { sourceRowIds: ['row-1'] },
+    resolvedValues: { description: 'Concrete Curb', unit: 'm', quantity: 1 },
+    missingFields: ['rate'],
+    sourceRowIds: ['row-1'],
+    sourceRefs: [{ page: 2, table: 1, row: 3 }],
+    section: null,
+  }
+  assert.equal(
+    inboxChipForProposal(
+      proposal({
+        operation: 'needs_human_review',
+        targetItemIds: [],
+        reviewDraft: draft,
+        explanation: 'The source row needs review.',
+      }),
+      undefined,
+      false,
+      [],
+    ),
+    'no_price',
+  )
+})
+
 test('inboxRowTitle prefers source rawText over the AI explanation', () => {
   assert.equal(
     inboxRowTitle(
@@ -502,8 +558,18 @@ test('inboxRowTitle prefers source rawText over the AI explanation', () => {
 test('inboxPendingCount counts only unresolved proposals', () => {
   assert.equal(
     inboxPendingCount(
-      [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
+      [{ id: 'a', stale: false }, { id: 'b', stale: false }, { id: 'c', stale: false }],
       { b: { status: 'skipped' }, c: 'accepted' },
+    ),
+    1,
+  )
+})
+
+test('inboxPendingCount excludes stale proposals from unresolved count', () => {
+  assert.equal(
+    inboxPendingCount(
+      [{ id: 'pending', stale: false }, { id: 'stale', stale: true }, { id: 'skipped', stale: false }],
+      { skipped: { status: 'skipped' } },
     ),
     1,
   )

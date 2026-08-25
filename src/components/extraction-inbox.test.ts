@@ -101,6 +101,44 @@ test("no missed rows copy is gated on a loaded review", () => {
 	assert.match(review, /review && inboxPending === 0\s*\?/);
 });
 
+test("stale proposals are excluded from the Inbox list projection", () => {
+	assert.match(
+		review,
+		/const inboxRows = tabProposals\.filter\(\(proposal\) => state\.tab !== "needs-review" \|\| proposal\.stale !== true\)\.map\(/,
+	);
+	assert.match(review, /if \(inboxRows\.length === 0\) return null;?/);
+});
+
+test("skipped Done rows restore through the existing reopen endpoint", () => {
+	assert.match(review, /const restoreProposal = useCallback/);
+	assert.match(
+		review,
+		/proposals\/\$\{encodeURIComponent\(proposal\.id\)\}\/reopen/,
+	);
+	assert.match(review, /status === "skipped"[\s\S]*?Restore/);
+});
+
+test("open-row copy uses the reason chip and keeps technical validation in Details", () => {
+	assert.match(
+		review,
+		/<span className="extraction-operation">\s*\{INBOX_CHIP_LABEL\[openRow\.chip\]\}\s*<\/span>/,
+	);
+	assert.match(
+		review,
+		/canAccept\s*\?\s*"Validated suggestion — ready for your approval"\s*:\s*null/,
+	);
+	const detailsStart = review.indexOf(
+		'<details className="extraction-inbox-details">',
+	);
+	const validationSummary = review.indexOf(
+		'<div className="extraction-validation-summary">',
+	);
+	const detailsEnd = review.indexOf("</details>", detailsStart);
+	assert.ok(detailsStart >= 0 && validationSummary > detailsStart);
+	assert.ok(detailsEnd > validationSummary);
+	assert.doesNotMatch(review, /Needs human review/);
+});
+
 test("mobile CSS hides one inbox pane at a time via data-pane", () => {
 	assert.match(
 		css,

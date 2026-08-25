@@ -261,7 +261,10 @@ export type InboxSourceRow = Pick<
 const INBOX_SENTENCE_MAX_CHARS = 160
 const INBOX_SENTENCE_BOUNDARY = /[.!?](?:\s|$)/
 const QUOTE_TOTAL_TEXT_PATTERN = /overhead|profit|discount|sub-?total|payable|grand total|amount in words|\bvat\b/i
-const UNPRICED_TEXT_PATTERN = /unpriced|incomplete pricing|no priced candidate|no numeric|lacks deterministic candidate/i
+const UNPRICED_TEXT_PATTERN = /\bunpriced\b|incomplete pricing\b|incomplete price\b|no priced candidate\b|no numeric\b|lacks deterministic candidate\b|missing(?: source)? price\b|\bno price\b/i
+const UNPRICED_MISSING_FIELDS = new Set([
+  'rate', 'total', 'materialRate', 'materialTotal', 'labourRate', 'labourTotal', 'amount',
+])
 
 /** First sentence of an inbox row's text, capped at maxChars (default 160). */
 export function firstInboxSentence(text: string, maxChars: number = INBOX_SENTENCE_MAX_CHARS): string {
@@ -293,9 +296,10 @@ export function isQuoteTotalProposal(
 }
 
 function hasUnpricedInboxText(
-  proposal: Pick<ValidatedProposal, 'explanation' | 'sourceRowIds'>,
+  proposal: Pick<ValidatedProposal, 'explanation' | 'reviewDraft' | 'sourceRowIds'>,
   sourceRows: readonly InboxSourceRow[],
 ): boolean {
+  if (proposal.reviewDraft?.missingFields.some((field) => UNPRICED_MISSING_FIELDS.has(field))) return true
   if (UNPRICED_TEXT_PATTERN.test(proposal.explanation)) return true
   return backingInboxRows(proposal.sourceRowIds, sourceRows)
     .some((row) => UNPRICED_TEXT_PATTERN.test(row.rawText))
@@ -334,10 +338,10 @@ export function inboxRowTitle(
 }
 
 export function inboxPendingCount(
-  proposals: readonly Pick<ValidatedProposal, 'id'>[],
+  proposals: readonly Pick<ValidatedProposal, 'id' | 'stale'>[],
   statuses: Readonly<Record<string, { status?: string } | string | undefined>>,
 ): number {
-  return proposals.filter((proposal) => !isResolvedInboxStatus(statuses[proposal.id])).length
+  return proposals.filter((proposal) => proposal.stale !== true && !isResolvedInboxStatus(statuses[proposal.id])).length
 }
 
 function isResolvedInboxStatus(entry: { status?: string } | string | undefined): boolean {
