@@ -34,6 +34,48 @@ interface ChatMessage {
 
 type CatalogSelection = Pick<StandardEntry, "id" | "description" | "unit">
 
+/** True while the New Item dialog should run a catalog search for `desc`.
+ * Skips closed modals, sub-2-char text, and the post-pick state where the
+ * description already equals the selected standard (so the dropdown stays
+ * closed and no "no match" flash re-appears after selecting a suggestion). */
+export function shouldSearchDescSuggestions(input: {
+  modalOpen: boolean
+  desc: string
+  selectedStandard: CatalogSelection | null
+}): boolean {
+  if (!input.modalOpen) return false
+  const desc = input.desc.trim()
+  if (desc.length < 2) return false
+  if (input.selectedStandard && desc === input.selectedStandard.description.trim()) return false
+  return true
+}
+
+export type DescSuggestionNotice =
+  | { kind: "hidden" }
+  | { kind: "searching" }
+  | { kind: "selected"; description: string }
+  | { kind: "no-match" }
+
+/** What the description combobox should say below the input. Distinguishes
+ * "still searching" from "genuinely no match" and never reports "no match"
+ * once a catalog standard has been picked for the current description. */
+export function descSuggestionNotice(input: {
+  desc: string
+  suggestions: number
+  loading: boolean
+  selectedStandard: CatalogSelection | null
+  searchedFor: string
+}): DescSuggestionNotice {
+  const desc = input.desc.trim()
+  if (desc.length === 0) return { kind: "hidden" }
+  if (input.selectedStandard && desc === input.selectedStandard.description.trim()) {
+    return { kind: "selected", description: input.selectedStandard.description }
+  }
+  if (input.suggestions > 0) return { kind: "hidden" }
+  if (input.loading || input.searchedFor.trim() !== desc) return { kind: "searching" }
+  return { kind: "no-match" }
+}
+
 function makeId(prefix = "e") {
   return `${prefix}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
@@ -120,6 +162,7 @@ export default function EstimatorPage() {
   const [chatCatalogLoading, setChatCatalogLoading] = useState(false)
   const catalogLoadedRef = useRef(false)
   const catalogEntriesRef = useRef<StandardEntry[]>([])
+  const catalogFetchSeqRef = useRef(0)
 
   const [itemModalOpen, setItemModalOpen] = useState(false)
   const [editingItemId, setEditingItemId] = useState<string | null>(null)
@@ -128,6 +171,7 @@ export default function EstimatorPage() {
   const [modalRate, setModalRate] = useState("0")
   const [modalUnit, setModalUnit] = useState("")
   const [descSuggestions, setDescSuggestions] = useState<StandardEntry[]>([])
+  const [descSearchedFor, setDescSearchedFor] = useState("")
   const [selectedModalStandard, setSelectedModalStandard] = useState<CatalogSelection | null>(null)
   const [activeSuggestion, setActiveSuggestion] = useState(-1)
   const [itemError, setItemError] = useState("")
@@ -170,6 +214,7 @@ export default function EstimatorPage() {
   }, [fetchEstimates])
 
   const fetchCatalog = useCallback(async (search: string, signal?: AbortSignal): Promise<StandardEntry[]> => {
+    const seq = ++catalogFetchSeqRef.current
     setCatalogLoading(true)
     setCatalogError("")
     try {
@@ -200,7 +245,9 @@ export default function EstimatorPage() {
       }
       return []
     } finally {
-      if (!signal?.aborted) setCatalogLoading(false)
+      // The latest request owns the shared loading flag, so an aborted fetch
+      // (e.g. a suggestion pick cancels an in-flight search) still settles it.
+      if (seq === catalogFetchSeqRef.current) setCatalogLoading(false)
     }
   }, [])
 
@@ -215,16 +262,18 @@ export default function EstimatorPage() {
   }, [catalogOpen, catalogSearch, fetchCatalog])
 
   useEffect(() => {
-    if (!itemModalOpen || modalDesc.trim().length < 2) return
+    if (!shouldSearchDescSuggestions({ modalOpen: itemModalOpen, desc: modalDesc, selectedStandard: selectedModalStandard })) return
+    const query = modalDesc
     const controller = new AbortController()
     const timer = window.setTimeout(async () => {
-      const entries = await fetchCatalog(modalDesc, controller.signal)
+      const entries = await fetchCatalog(query, controller.signal)
       if (controller.signal.aborted) return
       setDescSuggestions(entries.slice(0, 8))
       setActiveSuggestion(entries.length > 0 ? 0 : -1)
+      setDescSearchedFor(query.trim())
     }, 220)
     return () => { window.clearTimeout(timer); controller.abort() }
-  }, [fetchCatalog, itemModalOpen, modalDesc])
+  }, [fetchCatalog, itemModalOpen, modalDesc, selectedModalStandard])
 
   useEffect(() => () => chatAbortRef.current?.abort(), [])
 
@@ -325,6 +374,13 @@ export default function EstimatorPage() {
   }
 
   const totalAmount = items.reduce((sum, i) => sum + i.total, 0)
+  const descNotice = descSuggestionNotice({
+    desc: modalDesc,
+    suggestions: descSuggestions.length,
+    loading: catalogLoading,
+    selectedStandard: selectedModalStandard,
+    searchedFor: descSearchedFor,
+  })
 
   async function handleSave() {
     if (saveInFlightRef.current) return
@@ -392,6 +448,7 @@ export default function EstimatorPage() {
       setSelectedModalStandard(null)
     }
     setDescSuggestions([])
+    setDescSearchedFor("")
     setActiveSuggestion(-1)
     setItemError("")
     setItemModalOpen(true)
@@ -402,6 +459,7 @@ export default function EstimatorPage() {
     setEditingItemId(null)
     setSelectedModalStandard(null)
     setDescSuggestions([])
+    setDescSearchedFor("")
     setActiveSuggestion(-1)
     setItemError("")
     window.setTimeout(() => modalTriggerRef.current?.focus(), 0)
@@ -1092,9 +1150,19 @@ export default function EstimatorPage() {
                   ))}
                 </div>
               )}
-              {modalDesc && descSuggestions.length === 0 && (
+              {descNotice.kind === "searching" && (
+                <div className="desc-suggest open" role="status">
+                  <div className="ds-empty">Searching catalog…</div>
+                </div>
+              )}
+              {descNotice.kind === "no-match" && (
                 <div className="desc-suggest open">
                   <div className="ds-empty">No catalog match — type your own description</div>
+                </div>
+              )}
+              {descNotice.kind === "selected" && (
+                <div className="desc-suggest open">
+                  <div className="ds-empty ds-selected">✓ Catalog match — {descNotice.description}</div>
                 </div>
               )}
             </div>
