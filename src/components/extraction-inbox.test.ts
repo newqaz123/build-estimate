@@ -139,6 +139,55 @@ test("open-row copy uses the reason chip and keeps technical validation in Detai
 	assert.doesNotMatch(review, /Needs human review/);
 });
 
+test("Not an item renders and dispatches only for proposals the server can skip", () => {
+	assert.match(
+		review,
+		/const canSkip = !status && proposalCanBeSkipped\(proposal\);/,
+	);
+	assert.match(
+		review,
+		/\{canSkip \? \(\s*<Button[\s\S]*?void executeAction\(proposal, "skip"\)[\s\S]*?Not an item/,
+	);
+	assert.match(
+		review,
+		/if \(action === "skip" && !proposalCanBeSkipped\(proposal\)\) return false;/,
+	);
+});
+
+test("grouped not-an-item selection and dispatch reuse the single-row skip gate", () => {
+	assert.match(review, /status: statuses\[proposal\.id\],\s*sourceRef,/);
+	assert.match(
+		review,
+		/const unpricedGroupIds = unpricedInboxGroupIds\(inboxRows\);/,
+	);
+	assert.match(
+		review,
+		/if \(!row \|\| !proposalCanBeSkipped\(row\.proposal\)\) continue;\s*const ok = await executeAction\(row\.proposal, "skip"\);\s*if \(!ok\) break;/,
+	);
+});
+
+test("unpriced not-an-item guidance shows only when the open row can be skipped", () => {
+	assert.match(
+		review,
+		/canSkip &&\s*\(openRow\.chip === "no_price" \|\| openRow\.chip === "quote_total"\)\s*\?\s*"This source line has no usable price/,
+	);
+});
+
+test("Accept shows the deterministic outcome and complete legacy rows fall back to source review", () => {
+	assert.match(
+		review,
+		/const acceptOutcome = proposalAcceptOutcomeLabel\(proposal\);/,
+	);
+	assert.match(
+		review,
+		/\{canAccept && acceptOutcome \? \(\s*<span className="extraction-action-status">\{acceptOutcome\}<\/span>/,
+	);
+	assert.match(
+		review,
+		/\) : isComplete \? null : \(\s*<span className="extraction-action-status">\s*Review source in Details\s*<\/span>/,
+	);
+});
+
 test("mobile CSS hides one inbox pane at a time via data-pane", () => {
 	assert.match(
 		css,

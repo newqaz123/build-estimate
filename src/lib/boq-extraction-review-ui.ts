@@ -29,6 +29,41 @@ export function proposalCanBeAccepted(proposal: ReviewableProposal): boolean {
   )
 }
 
+type SkippableProposal = Pick<ReviewableProposal, 'operation' | 'evidenceValid' | 'reconciled' | 'stale'>
+
+/** Mirrors the server skip gate (`skipExtractionProposal`): only incomplete
+ *  proposals — human review, unproven evidence, unreconciled arithmetic, or a
+ *  stale target — may be marked "Not an item". The server refuses complete
+ *  proposals with `not_incomplete`, so those are accepted or rejected instead.
+ *  Lifecycle status and read-only protections stay with the caller. */
+export function proposalCanBeSkipped(proposal: SkippableProposal): boolean {
+  return proposal.operation === 'needs_human_review'
+    || proposal.evidenceValid !== true
+    || proposal.reconciled !== true
+    || proposal.stale === true
+}
+
+function boqItemCount(count: number): string {
+  return `${count} BOQ item${count === 1 ? '' : 's'}`
+}
+
+/** Deterministic Accept outcome derived only from the operation and the item
+ *  counts the server mutation applies — never from AI prose. Insert adds every
+ *  proposed item, replace swaps the targets for the proposed items, and remove
+ *  deletes the targets without a replacement. Other operations return null. */
+export function proposalAcceptOutcomeLabel(
+  proposal: Pick<ValidatedProposal, 'operation' | 'proposedItems' | 'targetItemIds'>,
+): string | null {
+  const proposed = boqItemCount(proposal.proposedItems.length)
+  const targeted = boqItemCount(proposal.targetItemIds.length)
+  switch (proposal.operation) {
+    case 'insert_missing_item': return `Add missing item · ${proposed}`
+    case 'replace_item': return `Replace item · ${targeted} → ${proposed}`
+    case 'remove_spurious_item': return `Remove non-item row · ${targeted}`
+    default: return null
+  }
+}
+
 /** Lifecycle statuses recorded after a reviewer resolves a proposal. Used to keep
  *  manual add gated to proposals that are still pending (no recorded outcome). */
 type ProposalReviewLifecycleStatus = 'accepted' | 'rejected' | 'skipped' | 'superseded' | 'undone'
@@ -235,7 +270,7 @@ export function rejectionLabelGroups(summary: ProposalValidationSummary | null):
  * Exception inbox projection
  * Pure helpers that classify leftover extraction suggestions into inbox
  * chips for the exception inbox. Rendering stays in the components; the
- * only gate reused here is the manual-add eligibility predicate.
+ * only gates reused here are the manual-add and skip eligibility predicates.
  * ------------------------------------------------------------------ */
 
 export type InboxChip =
@@ -350,13 +385,22 @@ function isResolvedInboxStatus(entry: { status?: string } | string | undefined):
   return typeof entry.status === 'string' && entry.status.length > 0
 }
 
-/** Ids of rows eligible for the shared unpriced grouping; only meaningful
- *  when at least two rows share the condition, otherwise []. */
+/** Ids of pending rows eligible for the shared unpriced grouping; only
+ *  meaningful when at least two rows qualify, otherwise []. A chip alone never
+ *  authorizes skip: each row must also pass `proposalCanBeSkipped`, otherwise
+ *  the server rejects it and halts the sequential group. */
 export function unpricedInboxGroupIds(
-  rows: readonly { id: string; chip: InboxChip }[],
+  rows: readonly {
+    id: string
+    chip: InboxChip
+    proposal: SkippableProposal
+    status: ProposalReviewLifecycleStatus | undefined
+  }[],
 ): string[] {
   const ids = rows
-    .filter((row) => row.chip === 'no_price' || row.chip === 'quote_total')
+    .filter((row) => (row.chip === 'no_price' || row.chip === 'quote_total')
+      && row.status === undefined
+      && proposalCanBeSkipped(row.proposal))
     .map((row) => row.id)
   return ids.length >= 2 ? ids : []
 }

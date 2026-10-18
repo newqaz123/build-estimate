@@ -662,6 +662,87 @@ test("incomplete proposals can be skipped and reopened without mutating BOQ sect
 	);
 });
 
+test("complete proposals cannot be skipped: the store answers 400 not_incomplete and leaves BOQ and audits unchanged", async () => {
+	const insertFixture = harness();
+	const candidates = buildExtractionCandidates(
+		insertFixture.run,
+		insertFixture.sourceRows,
+	);
+	const missing = [...candidates.values()].find(
+		(candidate) => candidate.pricingRole === "standard",
+	)!;
+	const boqRecord = insertFixture.db.docs.get("boqs/boq-1")! as unknown as Boq;
+	boqRecord.sections = boqRecord.sections.map((section) => ({
+		...section,
+		items: section.items.filter((item) => item.id !== missing.id),
+	}));
+	const prepared = prepareProviderProposalV2(
+		{
+			id: "complete-insert",
+			operation: "insert_missing_item",
+			sourceRowIds: missing.sourceRowIds,
+			targetItemIds: [],
+			candidateItemIds: [missing.id],
+			confidence: 0.95,
+			explanation: "Restore immutable source candidate.",
+		},
+		{
+			extractionRunId: insertFixture.run.id,
+			sections: boqRecord.sections,
+			targetItems: new Map(
+				boqRecord.sections
+					.flatMap((section) => section.items)
+					.flatMap((item) => (item.id ? [[item.id, item] as const] : [])),
+			),
+			candidateItems: candidates,
+		},
+	);
+	assert.equal(prepared.ok, true);
+	if (!prepared.ok) throw new Error("Preparation failed");
+	await insertFixture.store.saveValidatedProposals("boq-1", "run-1", [
+		{
+			...prepared.proposal,
+			evidenceValid: true as const,
+			reconciled: true as const,
+			stale: false,
+		},
+	]);
+	// The legacy separate_components fixture is equally complete.
+	const legacyFixture = harness();
+	await legacyFixture.store.saveValidatedProposals("boq-1", "run-1", [
+		legacyFixture.proposal,
+	]);
+
+	for (const [fixture, proposalId] of [
+		[insertFixture, "complete-insert"],
+		[legacyFixture, "proposal-1"],
+	] as const) {
+		const before = structuredClone(fixture.db.docs.get("boqs/boq-1"));
+		const result = await fixture.store.skip(
+			"boq-1",
+			"run-1",
+			proposalId,
+			"user-1",
+		);
+		assert.equal(result.status, 400, proposalId);
+		assert.deepEqual(result.body, { error: "not_incomplete" }, proposalId);
+		assert.deepEqual(fixture.db.docs.get("boqs/boq-1"), before, proposalId);
+		assert.equal(
+			[...fixture.db.docs.keys()].some((path) =>
+				path.startsWith(`${fixture.runPath}/proposalAudits/`),
+			),
+			false,
+			proposalId,
+		);
+		assert.equal(
+			(await fixture.store.getReviewState("boq-1", "run-1"))
+				?.proposalStatuses[proposalId]?.status,
+			"pending",
+			proposalId,
+		);
+	}
+});
+
 test("reopened rejected complete proposals can be accepted through a new append-only audit event", async () => {
 	const fixture = harness();
 	await fixture.store.saveValidatedProposals("boq-1", "run-1", [

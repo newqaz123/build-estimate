@@ -7,8 +7,10 @@ import {
   inboxChipForProposal,
   inboxPendingCount,
   inboxRowTitle,
+  proposalAcceptOutcomeLabel,
   proposalCanBeAccepted,
   proposalCanBeReviewedAndAdded,
+  proposalCanBeSkipped,
   proposalManualAddMode,
   selectReviewTab,
   proposalIsHighConfidence,
@@ -17,10 +19,13 @@ import {
   selectExtractionReviewProgress,
   sourceReferenceLabel,
   unpricedInboxGroupIds,
+  type InboxSourceRow,
 } from './boq-extraction-review-ui'
 import type { ExtractionReviewResponse } from './boq-extraction-ai-review'
-import { PROPOSAL_VALIDATION_FAILURE_CODES, type ProposalValidationFailureCode, type ProposalValidationSummary, type ValidatedProposal } from './boq-extraction-proposals'
+import { skipExtractionProposal } from './boq-extraction-acceptance'
+import { PROPOSAL_VALIDATION_FAILURE_CODES, applyValidatedProposal, fingerprintCanonicalItem, type ExtractionProposal, type ProposalValidationFailureCode, type ProposalValidationSummary, type ProposedExtractionItem, type ValidatedProposal } from './boq-extraction-proposals'
 import type { SourceBackedReviewDraft } from './boq-extraction-cell-mapping'
+import type { Boq, BoqPricedItem, BoqSection } from './boq-schema'
 
 type ReviewableProposalFixture = Omit<ValidatedProposal, 'evidenceValid' | 'reconciled' | 'stale'> & {
   evidenceValid: boolean
@@ -576,16 +581,194 @@ test('inboxPendingCount excludes stale proposals from unresolved count', () => {
 })
 
 test('unpricedInboxGroupIds requires two or more no-price or quote-total rows', () => {
+  // Rows carry their proposal and lifecycle status because a chip alone never
+  // authorizes skip; these pending human-review rows are all server-skippable.
+  const pending = (id: string) => proposal({ id, operation: 'needs_human_review', targetItemIds: [] })
   assert.deepEqual(
-    unpricedInboxGroupIds([{ id: 'a', chip: 'no_price' }]),
+    unpricedInboxGroupIds([{ id: 'a', chip: 'no_price', proposal: pending('a'), status: undefined }]),
     [],
   )
   assert.deepEqual(
     unpricedInboxGroupIds([
-      { id: 'a', chip: 'no_price' },
-      { id: 'b', chip: 'quote_total' },
-      { id: 'c', chip: 'missing_item' },
+      { id: 'a', chip: 'no_price', proposal: pending('a'), status: undefined },
+      { id: 'b', chip: 'quote_total', proposal: pending('b'), status: undefined },
+      { id: 'c', chip: 'missing_item', proposal: pending('c'), status: undefined },
     ]),
     ['a', 'b'],
   )
+})
+
+/* ------------------------------------------------------------------
+ * "Not an item" eligibility: the server only skips incomplete
+ * proposals, so the inbox must never offer skip for complete ones.
+ * ------------------------------------------------------------------ */
+
+const SKIP_MATRIX_OPERATIONS = [
+  'needs_human_review', 'insert_missing_item', 'replace_item', 'remove_spurious_item', 'keep',
+] as const
+
+function serverSkips(candidate: ReviewableProposalFixture): boolean {
+  return skipExtractionProposal({
+    boq: { sections: [] } as unknown as Boq,
+    proposal: candidate as unknown as ExtractionProposal,
+    actorId: 'user-1',
+    now: '2026-10-18T00:00:00.000Z',
+    existingAudit: null,
+  }).kind === 'skipped'
+}
+
+test('proposalCanBeSkipped matches the real server skip gate across operation, evidence, reconciliation, and staleness', () => {
+  const refused: string[] = []
+  for (const operation of SKIP_MATRIX_OPERATIONS) {
+    for (const evidenceValid of [true, false]) {
+      for (const reconciled of [true, false]) {
+        for (const stale of [false, true]) {
+          const candidate = proposal({ operation, evidenceValid, reconciled, stale })
+          const label = `${operation} evidenceValid=${evidenceValid} reconciled=${reconciled} stale=${stale}`
+          assert.equal(proposalCanBeSkipped(candidate), serverSkips(candidate), label)
+          if (!proposalCanBeSkipped(candidate)) refused.push(label)
+        }
+      }
+    }
+  }
+  assert.deepEqual(refused, [
+    'insert_missing_item evidenceValid=true reconciled=true stale=false',
+    'replace_item evidenceValid=true reconciled=true stale=false',
+    'remove_spurious_item evidenceValid=true reconciled=true stale=false',
+    'keep evidenceValid=true reconciled=true stale=false',
+  ])
+})
+
+test('complete legacy keep and separate_components proposals gain no Accept, Not an item, or manual-add permission', () => {
+  for (const operation of ['keep', 'separate_components'] as const) {
+    const legacy = proposal({ operation, targetItemIds: ['item-1'] })
+    assert.equal(proposalCanBeAccepted(legacy), false, operation)
+    assert.equal(proposalCanBeSkipped(legacy), false, operation)
+    assert.equal(proposalCanBeReviewedAndAdded(legacy, undefined, false), false, operation)
+    assert.equal(proposalAcceptOutcomeLabel(legacy), null, operation)
+  }
+})
+
+const groupSourceRows: InboxSourceRow[] = [
+  { sourceRowId: 'row-total', rawText: 'Grand total', classification: 'total', page: 4, table: 1, row: 9 },
+  { sourceRowId: 'row-vat', rawText: 'VAT 7%', classification: 'total', page: 4, table: 1, row: 10 },
+  { sourceRowId: 'row-layer', rawText: 'Layer 2 waterproofing', classification: 'item', page: 2, table: 1, row: 4 },
+  { sourceRowId: 'row-pipe', rawText: 'PVC pipe 4"', classification: 'item', page: 3, table: 1, row: 2 },
+]
+
+const completeRemoveOnTotal = proposal({
+  id: 'remove-total',
+  operation: 'remove_spurious_item',
+  sourceRowIds: ['row-total'],
+  targetItemIds: ['item-total'],
+  explanation: 'The grand total row is not a BOQ item.',
+})
+const completeUnpricedInsert = proposal({
+  id: 'insert-pipe',
+  operation: 'insert_missing_item',
+  sourceRowIds: ['row-pipe'],
+  targetItemIds: [],
+  explanation: 'The pipe row is unpriced in the deterministic BOQ.',
+})
+const humanReviewVat = proposal({
+  id: 'human-vat',
+  operation: 'needs_human_review',
+  sourceRowIds: ['row-vat'],
+  targetItemIds: [],
+  explanation: 'VAT summary line.',
+})
+const humanReviewLayer = proposal({
+  id: 'human-layer',
+  operation: 'needs_human_review',
+  sourceRowIds: ['row-layer'],
+  targetItemIds: [],
+  explanation: 'The row is an unpriced layer entry.',
+})
+
+function inboxGroupRow(candidate: ReviewableProposalFixture, status?: 'skipped') {
+  return {
+    id: candidate.id,
+    chip: inboxChipForProposal(candidate, status, false, groupSourceRows),
+    proposal: candidate,
+    status,
+  }
+}
+
+test('complete quote-total removes and unpriced inserts never join the not-an-item group', () => {
+  const rows = [completeRemoveOnTotal, humanReviewVat, completeUnpricedInsert, humanReviewLayer].map((candidate) => inboxGroupRow(candidate))
+  // Every chip qualifies for the unpriced group, so the chip alone would have
+  // queued two skips the server rejects with not_incomplete.
+  assert.deepEqual(rows.map((row) => row.chip), ['quote_total', 'quote_total', 'no_price', 'no_price'])
+  assert.deepEqual(unpricedInboxGroupIds(rows), ['human-vat', 'human-layer'])
+})
+
+test('unpriced grouping needs two eligible pending rows, not two matching chips', () => {
+  assert.deepEqual(unpricedInboxGroupIds([inboxGroupRow(completeRemoveOnTotal), inboxGroupRow(humanReviewVat)]), [])
+  assert.deepEqual(unpricedInboxGroupIds([inboxGroupRow(completeRemoveOnTotal), inboxGroupRow(completeUnpricedInsert)]), [])
+  assert.deepEqual(unpricedInboxGroupIds([inboxGroupRow(humanReviewVat, 'skipped'), inboxGroupRow(humanReviewLayer)]), [])
+})
+
+test('Accept outcome labels come only from operation and item counts, never AI prose', () => {
+  const item = (id: string): ProposedExtractionItem => ({
+    id,
+    desc: `Proposed ${id}`,
+    pricingRole: 'standard',
+    sourceRowIds: ['row-1'],
+    entryOrigin: 'ai_accepted',
+    unit: 'm',
+    qty: 1,
+    rate: 10,
+    total: 10,
+    costComponent: 'combined',
+  })
+  assert.equal(proposalAcceptOutcomeLabel(proposal({ operation: 'insert_missing_item', targetItemIds: [], proposedItems: [item('a'), item('b')] })), 'Add missing item · 2 BOQ items')
+  assert.equal(proposalAcceptOutcomeLabel(proposal({ operation: 'replace_item', targetItemIds: ['item-1', 'item-2'], proposedItems: [item('a')] })), 'Replace item · 2 BOQ items → 1 BOQ item')
+  assert.equal(proposalAcceptOutcomeLabel(proposal({ operation: 'remove_spurious_item', targetItemIds: ['item-1', 'item-2'], proposedItems: [] })), 'Remove non-item row · 2 BOQ items')
+  assert.equal(proposalAcceptOutcomeLabel(proposal({
+    operation: 'remove_spurious_item',
+    targetItemIds: ['item-1'],
+    proposedItems: [],
+    explanation: 'Insert three new priced items for this row.',
+  })), 'Remove non-item row · 1 BOQ item')
+  assert.equal(proposalAcceptOutcomeLabel(proposal({ operation: 'needs_human_review', targetItemIds: [] })), null)
+})
+
+test('Accept outcome counts match the BOQ items the server mutation adds and removes', () => {
+  const existing = (id: string): BoqPricedItem => ({
+    id, desc: `Existing ${id}`, sourceRowIds: [`row-${id}`], unit: 'm', qty: 1, rate: 10, total: 10, type: 'unit', stdStatus: 'unmatched',
+  })
+  const proposed = (id: string): ProposedExtractionItem => ({
+    id, desc: `Proposed ${id}`, pricingRole: 'standard', sourceRowIds: ['row-1'], entryOrigin: 'ai_accepted', unit: 'm', qty: 1, rate: 10, total: 10, costComponent: 'combined',
+  })
+  const sections: BoqSection[] = [{ header: 'Works', items: [existing('item-1'), existing('item-2')] }]
+  const targetFingerprint = { 'item-1': fingerprintCanonicalItem(sections[0].items[0]) }
+  const cases = [
+    {
+      candidate: proposal({ operation: 'insert_missing_item', targetItemIds: [], affectedItemFingerprints: {}, proposedItems: [proposed('new-1')], destinationSectionIndex: 0, destinationItemIndex: 0 }),
+      label: 'Add missing item · 1 BOQ item',
+      removed: 0,
+      added: 1,
+    },
+    {
+      candidate: proposal({ operation: 'replace_item', targetItemIds: ['item-1'], affectedItemFingerprints: targetFingerprint, proposedItems: [proposed('new-1'), proposed('new-2')] }),
+      label: 'Replace item · 1 BOQ item → 2 BOQ items',
+      removed: 1,
+      added: 2,
+    },
+    {
+      candidate: proposal({ operation: 'remove_spurious_item', targetItemIds: ['item-1'], affectedItemFingerprints: targetFingerprint, proposedItems: [] }),
+      label: 'Remove non-item row · 1 BOQ item',
+      removed: 1,
+      added: 0,
+    },
+  ]
+  const beforeIds = sections.flatMap((section) => section.items).map((entry) => entry.id)
+  for (const { candidate, label, removed, added } of cases) {
+    assert.equal(proposalAcceptOutcomeLabel(candidate), label)
+    const afterIds = applyValidatedProposal(sections, candidate as ValidatedProposal).sections
+      .flatMap((section) => section.items)
+      .map((entry) => entry.id)
+    assert.equal(beforeIds.filter((id) => !afterIds.includes(id)).length, removed, label)
+    assert.equal(afterIds.filter((id) => !beforeIds.includes(id)).length, added, label)
+  }
 })
