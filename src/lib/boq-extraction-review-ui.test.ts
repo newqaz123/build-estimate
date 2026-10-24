@@ -694,11 +694,15 @@ function inboxGroupRow(candidate: ReviewableProposalFixture, status?: 'skipped')
   }
 }
 
+test('validated inserts are not labeled No price merely because AI prose says unpriced', () => {
+  assert.equal(inboxChipForProposal(completeUnpricedInsert, undefined, false, groupSourceRows), 'needs_a_look')
+})
+
 test('complete quote-total removes and unpriced inserts never join the not-an-item group', () => {
   const rows = [completeRemoveOnTotal, humanReviewVat, completeUnpricedInsert, humanReviewLayer].map((candidate) => inboxGroupRow(candidate))
-  // Every chip qualifies for the unpriced group, so the chip alone would have
-  // queued two skips the server rejects with not_incomplete.
-  assert.deepEqual(rows.map((row) => row.chip), ['quote_total', 'quote_total', 'no_price', 'no_price'])
+  // The validated insert is not a no-price chip, and the complete removal is
+  // not server-skippable, so neither can halt grouped dismissal.
+  assert.deepEqual(rows.map((row) => row.chip), ['quote_total', 'quote_total', 'needs_a_look', 'no_price'])
   assert.deepEqual(unpricedInboxGroupIds(rows), ['human-vat', 'human-layer'])
 })
 

@@ -17,15 +17,12 @@ test("focused extraction review renders evidence, reconciliation, source navigat
 	assert.match(source, /Validation & reconciliation/);
 	assert.match(source, /Accept all validated high-confidence/);
 	// Updated to match new tab-based proposal rendering
-	assert.match(source, /isComplete.*canAccept.*Accept/);
-	assert.match(source, /Add missing item/);
-	assert.match(source, /Replace item/);
-	assert.match(source, /Remove non-item row/);
+	assert.match(source, /isComplete && canAccept[\s\S]*?Accept/);
+	assert.match(source, /proposalAcceptOutcomeLabel\(proposal\)/);
 	assert.match(source, /one combined BOQ row/);
-	// Updated to match new reject confirmation flow
-	assert.match(source, /handleReject.*proposal/);
-	assert.match(source, />Reject\{/);
-	assert.match(source, />Undo\{/);
+	assert.match(source, /handleReject[\s\S]*proposal/);
+	assert.match(source, />\s*Reject/);
+	assert.match(source, /Undo/);
 	// Updated to match new recheck button naming
 	assert.match(source, /Review this row with AI/);
 	assert.match(source, /onNavigateToEvidence/);
@@ -148,7 +145,7 @@ test("unsaved detail and compare edits block structural extraction mutations unt
 	assert.match(componentSource, /Save draft to continue/);
 	assert.match(
 		componentSource,
-		/disabled=\{readOnly \|\| Boolean\(mutationBlockedReason\)/,
+		/disabled=\{[\s\S]*?readOnly[\s\S]*?Boolean\(mutationBlockedReason\)/,
 	);
 	assert.match(
 		detailSource,
@@ -181,7 +178,7 @@ test("accepted and undone actions reload durable LIFO Undo eligibility", () => {
 	);
 	assert.match(
 		source,
-		/proposal_status", proposalId, status: "accepted", canUndo: false/,
+		/type: "proposal_status"[\s\S]*?status: "accepted"[\s\S]*?canUndo: false/,
 	);
 	assert.doesNotMatch(
 		source,
@@ -208,11 +205,11 @@ test("a saved canonical revision reloads durable staleness without dispatching a
 	assert.match(componentSource, /reviewSnapshotGenerationRef/);
 	assert.match(
 		componentSource,
-		/beginReviewSnapshotRequest\(reviewSnapshotGenerationRef\)/,
+		/beginReviewSnapshotRequest\(\s*reviewSnapshotGenerationRef,?\s*\)/,
 	);
 	assert.match(
 		componentSource,
-		/isLatestReviewSnapshotRequest\(reviewSnapshotGenerationRef, requestGeneration\)/,
+		/isLatestReviewSnapshotRequest\(\s*reviewSnapshotGenerationRef,\s*requestGeneration,?\s*\)/,
 	);
 	assert.match(
 		componentSource,
@@ -345,7 +342,7 @@ test("Task 3: manual add is gated by proposalCanBeReviewedAndAdded and seeded wi
 	assert.match(footerSection, /isIncomplete && humanReview && canReviewAndAdd/);
 	assert.match(
 		footerSection,
-		/editingProposalId === proposal\.id && humanReview && canReviewAndAdd/,
+		/editingProposalId === proposal\.id[\s\S]*humanReview[\s\S]*canReviewAndAdd/,
 	);
 	assert.doesNotMatch(footerSection, /proposal\.reviewDraft && !readOnly/);
 	// The selected source rows are passed into the editor so evidence-only
@@ -355,7 +352,8 @@ test("Task 3: manual add is gated by proposalCanBeReviewedAndAdded and seeded wi
 	// submit handler; only the route + body shape live in this component.
 	assert.match(footerSection, /submitSourceBackedItem\(proposal, payload\)/);
 	// Automatic acceptance stays disabled for human-review proposals.
-	assert.match(footerSection, /Needs human review · acceptance disabled/);
+	assert.match(source, /proposalCanBeAccepted\(proposal\) && !status/);
+	assert.doesNotMatch(source, /Needs human review · acceptance disabled/);
 });
 
 test("Task 4: proposalManualAddMode routes multi-row no-draft proposals to the batch editor and one-row/draft proposals to the single editor", () => {
@@ -412,7 +410,7 @@ test("Task 4: submitSourceBackedItem accepts the single/batch payload union and 
 	// The batch editor's onSubmit passes the batch payload unchanged.
 	assert.match(
 		source,
-		/EvidenceOnlyBatchItemEditor[\s\S]*?onSubmit=\{\(payload\) => submitSourceBackedItem\(proposal, payload\)\}/,
+		/EvidenceOnlyBatchItemEditor[\s\S]*?onSubmit=\{\(payload\) =>[\s\S]*?submitSourceBackedItem\(proposal, payload\)/,
 	);
 });
 
@@ -466,20 +464,25 @@ test("Task 8: pending complete proposals show Validated suggestion and Accept/Re
 	// Pending complete proposals show the "Validated suggestion" label
 	assert.match(source, /Validated suggestion — ready for your approval/);
 	// Complete proposals show Accept, Review source, and Reject buttons
-	assert.match(source, /isComplete.*canAccept.*Accept/);
+	assert.match(source, /isComplete && canAccept[\s\S]*?Accept/);
 	assert.match(source, /Review source/);
-	assert.match(source, /Reject/);
+	assert.match(source, /canReject[\s\S]*Reject/);
 });
 
-test("Task 8: pending incomplete proposals show More information needed and Skip, no Accept", () => {
+test("Task 8: pending incomplete proposals show Not an item only when skippable, and no Accept", () => {
 	const source = readFileSync(componentUrl, "utf8");
-	// Incomplete proposals show "More information needed" label
-	assert.match(source, /More information needed/);
-	// Incomplete proposals show Review source and Skip
-	assert.match(source, /Review source/);
-	assert.match(source, /Skip/);
-	// Incomplete proposals have logic to prevent Accept
-	assert.match(source, /isComplete.*canAccept/);
+	assert.doesNotMatch(source, /More information needed/);
+	assert.match(source, /proposalCanBeSkipped\(proposal\)/);
+	assert.match(source, /canSkip[\s\S]*Not an item/);
+	assert.match(source, /isComplete && canAccept/);
+	assert.match(
+		source,
+		/const canReject = !status && \(isComplete \|\| \(nonActionable && !humanReview\)\);/,
+	);
+	assert.doesNotMatch(
+		source,
+		/const canReject = !status && \(isComplete \|\| nonActionable\);/,
+	);
 });
 
 test("Task 8: skip posts to durable skip endpoint and moves to History", () => {
@@ -487,7 +490,7 @@ test("Task 8: skip posts to durable skip endpoint and moves to History", () => {
 	// Skip endpoint is called
 	assert.match(source, /executeAction.*skip/);
 	// Skip is only shown for incomplete proposals
-	assert.match(source, /isIncomplete.*Skip/);
+	assert.match(source, /canSkip[\s\S]*executeAction\(proposal, "skip"\)/);
 	// After skip, the proposal moves to History tab
 	assert.match(source, /await refreshStoredReview\(\)/);
 });
@@ -518,7 +521,7 @@ test("Task 8: undo moves item back to Needs your review only after server respon
 	// Undo calls the undo endpoint
 	assert.match(source, /executeAction.*undo/);
 	// Undo waits for refreshStoredReview() after the endpoint call
-	assert.match(source, /action === "undo".*await refreshStoredReview\(\)/);
+	assert.match(source, /action === "undo"[\s\S]*await refreshStoredReview\(\)/);
 	// Undo does NOT optimistically update local state
 	assert.doesNotMatch(
 		source,
@@ -534,7 +537,7 @@ test("Task 8: filter chips are removed and tabs are the only navigation", () => 
 	assert.match(source, /role="tablist"/);
 	assert.match(source, /role="tab"/);
 	// selectReviewTab is used to determine tab content
-	assert.match(source, /selectReviewTab\(\{ review.*proposalStatuses/);
+	assert.match(source, /selectReviewTab\(\s*\{[\s\S]*?review,[\s\S]*?proposalStatuses/);
 });
 
 test("Task 9: session-expired recovery detects 401 and shows sign-in link", () => {
@@ -546,7 +549,7 @@ test("Task 9: session-expired recovery detects 401 and shows sign-in link", () =
 	// Exact session-expired message should be rendered
 	assert.match(
 		source,
-		/Your session has expired\. Sign in again to continue reviewing this BOQ\./,
+		/Your session has expired\. Sign in again to continue reviewing this\s+BOQ\./,
 	);
 	// Sign in again link should be present
 	assert.match(source, /Sign in again/);
@@ -560,10 +563,14 @@ test("Task 9: session-expired recovery detects 401 and shows sign-in link", () =
 	assert.match(source, /executeAction[\s\S]*?response\.status === 401/);
 	// AI review fetch should check for 401
 	assert.match(source, /runReview[\s\S]*?response\.status === 401/);
+	assert.match(
+		source,
+		/\/re-extract`[\s\S]{0,80}?\)\s*;?\s*if \(response\.status === 401\)/,
+	);
 	// Review snapshot GET should check for 401
 	assert.match(
 		source,
-		/fetch.*\/review[\s\S]*?response\.ok[\s\S]*?response\.status === 401/,
+		/\/review`[\s\S]*?response\.status === 401/,
 	);
 	// add-source-item should check for 401
 	assert.match(
@@ -602,14 +609,14 @@ test("Task 5: submitSourceBackedItem posts the union payload to one endpoint wit
 	// same submit handler unchanged.
 	assert.match(
 		source,
-		/EvidenceOnlyBatchItemEditor[\s\S]*?onSubmit=\{\(payload\) => submitSourceBackedItem\(proposal, payload\)\}/,
+		/EvidenceOnlyBatchItemEditor[\s\S]*?onSubmit=\{\(payload\) =>[\s\S]*?submitSourceBackedItem\(proposal, payload\)/,
 	);
 	assert.match(
 		source,
-		/SourceBackedItemEditor[\s\S]*?onSubmit=\{\(payload\) => submitSourceBackedItem\(proposal, payload\)\}/,
+		/SourceBackedItemEditor[\s\S]*?onSubmit=\{\(payload\) =>[\s\S]*?submitSourceBackedItem\(proposal, payload\)/,
 	);
-	// One Review & add affordance and a single editor-mount id remain.
-	assert.equal((source.match(/Review &amp; add|Review & add/g) ?? []).length, 1);
+	assert.match(source, /Add to BOQ/);
+	assert.doesNotMatch(source, /Review & add|Review &amp; add/);
 	assert.match(source, /editingProposalId/);
 	// Automatic Accept stays suppressed for needs_human_review proposals.
 	assert.doesNotMatch(

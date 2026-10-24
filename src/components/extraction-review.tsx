@@ -497,6 +497,11 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
     setReextracting(true)
     try {
       const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/re-extract`, { method: "POST" })
+      if (response.status === 401) {
+        setSessionExpired(true)
+        dispatch({ type: "review_failed", error: "Session expired. Please sign in again." })
+        return
+      }
       if (!response.ok) throw new Error(await readError(response, "Source re-extraction could not be started."))
       const result = await response.json() as { extractionRun?: { id?: string } }
       if (!result.extractionRun?.id) throw new Error("Source re-extraction did not return immutable review evidence.")
@@ -651,6 +656,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
                 const nonActionable = !isReviewActionableOperation(proposal.operation)
                 const isComplete = canAccept || (!humanReview && !nonActionable && proposal.stale !== true)
                 const canSkip = !status && proposalCanBeSkipped(proposal);
+                const canReject = !status && (isComplete || (nonActionable && !humanReview));
                 const acceptOutcome = proposalAcceptOutcomeLabel(proposal);
                 const chipAllowsAdd = openRow.chip === "missing_item" || openRow.chip === "needs_a_look"
                 return (
@@ -679,7 +685,7 @@ export function ExtractionReview({ boq, canonicalRevisionKey, onBoqChange, onInb
                         {!status ? <>
                           {openRow.sourceRef ? <Button type="button" variant="ghost" size="sm" onClick={() => { const sourceRef = openRow.sourceRef; if (!sourceRef) return; onNavigateToEvidence({ page: sourceRef.page, table: sourceRef.table, row: sourceRef.row, cells: [] }) }}><FileSearch aria-hidden="true" />Show on PDF</Button> : null}
                           {isComplete && canAccept ? <Button type="button" size="sm" onClick={() => void executeAction(proposal, "accept")} disabled={readOnly || Boolean(mutationBlockedReason) || Boolean(action)}>Accept{action === "accepting" ? <Loader2 className="animate-spin" /> : <Check aria-hidden="true" />}</Button> : null}
-                          {isComplete ? <Button type="button" variant="ghost" size="sm" onClick={() => handleReject(proposal)} disabled={readOnly || Boolean(action)}>Reject{action === "rejecting" ? <Loader2 className="animate-spin" /> : <X aria-hidden="true" />}</Button> : null}
+                          {canReject ? <Button type="button" variant="ghost" size="sm" onClick={() => handleReject(proposal)} disabled={readOnly || Boolean(action)}>Reject{action === "rejecting" ? <Loader2 className="animate-spin" /> : <X aria-hidden="true" />}</Button> : null}
                           {isIncomplete && humanReview && canReviewAndAdd && chipAllowsAdd ? (
                             <Button type="button" variant="outline" size="sm" onClick={() => { setEditingProposalId(proposal.id); setSourceBackedError(null) }} disabled={Boolean(action)}>Add to BOQ</Button>
                           ) : null}

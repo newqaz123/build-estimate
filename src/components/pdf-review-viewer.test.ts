@@ -23,11 +23,15 @@ test("PDF review viewer owns canvas rendering, box zoom, pan, and recovery contr
   assert.match(source, /clipSelectionToPage/)
   assert.match(source, /clampPdfPan/)
   assert.match(source, /pdfPageBounds/)
+  assert.match(source, /role="status"/)
+  assert.match(source, /Source row · table/)
+  assert.match(source, /Source row is on page/)
 })
 
 test("PDF viewer recovery and interrupted gestures remain operable", () => {
   const source = readFileSync(viewerUrl, "utf8")
   const css = readFileSync(globalCssUrl, "utf8")
+  assert.match(css, /\.pdf-evidence-focus\s*\{[^}]*position:\s*absolute/)
 
   assert.match(source, /activePointerIdRef/)
   assert.match(

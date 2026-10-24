@@ -576,10 +576,11 @@ export function PdfReviewViewer({
 					/>
 				) : null}
 				{evidenceFocus ? (
-					<div
-						className="pdf-evidence-focus"
-						aria-label={`Focus marker for table ${evidenceFocus.table}, row ${evidenceFocus.row}`}
-					/>
+					<div className="pdf-evidence-focus" role="status">
+						{evidenceFocus.page === pageNumber
+							? `Source row · table ${evidenceFocus.table} · row ${evidenceFocus.row}`
+							: `Source row is on page ${evidenceFocus.page}`}
+					</div>
 				) : null}
 				{loading ? (
 					<div

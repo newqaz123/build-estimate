@@ -355,7 +355,10 @@ export function inboxChipForProposal(
   if (isQuoteTotalProposal(proposal, sourceRows)) return 'quote_total'
   if (proposal.targetItemIds.length > 0) return 'already_in_boq'
   const canAdd = proposalCanBeReviewedAndAdded(proposal, status, readOnly)
-  if (hasUnpricedInboxText(proposal, sourceRows) || (proposal.operation === 'needs_human_review' && !canAdd)) return 'no_price'
+  // Validated insert/replace/remove proposals keep their actionable chip even
+  // when AI prose mentions pricing. "No price" is only for human-review leftovers.
+  if (proposal.operation !== 'needs_human_review') return 'needs_a_look'
+  if (hasUnpricedInboxText(proposal, sourceRows) || !canAdd) return 'no_price'
   if (canAdd) return 'missing_item'
   return 'needs_a_look'
 }
