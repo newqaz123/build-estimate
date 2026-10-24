@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 
 import {
   descSuggestionNotice,
+  estimateSaveRequest,
   normalizeEstimateItems,
   shouldSearchDescSuggestions,
   toEstimateItemPayload,
@@ -100,6 +101,25 @@ test('new item dialog search gating skips closed modal, short text, and re-enabl
     shouldSearchDescSuggestions({ modalOpen: true, desc: 'Ready-mix concrete C3', selectedStandard: picked }),
     true,
   )
+})
+
+test('saving an opened estimate updates it instead of creating another copy', () => {
+  assert.deepEqual(estimateSaveRequest(null), { url: '/api/estimates', method: 'POST' })
+  assert.deepEqual(estimateSaveRequest('est-1'), { url: '/api/estimates/est-1', method: 'PUT' })
+  assert.deepEqual(estimateSaveRequest('a b/c'), { url: '/api/estimates/a%20b%2Fc', method: 'PUT' })
+})
+
+test('the estimator remembers which estimate is open and lets people start or reopen one', () => {
+  // Save routes through the shared request choice and keeps the id the server assigns.
+  assert.match(source, /estimateSaveRequest\(estimateId\)/)
+  assert.match(source, /setEstimateId\(saved\.id\)/)
+  // Loading keeps the newest estimate's id instead of discarding it.
+  assert.match(source, /setEstimateId\(last\.id\)/)
+  // People can start a fresh estimate and reopen an older one.
+  assert.match(source, />\s*New estimate\s*</)
+  assert.match(source, /Saved estimates/)
+  // Unsaved work is never dropped silently.
+  assert.match(source, /Discard unsaved changes/)
 })
 
 test('new item dialog renders the suggestion notice through the shared helpers', () => {

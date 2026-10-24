@@ -2390,6 +2390,9 @@
 .est-total-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; justify-content: flex-end; }
 .est-print-total { display: none; }
 
+.estimate-switcher { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); flex-shrink: 0; flex-wrap: wrap; }
+.estimate-switcher label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted-text); font-weight: 600; }
+.estimate-switcher .proto-select { flex: 1 1 260px; max-width: 420px; min-width: 0; }
 .project-meta { display: flex; gap: var(--space-4); align-items: flex-start; margin-bottom: var(--space-3); flex-shrink: 0; flex-wrap: wrap; }
 .project-meta .pm-group { display: flex; flex-direction: column; gap: 2px; }
 .project-meta .pm-group label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted-text); font-weight: 600; }

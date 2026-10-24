@@ -111,6 +111,8 @@ Do not add the sentence to the sidebar. On Compare and Catalog, give any icon-on
 
 ### Task 3: Honest dashboard
 
+> **Partly done (2026-10-24, dashboard numbers fix):** hardcoded trends are removed; Total Items and Vendors with quotes come from the all-quotes `summary` on `/api/boqs`; Quick Stats show **Quotes still in draft** and **Estimates started**. Covered by `src/app/(authenticated)/dashboard/dashboard-page.test.ts` and `src/lib/boq-workspace-summary.test.ts`. **Remaining in this task:** activity rows link to their quote and use `displayQuoteName`.
+
 **Files:**
 - Modify: `src/app/(authenticated)/dashboard/page.tsx`
 - Test: `src/app/(authenticated)/dashboard/page.tsx` source contract, or the nearest dashboard test

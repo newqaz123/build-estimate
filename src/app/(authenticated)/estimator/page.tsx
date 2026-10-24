@@ -106,6 +106,18 @@ export function normalizeEstimateItems(items: Estimate["items"] | undefined): Es
   })
 }
 
+/** An estimate that has been saved once is updated in place; only a new estimate is created. */
+export function estimateSaveRequest(estimateId: string | null): { url: string; method: "POST" | "PUT" } {
+  return estimateId
+    ? { url: `/api/estimates/${encodeURIComponent(estimateId)}`, method: "PUT" }
+    : { url: "/api/estimates", method: "POST" }
+}
+
+function savedEstimateLabel(estimate: Estimate) {
+  const lines = Array.isArray(estimate.items) ? estimate.items.length : 0
+  return `${estimate.name || "Untitled estimate"} · ${estimate.date || "No date"} · ${lines} ${lines === 1 ? "line" : "lines"}`
+}
+
 export function toEstimateItemPayload(item: EstimateItemLocal): Estimate["items"][number] {
   return {
     code: "",
@@ -144,6 +156,10 @@ export default function EstimatorPage() {
   const saveInFlightRef = useRef(false)
   const saveRequestRef = useRef(0)
   const editRevisionRef = useRef(0)
+  // The edit revision last loaded or saved; a different current revision means unsaved changes.
+  const savedRevisionRef = useRef(0)
+  const [estimateId, setEstimateId] = useState<string | null>(null)
+  const [savedEstimates, setSavedEstimates] = useState<Estimate[]>([])
 
   const [chatOpen, setChatOpen] = useState(false)
   const [chatInput, setChatInput] = useState("")
@@ -185,6 +201,14 @@ export default function EstimatorPage() {
     return true
   }
 
+  const fillForm = useCallback((estimate: Estimate | null) => {
+    setProjectName(estimate?.name || "New Estimate")
+    setProjectDate(estimate ? estimate.date || "" : new Date().toISOString().split("T")[0])
+    setProjectDesc(estimate?.notes || "")
+    setItems(normalizeEstimateItems(estimate?.items))
+    savedRevisionRef.current = editRevisionRef.current
+  }, [])
+
   const fetchEstimates = useCallback(async (signal?: AbortSignal) => {
     setLoading(true)
     setLoadError("")
@@ -192,12 +216,12 @@ export default function EstimatorPage() {
       const res = await fetch("/api/estimates", { signal })
       if (!res.ok) throw new Error("Could not load your latest estimate")
       const data = (await res.json()) as { estimates?: Estimate[] }
-      const last = Array.isArray(data.estimates) ? data.estimates[0] : undefined
+      const list = Array.isArray(data.estimates) ? data.estimates : []
+      setSavedEstimates(list)
+      const last = list[0]
       if (last) {
-        setProjectName(last.name || "New Estimate")
-        setProjectDate(last.date || "")
-        setProjectDesc(last.notes || "")
-        setItems(normalizeEstimateItems(last.items))
+        setEstimateId(last.id)
+        fillForm(last)
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return
@@ -205,7 +229,7 @@ export default function EstimatorPage() {
     } finally {
       if (!signal?.aborted) setLoading(false)
     }
-  }, [])
+  }, [fillForm])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -392,9 +416,10 @@ export default function EstimatorPage() {
     const savedRevision = editRevisionRef.current
     saveInFlightRef.current = true
     setSaving(true)
+    const request = estimateSaveRequest(estimateId)
     try {
-      const res = await fetch("/api/estimates", {
-        method: "POST",
+      const res = await fetch(request.url, {
+        method: request.method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: projectName || "New Estimate",
@@ -405,13 +430,17 @@ export default function EstimatorPage() {
         }),
       })
       if (!res.ok) throw new Error("Save failed")
-      const saved = (await res.json()) as { id?: string } | null
+      const saved = (await res.json()) as Estimate | null
       if (!saved?.id) throw new Error("Save response was incomplete")
+      // Later saves update this same estimate instead of creating another copy.
+      setEstimateId(saved.id)
+      setSavedEstimates((prev) => [saved, ...prev.filter((estimate) => estimate.id !== saved.id)])
       if (savedRevision !== editRevisionRef.current) {
         toast.warning("Estimate changed while saving. Save again to include the latest edits.")
         return
       }
-      toast.success("Estimate saved")
+      savedRevisionRef.current = savedRevision
+      toast.success(request.method === "POST" ? "Estimate created" : "Estimate saved")
     } catch {
       toast.error("Failed to save estimate")
     } finally {
@@ -420,6 +449,26 @@ export default function EstimatorPage() {
         setSaving(false)
       }
     }
+  }
+
+  // ── Switching estimates ──
+  function confirmDiscardUnsaved() {
+    if (editRevisionRef.current === savedRevisionRef.current) return true
+    return window.confirm(`Discard unsaved changes to “${projectName || "this estimate"}”?`)
+  }
+
+  function startNewEstimate() {
+    if (saveInFlightRef.current || !confirmDiscardUnsaved()) return
+    setEstimateId(null)
+    fillForm(null)
+  }
+
+  function openSavedEstimate(id: string) {
+    if (saveInFlightRef.current || id === estimateId) return
+    const estimate = savedEstimates.find((candidate) => candidate.id === id)
+    if (!estimate || !confirmDiscardUnsaved()) return
+    setEstimateId(estimate.id)
+    fillForm(estimate)
   }
 
   // ── Item modal ──
@@ -768,6 +817,25 @@ export default function EstimatorPage() {
   return (
     <div className={`estimator-workspace${items.length > 0 ? " has-summary" : ""}`} data-od-id="estimator-page">
       <div className="est-page">
+        <div className="estimate-switcher" data-od-id="estimate-switcher">
+          <label htmlFor="estimate-open">Saved estimates</label>
+          <select
+            id="estimate-open"
+            className="proto-select"
+            value={estimateId ?? ""}
+            onChange={(event) => openSavedEstimate(event.target.value)}
+            disabled={saving || savedEstimates.length === 0}
+            data-od-id="estimate-open"
+          >
+            {estimateId === null && <option value="">New estimate (not saved yet)</option>}
+            {savedEstimates.map((estimate) => (
+              <option key={estimate.id} value={estimate.id}>{savedEstimateLabel(estimate)}</option>
+            ))}
+          </select>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={startNewEstimate} disabled={saving} data-od-id="new-estimate">
+            New estimate
+          </button>
+        </div>
         <div className="project-meta">
           <div className="pm-group" style={{ flex: 1 }}>
             <label>Project Name</label>

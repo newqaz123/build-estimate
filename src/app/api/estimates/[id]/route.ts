@@ -1,7 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { getDocument, updateDocument, deleteDocument } from '@/lib/db'
-import type { Estimate, EstimateItem } from '@/lib/estimate-schema'
+import type { Estimate } from '@/lib/estimate-schema'
+import { createEstimateUpdateHandler, type EstimateRouteContext } from '../handler'
+
+const updateEstimate = createEstimateUpdateHandler({
+  authenticate: () => auth(),
+  getEstimate: (id) => getDocument<Estimate>('estimates', id),
+  updateEstimate: async (id, updates) => {
+    await updateDocument('estimates', id, updates as Record<string, unknown>)
+    return getDocument<Estimate>('estimates', id)
+  },
+  logError: (message, error) => console.error(message, error),
+})
 
 export async function GET(
   _request: NextRequest,
@@ -26,51 +37,8 @@ export async function GET(
   }
 }
 
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await auth()
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  try {
-    const { id } = await params
-    const existing = await getDocument<Estimate>('estimates', id)
-    if (!existing) {
-      return NextResponse.json({ error: 'Estimate not found' }, { status: 404 })
-    }
-
-    const body = await request.json()
-    const { name, project, date, notes, items, status } = body as {
-      name?: string
-      project?: string
-      date?: string
-      notes?: string
-      items?: EstimateItem[]
-      status?: 'draft' | 'final'
-    }
-
-    const updates: Record<string, unknown> = {}
-    if (name !== undefined) updates.name = name
-    if (project !== undefined) updates.project = project
-    if (date !== undefined) updates.date = date
-    if (notes !== undefined) updates.notes = notes
-    if (items !== undefined) {
-      updates.items = items
-      updates.totalAmount = items.reduce((sum, item) => sum + (item.total || 0), 0)
-    }
-    if (status !== undefined) updates.status = status
-
-    await updateDocument('estimates', id, updates)
-
-    const updated = await getDocument<Estimate>('estimates', id)
-    return NextResponse.json(updated)
-  } catch (error) {
-    console.error('Error updating estimate:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
-  }
+export function PUT(request: NextRequest, context: EstimateRouteContext) {
+  return updateEstimate(request, context)
 }
 
 export async function DELETE(

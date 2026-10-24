@@ -1,7 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { queryCollection, getDocument, createDocumentWithId } from '@/lib/db'
-import type { Estimate, EstimateItem } from '@/lib/estimate-schema'
+import type { Estimate } from '@/lib/estimate-schema'
+import { createEstimateCreateHandler } from './handler'
+
+const createEstimate = createEstimateCreateHandler({
+  authenticate: () => auth(),
+  newId: () => crypto.randomUUID(),
+  createEstimate: async (id, estimate) => {
+    await createDocumentWithId('estimates', id, estimate as unknown as Record<string, unknown>)
+    return getDocument<Estimate>('estimates', id)
+  },
+  logError: (message, error) => console.error(message, error),
+})
 
 export async function GET() {
   const session = await auth()
@@ -22,47 +33,6 @@ export async function GET() {
   }
 }
 
-export async function POST(request: NextRequest) {
-  const session = await auth()
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  try {
-    const body = await request.json()
-    const { name, project, date, notes, items } = body as {
-      name: string
-      project?: string
-      date: string
-      notes?: string
-      items?: EstimateItem[]
-    }
-
-    if (!name) {
-      return NextResponse.json({ error: 'Name is required' }, { status: 400 })
-    }
-
-    const estimateItems = items || []
-    const totalAmount = estimateItems.reduce((sum, item) => sum + (item.total || 0), 0)
-    const id = crypto.randomUUID()
-
-    const estimate: Omit<Estimate, 'createdAt' | 'updatedAt'> = {
-      id,
-      name,
-      project: project || '',
-      date: date || '',
-      notes: notes || '',
-      items: estimateItems,
-      totalAmount,
-      status: 'draft',
-    }
-
-    await createDocumentWithId('estimates', id, estimate as unknown as Record<string, unknown>)
-    const created = await getDocument<Estimate>('estimates', id)
-
-    return NextResponse.json(created, { status: 201 })
-  } catch (error) {
-    console.error('Error creating estimate:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
-  }
+export function POST(request: NextRequest) {
+  return createEstimate(request)
 }

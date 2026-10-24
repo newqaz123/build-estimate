@@ -20,8 +20,19 @@ interface DashboardData {
   boqs: Boq[];
   boqTotal: number;
   estimates: number;
-  vendors: number;
+  totalItems: number;
+  vendorCount: number;
+  unapprovedCount: number;
 }
+
+const EMPTY_DASHBOARD: DashboardData = {
+  boqs: [],
+  boqTotal: 0,
+  estimates: 0,
+  totalItems: 0,
+  vendorCount: 0,
+  unapprovedCount: 0,
+};
 
 function timeAgo(dateStr: string) {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -42,24 +53,26 @@ export default function DashboardPage() {
   useEffect(() => {
     async function fetchData() {
       try {
-        const [boqsRes, estimatesRes, vendorsRes] = await Promise.all([
+        const [boqsRes, estimatesRes] = await Promise.all([
           fetch("/api/boqs?limit=5"),
           fetch("/api/estimates"),
-          fetch("/api/vendors"),
         ]);
 
         const boqsJson = await boqsRes.json();
         const estimatesJson = await estimatesRes.json();
-        const vendorsJson = await vendorsRes.json();
+        // The list returns only the five newest quotes; the summary covers every quote.
+        const summary = boqsJson.summary ?? {};
 
         setData({
           boqs: boqsJson.boqs || [],
           boqTotal: boqsJson.total || 0,
           estimates: (estimatesJson.estimates || []).length,
-          vendors: Array.isArray(vendorsJson) ? vendorsJson.length : 0,
+          totalItems: summary.totalItems ?? 0,
+          vendorCount: summary.vendorCount ?? 0,
+          unapprovedCount: summary.unapprovedCount ?? 0,
         });
       } catch {
-        setData({ boqs: [], boqTotal: 0, estimates: 0, vendors: 0 });
+        setData(EMPTY_DASHBOARD);
       } finally {
         setLoading(false);
       }
@@ -76,7 +89,7 @@ export default function DashboardPage() {
     );
   }
 
-  if (!data || (data.boqTotal === 0 && data.estimates === 0 && data.vendors === 0)) {
+  if (!data || (data.boqTotal === 0 && data.estimates === 0)) {
     return (
       <div className="proto-empty-state dashboard-empty" data-od-id="dashboard-empty">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
@@ -94,42 +107,24 @@ export default function DashboardPage() {
     );
   }
 
-  const totalItems = data.boqs.reduce((sum, b) => sum + (b.totalItems || 0), 0);
-
   return (
     <>
       <section className="dashboard-stats" data-od-id="dashboard-stats" aria-label="Workspace summary">
         <div className="proto-card stat-card" data-od-id="stat-boqs">
           <div className="stat-value num">{data.boqTotal}</div>
           <div className="stat-label">Total BOQs</div>
-          <div className="stat-trend up">
-            <TrendUpIcon />
-            +12 this month
-          </div>
         </div>
         <div className="proto-card stat-card" data-od-id="stat-items">
-          <div className="stat-value num">{totalItems}</div>
+          <div className="stat-value num">{data.totalItems}</div>
           <div className="stat-label">Total Items</div>
-          <div className="stat-trend up">
-            <TrendUpIcon />
-            +847 this month
-          </div>
         </div>
         <div className="proto-card stat-card" data-od-id="stat-vendors">
-          <div className="stat-value num">{data.vendors}</div>
-          <div className="stat-label">Vendors</div>
-          <div className="stat-trend up">
-            <TrendUpIcon />
-            +5 this month
-          </div>
+          <div className="stat-value num">{data.vendorCount}</div>
+          <div className="stat-label">Vendors with quotes</div>
         </div>
         <div className="proto-card stat-card" data-od-id="stat-estimates">
           <div className="stat-value num">{data.estimates}</div>
           <div className="stat-label">Estimates</div>
-          <div className="stat-trend up">
-            <TrendUpIcon />
-            +3 this week
-          </div>
         </div>
       </section>
 
@@ -180,34 +175,19 @@ export default function DashboardPage() {
           <div className="dashboard-quick-stats">
             <div className="dashboard-quick-stat">
               <div className="dashboard-quick-label">Total Items Across BOQs</div>
-              <div className="dashboard-quick-value num">{totalItems}</div>
+              <div className="dashboard-quick-value num">{data.totalItems}</div>
             </div>
             <div className="dashboard-quick-stat">
-              <div className="dashboard-quick-label">Comparison Match Rate</div>
-              <div className="dashboard-quick-row">
-                <div className="dashboard-quick-value num">—</div>
-                <span className="dashboard-quick-hint">Add BOQs to calculate</span>
-              </div>
+              <div className="dashboard-quick-label">Quotes still in draft</div>
+              <div className="dashboard-quick-value num">{data.unapprovedCount}</div>
             </div>
             <div className="dashboard-quick-stat">
-              <div className="dashboard-quick-label">Data Coverage</div>
-              <div className="dashboard-quick-row">
-                <div className="dashboard-quick-value num">—</div>
-                <span className="dashboard-quick-hint">Standardize items to calculate</span>
-              </div>
+              <div className="dashboard-quick-label">Estimates started</div>
+              <div className="dashboard-quick-value num">{data.estimates}</div>
             </div>
           </div>
         </article>
       </section>
     </>
-  );
-}
-
-function TrendUpIcon() {
-  return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-      <polyline points="2 12 6 8 10 12 14 4" />
-      <polyline points="9 4 14 4 14 9" />
-    </svg>
   );
 }

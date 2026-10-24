@@ -5,6 +5,7 @@ import type { Boq } from '@/lib/boq-schema'
 import { toPublicBoq } from '@/lib/boq-public'
 import { calculateBoqTotals } from '@/lib/boq-pricing'
 import { BoqCanonicalValidationError, parseCanonicalBoqSections } from '@/lib/boq-canonical'
+import { summarizeBoqWorkspace } from '@/lib/boq-workspace-summary'
 
 function computeTotals(sections: Boq['sections']) {
   return calculateBoqTotals(sections)
@@ -63,7 +64,7 @@ export async function GET(request: NextRequest) {
     const offset = (page - 1) * limit
     const paginated = boqs.slice(offset, offset + limit).map(toPublicBoq)
 
-    return NextResponse.json({ boqs: paginated, total, page, totalPages })
+    return NextResponse.json({ boqs: paginated, total, page, totalPages, summary: summarizeBoqWorkspace(boqs) })
   } catch (error) {
     console.error('Error fetching BOQs:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
