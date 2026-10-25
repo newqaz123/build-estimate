@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import {
+  wantsClassicBoqWorkspace,
   boqComparisonReviewHref,
   boqDetailHref,
   boqDetailReturnHref,
@@ -107,4 +108,12 @@ test("workspace href preserves only a validated compare return path", () => {
     boqWorkspaceHref("opaque", "review", "https://evil.example/compare"),
     "/boqs/opaque?view=review",
   )
+})
+
+test('compare links and ?classic=1 open the tabbed workspace; everything else the simple review', () => {
+  const q = (query: string) => new URLSearchParams(query)
+  assert.equal(wantsClassicBoqWorkspace(q('view=compare&returnTo=%2Fcompare')), true)
+  assert.equal(wantsClassicBoqWorkspace(q('classic=1&view=review')), true)
+  assert.equal(wantsClassicBoqWorkspace(q('view=review')), false)
+  assert.equal(wantsClassicBoqWorkspace(q('')), false)
 })

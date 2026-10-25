@@ -103,6 +103,7 @@ import {
   boqWorkspaceHref,
   isBoqReviewMode,
   safeBoqWorkspaceView,
+  wantsClassicBoqWorkspace,
   safeCompareReturnPath,
   type BoqWorkspaceView,
 } from "@/lib/boq-review-route";
@@ -202,8 +203,8 @@ function BoqDetailContent() {
   const rawReturnTo = searchParams.get("returnTo");
   const returnTo = safeCompareReturnPath(rawReturnTo);
 	const legacyReviewMode = isBoqReviewMode(searchParams);
-	// The simple review page is the default; the older tabbed workspace stays reachable via ?classic=1.
-	const classicView = searchParams.get("classic") === "1";
+	// The simple review page is the default; the tabbed workspace serves ?classic=1 and ?view=compare.
+	const classicView = wantsClassicBoqWorkspace(searchParams);
   const shouldCanonicalizeUrl =
     legacyReviewMode ||
     (rawReturnTo !== null && returnTo === null) ||

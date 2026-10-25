@@ -100,3 +100,12 @@ export function boqWorkspaceHref(
   if (safeReturnTo) query.set("returnTo", safeReturnTo)
   return `${boqDetailHref(id)}?${query.toString()}`
 }
+
+/**
+ * The simple review page is the default BOQ page. The tabbed workspace is used
+ * for ?classic=1 and for links that ask for the comparison view (the Compare
+ * inbox "Open comparison" button), which only the tabbed workspace renders.
+ */
+export function wantsClassicBoqWorkspace(params: { get(name: string): string | null }): boolean {
+  return params.get('classic') === '1' || params.get('view') === 'compare'
+}
