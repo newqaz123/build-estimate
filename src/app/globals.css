@@ -3206,12 +3206,16 @@
 .simple-review-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border); background: var(--surface); flex-wrap: wrap; }
 .simple-review-title, .simple-review-actions { display: flex; align-items: center; gap: var(--space-2); min-width: 0; flex-wrap: wrap; }
 .simple-review-back { font-size: 20px; line-height: 1; color: var(--muted-text); padding: 0 4px; }
-.simple-review-meta { height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); font-size: 12px; min-width: 0; width: 160px; }
-.simple-review-project { width: 220px; font-weight: 600; }
-.simple-review-date { width: 132px; }
+.simple-review-meta { height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); font-size: 12px; min-width: 72px; flex: 0 1 150px; }
+.simple-review-project { flex-basis: 200px; font-weight: 600; }
+.simple-review-date { flex: 0 0 124px; }
+/* Keep the header to one row on a laptop: inputs shrink, the summary wraps inside itself. */
+.simple-review-header { flex-wrap: nowrap; }
+.simple-review-header > .simple-review-title { flex: 1 1 auto; flex-wrap: nowrap; }
+.simple-review-header > .simple-review-actions { flex: 0 0 auto; flex-wrap: nowrap; }
 .simple-review-meta.is-missing { border-color: var(--danger, #c0392b); background: color-mix(in oklab, var(--danger, #c0392b) 6%, var(--surface)); }
 .simple-review-meta:disabled { border-color: transparent; background: transparent; color: var(--fg-2); }
-.simple-review-summary { font-size: 12px; color: var(--muted-text); font-variant-numeric: tabular-nums; }
+.simple-review-summary { font-size: 12px; color: var(--muted-text); font-variant-numeric: tabular-nums; max-width: 190px; line-height: 1.25; }
 .simple-review-warn { color: var(--warning, #b88a00); font-weight: 600; }
 .simple-review-classic { font-size: 11px; color: var(--muted-text); text-decoration: underline; }
 .simple-review-strip { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; padding: 6px var(--space-3); border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--accent) 5%, var(--surface)); font-size: 12px; }
