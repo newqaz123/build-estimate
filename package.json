@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "next dev",
     "dev:docling": "bash scripts/dev-docling.sh",
+    "setup:docling": "bash scripts/setup-docling.sh",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

@@ -1,6 +1,22 @@
-fastapi>=0.115.0
-uvicorn>=0.30.0
-python-multipart>=0.0.12
-docling>=2.0.0
-pypdf>=5.0.0
-pandas>=2.0.0
+# Docling sidecar runtime. Pinned so a fresh install on macOS, Windows and
+# Linux resolves the exact stack the tests and measurements ran on
+# (Python 3.11-3.13). Install with scripts/setup-docling.sh (macOS/Linux) or
+# scripts/setup-docling.ps1 (Windows); both use the CPU-only torch wheel index
+# on Linux/Windows so pip does not pull multi-GB CUDA builds.
+fastapi==0.162.0
+uvicorn==0.54.0
+python-multipart==0.0.32
+pydantic==2.14.1
+docling==2.142.1
+docling-core==2.104.0
+docling-ibm-models==4.0.4
+docling-parse==7.23.0
+pypdf==6.21.2
+pypdfium2==5.14.0
+pandas==3.1.0
+numpy==2.5.4
+pillow==13.0.0
+# OCR for scanned pages (replaces Tesseract: no system binary needed).
+rapidocr==3.10.0
+torch==2.14.1
+torchvision==0.29.1

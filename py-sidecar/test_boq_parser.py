@@ -1245,21 +1245,32 @@ class DockerSourceSetTest(unittest.TestCase):
         sidecar = Path(__file__).resolve().parent
         dockerfile = (sidecar / "Dockerfile").read_text()
         copied = set(re.findall(r"^COPY\s+([^ ]+\.py)\s+", dockerfile, re.MULTILINE))
-        tree = ast.parse((sidecar / "main.py").read_text())
-        local_modules = {
-            alias.name.split(".")[0]
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Import)
-            for alias in node.names
-            if (sidecar / f"{alias.name.split('.')[0]}.py").exists()
-        } | {
-            node.module.split(".")[0]
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom) and node.module
-            if (sidecar / f"{node.module.split('.')[0]}.py").exists()
-        }
+        def local_imports(module_file: Path) -> set[str]:
+            tree = ast.parse(module_file.read_text())
+            names = {
+                alias.name.split(".")[0]
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Import)
+                for alias in node.names
+            } | {
+                node.module.split(".")[0]
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom) and node.module
+            }
+            return {name for name in names if (sidecar / f"{name}.py").exists()}
 
-        self.assertEqual(copied, {"main.py", *(f"{module}.py" for module in local_modules)})
+        # Transitive: a module imported by an imported module must ship too.
+        local_modules: set[str] = set()
+        pending = list(local_imports(sidecar / "main.py"))
+        while pending:
+            module = pending.pop()
+            if module in local_modules:
+                continue
+            local_modules.add(module)
+            pending.extend(local_imports(sidecar / f"{module}.py"))
+
+        # warmup.py is the image's build-time model fetch, not imported by main.
+        self.assertEqual(copied - {"warmup.py"}, {"main.py", *(f"{module}.py" for module in local_modules)})
 
 
 class ContractV3InvariantTest(unittest.TestCase):

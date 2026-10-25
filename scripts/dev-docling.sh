@@ -37,7 +37,7 @@ fi
 # Only check the venv after confirming we actually need to start a new process.
 if [[ ! -x "$UVICORN" ]]; then
 	echo "error: missing Docling venv uvicorn at ${UVICORN}" >&2
-	echo "Create it with the project py-sidecar/.venv-docling setup before running dev:docling." >&2
+	echo "Create it with: npm run setup:docling (Windows: scripts\\setup-docling.ps1)" >&2
 	exit 1
 fi
 
