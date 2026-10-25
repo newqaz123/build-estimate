@@ -380,6 +380,10 @@ export default function CatalogPage() {
           aliases: addAliases.split(",").map((a) => a.trim()).filter(Boolean),
         }),
       })
+      if (res.status === 409) {
+        toast.error("This catalog entry already exists (same description and unit)")
+        return
+      }
       if (!res.ok) throw new Error("Failed to create")
       toast.success("Standard entry created")
       setAddOpen(false)
@@ -498,7 +502,7 @@ export default function CatalogPage() {
                   return (
                     <tr key={key} data-od-id={`review-item-${i}`}>
                       <td className="catalog-source-cell">
-                        <span className="flex items-center gap-2">{item.boqProject}<ProtoBadge status={item.boqStatus} /></span>
+                        <span className="flex items-center gap-2">{item.boqProject || 'Untitled BOQ'}<ProtoBadge status={item.boqStatus} /></span>
                         {item.boqVendor ? <small>Vendor: {item.boqVendor}</small> : <small>Vendor: —</small>}
                       </td>
                       <td>{item.desc}</td>

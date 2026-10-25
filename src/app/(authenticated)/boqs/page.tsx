@@ -239,7 +239,7 @@ export default function BoqsPage() {
                   <td className="boq-name-cell"><Link href={boqDetailHref(boq.id)} className="boq-cell-truncate font-medium text-foreground hover:text-accent no-underline" title={boq.project}>{boq.project}</Link></td>
                   <td className="boq-name-cell text-muted-foreground"><span className="boq-cell-truncate" title={boq.vendor}>{boq.vendor}</span></td>
                   <td>{boq.workType}</td>
-                  <td className="text-muted-foreground">{boq.date}</td>
+                  <td className="text-muted-foreground" style={{ whiteSpace: "nowrap" }}>{boq.date}</td>
                   <td className="num-col">{boq.totalItems}</td>
                   <td className="num-col">{formatCurrency(boq.grandTotal)}</td>
                   <td><ProtoBadge status={boq.status} /></td>

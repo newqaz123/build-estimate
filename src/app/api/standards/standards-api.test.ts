@@ -6,6 +6,7 @@ import { boqHasLinkedStandardItems, computeBoqStdStatus, hasLinkedEstimateItems,
 import {
   applyStandardToBoqItem,
   enrichStandardsWithHistoricalPricing,
+  findDuplicateStandard,
   mergeStandardSourceItems,
   normalizeStandardEntry,
   queryStandards,
@@ -463,4 +464,17 @@ test('parseBoqListLimit rejects malformed numeric strings instead of parsing a v
   for (const value of ['10abc', '12.5', '1e9', ' 10 ', '\t10']) {
     assert.equal(parseBoqListLimit(value), 10, `expected ${JSON.stringify(value)} to use the default`)
   }
+})
+
+test('duplicate standard check: same description (case/space-insensitive) and an equivalent unit, active only', () => {
+  const now = '2026-10-25T00:00:00.000Z'
+  const base = { aliases: [], sourceBoqCount: 0, createdAt: now, updatedAt: now }
+  const entries = [
+    { ...base, id: 'a', description: 'Pipe  painting work', unit: 'Lot' },
+    { ...base, id: 'b', description: 'Old item', unit: 'm', archivedAt: now },
+  ]
+  assert.equal(findDuplicateStandard(entries, ' pipe painting WORK ', 'LS')?.id, 'a')
+  assert.equal(findDuplicateStandard(entries, 'Pipe painting work', 'm'), undefined)
+  assert.equal(findDuplicateStandard(entries, 'Pipe painting', 'lot'), undefined)
+  assert.equal(findDuplicateStandard(entries, 'Old item', 'm'), undefined)
 })

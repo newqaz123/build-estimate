@@ -5,6 +5,7 @@ import type { StandardEntry } from '@/lib/standard-schema'
 import type { Boq, BoqItem } from '@/lib/boq-schema'
 import { buildCatalogHistoricalPricing } from '@/lib/catalog-historical-pricing'
 import { isPricedBoqItem } from '@/lib/boq-pricing'
+import { unitMatchKey } from '@/lib/standard-matching'
 import {
   mergeStandardSourceItems,
   normalizeStandardEntry,
@@ -32,6 +33,22 @@ export function queryStandards(
         entry.aliases.some((alias) => alias.toLowerCase().includes(normalizedSearch))
       )
     })
+}
+
+const descriptionKey = (text: string) => text.trim().toLowerCase().replace(/\s+/g, ' ')
+
+/** An active entry with the same description (case/space-insensitive) and an equivalent unit. */
+export function findDuplicateStandard(
+  entries: StandardEntry[],
+  description: string,
+  unit: string,
+  unitMap: Record<string, string> = {},
+): StandardEntry | undefined {
+  const key = descriptionKey(description)
+  const unitKey = unitMatchKey(unit, unitMap)
+  return entries
+    .map(normalizeStandardEntry)
+    .find((entry) => !entry.archivedAt && descriptionKey(entry.description) === key && unitMatchKey(entry.unit, unitMap) === unitKey)
 }
 
 export function enrichStandardsWithHistoricalPricing(
@@ -115,6 +132,15 @@ export async function POST(request: NextRequest) {
     const trimmedUnit = unit?.trim()
     if (!trimmedDescription || !trimmedUnit) {
       return NextResponse.json({ error: 'Description and unit are required' }, { status: 400 })
+    }
+
+    const [{ docs: existing }, settings] = await Promise.all([
+      queryCollection<StandardEntry>('standards'),
+      getDocument<{ fuzzy?: { unitMap?: Record<string, string> } }>('settings', 'workspace'),
+    ])
+    const duplicate = findDuplicateStandard(existing, trimmedDescription, trimmedUnit, settings?.fuzzy?.unitMap ?? {})
+    if (duplicate) {
+      return NextResponse.json({ error: 'A catalog entry with this description and unit already exists', existingId: duplicate.id }, { status: 409 })
     }
 
     const id = crypto.randomUUID()
