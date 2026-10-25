@@ -1,3 +1,5 @@
+import { loadActiveCatalogConversionRules } from '@/lib/catalog-conversion-storage'
+import type { HumanApprovedCatalogConversionRule } from '@/lib/catalog-conversion'
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { queryCollection, getDocument, createDocumentWithId } from '@/lib/db'
@@ -39,8 +41,9 @@ export function enrichStandardsWithHistoricalPricing(
   standards: StandardEntry[],
   boqs: Boq[],
   unitMap: Record<string, string> = {},
+  conversionRules: HumanApprovedCatalogConversionRule[] = [],
 ): StandardEntry[] {
-  const pricing = buildCatalogHistoricalPricing(standards, boqs, unitMap)
+  const pricing = buildCatalogHistoricalPricing(standards, boqs, unitMap, { conversionRules })
   return standards.map((standard) => {
     const historicalPricing = pricing.get(standard.id)
     return historicalPricing ? { ...standard, historicalPricing } : standard
@@ -79,18 +82,19 @@ export async function GET(request: NextRequest) {
     const search = searchParams.get('search')
     const includeArchived = searchParams.get('includeArchived') === 'true'
 
-    const [{ docs }, { docs: boqs }, settings] = await Promise.all([
+    const [{ docs }, { docs: boqs }, settings, conversionRules] = await Promise.all([
       queryCollection<StandardEntry>('standards', {
         orderByField: 'description',
         orderDirection: 'asc',
       }),
       queryCollection<Boq>('boqs'),
       getDocument<{ fuzzy?: { unitMap?: Record<string, string> } }>('settings', 'workspace'),
+      loadActiveCatalogConversionRules(),
     ])
 
     const standards = queryStandards(docs, { includeArchived, search })
 
-    return NextResponse.json(enrichStandardsWithHistoricalPricing(standards, boqs, settings?.fuzzy?.unitMap ?? {}))
+    return NextResponse.json(enrichStandardsWithHistoricalPricing(standards, boqs, settings?.fuzzy?.unitMap ?? {}, conversionRules))
   } catch (error) {
     console.error('Error fetching standards:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

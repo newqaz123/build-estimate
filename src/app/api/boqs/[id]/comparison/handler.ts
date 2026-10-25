@@ -1,12 +1,14 @@
 import type { Boq } from '@/lib/boq-schema'
 import { compareBoqToCatalog } from '@/lib/boq-catalog-comparison'
 import type { StandardEntry } from '@/lib/standard-schema'
+import type { HumanApprovedCatalogConversionRule } from '@/lib/catalog-conversion'
 
 export interface ComparisonHandlerDependencies {
   authenticate: () => Promise<{ user?: unknown } | null>
   loadBoqs: () => Promise<Boq[]>
   loadStandards: () => Promise<StandardEntry[]>
   loadUnitMap: () => Promise<Record<string, string>>
+  loadConversionRules?: () => Promise<HumanApprovedCatalogConversionRule[]>
 }
 
 export function createComparisonGetHandler({
@@ -14,6 +16,7 @@ export function createComparisonGetHandler({
   loadBoqs,
   loadStandards,
   loadUnitMap,
+  loadConversionRules = async () => [],
 }: ComparisonHandlerDependencies) {
   return async function GET(
     _request: Request,
@@ -26,10 +29,11 @@ export function createComparisonGetHandler({
       }
 
       const { id } = await params
-      const [boqs, standards, unitMap] = await Promise.all([
+      const [boqs, standards, unitMap, conversionRules] = await Promise.all([
         loadBoqs(),
         loadStandards(),
         loadUnitMap(),
+        loadConversionRules(),
       ])
       const target = boqs.find((boq) => boq.id === id)
 
@@ -38,7 +42,7 @@ export function createComparisonGetHandler({
       }
 
       return Response.json(
-        compareBoqToCatalog(target, standards, boqs, unitMap),
+        compareBoqToCatalog(target, standards, boqs, unitMap, conversionRules),
       )
     } catch (error) {
       console.error('Error comparing BOQ to catalog:', error)

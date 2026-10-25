@@ -1,3 +1,4 @@
+import { loadActiveCatalogConversionRules } from '@/lib/catalog-conversion-storage'
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { getDocument, queryCollection } from '@/lib/db'
@@ -59,15 +60,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: validation.error }, { status: 400 })
   }
 
-  const [settings, activeStandards, { docs: boqs }] = await Promise.all([
+  const [settings, activeStandards, { docs: boqs }, conversionRules] = await Promise.all([
     getDocument<WorkspaceSettings>('settings', 'workspace').catch((error) => {
       console.error('Could not load estimate AI settings:', error instanceof Error ? error.message : 'unknown settings error')
       return null
     }),
     loadActiveStandards(),
     queryCollection<Boq>('boqs'),
+    loadActiveCatalogConversionRules().catch(() => []),
   ])
-  const pricing = buildCatalogHistoricalPricing(activeStandards, boqs, settings?.fuzzy?.unitMap ?? {})
+  const pricing = buildCatalogHistoricalPricing(activeStandards, boqs, settings?.fuzzy?.unitMap ?? {}, { conversionRules })
   const serverCatalog = activeStandards.map((standard) => standardEntryToEstimateAiCatalogEntry({
     ...standard,
     ...(pricing.get(standard.id) ? { historicalPricing: pricing.get(standard.id) } : {}),

@@ -2,8 +2,18 @@ import type { Boq, BoqPricedItem } from "./boq-schema";
 import { isPricedBoqItem } from "./boq-pricing";
 import { deriveSourceCostAllocation } from "./boq-cost-allocation";
 import type { StandardEntry } from "./standard-schema";
-import { canonicalUnit, rankCatalogMatches } from "./standard-matching";
+import {
+	canonicalUnit,
+	rankCatalogMatches,
+	unitsCompatible,
+} from "./standard-matching";
 import { getBoqItemRequestIdentity } from "./boq-item-identity";
+import type { HumanApprovedCatalogConversionRule } from "./catalog-conversion";
+import {
+	convertRate,
+	createRateConverter,
+	type RateConversion,
+} from "./catalog-rate-conversion";
 import {
 	buildCatalogComponentPricing,
 	buildCatalogHistoricalPricing,
@@ -47,6 +57,8 @@ export interface BoqCatalogComparisonRow {
 		max: number;
 	};
 	variancePct: number | null;
+	/** Set when this line's unit differs from the catalog's and a conversion rule was used. */
+	conversion?: RateConversion & { catalogRate: number };
 	components: ComponentComparisonMap;
 }
 
@@ -137,14 +149,16 @@ export function compareBoqToCatalog(
 	standards: StandardEntry[],
 	allBoqs: Boq[],
 	unitMap: Record<string, string> = {},
+	conversionRules: readonly HumanApprovedCatalogConversionRule[] = [],
 ): { boqId: string; rows: BoqCatalogComparisonRow[] } {
 	const resolver = createHistoricalStandardResolver(standards);
 	const { active, byId } = resolver;
+	const convert = createRateConverter(conversionRules, unitMap);
 	const historicalPricing = buildCatalogHistoricalPricing(
 		active,
 		allBoqs,
 		unitMap,
-		{ excludeBoqId: target.id },
+		{ excludeBoqId: target.id, conversionRules },
 	);
 	const componentPricing = buildCatalogComponentPricing(
 		active,
@@ -159,7 +173,10 @@ export function compareBoqToCatalog(
 			const ranked = linked
 				? undefined
 				: rankCatalogMatches(item.desc, item.unit, active, unitMap).find(
-						(candidate) => candidate.unitCompatible && candidate.score >= 1100,
+						(candidate) =>
+							candidate.score >= 1100 &&
+							(candidate.unitCompatible ||
+								Boolean(byId.get(candidate.id) && convert(item.unit, byId.get(candidate.id)!))),
 					);
 			const standard = linked ?? (ranked ? byId.get(ranked.id) : undefined);
 			const candidate = standard
@@ -184,6 +201,16 @@ export function compareBoqToCatalog(
 						max: pricing.max,
 					}
 				: null;
+			const conversion =
+				benchmark && standard ? convert(item.unit, standard) : null;
+			const comparableRate = conversion
+				? convertRate(item.rate, conversion)
+				: item.rate;
+			// Different units with no conversion rule cannot be compared.
+			const comparable =
+				!standard ||
+				Boolean(conversion) ||
+				unitsCompatible(item.unit, standard.unit, unitMap);
 			const components = deriveTargetComponents(item);
 			const matchedComponentPricing =
 				candidate && matchedStandardId === candidate.standardId
@@ -220,9 +247,12 @@ export function compareBoqToCatalog(
 					candidate,
 					benchmark,
 					variancePct:
-						benchmark && item.rate > 0
-							? ((item.rate - benchmark.average) / benchmark.average) * 100
+						benchmark && comparable && item.rate > 0
+							? ((comparableRate - benchmark.average) / benchmark.average) * 100
 							: null,
+					...(conversion
+						? { conversion: { ...conversion, catalogRate: comparableRate } }
+						: {}),
 					components,
 				},
 			];

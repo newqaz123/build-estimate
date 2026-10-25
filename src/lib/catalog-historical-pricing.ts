@@ -4,6 +4,8 @@ import { deriveSourceCostAllocation } from "./boq-cost-allocation";
 import type { StandardEntry } from "./standard-schema";
 import { canonicalUnit, unitsCompatible } from "./standard-matching";
 import { countableApprovedQuotes } from "./boq-duplicates";
+import type { HumanApprovedCatalogConversionRule } from "./catalog-conversion";
+import { convertRate, createRateConverter } from "./catalog-rate-conversion";
 
 export interface HistoricalPriceSource {
 	boqId: string;
@@ -16,6 +18,8 @@ export interface HistoricalPriceSource {
 	description: string;
 	unit: string;
 	rate: number;
+	/** Set when the quote used another unit and a conversion rule turned it into the catalog unit. */
+	converted?: { unit: string; rate: number; ruleId: string; catalogUnitsPerSourceUnit: number };
 }
 
 export interface HistoricalPriceSummary {
@@ -97,9 +101,13 @@ export function buildCatalogHistoricalPricing(
 	standards: StandardEntry[],
 	boqs: Boq[],
 	unitMap: Record<string, string> = {},
-	options: { excludeBoqId?: string } = {},
+	options: {
+		excludeBoqId?: string;
+		conversionRules?: readonly HumanApprovedCatalogConversionRule[];
+	} = {},
 ): Map<string, HistoricalPriceSummary> {
 	const resolver = createHistoricalStandardResolver(standards);
+	const convert = createRateConverter(options.conversionRules ?? [], unitMap);
 	const grouped = new Map<string, HistoricalPriceSource[]>();
 
 	// Repeat uploads of one quote are counted once (see countableApprovedQuotes).
@@ -117,7 +125,11 @@ export function buildCatalogHistoricalPricing(
 				const standardId = resolver.resolve(boq.id, sectionIndex, item);
 				if (!standardId) return;
 				const standard = resolver.byId.get(standardId);
-				if (!standard || !unitsCompatible(item.unit, standard.unit, unitMap))
+				if (!standard) return;
+				const conversion = unitsCompatible(item.unit, standard.unit, unitMap)
+					? null
+					: convert(item.unit, standard);
+				if (!unitsCompatible(item.unit, standard.unit, unitMap) && !conversion)
 					return;
 
 				const source: HistoricalPriceSource = {
@@ -129,8 +141,18 @@ export function buildCatalogHistoricalPricing(
 					...(item.id ? { itemId: item.id } : {}),
 					...(item.code ? { itemCode: item.code } : {}),
 					description: item.desc,
-					unit: item.unit,
-					rate: item.rate,
+					unit: conversion ? standard.unit : item.unit,
+					rate: conversion ? convertRate(item.rate, conversion) : item.rate,
+					...(conversion
+						? {
+								converted: {
+									unit: item.unit,
+									rate: item.rate,
+									ruleId: conversion.ruleId,
+									catalogUnitsPerSourceUnit: conversion.catalogUnitsPerSourceUnit,
+								},
+							}
+						: {}),
 				};
 				const sources = grouped.get(standardId);
 				if (sources) sources.push(source);

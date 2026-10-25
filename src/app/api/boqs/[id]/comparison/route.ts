@@ -2,6 +2,7 @@ import { auth } from '@/lib/auth'
 import { getDocument, queryCollection } from '@/lib/db'
 import type { Boq } from '@/lib/boq-schema'
 import type { StandardEntry } from '@/lib/standard-schema'
+import { loadActiveCatalogConversionRules } from '@/lib/catalog-conversion-storage'
 import { createComparisonGetHandler } from './handler'
 
 export const GET = createComparisonGetHandler({
@@ -21,4 +22,5 @@ export const GET = createComparisonGetHandler({
 
     return settings?.fuzzy?.unitMap ?? {}
   },
+  loadConversionRules: () => loadActiveCatalogConversionRules(),
 })

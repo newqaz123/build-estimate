@@ -240,7 +240,8 @@ export function previewCatalogMerge(args: {
 }): CatalogMergePreview {
   const { standards, boqs, rules = [], unitMap = {}, input } = args
   const [keep, ...others] = pickEntries(standards, [input.keepId, ...input.mergeIds])
-  const history = buildCatalogHistoricalPricing(standards, boqs, unitMap)
+  const activeRules = rules.filter((rule) => rule.archivedAt === undefined)
+  const history = buildCatalogHistoricalPricing(standards, boqs, unitMap, { conversionRules: activeRules })
   const linked = new Map<string, number>()
   for (const boq of boqs) for (const section of boq.sections) for (const item of section.items) {
     if (isPricedBoqItem(item) && item.stdId) linked.set(item.stdId, (linked.get(item.stdId) ?? 0) + 1)
@@ -248,7 +249,7 @@ export function previewCatalogMerge(args: {
   const plan = planCatalogMerge({ standards, boqs, rules, unitMap, input: { ...input, description: input.description || keep!.description, unit: input.unit || keep!.unit }, now: new Date(0).toISOString() })
   const plannedBoqs = boqs.map((boq) => plan.boqs.find((next) => next.id === boq.id) ?? boq)
   const plannedStandards = standards.map((standard) => (standard.id === plan.kept.id ? plan.kept : plan.archived.find((entry) => entry.id === standard.id) ?? standard))
-  const combined = buildCatalogHistoricalPricing(plannedStandards, plannedBoqs, unitMap).get(plan.kept.id) ?? null
+  const combined = buildCatalogHistoricalPricing(plannedStandards, plannedBoqs, unitMap, { conversionRules: activeRules.map((rule) => plan.rules.find((next) => next.id === rule.id) ?? rule) }).get(plan.kept.id) ?? null
   const entries = [keep!, ...others].map((entry) => ({
     id: entry.id, description: entry.description, unit: entry.unit, aliases: entry.aliases,
     linkedRows: linked.get(entry.id) ?? 0, history: history.get(entry.id) ?? null,

@@ -360,3 +360,23 @@ export function createFirestoreCatalogConversionRuleStore(
     options,
   )
 }
+
+/**
+ * Active (not archived) human-approved rules, for price comparison.
+ * A malformed document is skipped rather than breaking every comparison.
+ */
+export async function loadActiveCatalogConversionRules(
+  db: Firestore = getDb(),
+): Promise<HumanApprovedCatalogConversionRule[]> {
+  const snapshot = await db.collection(CATALOG_CONVERSION_RULES_COLLECTION).get()
+  const rules: HumanApprovedCatalogConversionRule[] = []
+  for (const doc of snapshot.docs) {
+    try {
+      const rule = parseHumanApprovedCatalogConversionRule({ ...doc.data(), id: doc.id })
+      if (rule.archivedAt === undefined) rules.push(rule)
+    } catch {
+      console.warn('Skipping malformed catalog conversion rule document.')
+    }
+  }
+  return rules
+}
