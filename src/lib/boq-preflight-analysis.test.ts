@@ -53,3 +53,16 @@ test('does not expose source text or item values in output', () => {
   assert.deepEqual(Object.keys(result).sort(), ['confidence', 'page', 'reasons', 'suggested', 'textSource'])
   assert.equal(result.textSource, 'embedded')
 })
+
+test('suggests scanned pages that have no text layer for OCR at import', () => {
+  const result = analyzePreflightPages([
+    { page: 1, geometry: { tableCount: 0, numericTokenCount: 0, scanned: true } },
+    { page: 2, geometry: { tableCount: 0, numericTokenCount: 0 } },
+    { page: 3, embeddedText: 'Cover letter', geometry: { tableCount: 0, numericTokenCount: 0, scanned: true } },
+  ])
+  assert.deepEqual(result[0], { page: 1, suggested: true, confidence: 0.6, reasons: ['scanned_page'], textSource: 'unavailable' })
+  assert.equal(result[1].suggested, false)
+  // A page with real text is judged on its text, never as a scan.
+  assert.equal(result[2].suggested, false)
+  assert.ok(!result[2].reasons.includes('scanned_page'))
+})

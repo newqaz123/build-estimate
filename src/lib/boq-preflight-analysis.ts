@@ -9,6 +9,8 @@ export interface PreflightPageInput {
   geometry: {
     tableCount: number
     numericTokenCount: number
+    /** Image-only or outlined-glyph page with no text layer (OCR required). */
+    scanned?: boolean
   }
 }
 
@@ -78,6 +80,14 @@ export function analyzePreflightPages(pages: readonly PreflightPageInput[]): Pre
     if (quantityRateAmountSignals >= 2 && input.geometry.numericTokenCount >= 3) {
       reasons.push('quantity_rate_amount')
       score += 0.15
+    }
+
+    if (source === 'unavailable' && input.geometry.scanned) {
+      // Nothing to read until OCR runs at import, so a scan is suggested at
+      // the threshold: quotations are usually scanned table pages, and the
+      // user can still deselect a scanned cover letter.
+      reasons.push('scanned_page')
+      score = Math.max(score, PREFLIGHT_HIGH_CONFIDENCE_THRESHOLD)
     }
 
     const confidence = Math.min(1, Number(score.toFixed(2)))

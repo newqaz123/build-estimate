@@ -9,6 +9,7 @@ import { analyzePreflightPages } from "@/lib/boq-preflight-analysis";
 import {
 	createPreflightAnalysisAdapter,
 	mapPdfjsToPreflightInput,
+	pdfjsPageGeometry,
 } from "@/lib/boq-preflight-analysis-adapter";
 
 const adapterSourcePath = join(
@@ -199,4 +200,33 @@ startxref
 	assert.equal(pages.length, 1);
 	assert.equal(pages[0]?.page, 1);
 	assert.match(pages[0]?.embeddedText ?? "", /Hello BOQ/);
+});
+
+const CODES = { images: new Set([85, 86]), path: 91 };
+
+test("pdfjsPageGeometry counts numeric tokens and detects rows of numbers as a table", () => {
+	const at = (str: string, y: number) => ({ str, transform: [1, 0, 0, 1, 40, y] });
+	const geometry = pdfjsPageGeometry(
+		[
+			at("Description", 700), at("Qty", 700), at("Amount", 700),
+			at("Widget", 680), at("2", 680), at("1,250.00", 681),
+			at("Bracket", 660), at("4", 660), at("(80.50)", 660),
+			at("Paint", 640), at("1", 640), at("300", 640),
+			at("Page 1 of 2", 40),
+		],
+		[91, 91],
+		CODES,
+	);
+	assert.deepEqual(geometry, { tableCount: 1, numericTokenCount: 8, scanned: false });
+});
+
+test("pdfjsPageGeometry flags image-only and outlined-glyph pages as scans, not text pages", () => {
+	assert.equal(pdfjsPageGeometry([], [85], CODES).scanned, true);
+	assert.equal(pdfjsPageGeometry([{ str: " " }], Array(250).fill(91), CODES).scanned, true);
+	assert.equal(pdfjsPageGeometry([], Array(20).fill(91), CODES).scanned, false);
+	assert.equal(
+		pdfjsPageGeometry([{ str: "A real text layer with plenty of words" }], [85], CODES).scanned,
+		false,
+	);
+	assert.equal(pdfjsPageGeometry([{ str: "1 2 3" }], [], CODES).tableCount, 0);
 });
