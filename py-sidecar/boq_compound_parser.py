@@ -98,6 +98,30 @@ def _header_leaf(row: dict[str, Any], column: int) -> str:
     return _normal(str(headers[column]).rsplit("/", 1)[-1])
 
 
+def _component_relative_header(row: dict[str, Any], column: int, component: str) -> str:
+    """Normalised header words after the component group, e.g. "price unit"."""
+    headers = row.get("headers", [])
+    if column >= len(headers):
+        return ""
+    words = _normal(headers[column]).split()
+    if component not in words:
+        return ""
+    return " ".join(words[words.index(component) + 1:])
+
+
+def _is_component_total_price(row: dict[str, Any], component: str, column: int) -> bool:
+    if _component_relative_header(row, column, component) not in {"price", "cost"}:
+        return False
+    for sibling in range(len(row.get("headers", []))):
+        if sibling == column:
+            continue
+        words = set(_component_relative_header(row, sibling, component).split())
+        # "Price/Unit" beside a bare "Price": the bare one is the line total.
+        if "rate" in words or {"price", "unit"} <= words:
+            return True
+    return False
+
+
 def _find_columns(row: dict[str, Any]) -> dict[str, int]:
     roles: dict[str, int] = {}
     # Iterate over the full retained header vector, not only cells present in
@@ -117,6 +141,10 @@ def _find_columns(row: dict[str, Any]) -> dict[str, int]:
         elif component and ("qty" in header or "quantity" in header):
             roles[f"{component}_qty"] = column
         elif component and ("total" in header or "amount" in header):
+            roles[f"{component}_total"] = column
+        elif component and _is_component_total_price(row, component, column):
+            # "Material / Price/Unit" + "Material / Price": the bare "Price"
+            # beside a per-unit sibling is the component line total.
             roles[f"{component}_total"] = column
         elif component and ("rate" in header or "price" in header):
             roles[f"{component}_rate"] = column
