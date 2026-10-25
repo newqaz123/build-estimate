@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button"
 import {
   MAX_REVIEW_SPLIT,
   MIN_REVIEW_SPLIT,
+  clampReviewSplit,
   reviewSplitFromKey,
   reviewSplitFromPointer,
 } from "@/lib/pdf-review-geometry"
@@ -24,15 +25,17 @@ interface ReviewWorkspaceProps {
   children: ReactNode
   sourceFileName: string
   hasSource?: boolean
+  /** Starting PDF share of the split, in percent (default 50). */
+  initialSplit?: number
 }
 
-export function ReviewWorkspace({ pdf, children, sourceFileName, hasSource = true }: ReviewWorkspaceProps) {
+export function ReviewWorkspace({ pdf, children, sourceFileName, hasSource = true, initialSplit = 50 }: ReviewWorkspaceProps) {
   const bodyRef = useRef<HTMLDivElement>(null)
   const collapseRef = useRef<HTMLButtonElement>(null)
   const showPdfRef = useRef<HTMLButtonElement>(null)
   const fullPdfRef = useRef<HTMLButtonElement>(null)
   const exitFullPdfRef = useRef<HTMLButtonElement>(null)
-  const [split, setSplit] = useState(50)
+  const [split, setSplit] = useState(() => clampReviewSplit(initialSplit))
   const [mode, setMode] = useState<ReviewWorkspaceMode>("split")
   const [isResizing, setIsResizing] = useState(false)
 

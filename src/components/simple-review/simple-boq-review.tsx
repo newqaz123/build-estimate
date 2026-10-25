@@ -67,6 +67,17 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100
 }
 
+const MISSING_PROJECT = "Add a project name (top left). Prices are saved under it."
+
+/** Server checks speak in field names; say it plainly. */
+function plainBlocking(text: string): string {
+  const missing = /^(project|vendor|date|workType) is required$/i.exec(text.trim())
+  if (!missing) return text
+  const field = missing[1]!.toLowerCase()
+  if (field === "project") return MISSING_PROJECT
+  return `Add the ${field === "worktype" ? "work type" : field} (top left).`
+}
+
 async function readError(response: Response, fallback: string): Promise<{ message: string; blocking?: string[] }> {
   try {
     const body = (await response.json()) as { error?: unknown; blocking?: unknown }
@@ -206,7 +217,15 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
     if (ref) setFocus((current) => ({ page: ref.page, table: ref.table, row: ref.row, key: current.key + 1 }))
   }
 
+  const projectRef = useRef<HTMLInputElement>(null)
+  const projectMissing = !approved && meta.project.trim() === ""
+
   const approve = async () => {
+    if (projectMissing) {
+      setBlocking([MISSING_PROJECT])
+      projectRef.current?.focus()
+      return
+    }
     setBusy("approve")
     setBlocking([])
     try {
@@ -217,7 +236,7 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
       })
       if (!response.ok) {
         const error = await readError(response, "Could not approve this quote.")
-        setBlocking(error.blocking?.length ? error.blocking : [error.message])
+        setBlocking((error.blocking?.length ? error.blocking : [error.message]).map(plainBlocking))
         return
       }
       const body = (await response.json()) as { boq: Boq; linked: number; noCatalog: number }
@@ -258,7 +277,7 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
         <header className="simple-review-header">
           <div className="simple-review-title">
             <Link href="/boqs" className="simple-review-back" aria-label="Back to quotes">‹</Link>
-            <input aria-label="Project" className="simple-review-meta simple-review-project" value={meta.project} disabled={approved} placeholder="Project"
+            <input ref={projectRef} aria-label="Project" className={`simple-review-meta simple-review-project${projectMissing ? " is-missing" : ""}`} value={meta.project} disabled={approved} placeholder="Project name (needed)" aria-invalid={projectMissing || undefined}
               onChange={(e) => { setMeta({ ...meta, project: e.target.value }); setDirty(true) }} />
             <input aria-label="Vendor" className="simple-review-meta" value={meta.vendor} disabled={approved} placeholder="Vendor"
               onChange={(e) => { setMeta({ ...meta, vendor: e.target.value }); setDirty(true) }} />
@@ -317,6 +336,7 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
         ) : null}
 
         <ReviewWorkspace
+          initialSplit={40}
           hasSource={hasSource}
           sourceFileName={boq.sourceFileName || "source.pdf"}
           pdf={hasSource ? (
@@ -338,10 +358,10 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
               <tr>
                 <th className="col-num">#</th>
                 <th>Description</th>
-                <th className="col-num-input">Qty</th>
+                <th className="col-qty">Qty</th>
                 <th className="col-unit">Unit</th>
-                <th className="col-num-input">Rate</th>
-                <th className="col-num-input">Total</th>
+                <th className="col-rate">Rate</th>
+                <th className="col-total">Total</th>
                 <th className="col-catalog">Catalog item</th>
               </tr>
             </thead>
