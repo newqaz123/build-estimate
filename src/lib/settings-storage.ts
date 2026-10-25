@@ -143,7 +143,9 @@ export const DEFAULT_SETTINGS: WorkspaceSettings = {
   llm: { provider: 'openai', model: 'gpt-4o' },
   docling: { endpoint: 'http://localhost:5001' },
   fuzzy: {
-    unitMap: { LS: 'L/S', SQFT: 'sq ft', SQM: 'sq m' },
+    // Common synonyms (LS/L/S/เหมา, sq.m/ตร.ม., No./pcs/ตัว ...) are built into
+    // canonicalUnit; this map is for workspace-specific units on top of them.
+    unitMap: { LS: 'lot', SQFT: 'sq ft', SQM: 'm2' },
     normalizeRules: [
       ['\\bsq\\.?\\s*ft\\b', 'sq ft'],
       ['\\bsq\\.?\\s*m\\b', 'sq m'],

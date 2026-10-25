@@ -143,3 +143,58 @@ test('rejects malformed, wrong-key, unknown, and archived LLM suggestions', () =
     assert.equal(suggestionFromLlmResponse(response, standards, 'row'), null)
   }
 })
+
+const unitMap = { LS: 'lot', SQFT: 'sq ft', SQM: 'm2' }
+const pipeCatalog = [
+  standard({ id: 'P1', description: 'Pipe SUS304 Sch10S ERW 1B x 6000L', unit: 'ea' }),
+  standard({ id: 'P2', description: 'Pipe SUS304 Sch10S ERW 2B x 6000L', unit: 'ea' }),
+  standard({ id: 'P4', description: 'Pipe SUS304 Sch10S ERW 4B x 6000L', unit: 'ea' }),
+  standard({ id: 'P2-316', description: 'Pipe SUS316 Sch10S ERW 2B x 6000L', unit: 'ea' }),
+  standard({ id: 'R42', description: 'Con. Reduce SUS304 Sch10S ERW 4B x 2B', unit: 'ea' }),
+  standard({ id: 'T42', description: 'Tee.Reduce SUS304 Sch10S ERW 4B x 2B', unit: 'ea' }),
+  standard({ id: 'TR', description: 'Transportation of tools', unit: 'lot', aliases: ['ค่าขนส่งเครื่องมือ'] }),
+  standard({ id: 'SH47', description: 'Roof sheet THK 0.47mm', unit: 'm2' }),
+  standard({ id: 'SH35', description: 'Roof sheet THK 0.35mm', unit: 'm2' }),
+]
+
+test('never suggests a sibling with a different size or spec', () => {
+  for (const [desc, expected] of [
+    ['pipe sus304 sch10s erw 2 inch x 6000L', 'P2'],
+    ['Pipe SUS304 Sch10S ERW DN100 x 6000L', 'P4'],
+    ['Pipe SUS316 Sch10S ERW 2" x 6000L', 'P2-316'],
+    ['concentric reducer SUS304 Sch10S ERW 4 inch x 2 inch', 'R42'],
+    ['Roof sheet 0.35 mm', 'SH35'],
+  ] as const) {
+    const suggestions = qualifyingLocalSuggestions(item({ desc, unit: desc.startsWith('Roof') ? 'ตร.ม.' : 'No.' }), pipeCatalog, unitMap)
+    assert.equal(suggestions[0]?.standardId, expected, desc)
+    // Siblings with another size or spec are rejected outright, not merely ranked
+    // lower; only same-size/spec alternatives (Tee.Reduce 4B x 2B) may follow.
+    assert.deepEqual(
+      suggestions.map((suggestion) => suggestion.standardId).filter((id) => id !== 'T42'),
+      [expected],
+      desc,
+    )
+  }
+})
+
+test('a size the catalog does not stock gets no local suggestion', () => {
+  assert.deepEqual(
+    qualifyingLocalSuggestions(item({ desc: 'Pipe SUS304 Sch10S ERW 3 inch x 6000L', unit: 'ea' }), pipeCatalog, unitMap),
+    [],
+  )
+})
+
+test('unit spelling variants and Thai wording still qualify', () => {
+  assert.equal(
+    qualifyingLocalSuggestions(item({ desc: 'ค่าขนส่ง เครื่องมือ', unit: 'เหมา' }), pipeCatalog, unitMap)[0]?.standardId,
+    'TR',
+  )
+  assert.equal(
+    qualifyingLocalSuggestions(item({ desc: 'Transportation of tools', unit: 'L/S' }), pipeCatalog, unitMap)[0]?.reason,
+    'Exact',
+  )
+  assert.equal(
+    qualifyingLocalSuggestions(item({ desc: 'Pipe SUS304 Sch10S ERW 2B x 6000L', unit: 'pcs' }), pipeCatalog, unitMap)[0]?.standardId,
+    'P2',
+  )
+})

@@ -132,7 +132,8 @@ export function CatalogMatchModal({ itemDesc, itemUnit, sourceProject, sourceVen
 
   const rankedCandidates = useMemo(() => {
     const query = search.trim() || itemDesc.trim()
-    const normalizedQuery = normalizeCatalogText(applyNormalizeRules(query, normalizeRules))
+    const ruledQuery = applyNormalizeRules(query, normalizeRules)
+    const normalizedQuery = normalizeCatalogText(ruledQuery)
     if (!normalizedQuery) return []
 
     const rankingCatalog = standards.map((standard) => ({
@@ -140,7 +141,9 @@ export function CatalogMatchModal({ itemDesc, itemUnit, sourceProject, sourceVen
       description: applyNormalizeRules(standard.description, normalizeRules),
       aliases: (standard.aliases ?? []).map((alias) => applyNormalizeRules(alias, normalizeRules)),
     }))
-    const ranked = rankCatalogMatches(normalizedQuery, itemUnit, rankingCatalog, unitMap)
+    // Rank on the rule-applied text, not the pre-normalized query, so size marks
+    // such as 2" reach the shared size/spec matcher intact.
+    const ranked = rankCatalogMatches(ruledQuery, itemUnit, rankingCatalog, unitMap)
       .map((candidate) => {
         const original = standards.find((standard) => standard.id === candidate.id)
         return original

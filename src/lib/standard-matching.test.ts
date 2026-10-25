@@ -3,6 +3,7 @@ import test from "node:test";
 import {
 	canonicalUnit,
 	normalizeCatalogText,
+	unitMatchKey,
 	rankCatalogMatches,
 	scoreCatalogTextMatch,
 	unitsCompatible,
@@ -184,4 +185,50 @@ test("exposes pure text match scores without changing rank acceptance", () => {
 	assert.equal(ranked[0].matchReason, "exact");
 	assert.equal(ranked[0].unitCompatible, true);
 	assert.ok(ranked[0].score >= 1300);
+});
+
+test("normalizes Thai with marks kept, NFC sara am and decimals intact", () => {
+	assert.equal(normalizeCatalogText("ท่อ  สแตนเลส"), "ท่อ สแตนเลส");
+	assert.equal(normalizeCatalogText("น\u0e4d\u0e32"), "นำ");
+	assert.equal(normalizeCatalogText("Sheet 0.47mm"), "sheet 0.47mm");
+	assert.equal(normalizeCatalogText('Pipe 2"'), "pipe 2 in");
+	assert.equal(normalizeCatalogText(normalizeCatalogText('Pipe 2" x 0.5')), normalizeCatalogText('Pipe 2" x 0.5'));
+});
+
+test("unit compatibility folds built-in synonyms after the workspace unitMap", () => {
+	assert.equal(unitMatchKey("ตร.ม.", {}), "m2");
+	assert.equal(unitMatchKey("L/S", { LS: "L/S" }), "lot");
+	assert.equal(unitMatchKey("No.", {}), "ea");
+	assert.equal(unitMatchKey("pcs", { pcs: "piece" }), "piece");
+	assert.equal(unitMatchKey("ton", {}), "ton");
+	assert.equal(unitsCompatible("เหมา", "L/S", { LS: "L/S" }), true);
+	assert.equal(unitsCompatible("ชุด", "Sets", {}), true);
+	assert.equal(unitsCompatible("ลบ.ม.", "m³", { m3: "m³" }), true);
+	assert.equal(unitsCompatible("m", "m2", {}), false);
+	// canonicalUnit keeps the workspace spelling for display and grouping.
+	assert.equal(canonicalUnit("pcs", {}), "pcs");
+	assert.equal(canonicalUnit("m3", { m3: "m³" }), "m³");
+});
+
+test("rejects size/spec conflicts and ranks the agreeing sibling first", () => {
+	const catalog = [
+		{ id: "a", description: "Elbow 90 SUS304 Sch10S 1B", unit: "ea", aliases: [] },
+		{ id: "b", description: "Elbow 90 SUS304 Sch10S 2B", unit: "ea", aliases: [] },
+		{ id: "c", description: "Elbow 90 SUS304 Sch40 2B", unit: "ea", aliases: [] },
+		{ id: "d", description: "Elbow 90 fitting", unit: "ea", aliases: [] },
+	];
+	const ranked = rankCatalogMatches("90 deg elbow SUS304 Sch10S 2 inch", "pcs", catalog, {});
+	assert.equal(ranked[0].id, "b");
+	assert.deepEqual(ranked[0].specAgreements?.sort(), ["material", "schedule", "size"]);
+	for (const id of ["a", "c"]) {
+		const candidate = ranked.find((entry) => entry.id === id);
+		assert.equal(candidate?.score, 0, id);
+		assert.equal(candidate?.specConflict, true, id);
+	}
+	// An unsized entry is not a conflict, but the agreeing sibling outranks it.
+	assert.ok((ranked.find((entry) => entry.id === "d")?.score ?? 0) > 0);
+	assert.equal(
+		scoreCatalogTextMatch("Elbow 90 SUS304 Sch10S 4B", "Elbow 90 SUS304 Sch10S 2B").score,
+		0,
+	);
 });
