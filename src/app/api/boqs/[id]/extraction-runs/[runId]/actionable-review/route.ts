@@ -398,9 +398,9 @@ function productionDependencies(): ActionableReviewRouteDependencies {
   const conversionStore = () => createFirestoreCatalogConversionRuleStore(getDb())
   const mappingCache = () => createFirestoreCatalogMappingCacheStore(getDb())
   const storage = () => createFirestoreActionableReviewStorage(getDb())
-  const callLLM: LlmCall = async (messages, provider, model, signal) => {
+  const callLLM: LlmCall = async (messages, provider, model, signal, options) => {
     const { callLLM: impl } = await import('@/lib/llm')
-    return impl(messages, provider, model, signal)
+    return impl(messages, provider, model, signal, options)
   }
 
   const getAudits = createGetAuditsFromReviewState(async (boqId, runId) => {

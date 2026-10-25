@@ -1,48 +1,163 @@
 export type LlmMessage = { role: string; content: string }
 
+export type LlmResponseFormat = 'text' | 'json'
+
+export interface LlmCallOptions {
+  /** Abort the provider request after this many ms (default 60s). */
+  timeoutMs?: number
+  /** Upper bound on completion tokens (default 4096). */
+  maxTokens?: number
+  /** 'json' asks the provider for a JSON object response (OpenAI-compatible json_object). */
+  responseFormat?: LlmResponseFormat
+  /** Test seams. */
+  fetchImpl?: typeof fetch
+  env?: Record<string, string | undefined>
+  logUsage?: (entry: LlmUsageLogEntry) => void
+}
+
+export interface LlmUsage {
+  promptTokens?: number
+  completionTokens?: number
+  totalTokens?: number
+}
+
+export interface LlmUsageLogEntry extends LlmUsage {
+  provider: string
+  model: string
+  durationMs: number
+}
+
+export type LlmResult = { content: string; provider: string; model: string; usage?: LlmUsage }
+
 export type LlmCall = (
   messages: LlmMessage[],
   provider?: string,
   model?: string,
   signal?: AbortSignal,
-) => Promise<{ content: string; provider: string; model: string }>
+  options?: LlmCallOptions,
+) => Promise<LlmResult>
+
+export const DEFAULT_LLM_TIMEOUT_MS = 60_000
+export const DEFAULT_LLM_MAX_TOKENS = 4096
+
+const PROVIDERS = {
+  openai: { url: 'https://api.openai.com/v1/chat/completions', keyName: 'OPENAI_API_KEY', label: 'OpenAI', defaultModel: 'gpt-4o' },
+  openrouter: { url: 'https://openrouter.ai/api/v1/chat/completions', keyName: 'OPENROUTER_API_KEY', label: 'OpenRouter', defaultModel: 'openai/gpt-4o' },
+} as const
+
+type ProviderName = keyof typeof PROVIDERS
+
+function defaultUsageLogger(entry: LlmUsageLogEntry) {
+  console.info(
+    `[llm] ${entry.provider}/${entry.model} tokens prompt=${entry.promptTokens ?? '?'} completion=${entry.completionTokens ?? '?'} total=${entry.totalTokens ?? '?'} in ${entry.durationMs}ms`,
+  )
+}
+
+function readUsage(data: unknown): LlmUsage | undefined {
+  if (typeof data !== 'object' || data === null) return undefined
+  const usage = (data as { usage?: unknown }).usage
+  if (typeof usage !== 'object' || usage === null) return undefined
+  const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : undefined)
+  const record = usage as Record<string, unknown>
+  return {
+    promptTokens: num(record.prompt_tokens),
+    completionTokens: num(record.completion_tokens),
+    totalTokens: num(record.total_tokens),
+  }
+}
+
+function readContent(data: unknown, label: string): string {
+  const choices = typeof data === 'object' && data !== null ? (data as { choices?: unknown }).choices : undefined
+  if (!Array.isArray(choices) || choices.length === 0) {
+    throw new Error(`${label} API returned no choices`)
+  }
+  const message = (choices[0] as { message?: { content?: unknown } } | null)?.message
+  const content = message?.content
+  if (typeof content !== 'string') {
+    throw new Error(`${label} API returned a choice without text content`)
+  }
+  return content
+}
+
+/** OpenAI json_object mode requires the word "JSON" somewhere in the messages. */
+function ensureJsonInstruction(messages: LlmMessage[]): LlmMessage[] {
+  if (messages.some((message) => /json/i.test(message.content))) return messages
+  return [{ role: 'system', content: 'Respond with a single JSON object.' }, ...messages]
+}
 
 export async function callLLM(
   messages: LlmMessage[],
   provider?: string,
   model?: string,
   signal?: AbortSignal,
-): Promise<{ content: string; provider: string; model: string }> {
-  const activeProvider = provider || process.env.LLM_PROVIDER || 'openai'
-  const activeModel = model || process.env.LLM_MODEL || (activeProvider === 'openrouter' ? 'openai/gpt-4o' : 'gpt-4o')
+  options: LlmCallOptions = {},
+): Promise<LlmResult> {
+  const env = options.env ?? process.env
+  const fetchImpl = options.fetchImpl ?? fetch
+  const logUsage = options.logUsage ?? defaultUsageLogger
 
-  if (activeProvider === 'openrouter') {
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-      },
-      signal,
-      body: JSON.stringify({ model: activeModel, messages }),
-    })
-    if (!res.ok) throw new Error(`OpenRouter API error: ${res.status} ${res.statusText}`)
-    const data = await res.json()
-    return { content: data.choices[0].message.content, provider: 'openrouter', model: activeModel }
+  const requestedProvider = provider || env.LLM_PROVIDER || 'openai'
+  if (!(requestedProvider in PROVIDERS)) {
+    throw new Error(`Unsupported LLM provider: ${requestedProvider}`)
+  }
+  const activeProvider = requestedProvider as ProviderName
+  const config = PROVIDERS[activeProvider]
+  const activeModel = model || env.LLM_MODEL || config.defaultModel
+
+  const apiKey = env[config.keyName]?.trim()
+  if (!apiKey) {
+    throw new Error(`${config.label} API key is not configured (${config.keyName})`)
   }
 
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-    },
-    signal,
-    body: JSON.stringify({ model: activeModel, messages }),
-  })
-  if (!res.ok) throw new Error(`OpenAI API error: ${res.status} ${res.statusText}`)
-  const data = await res.json()
-  return { content: data.choices[0].message.content, provider: 'openai', model: activeModel }
+  const timeoutMs = options.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS
+  // AbortController + setTimeout rather than AbortSignal.timeout(): the timer is
+  // cleared as soon as the provider answers, so nothing lingers per request.
+  const timeoutController = new AbortController()
+  const timer = setTimeout(() => timeoutController.abort(new Error('LLM request timed out')), timeoutMs)
+  const combinedSignal = signal ? AbortSignal.any([signal, timeoutController.signal]) : timeoutController.signal
+
+  const json = options.responseFormat === 'json'
+  const body = {
+    model: activeModel,
+    messages: json ? ensureJsonInstruction(messages) : messages,
+    max_tokens: options.maxTokens ?? DEFAULT_LLM_MAX_TOKENS,
+    ...(json ? { response_format: { type: 'json_object' } } : {}),
+  }
+
+  const startedAt = Date.now()
+  let res: Response
+  let data: unknown
+  try {
+    try {
+      res = await fetchImpl(config.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        signal: combinedSignal,
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) throw new Error(`${config.label} API error: ${res.status} ${res.statusText}`)
+      try {
+        data = await res.json()
+      } catch (error) {
+        if (timeoutController.signal.aborted || signal?.aborted) throw error
+        throw new Error(`${config.label} API returned a non-JSON response`)
+      }
+    } catch (error) {
+      if (timeoutController.signal.aborted && !signal?.aborted) {
+        throw new Error(`${config.label} API request timed out after ${timeoutMs}ms`)
+      }
+      throw error
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+  const content = readContent(data, config.label)
+  const usage = readUsage(data)
+  logUsage({ provider: activeProvider, model: activeModel, durationMs: Date.now() - startedAt, ...usage })
+  return { content, provider: activeProvider, model: activeModel, ...(usage ? { usage } : {}) }
 }
 
 const ACTIONABLE_REVIEW_SYSTEM_PROMPT = [
@@ -79,7 +194,7 @@ export function createActionableReviewProviderCall(deps: {
         }),
       },
     ]
-    const result = await invoke(messages, deps.provider, model, deps.signal)
+    const result = await invoke(messages, deps.provider, model, deps.signal, { responseFormat: 'json' })
     const content = unwrapConventionalJsonFence(result.content)
     try {
       return JSON.parse(content) as unknown

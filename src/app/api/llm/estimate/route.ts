@@ -104,7 +104,7 @@ export async function POST(request: NextRequest) {
     const result = await callLLM([
       { role: 'system', content: systemPrompt },
       { role: 'user', content: buildEstimateAiUserMessage(requestWithServerCatalog) },
-    ], provider, model)
+    ], provider, model, request.signal, { responseFormat: 'json' })
 
     const normalized = normalizeEstimateAiResponse(result.content, [
       ...catalog.available,
