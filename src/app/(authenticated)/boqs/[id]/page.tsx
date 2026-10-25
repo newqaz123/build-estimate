@@ -214,7 +214,7 @@ function BoqDetailContent() {
 
   const handleViewChange = useCallback(
     (nextView: BoqWorkspaceView) => {
-      router.replace(`${boqWorkspaceHref(id, nextView, returnTo)}${classicView ? "&classic=1" : ""}`, { scroll: false });
+      router.replace(boqWorkspaceHref(id, nextView, returnTo) + (classicView ? "&classic=1" : ""), { scroll: false });
     },
     [classicView, id, returnTo, router],
   );
@@ -260,7 +260,7 @@ function BoqDetailContent() {
 
 	useEffect(() => {
     if (!shouldCanonicalizeUrl) return;
-    router.replace(`${boqWorkspaceHref(id, view, returnTo)}${classicView ? "&classic=1" : ""}`, { scroll: false });
+    router.replace(boqWorkspaceHref(id, view, returnTo) + (classicView ? "&classic=1" : ""), { scroll: false });
   }, [classicView, id, returnTo, router, shouldCanonicalizeUrl, view]);
 
 	useEffect(() => {
