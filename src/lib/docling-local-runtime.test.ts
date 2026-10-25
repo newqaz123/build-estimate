@@ -1,10 +1,31 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import test from "node:test";
 
 const REPO_ROOT = new URL("../..", import.meta.url);
+
+/** True when `command` can be spawned on this machine (not ENOENT). */
+function commandAvailable(command: string, args: string[]): boolean {
+	const result = spawnSync(command, args, { stdio: "ignore" });
+	return !result.error;
+}
+
+/**
+ * The reuse tests drive scripts/dev-docling.sh, which needs bash, lsof and
+ * curl. Skip (rather than fail) on machines without them, e.g. minimal
+ * Linux containers or Windows without Git Bash.
+ */
+const missingScriptTools = [
+	["bash", ["-c", "true"]],
+	["lsof", ["-v"]],
+	["curl", ["--version"]],
+].filter(([command, args]) => !commandAvailable(command as string, args as string[]))
+	.map(([command]) => command as string);
+const scriptToolsSkip = missingScriptTools.length > 0
+	? `requires ${missingScriptTools.join(", ")} (not available on this machine)`
+	: false;
 
 /**
  * Launch a real temporary HTTP server as a separate Node child process on a
@@ -106,7 +127,7 @@ test("local Docling command and example endpoint use the application default por
 	);
 });
 
-test("identity-checked reuse: both markers present exits 0", async () => {
+test("identity-checked reuse: both markers present exits 0", { skip: scriptToolsSkip }, async () => {
 	await withFakeServer({ status: "ok", parser: "docling" }, async (port) => {
 		const result = await runScript(port);
 		assert.equal(result.code, 0, `expected exit 0; stderr: ${result.stderr}`);
@@ -114,7 +135,7 @@ test("identity-checked reuse: both markers present exits 0", async () => {
 	});
 });
 
-test("identity-checked reuse: status-only marker is rejected (exit 48)", async () => {
+test("identity-checked reuse: status-only marker is rejected (exit 48)", { skip: scriptToolsSkip }, async () => {
 	await withFakeServer({ status: "ok", parser: "other" }, async (port) => {
 		const result = await runScript(port);
 		assert.equal(result.code, 48, `expected exit 48; stdout: ${result.stdout}`);
@@ -122,7 +143,7 @@ test("identity-checked reuse: status-only marker is rejected (exit 48)", async (
 	});
 });
 
-test("identity-checked reuse: parser-only marker is rejected (exit 48)", async () => {
+test("identity-checked reuse: parser-only marker is rejected (exit 48)", { skip: scriptToolsSkip }, async () => {
 	await withFakeServer({ status: "bad", parser: "docling" }, async (port) => {
 		const result = await runScript(port);
 		assert.equal(result.code, 48, `expected exit 48; stdout: ${result.stdout}`);

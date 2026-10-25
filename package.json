@@ -2,13 +2,16 @@
   "name": "buildestimate-next",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "next dev",
     "dev:docling": "bash scripts/dev-docling.sh",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx --test",
+    "test": "tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
     "check": "npm run lint && tsc --noEmit && npm test"
   },
   "dependencies": {
