@@ -218,12 +218,21 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
   }
 
   const projectRef = useRef<HTMLInputElement>(null)
+  const vendorRef = useRef<HTMLInputElement>(null)
+  const dateRef = useRef<HTMLInputElement>(null)
   const projectMissing = !approved && meta.project.trim() === ""
+  const vendorMissing = !approved && meta.vendor.trim() === ""
+  const dateMissing = !approved && meta.date.trim() === ""
 
   const approve = async () => {
-    if (projectMissing) {
-      setBlocking([MISSING_PROJECT])
-      projectRef.current?.focus()
+    // Ask for every missing header field at once instead of one server round trip each.
+    if (projectMissing || vendorMissing || dateMissing) {
+      setBlocking([
+        ...(projectMissing ? [MISSING_PROJECT] : []),
+        ...(vendorMissing ? [plainBlocking("vendor is required")] : []),
+        ...(dateMissing ? [plainBlocking("date is required")] : []),
+      ])
+      ;(projectMissing ? projectRef : vendorMissing ? vendorRef : dateRef).current?.focus()
       return
     }
     setBusy("approve")
@@ -279,9 +288,9 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
             <Link href="/boqs" className="simple-review-back" aria-label="Back to quotes">‹</Link>
             <input ref={projectRef} aria-label="Project" className={`simple-review-meta simple-review-project${projectMissing ? " is-missing" : ""}`} value={meta.project} disabled={approved} placeholder="Project name (needed)" aria-invalid={projectMissing || undefined}
               onChange={(e) => { setMeta({ ...meta, project: e.target.value }); setDirty(true) }} />
-            <input aria-label="Vendor" className="simple-review-meta" value={meta.vendor} disabled={approved} placeholder="Vendor"
+            <input ref={vendorRef} aria-label="Vendor" className={`simple-review-meta${vendorMissing ? " is-missing" : ""}`} value={meta.vendor} disabled={approved} placeholder="Vendor (needed)" aria-invalid={vendorMissing || undefined}
               onChange={(e) => { setMeta({ ...meta, vendor: e.target.value }); setDirty(true) }} />
-            <input aria-label="Quote date" type="date" className="simple-review-meta simple-review-date" value={meta.date} disabled={approved}
+            <input ref={dateRef} aria-label="Quote date" type="date" className={`simple-review-meta simple-review-date${dateMissing ? " is-missing" : ""}`} value={meta.date} disabled={approved} aria-invalid={dateMissing || undefined}
               onChange={(e) => { setMeta({ ...meta, date: e.target.value }); setDirty(true) }} />
             <select aria-label="Work type" className="simple-review-meta" value={meta.workType} disabled={approved}
               onChange={(e) => { setMeta({ ...meta, workType: e.target.value as WorkType }); setDirty(true) }}>
