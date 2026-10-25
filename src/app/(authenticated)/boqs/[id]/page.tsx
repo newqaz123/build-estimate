@@ -48,6 +48,7 @@ import { ExtractionWarnings } from "@/components/extraction-warnings";
 import { SourceQuoteSummary } from "@/components/source-quote-summary";
 import { ProtoBadge } from "@/components/proto-badge";
 import { ReviewWorkspace } from "@/components/review-workspace";
+import { SimpleBoqReview } from "@/components/simple-review/simple-boq-review";
 import dynamic from "next/dynamic";
 // pdfjs-dist references browser-only APIs (DOMMatrix) at module evaluation, so the
 // viewer must never be server-rendered; load it client-side only.
@@ -201,6 +202,8 @@ function BoqDetailContent() {
   const rawReturnTo = searchParams.get("returnTo");
   const returnTo = safeCompareReturnPath(rawReturnTo);
 	const legacyReviewMode = isBoqReviewMode(searchParams);
+	// The simple review page is the default; the older tabbed workspace stays reachable via ?classic=1.
+	const classicView = searchParams.get("classic") === "1";
   const shouldCanonicalizeUrl =
     legacyReviewMode ||
     (rawReturnTo !== null && returnTo === null) ||
@@ -211,9 +214,9 @@ function BoqDetailContent() {
 
   const handleViewChange = useCallback(
     (nextView: BoqWorkspaceView) => {
-      router.replace(boqWorkspaceHref(id, nextView, returnTo), { scroll: false });
+      router.replace(`${boqWorkspaceHref(id, nextView, returnTo)}${classicView ? "&classic=1" : ""}`, { scroll: false });
     },
-    [id, returnTo, router],
+    [classicView, id, returnTo, router],
   );
 
 	const fetchBoq = useCallback(async () => {
@@ -257,8 +260,8 @@ function BoqDetailContent() {
 
 	useEffect(() => {
     if (!shouldCanonicalizeUrl) return;
-    router.replace(boqWorkspaceHref(id, view, returnTo), { scroll: false });
-  }, [id, returnTo, router, shouldCanonicalizeUrl, view]);
+    router.replace(`${boqWorkspaceHref(id, view, returnTo)}${classicView ? "&classic=1" : ""}`, { scroll: false });
+  }, [classicView, id, returnTo, router, shouldCanonicalizeUrl, view]);
 
 	useEffect(() => {
 		let active = true;
@@ -319,6 +322,10 @@ function BoqDetailContent() {
 				</Link>
 			</div>
 		);
+	}
+
+	if (!classicView) {
+		return <SimpleBoqReview key={boq.id} boq={boq} onBoqChange={setBoq} />;
 	}
 
 	return (
