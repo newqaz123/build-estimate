@@ -125,6 +125,10 @@ export interface Boq {
   activeExtractionRunId?: string
   extractionWarnings?: BoqExtractionWarning[]
   metadataConfidence?: BoqMetadataConfidence
+  /** Set by the one-step Approve; removed by Reopen to edit. */
+  approvedAt?: string
+  /** Last time an approved quote was reopened for editing. */
+  reopenedAt?: string
   createdAt: string
   updatedAt: string
 }
