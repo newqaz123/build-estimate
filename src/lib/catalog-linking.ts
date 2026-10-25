@@ -5,6 +5,7 @@ import { isPricedBoqItem } from "./boq-pricing";
 import { parseDecimalString } from "./decimal-string";
 import type { PricingNormalization } from "./actionable-review-types";
 import type { StandardEntry, StandardSourceItem } from "./standard-schema";
+import { unitMatchKey } from "./standard-matching";
 
 export class CatalogLinkError extends TypeError {
 	constructor(message: string) {
@@ -185,4 +186,31 @@ export function buildCatalogLinkUpdate(input: {
 	);
 
 	return { item: nextItem, standard: nextStandard };
+}
+
+const descriptionKey = (text: string) => text.trim().toLowerCase().replace(/\s+/g, " ");
+
+/**
+ * An active entry with the same description (case/space-insensitive) and an
+ * equivalent unit. `excludeIds` skips the entry being edited or merged.
+ */
+export function findDuplicateStandard(
+	entries: StandardEntry[],
+	description: string,
+	unit: string,
+	unitMap: Record<string, string> = {},
+	excludeIds: Iterable<string> = [],
+): StandardEntry | undefined {
+	const skip = new Set(excludeIds);
+	const key = descriptionKey(description);
+	const unitKey = unitMatchKey(unit, unitMap);
+	return entries
+		.map(normalizeStandardEntry)
+		.find(
+			(entry) =>
+				!entry.archivedAt &&
+				!skip.has(entry.id) &&
+				descriptionKey(entry.description) === key &&
+				unitMatchKey(entry.unit, unitMap) === unitKey,
+		);
 }

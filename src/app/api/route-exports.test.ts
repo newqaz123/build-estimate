@@ -20,6 +20,8 @@ const ROUTES: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['boqs/preflight/route.ts', ['POST']],
   ['boqs/preflight/[id]/route.ts', ['GET', 'PATCH', 'DELETE']],
   ['internal/cleanup/preflight/route.ts', ['DELETE']],
+  ['standards/merge/route.ts', ['POST']],
+  ['standards/merge/undo/route.ts', ['POST']],
 ]
 
 test('new BOQ ingestion route modules export only supported HTTP handlers', () => {

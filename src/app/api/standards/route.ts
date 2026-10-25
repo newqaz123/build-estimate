@@ -5,15 +5,15 @@ import type { StandardEntry } from '@/lib/standard-schema'
 import type { Boq, BoqItem } from '@/lib/boq-schema'
 import { buildCatalogHistoricalPricing } from '@/lib/catalog-historical-pricing'
 import { isPricedBoqItem } from '@/lib/boq-pricing'
-import { unitMatchKey } from '@/lib/standard-matching'
 import {
+  findDuplicateStandard,
   mergeStandardSourceItems,
   normalizeStandardEntry,
 } from '@/lib/catalog-linking'
 
 type MatchConfidence = BoqItem['stdConfidence']
 
-export { mergeStandardSourceItems, normalizeStandardEntry }
+export { findDuplicateStandard, mergeStandardSourceItems, normalizeStandardEntry }
 
 export function queryStandards(
   entries: StandardEntry[],
@@ -33,22 +33,6 @@ export function queryStandards(
         entry.aliases.some((alias) => alias.toLowerCase().includes(normalizedSearch))
       )
     })
-}
-
-const descriptionKey = (text: string) => text.trim().toLowerCase().replace(/\s+/g, ' ')
-
-/** An active entry with the same description (case/space-insensitive) and an equivalent unit. */
-export function findDuplicateStandard(
-  entries: StandardEntry[],
-  description: string,
-  unit: string,
-  unitMap: Record<string, string> = {},
-): StandardEntry | undefined {
-  const key = descriptionKey(description)
-  const unitKey = unitMatchKey(unit, unitMap)
-  return entries
-    .map(normalizeStandardEntry)
-    .find((entry) => !entry.archivedAt && descriptionKey(entry.description) === key && unitMatchKey(entry.unit, unitMap) === unitKey)
 }
 
 export function enrichStandardsWithHistoricalPricing(
