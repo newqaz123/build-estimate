@@ -397,7 +397,7 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
                         <textarea
                           aria-label={`Description row ${rowNumber}`}
                           className="simple-review-cell simple-review-desc"
-                          rows={Math.min(3, Math.max(1, Math.ceil(item.desc.length / 60)))}
+                          rows={1}
                           value={item.desc}
                           disabled={approved}
                           onFocus={() => goToSource(key, item)}
@@ -405,7 +405,7 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
                         />
                         {item.optional ? <span className="simple-review-tag">Optional{item.excludedFromTotal ? " · not in total" : ""}</span> : null}
                         {flags.map((flag) => (
-                          <span key={flag.text} className={`simple-review-flag flag-${flag.kind}`}><AlertTriangle aria-hidden="true" />{flag.text}</span>
+                          <span key={flag.text} className={`simple-review-flag flag-${flag.kind}`} title={flag.text}><AlertTriangle aria-hidden="true" /><span className="simple-review-flag-text">{flag.text}</span></span>
                         ))}
                       </td>
                       <td><NumberCell label={`Qty row ${rowNumber}`} value={item.qty} disabled={approved} onFocus={() => goToSource(key, item)}

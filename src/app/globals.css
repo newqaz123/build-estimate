@@ -3249,10 +3249,11 @@
 .simple-review-cell:hover:not(:disabled) { border-color: var(--border); }
 .simple-review-cell:focus { outline: none; border-color: var(--accent); background: var(--surface); }
 .simple-review-cell.is-invalid { border-color: var(--danger, #c0392b); }
-.simple-review-desc { resize: none; display: block; line-height: 1.35; }
+.simple-review-desc { resize: none; display: block; line-height: 1.35; field-sizing: content; max-height: 7.5em; overflow-y: auto; }
 .simple-review-number { text-align: right; font-variant-numeric: tabular-nums; }
 .simple-review-tag { display: inline-block; margin: 0 5px 2px; font-size: 10px; color: var(--muted-text); }
 .simple-review-flag { display: flex; gap: 4px; align-items: flex-start; margin: 1px 5px 3px; font-size: 11px; line-height: 1.3; color: color-mix(in oklab, var(--warning, #b88a00) 75%, var(--fg)); }
+.simple-review-flag-text { min-width: 0; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .simple-review-flag svg { width: 11px; height: 11px; flex: none; margin-top: 2px; }
 .simple-review-flag.flag-ai { color: color-mix(in oklab, var(--accent) 70%, var(--fg)); }
 .simple-review-pick { display: flex; align-items: center; gap: 4px; width: 100%; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); text-align: left; font-size: 11.5px; cursor: pointer; }
