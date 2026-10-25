@@ -20,6 +20,10 @@ const EXTRACTION_WARNING_LABELS: Readonly<Record<string, string>> = {
   source_discount: 'Source discount not applied automatically',
   document_total_mismatch: 'Document total did not reconcile with line items',
   section_total_mismatch: 'Section total did not reconcile',
+  component_arithmetic_mismatch: 'Material/labour quantity × rate did not match',
+  ocr_unavailable: 'Scanned pages could not be read (OCR unavailable)',
+  ocr_corrected_value: 'OCR value corrected automatically, please confirm',
+  document_summary_mismatch: 'Printed quote summary did not match the line items',
 }
 
 const UNKNOWN_CODE_LABEL = 'Other extraction note'

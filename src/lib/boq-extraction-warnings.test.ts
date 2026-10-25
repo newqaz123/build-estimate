@@ -122,6 +122,18 @@ test("extractionWarningLabel exposes plain labels for known codes", () => {
   assert.equal(extractionWarningLabel("item_arithmetic_mismatch"), "Quantity × rate did not match the amount")
 })
 
+test("OCR and printed-summary codes have plain labels and need review", () => {
+  assert.equal(extractionWarningLabel("ocr_unavailable"), "Scanned pages could not be read (OCR unavailable)")
+  assert.equal(extractionWarningLabel("ocr_corrected_value"), "OCR value corrected automatically, please confirm")
+  assert.equal(extractionWarningLabel("document_summary_mismatch"), "Printed quote summary did not match the line items")
+  const summary = summarizeExtractionWarnings([
+    warning("ocr_unavailable", "OCR engine missing; scanned pages 2-3 were skipped."),
+    warning("document_summary_mismatch", "Table total 10 does not match the printed summary total 12."),
+  ])
+  assert.deepEqual(summary.needsReview.map((group) => group.code).sort(), ["document_summary_mismatch", "ocr_unavailable"])
+  assert.equal(summary.documentInformation.length, 0)
+})
+
 test("occurrence count reflects total warnings including duplicates", () => {
   const warnings = [
     warning("unsupported_row", "a"),
