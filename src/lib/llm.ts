@@ -90,14 +90,16 @@ const REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high'])
 
 /**
  * OpenRouter reasoning control. Reasoning models (e.g. DeepSeek flash) can spend the
- * whole max_tokens budget thinking and return no answer, so default to low effort.
- * LLM_REASONING_EFFORT=off disables reasoning; =default sends nothing (provider default).
+ * whole max_tokens budget thinking and return no answer (measured: even effort=low ran
+ * out 1 in 4 times on the whole-quote check, inside a 20s budget), so reasoning is off
+ * by default. LLM_REASONING_EFFORT=minimal|low|medium|high turns it on; =default sends
+ * nothing (provider default).
  */
 export function openRouterReasoning(env: Record<string, string | undefined>): Record<string, unknown> | undefined {
-  const raw = env.LLM_REASONING_EFFORT?.trim().toLowerCase() || 'low'
+  const raw = env.LLM_REASONING_EFFORT?.trim().toLowerCase() || 'off'
   if (raw === 'default') return undefined
   if (raw === 'off' || raw === 'none') return { enabled: false }
-  return REASONING_EFFORTS.has(raw) ? { effort: raw } : { effort: 'low' }
+  return REASONING_EFFORTS.has(raw) ? { effort: raw } : { enabled: false }
 }
 
 /** OpenAI json_object mode requires the word "JSON" somewhere in the messages. */
