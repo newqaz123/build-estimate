@@ -312,6 +312,22 @@ export function buildVerificationMessages(request: VerificationRequest): Array<{
   ]
 }
 
+function normalizeAiIssue(entry: unknown): VerificationResponseIssue | null {
+  if (!isRecord(entry)) return null
+  if (!ALLOWED_CODES.has(String(entry.code)) || !ALLOWED_SEVERITIES.has(String(entry.severity))) return null
+  if (typeof entry.message !== 'string' || entry.message.trim() === '' || entry.message.length > 1_000) return null
+  if (Object.keys(entry).some((key) => !['code', 'severity', 'itemId', 'message'].includes(key))) return null
+  // An empty itemId means "not about one row".
+  const itemId = typeof entry.itemId === 'string' ? entry.itemId.trim() : entry.itemId
+  if (itemId !== undefined && itemId !== null && itemId !== '' && (typeof itemId !== 'string' || itemId.length > MAX_ID)) return null
+  return {
+    code: entry.code as VerificationResponseIssue['code'],
+    severity: entry.severity as VerificationResponseIssue['severity'],
+    message: entry.message.trim(),
+    ...(typeof itemId === 'string' && itemId !== '' ? { itemId } : {}),
+  }
+}
+
 export function normalizeAiVerification(content: string): VerificationResponseIssue[] {
   let value: unknown
   try {
@@ -319,31 +335,19 @@ export function normalizeAiVerification(content: string): VerificationResponseIs
   } catch {
     throw new AiVerificationResponseError()
   }
-  if (!isRecord(value) || Object.keys(value).some((key) => key !== 'issues') || !Array.isArray(value.issues)) {
+  // The top level must carry an issues array; other top-level keys are ignored.
+  if (!isRecord(value) || !Array.isArray(value.issues)) {
     throw new AiVerificationResponseError()
   }
+  // Each entry is validated on its own and invalid ones are dropped, so one stray
+  // entry from the model does not throw away the rest. If nothing valid remains
+  // from a non-empty list, the reply is treated as malformed.
   const issues: VerificationResponseIssue[] = []
   for (const entry of value.issues) {
-    if (!isRecord(entry)) throw new AiVerificationResponseError()
-    if (!ALLOWED_CODES.has(String(entry.code)) || !ALLOWED_SEVERITIES.has(String(entry.severity))) {
-      throw new AiVerificationResponseError()
-    }
-    if (typeof entry.message !== 'string' || entry.message.trim() === '' || entry.message.length > 1_000) {
-      throw new AiVerificationResponseError()
-    }
-    if (entry.itemId !== undefined && (typeof entry.itemId !== 'string' || entry.itemId.trim() === '' || entry.itemId.length > MAX_ID)) {
-      throw new AiVerificationResponseError()
-    }
-    if (Object.keys(entry).some((key) => !['code', 'severity', 'itemId', 'message'].includes(key))) {
-      throw new AiVerificationResponseError()
-    }
-    issues.push({
-      code: entry.code as VerificationResponseIssue['code'],
-      severity: entry.severity as VerificationResponseIssue['severity'],
-      message: entry.message.trim(),
-      ...(typeof entry.itemId === 'string' ? { itemId: entry.itemId } : {}),
-    })
+    const issue = normalizeAiIssue(entry)
+    if (issue) issues.push(issue)
   }
+  if (value.issues.length > 0 && issues.length === 0) throw new AiVerificationResponseError()
   return issues
 }
 

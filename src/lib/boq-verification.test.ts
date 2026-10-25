@@ -107,6 +107,23 @@ test('normalization validates the complete AI response schema', () => {
   assert.throws(() => normalizeAiVerification(JSON.stringify({ issues: ['invalid'] })), AiVerificationResponseError)
 })
 
+test('normalization keeps valid AI issues when the model adds a stray entry or key', () => {
+  const issues = normalizeAiVerification(JSON.stringify({
+    totalMismatch: true,
+    issues: [
+      { code: 'unit_mismatch', severity: 'warning', itemId: 'item-1', message: 'Unit looks inconsistent.' },
+      { code: 'not_a_code', severity: 'warning', message: 'dropped' },
+      { code: 'rate_outlier', severity: 'warning', message: 'dropped', confidence: 0.4 },
+      { code: 'metadata_missing', severity: 'warning', itemId: '', message: 'project is required' },
+    ],
+  }))
+  assert.deepEqual(issues, [
+    { code: 'unit_mismatch', severity: 'warning', itemId: 'item-1', message: 'Unit looks inconsistent.' },
+    { code: 'metadata_missing', severity: 'warning', message: 'project is required' },
+  ])
+  assert.deepEqual(normalizeAiVerification('{"issues":[]}'), [])
+})
+
 test('AI and local findings are merged without duplicates', () => {
   const local = [{ code: 'metadata_missing' as const, severity: 'blocking' as const, message: 'Vendor is required.' }]
   const merged = mergeVerificationIssues(local, [
