@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import type { BoqCatalogComparisonRow } from "@/lib/boq-catalog-comparison";
 import type { Boq } from "@/lib/boq-schema";
+import { formatVsCatalog } from "@/lib/quote-numbers";
 
 import {
   BoqCatalogComponentTable,
@@ -19,13 +20,6 @@ export interface BoqCatalogComparisonPanelProps {
   hasUnsavedChanges: boolean;
   onRetry: () => void;
   onOpenReview: () => void;
-}
-
-function formatVariance(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return "—";
-  if (Math.abs(value) < 0.05) return "At average";
-  const sign = value > 0 ? "+" : "−";
-  return `${sign}${Math.abs(value).toFixed(1)}%`;
 }
 
 function currency(value: number): string {
@@ -167,11 +161,11 @@ export function BoqCatalogComparisonPanel({
           data-od-id="boq-compare-summary"
         >
           <div className="boq-compare-stat">
-            <b className="num">{formatVariance(summary.materialVariancePct)}</b>
+            <b className="num">{formatVsCatalog(summary.materialVariancePct)}</b>
             <small>Material vs catalog</small>
           </div>
           <div className="boq-compare-stat">
-            <b className="num">{formatVariance(summary.labourVariancePct)}</b>
+            <b className="num">{formatVsCatalog(summary.labourVariancePct)}</b>
             <small>Labour vs catalog</small>
           </div>
           <div className="boq-compare-stat">

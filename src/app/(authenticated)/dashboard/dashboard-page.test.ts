@@ -25,6 +25,6 @@ test('dashboard counts vendors from quotes instead of the empty vendor directory
 
 test('dashboard quick stats show real counts instead of placeholders', () => {
   assert.doesNotMatch(source, /Comparison Match Rate|Data Coverage|Add BOQs to calculate|Standardize items to calculate/)
-  assert.match(source, /Quotes still in draft/)
+  assert.match(source, /AWAITING_APPROVAL_LABEL/)
   assert.match(source, /Estimates started/)
 })

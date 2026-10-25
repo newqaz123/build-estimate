@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ProtoBadge } from "@/components/proto-badge";
+import { AWAITING_APPROVAL_LABEL } from "@/lib/quote-numbers";
 
 interface Boq {
   id: string;
@@ -178,7 +179,7 @@ export default function DashboardPage() {
               <div className="dashboard-quick-value num">{data.totalItems}</div>
             </div>
             <div className="dashboard-quick-stat">
-              <div className="dashboard-quick-label">Quotes still in draft</div>
+              <div className="dashboard-quick-label">{AWAITING_APPROVAL_LABEL}</div>
               <div className="dashboard-quick-value num">{data.unapprovedCount}</div>
             </div>
             <div className="dashboard-quick-stat">

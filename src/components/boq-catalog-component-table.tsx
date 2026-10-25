@@ -4,6 +4,7 @@ import {
   formatHistoricalVariance,
   type BoqCatalogComparisonRow,
 } from '@/lib/boq-catalog-comparison'
+import { vsCatalogPct } from '@/lib/quote-numbers'
 
 export interface ComponentComparisonSummary {
   materialVariancePct: number | null
@@ -32,42 +33,13 @@ function currency(value: number): string {
   return `฿${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
 }
 
-function weightedVariance(
-  rows: BoqCatalogComparisonRow[],
-  key: ComponentKey,
-): number | null {
-  let actual = 0
-  let baseline = 0
-
-  for (const row of rows) {
-    const component = row.components[key]
-    if (
-      !component.present
-      || component.qty === null
-      || component.rate === null
-      || component.benchmark === null
-      || component.qty <= 0
-      || component.benchmark.average <= 0
-    ) {
-      continue
-    }
-
-    actual += component.rate * component.qty
-    baseline += component.benchmark.average * component.qty
-  }
-
-  return baseline > 0
-    ? ((actual - baseline) / baseline) * 100
-    : null
-}
-
 export function summarizeComponentComparison(
   rows: BoqCatalogComparisonRow[],
   boqTotal: number,
 ): ComponentComparisonSummary {
   return {
-    materialVariancePct: weightedVariance(rows, 'material'),
-    labourVariancePct: weightedVariance(rows, 'labour'),
+    materialVariancePct: vsCatalogPct(rows, 'material'),
+    labourVariancePct: vsCatalogPct(rows, 'labour'),
     componentLines: rows.filter((row) =>
       row.components.material.present
       || row.components.labour.present,

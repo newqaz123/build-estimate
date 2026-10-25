@@ -15,9 +15,9 @@ test('compare page is a Comparison Inbox with workspace navigation', () => {
   assert.match(source, /boqWorkspaceHref\([^,]+,\s*"compare"/)
   assert.match(source, /boqWorkspaceHref\([^,]+,\s*"review"/)
   assert.match(source, /summarizeComponentComparison/)
-  assert.match(source, /Needs review/)
+  assert.match(source, /AWAITING_APPROVAL_LABEL/)
   assert.match(source, /Unmatched lines/)
-  assert.match(source, /Provisional material/)
+  assert.match(source, /Material vs catalog/)
   assert.match(source, /Recent BOQs/)
   assert.doesNotMatch(source, /Material rate vs catalog/)
   assert.doesNotMatch(source, /Labour rate vs catalog/)
@@ -53,11 +53,10 @@ test('clean draft is not classified as review issue from status alone', () => {
 test('compare inbox KPI strip is inbox-level, not selected-comparison cards', () => {
   assert.match(
     source,
-    /className="compare-summary"[\s\S]*Needs review[\s\S]*Unmatched lines[\s\S]*Provisional material[\s\S]*Recent BOQs/,
+    /className="compare-summary"[\s\S]*AWAITING_APPROVAL_LABEL[\s\S]*Unmatched lines[\s\S]*Material vs catalog[\s\S]*Recent BOQs/,
   )
-  assert.match(source, /inboxNeedsReview|needsReviewCount/)
+  assert.match(source, /countAwaitingApproval\(boqs\)/)
   assert.match(source, /inboxUnmatchedLines|unmatchedLines/)
-  assert.match(source, /Provisional material/)
   assert.doesNotMatch(
     source,
     /className="compare-summary"[\s\S]*Material rate vs catalog/,

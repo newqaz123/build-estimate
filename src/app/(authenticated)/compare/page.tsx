@@ -14,6 +14,7 @@ import { getBoqCatalogReadiness } from "@/lib/boq-catalog-readiness"
 import { verifyBoqLocally } from "@/lib/boq-ingestion"
 import { resolveCompareBoqId } from "@/lib/compare-boq-selection"
 import { boqWorkspaceHref, compareBoqHref } from "@/lib/boq-review-route"
+import { AWAITING_APPROVAL_LABEL, countAwaitingApproval, formatVsCatalog } from "@/lib/quote-numbers"
 
 type ComparisonResponse = { boqId: string; rows: BoqCatalogComparisonRow[] }
 
@@ -22,12 +23,6 @@ type ComparisonLoadState = "idle" | "loading" | "loaded" | "error"
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError"
-}
-
-function formatVariance(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return "—"
-  const sign = value > 0 ? "+" : ""
-  return `${sign}${value.toFixed(1)}%`
 }
 
 function boqNeedsReview(boq: Boq): boolean {
@@ -202,10 +197,8 @@ function ComparePageContent() {
   const comparisonSummary = summarizeComponentComparison(rows, selected?.grandTotal ?? 0)
   const selectedReadiness = selected ? getBoqCatalogReadiness(selected) : null
   const hasReviewIssues = Boolean(selected && boqNeedsReview(selected))
-  const inboxNeedsReview = boqs.reduce(
-    (count, boq) => count + (boqNeedsReview(boq) ? 1 : 0),
-    0,
-  )
+  // Same definition as the Dashboard (see lib/quote-numbers).
+  const awaitingApprovalCount = countAwaitingApproval(boqs)
   const inboxUnmatchedLines = boqs.reduce(
     (sum, boq) => sum + getBoqCatalogReadiness(boq).blocking,
     0,
@@ -234,16 +227,16 @@ function ComparePageContent() {
         </div>
         <div className="compare-summary">
           <div className="proto-card stat-card">
-            <div className="stat-value num">{inboxNeedsReview}</div>
-            <div className="stat-label">Needs review</div>
+            <div className="stat-value num">{awaitingApprovalCount}</div>
+            <div className="stat-label">{AWAITING_APPROVAL_LABEL}</div>
           </div>
           <div className="proto-card stat-card">
             <div className="stat-value num">{inboxUnmatchedLines}</div>
             <div className="stat-label">Unmatched lines</div>
           </div>
           <div className="proto-card stat-card">
-            <div className="stat-value num">{formatVariance(provisionalMaterialVariance)}</div>
-            <div className="stat-label">Provisional material</div>
+            <div className="stat-value num">{formatVsCatalog(provisionalMaterialVariance)}</div>
+            <div className="stat-label">Material vs catalog</div>
           </div>
           <div className="proto-card stat-card">
             <div className="stat-value num">{boqs.length}</div>
@@ -375,13 +368,13 @@ function ComparePageContent() {
                     <div>
                       <span className="text-muted-foreground">Material vs catalog</span>
                       <div className="font-mono text-base num">
-                        {formatVariance(comparisonSummary.materialVariancePct)}
+                        {formatVsCatalog(comparisonSummary.materialVariancePct)}
                       </div>
                     </div>
                     <div>
                       <span className="text-muted-foreground">Labour vs catalog</span>
                       <div className="font-mono text-base num">
-                        {formatVariance(comparisonSummary.labourVariancePct)}
+                        {formatVsCatalog(comparisonSummary.labourVariancePct)}
                       </div>
                     </div>
                     <div>
