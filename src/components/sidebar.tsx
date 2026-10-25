@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { signOut } from "next-auth/react";
 
 const navItems = [
   {
@@ -125,21 +126,22 @@ export function Sidebar() {
       </nav>
 
       <div className="sidebar-footer">
-        <form action="/api/auth/signout" method="POST">
-          <button
-            type="submit"
-            data-od-id="nav-signout"
-            className="sidebar-signout"
-            aria-label="Sign out"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true" focusable="false">
-              <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
-              <polyline points="16 17 21 12 16 7" />
-              <line x1="21" y1="12" x2="9" y2="12" />
-            </svg>
-            <span>Sign out</span>
-          </button>
-        </form>
+        <button
+          type="button"
+          // A plain form POST has no CSRF token, so Auth.js rejected it (MissingCSRF) and the
+          // user stayed signed in. next-auth/react fetches the token and posts it.
+          onClick={() => void signOut({ callbackUrl: "/" })}
+          data-od-id="nav-signout"
+          className="sidebar-signout"
+          aria-label="Sign out"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true" focusable="false">
+            <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+            <polyline points="16 17 21 12 16 7" />
+            <line x1="21" y1="12" x2="9" y2="12" />
+          </svg>
+          <span>Sign out</span>
+        </button>
       </div>
     </aside>
   );
