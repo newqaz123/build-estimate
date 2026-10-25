@@ -19,6 +19,8 @@ export interface LlmUsage {
   promptTokens?: number
   completionTokens?: number
   totalTokens?: number
+  /** Provider-reported cost in USD when available (OpenRouter returns usage.cost). */
+  costUsd?: number
 }
 
 export interface LlmUsageLogEntry extends LlmUsage {
@@ -49,7 +51,7 @@ type ProviderName = keyof typeof PROVIDERS
 
 function defaultUsageLogger(entry: LlmUsageLogEntry) {
   console.info(
-    `[llm] ${entry.provider}/${entry.model} tokens prompt=${entry.promptTokens ?? '?'} completion=${entry.completionTokens ?? '?'} total=${entry.totalTokens ?? '?'} in ${entry.durationMs}ms`,
+    `[llm] ${entry.provider}/${entry.model} tokens prompt=${entry.promptTokens ?? '?'} completion=${entry.completionTokens ?? '?'} total=${entry.totalTokens ?? '?'}${entry.costUsd !== undefined ? ` cost=$${entry.costUsd.toFixed(6)}` : ''} in ${entry.durationMs}ms`,
   )
 }
 
@@ -63,6 +65,7 @@ function readUsage(data: unknown): LlmUsage | undefined {
     promptTokens: num(record.prompt_tokens),
     completionTokens: num(record.completion_tokens),
     totalTokens: num(record.total_tokens),
+    ...(num(record.cost) !== undefined ? { costUsd: num(record.cost) } : {}),
   }
 }
 
@@ -125,19 +128,27 @@ export async function callLLM(
   }
 
   const startedAt = Date.now()
-  let res: Response
   let data: unknown
+  const send = async (payload: Record<string, unknown>): Promise<Response> => fetchImpl(config.url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    signal: combinedSignal,
+    body: JSON.stringify(payload),
+  })
   try {
     try {
-      res = await fetchImpl(config.url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
-        signal: combinedSignal,
-        body: JSON.stringify(body),
-      })
+      let res = await send(body)
+      if (!res.ok && json && (res.status === 400 || res.status === 422)) {
+        // Some models/providers reject response_format. Degrade gracefully: retry
+        // once as plain text (the messages still ask for JSON) and let callers
+        // parse JSON from the text, including fenced JSON.
+        const { response_format: _omitted, ...plain } = body
+        void _omitted
+        res = await send(plain)
+      }
       if (!res.ok) throw new Error(`${config.label} API error: ${res.status} ${res.statusText}`)
       try {
         data = await res.json()
@@ -209,9 +220,5 @@ export function createActionableReviewProviderCall(deps: {
  * Safely unwrap one conventional ``` / ```json fenced object before JSON.parse.
  * Anything else is returned trimmed for fail-closed parse.
  */
-export function unwrapConventionalJsonFence(raw: string): string {
-  const trimmed = raw.trim()
-  const fenced = /^```(?:json)?\s*\r?\n?([\s\S]*?)\r?\n?```\s*$/i.exec(trimmed)
-  if (!fenced) return trimmed
-  return fenced[1]!.trim()
-}
+import { unwrapConventionalJsonFence } from './json-fence'
+export { unwrapConventionalJsonFence }

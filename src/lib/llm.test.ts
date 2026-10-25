@@ -165,3 +165,33 @@ test('createActionableReviewProviderCall requests JSON response format', async (
   assert.deepEqual(await call({ model: 'm', rows: [], maxPromptTokens: 100 }), { advice: [] })
   assert.equal(seenOptions?.responseFormat, 'json')
 })
+
+test('callLLM retries once without response_format when the model rejects JSON mode', async () => {
+  const { fetchImpl, calls } = mockFetch((captured) => captured.body.response_format
+    ? new Response('{"error":"response_format not supported"}', { status: 400, statusText: 'Bad Request' })
+    : okJson(completion('```json\n{"ok":true}\n```')))
+  const result = await callLLM(messages, 'openrouter', 'some/model', undefined, opts({ fetchImpl, responseFormat: 'json' }))
+  assert.equal(calls.length, 2)
+  assert.deepEqual(calls[0]!.body.response_format, { type: 'json_object' })
+  assert.equal('response_format' in calls[1]!.body, false)
+  // The plain retry still asks for JSON in the messages.
+  assert.match(JSON.stringify(calls[1]!.body.messages), /JSON/)
+  assert.match(result.content, /"ok":true/)
+})
+
+test('callLLM does not retry non-JSON-mode failures or non-400 errors', async () => {
+  const plain = mockFetch(() => new Response('bad', { status: 400, statusText: 'Bad Request' }))
+  await assert.rejects(callLLM(messages, 'openai', undefined, undefined, opts({ fetchImpl: plain.fetchImpl })), /400/)
+  assert.equal(plain.calls.length, 1)
+  const server = mockFetch(() => new Response('down', { status: 503, statusText: 'Unavailable' }))
+  await assert.rejects(callLLM(messages, 'openai', undefined, undefined, opts({ fetchImpl: server.fetchImpl, responseFormat: 'json' })), /503/)
+  assert.equal(server.calls.length, 1)
+})
+
+test('callLLM records provider-reported cost when present (OpenRouter usage.cost)', async () => {
+  const logged: LlmUsageLogEntry[] = []
+  const { fetchImpl } = mockFetch(() => okJson(completion('hi', { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, cost: 0.0000423 })))
+  const result = await callLLM(messages, 'openrouter', 'x/y', undefined, opts({ fetchImpl, logUsage: (entry) => logged.push(entry) }))
+  assert.equal(result.usage?.costUsd, 0.0000423)
+  assert.equal(logged[0]!.costUsd, 0.0000423)
+})

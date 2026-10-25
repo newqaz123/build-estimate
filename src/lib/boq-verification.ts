@@ -1,3 +1,4 @@
+import { unwrapConventionalJsonFence } from './json-fence'
 import {
   verifyBoqLocally,
   type VerificationIssue,
@@ -314,7 +315,7 @@ export function buildVerificationMessages(request: VerificationRequest): Array<{
 export function normalizeAiVerification(content: string): VerificationResponseIssue[] {
   let value: unknown
   try {
-    value = JSON.parse(content.trim())
+    value = JSON.parse(unwrapConventionalJsonFence(content))
   } catch {
     throw new AiVerificationResponseError()
   }

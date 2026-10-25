@@ -1,3 +1,4 @@
+import { unwrapConventionalJsonFence } from './json-fence'
 import type { WorkspaceSettings } from './settings-schema'
 import type { Boq, BoqItem, BoqSection } from './boq-schema'
 import type { BoqSourceRowV3, DerivedPricedItemV3 } from './boq-extraction-schema'
@@ -354,7 +355,7 @@ export function buildExtractionReviewMessages(input: {
 function normalizeResponse(content: string): unknown[] {
   let parsed: unknown
   try {
-    parsed = JSON.parse(content)
+    parsed = JSON.parse(unwrapConventionalJsonFence(content))
   } catch {
     throw new ExtractionReviewResponseError()
   }

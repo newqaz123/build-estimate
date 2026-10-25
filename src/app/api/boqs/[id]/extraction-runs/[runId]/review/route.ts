@@ -18,7 +18,8 @@ const handler = createExtractionReviewHandler({
   failReviewLease: (boqId, runId, leaseId, failureCode, retryDelayMs, preservedProposals, refreshedSourceRowIds, validationSummary) => createFirestoreExtractionProposalStore(getDb()).failReviewLease(boqId, runId, leaseId, failureCode, retryDelayMs, preservedProposals, refreshedSourceRowIds, validationSummary),
   createLeaseId: () => crypto.randomUUID(),
   getSettings: () => getDocument<WorkspaceSettings>('settings', 'workspace'),
-  callProvider: callLLM,
+  // JSON mode; callLLM retries as plain text if a model rejects response_format.
+  callProvider: (messages, provider, model, signal) => callLLM(messages, provider, model, signal, { responseFormat: 'json' }),
   env: process.env,
   timeoutMs: REVIEW_TIMEOUT_MS,
   // Only safe categorical failure reasons are logged; no BOQ source data or provider payloads.
