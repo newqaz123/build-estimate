@@ -17,11 +17,34 @@ export interface ReviewIssue {
   itemId?: string
   sectionIndex?: number
   itemIndex?: number
+  /** Set on AI findings only (see boq-verification AI_ISSUE_CATEGORIES). */
+  category?: 'number_error' | 'misread' | 'advisory'
 }
 
 export interface RowFlag {
   kind: 'parser' | 'math' | 'ai' | 'catalog'
   text: string
+  /** 'important' rows are highlighted; 'note' goes behind a collapsed "Other notes". */
+  level: 'important' | 'note'
+}
+
+/** Codes that are about wording or scope, never about a wrong number. */
+const ADVISORY_CODES = new Set(['description_unclear', 'possible_duplicate', 'metadata_missing'])
+
+/**
+ * Deterministic triage of a check finding. Rule findings (no category) are kept
+ * prominent unless they are wording-only; AI findings are prominent only when the
+ * AI says the numbers are wrong or mis-read AND the code is about numbers/units.
+ */
+export function issueLevel(issue: Pick<ReviewIssue, 'code' | 'category'>): RowFlag['level'] {
+  if (ADVISORY_CODES.has(issue.code)) return 'note'
+  if (issue.category === undefined) return 'important'
+  return issue.category === 'number_error' || issue.category === 'misread' ? 'important' : 'note'
+}
+
+/** Rows with at least one important flag: these are highlighted and counted. */
+export function importantRowKeys(flags: ReadonlyMap<string, RowFlag[]>): Set<string> {
+  return new Set([...flags].filter(([, list]) => list.some((flag) => flag.level === 'important')).map(([key]) => key))
 }
 
 const TOLERANCE = 0.01
@@ -55,14 +78,14 @@ export function buildRowFlags(boq: Pick<Boq, 'sections'>, aiIssues: ReviewIssue[
     section.items.forEach((item, itemIndex) => {
       const key = rowKey(sectionIndex, itemIndex)
       if (item.id) keyById.set(item.id, key)
-      for (const warning of item.extractionWarnings ?? []) add(key, { kind: 'parser', text: shortParserReason(warning.code, warning.message) })
+      for (const warning of item.extractionWarnings ?? []) add(key, { kind: 'parser', text: shortParserReason(warning.code, warning.message), level: 'important' })
       if (!isPricedBoqItem(item)) return
       if (Number.isFinite(item.qty) && Number.isFinite(item.rate) && Number.isFinite(item.total)
         && Math.abs(item.qty * item.rate - item.total) > TOLERANCE) {
-        add(key, { kind: 'math', text: `Qty × rate = ${(item.qty * item.rate).toLocaleString('en-US', { maximumFractionDigits: 2 })}, but total says ${item.total.toLocaleString('en-US', { maximumFractionDigits: 2 })}` })
+        add(key, { kind: 'math', text: `Qty × rate = ${(item.qty * item.rate).toLocaleString('en-US', { maximumFractionDigits: 2 })}, but total says ${item.total.toLocaleString('en-US', { maximumFractionDigits: 2 })}`, level: 'important' })
       }
-      if (item.qty === 0) add(key, { kind: 'math', text: 'Quantity is 0' })
-      if (item.rate === 0 && !item.optional) add(key, { kind: 'math', text: 'Rate is 0' })
+      if (item.qty === 0) add(key, { kind: 'math', text: 'Quantity is 0', level: 'important' })
+      if (item.rate === 0 && !item.optional) add(key, { kind: 'math', text: 'Rate is 0', level: 'important' })
     })
   })
   for (const issue of aiIssues) {
@@ -70,7 +93,7 @@ export function buildRowFlags(boq: Pick<Boq, 'sections'>, aiIssues: ReviewIssue[
       : issue.sectionIndex !== undefined && issue.itemIndex !== undefined ? rowKey(issue.sectionIndex, issue.itemIndex) : undefined
     if (!key) continue
     if (issue.code === 'line_total_mismatch') continue // already covered by the math check
-    add(key, { kind: 'ai', text: `AI: ${clip(issue.message)}` })
+    add(key, { kind: 'ai', text: issue.category ? `AI: ${clip(issue.message)}` : clip(issue.message), level: issueLevel(issue) })
   }
   return flags
 }

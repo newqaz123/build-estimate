@@ -19,6 +19,7 @@ import {
   buildApprovalChoices,
   buildQuoteNotes,
   buildRowFlags,
+  importantRowKeys,
   preselectCatalog,
   rowKey,
   rowSourceRef,
@@ -275,7 +276,9 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
     }
   }
 
-  const flaggedCount = rowFlags.size
+  const importantRows = useMemo(() => importantRowKeys(rowFlags), [rowFlags])
+  const flaggedCount = importantRows.size
+  const noteCount = useMemo(() => [...rowFlags.values()].reduce((sum, list) => sum + list.filter((flag) => flag.level === "note").length, 0), [rowFlags])
   const evidenceFocus = focus.key > 0 ? { page: focus.page, table: focus.table, row: focus.row, cells: [] } : undefined
   const rowNumbers = new Map<string, number>()
   sections.forEach((section, si) => section.items.forEach((item, ii) => { if (isPricedBoqItem(item)) rowNumbers.set(rowKey(si, ii), rowNumbers.size + 1) }))
@@ -322,7 +325,7 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
           ) : aiCheck?.state === "running" ? (
             <span><Loader2 className="animate-spin" aria-hidden="true" /> Checking the quote…</span>
           ) : aiCheck?.state === "done" && aiCheck.result.mode === "ai" ? (
-            <span><Sparkles aria-hidden="true" /> AI check done ({aiCheck.result.model}). {flaggedCount ? `${flaggedCount} ${flaggedCount === 1 ? "row needs" : "rows need"} a look.` : "Nothing looks wrong."}</span>
+            <span><Sparkles aria-hidden="true" /> AI check done ({aiCheck.result.model}). {flaggedCount ? `${flaggedCount} ${flaggedCount === 1 ? "row needs" : "rows need"} a look.` : "Nothing looks wrong."}{noteCount ? ` ${noteCount} other ${noteCount === 1 ? "note" : "notes"} (not errors).` : ""}</span>
           ) : aiCheck?.state === "done" && aiCheck.result.mode === "local" ? (
             <span className="simple-review-note"><Info aria-hidden="true" /> AI check didn’t run ({AI_NOT_RUN_REASON[aiCheck.result.aiStatus]}). Basic checks only. {flaggedCount ? `${flaggedCount} ${flaggedCount === 1 ? "row needs" : "rows need"} a look.` : ""}</span>
           ) : aiCheck?.state === "failed" ? (
@@ -381,7 +384,9 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
                 ) : null}
                 {section.items.map((item, itemIndex) => {
                   const key = rowKey(sectionIndex, itemIndex)
-                  const flags = rowFlags.get(key) ?? []
+                  const allFlags = rowFlags.get(key) ?? []
+                  const flags = allFlags.filter((flag) => flag.level === "important")
+                  const notes = allFlags.filter((flag) => flag.level === "note")
                   const rowNumber = rowNumbers.get(key) ?? 0
                   if (onlyFlagged && flags.length === 0) return null
                   if (!isPricedBoqItem(item)) {
@@ -416,6 +421,12 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
                         {flags.map((flag) => (
                           <span key={flag.text} className={`simple-review-flag flag-${flag.kind}`} title={flag.text}><AlertTriangle aria-hidden="true" /><span className="simple-review-flag-text">{flag.text}</span></span>
                         ))}
+                        {notes.length ? (
+                          <details className="simple-review-notes" onClick={(e) => e.stopPropagation()}>
+                            <summary>Other notes ({notes.length})</summary>
+                            {notes.map((note) => <span key={note.text} className="simple-review-note-text">{note.text}</span>)}
+                          </details>
+                        ) : null}
                       </td>
                       <td><NumberCell label={`Qty row ${rowNumber}`} value={item.qty} disabled={approved} onFocus={() => goToSource(key, item)}
                         onCommit={(qty) => editItem(sectionIndex, itemIndex, (current) => ({ ...current, qty, total: round2(qty * current.rate) }))} /></td>

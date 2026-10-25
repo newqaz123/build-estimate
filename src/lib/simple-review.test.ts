@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { Boq, BoqPricedItem } from './boq-schema'
 import type { StandardEntry } from './standard-schema'
-import { buildApprovalChoices, buildQuoteNotes, buildRowFlags, preselectCatalog, rowKey, searchCatalog } from './simple-review'
+import { buildApprovalChoices, buildQuoteNotes, buildRowFlags, importantRowKeys, issueLevel, preselectCatalog, rowKey, searchCatalog } from './simple-review'
 
 const NOW = '2026-10-25T12:00:00.000Z'
 function item(id: string, desc: string, unit: string, qty: number, rate: number, extra: Partial<BoqPricedItem> = {}): BoqPricedItem {
@@ -25,9 +25,9 @@ test('buildRowFlags: math, zero values, parser warnings and AI issues become sho
     item('b', 'Valve', 'ea', 0, 10, { extractionWarnings: [{ code: 'ocr_corrected', message: 'Quantity read as 1O, fixed to 10' }] }),
     item('c', 'Paint', 'm2', 1, 5),
   ]), [
-    { code: 'suspicious_rate', severity: 'warning', message: 'Rate looks 10x higher than similar rows', itemId: 'c' },
+    { code: 'rate_outlier', category: 'misread', severity: 'warning', message: 'Rate looks 10x higher than similar rows', itemId: 'c' },
     { code: 'line_total_mismatch', severity: 'warning', message: 'dup', itemId: 'a' },
-    { code: 'suspicious_rate', severity: 'warning', message: 'by position', sectionIndex: 0, itemIndex: 1 },
+    { code: 'quantity_outlier', category: 'number_error', severity: 'warning', message: 'by position', sectionIndex: 0, itemIndex: 1 },
   ])
   assert.match(flags.get(rowKey(0, 0))![0]!.text, /Qty × rate = 20, but total says 25/)
   assert.equal(flags.get(rowKey(0, 0))!.length, 1, 'AI duplicate of the math check is dropped')
@@ -35,7 +35,32 @@ test('buildRowFlags: math, zero values, parser warnings and AI issues become sho
   assert.ok(b.some((t) => t.startsWith('Text read by OCR')))
   assert.ok(b.includes('Quantity is 0'))
   assert.ok(b.includes('AI: by position'))
-  assert.deepEqual(flags.get(rowKey(0, 2)), [{ kind: 'ai', text: 'AI: Rate looks 10x higher than similar rows' }])
+  assert.deepEqual(flags.get(rowKey(0, 2)), [{ kind: 'ai', text: 'AI: Rate looks 10x higher than similar rows', level: 'important' }])
+})
+
+test('buildRowFlags: AI advisory findings become collapsed notes; only important rows are counted', () => {
+  const flags = buildRowFlags(quote([
+    item('a', 'Pipe', 'm', 2, 10),
+    item('b', 'Valve', 'ea', 1, 10),
+    item('c', 'Paint', 'm2', 1, 5),
+    item('d', 'Paint', 'm2', 1, 5),
+  ]), [
+    { code: 'description_unclear', category: 'advisory', severity: 'warning', message: 'Short text', itemId: 'a' },
+    { code: 'possible_duplicate', category: 'number_error', severity: 'warning', message: 'Same as row d', itemId: 'c' },
+    { code: 'unit_mismatch', category: 'advisory', severity: 'warning', message: 'Unit may be odd', itemId: 'b' },
+    { code: 'rate_outlier', category: 'misread', severity: 'warning', message: 'Rate shifted', itemId: 'd' },
+  ])
+  assert.equal(flags.get('0:0')![0]!.level, 'note')
+  assert.equal(flags.get('0:1')![0]!.level, 'note', 'advisory category stays a note even on a numeric code')
+  assert.equal(flags.get('0:2')![0]!.level, 'note', 'wording codes stay notes even if the AI calls them errors')
+  assert.equal(flags.get('0:3')![0]!.level, 'important')
+  assert.deepEqual([...importantRowKeys(flags)], ['0:3'])
+})
+
+test('issueLevel: rule findings without a category stay important unless wording-only', () => {
+  assert.equal(issueLevel({ code: 'invalid_number' }), 'important')
+  assert.equal(issueLevel({ code: 'metadata_missing' }), 'note')
+  assert.equal(issueLevel({ code: 'rate_outlier', category: 'advisory' }), 'note')
 })
 
 test('buildQuoteNotes keeps only issues not pinned to a row', () => {

@@ -3260,6 +3260,11 @@
 .simple-review-flag-text { min-width: 0; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .simple-review-flag svg { width: 11px; height: 11px; flex: none; margin-top: 2px; }
 .simple-review-flag.flag-ai { color: color-mix(in oklab, var(--accent) 70%, var(--fg)); }
+.simple-review-notes { margin: 1px 5px 3px; font-size: 11px; color: var(--muted-text); }
+.simple-review-notes summary { cursor: pointer; list-style: none; }
+.simple-review-notes summary::before { content: "▸ "; }
+.simple-review-notes[open] summary::before { content: "▾ "; }
+.simple-review-note-text { display: block; margin-top: 2px; line-height: 1.3; }
 .simple-review-pick { display: flex; align-items: center; gap: 4px; width: 100%; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); text-align: left; font-size: 11.5px; cursor: pointer; }
 .simple-review-pick:disabled { cursor: default; border-color: transparent; background: transparent; }
 .simple-review-pick.is-none .simple-review-pick-text { color: var(--muted-text); }
