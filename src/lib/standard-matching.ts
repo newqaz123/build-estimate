@@ -136,11 +136,97 @@ export function unitsCompatible(
 	return unitMatchKey(itemUnit, unitMap) === unitMatchKey(catalogUnit, unitMap);
 }
 
+/**
+ * OCR often drops a space ("existingroof"). A search word that is exactly two
+ * neighbouring target words glued together is split back into those words.
+ */
+function splitGluedTokens(searchTokens: string[], targetTokens: string[]): string[] {
+	const target = new Set(targetTokens);
+	const out: string[] = [];
+	for (const token of searchTokens) {
+		let split: string[] | null = null;
+		if (!target.has(token)) {
+			for (let i = 0; i < targetTokens.length - 1; i++) {
+				if (targetTokens[i]! + targetTokens[i + 1]! === token) {
+					split = [targetTokens[i]!, targetTokens[i + 1]!];
+					break;
+				}
+			}
+		}
+		out.push(...(split ?? [token]));
+	}
+	return out;
+}
+
+/** Words that say what is done, not what it is done to; they never decide the item. */
+const GENERIC_WORDS = new Set([
+	"and", "with", "for", "the", "of", "to", "in", "on", "at", "by", "from", "per", "all",
+	"new", "old", "existing", "type", "work", "works", "include", "including", "included",
+	"supply", "install", "installation", "installing", "take", "off", "remove", "removal",
+	"dismantle", "provide", "complete", "set", "lot", "item", "items", "misc", "other",
+	"dia", "diameter", "size",
+]);
+
+function editDistance(a: string, b: string): number {
+	if (Math.abs(a.length - b.length) > 2) return 3;
+	let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+	for (let i = 1; i <= a.length; i++) {
+		const current = [i];
+		for (let j = 1; j <= b.length; j++) {
+			current[j] = Math.min(previous[j]! + 1, current[j - 1]! + 1, previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+		}
+		previous = current;
+	}
+	return previous[b.length]!;
+}
+
+/** A typo of the same word ("roofinf"/"roofing"); short words must be one edit apart so pipe/pump still clash. */
+function sameWordTypo(a: string, b: string): boolean {
+	const distance = editDistance(a, b);
+	return distance <= 1 || (distance <= 2 && Math.min(a.length, b.length) >= 6);
+}
+
+function keyWords(tokens: string[]): string[] {
+	return tokens.filter((token) => /^\p{L}[\p{L}\p{M}]+$/u.test(token) && token.length >= 3 && !GENERIC_WORDS.has(token));
+}
+
+/**
+ * The key noun/material must agree: when the search has a key word the candidate
+ * lacks AND the candidate has a key word the search lacks ("roof" vs "pipe"), the
+ * two rows are most likely different things. Returns the clashing words, or null
+ * when the description or any alias agrees.
+ */
+export function keyWordConflict(
+	description: string,
+	candidateDescription: string,
+	aliases: string[] = [],
+): { search: string[]; candidate: string[] } | null {
+	const searchTokens = tokenize(description);
+	let first: { search: string[]; candidate: string[] } | null = null;
+	for (const target of [candidateDescription, ...aliases]) {
+		const targetTokens = tokenize(target);
+		const search = splitGluedTokens(searchTokens, targetTokens);
+		const searchSet = new Set(search);
+		const targetSet = new Set(targetTokens);
+		const rawSearch = keyWords(search).filter((token) => !targetSet.has(token));
+		const targetKeyWords = keyWords(targetTokens);
+		// A target with no key words at all (sizes only, short Thai) neither agrees nor clashes.
+		if (targetKeyWords.length === 0 && aliases.length > 0) continue;
+		const rawCandidate = targetKeyWords.filter((token) => !searchSet.has(token));
+		const leftSearch = rawSearch.filter((token) => !rawCandidate.some((other) => sameWordTypo(token, other)));
+		const leftCandidate = rawCandidate.filter((token) => !rawSearch.some((other) => sameWordTypo(token, other)));
+		if (leftSearch.length === 0 || leftCandidate.length === 0) return null;
+		first ??= { search: leftSearch, candidate: leftCandidate };
+	}
+	return first;
+}
+
 function tokenOverlapScore(
-	searchTokens: string[],
+	rawSearchTokens: string[],
 	targetTokens: string[],
 ): number {
-	if (searchTokens.length === 0 || targetTokens.length === 0) return 0;
+	if (rawSearchTokens.length === 0 || targetTokens.length === 0) return 0;
+	const searchTokens = splitGluedTokens(rawSearchTokens, targetTokens);
 
 	const target = new Set(targetTokens);
 	let matches = 0;

@@ -108,3 +108,17 @@ test('buildApprovalChoices sends every priced row with its pick', () => {
     { sectionIndex: 0, itemIndex: 1, itemId: 'b', standardId: null },
   ])
 })
+
+test('preselectCatalog leaves a weak guess unselected but remembers the closest item', () => {
+  const standards = [standard('s-pipe', 'Take off existing pipe', 'lot'), standard('s-roof', 'Take off existing roof SS400', 'lot'),
+    standard('s-2b', 'Steel pipe 2B', 'm'), standard('s-4b', 'Steel pipe 4B', 'm')]
+  const picks = preselectCatalog(quote([
+    item('a', 'Take off existing gutter', 'lot', 1, 1),
+    item('b', 'Take off existingroof', 'lot', 1, 1),
+    item('c', 'Steel pipe', 'm', 1, 1),
+  ]), standards, {})
+  assert.deepEqual(picks.get('0:0'), { standardId: null, reason: 'Unsure', suggestedId: 's-pipe' })
+  assert.equal(picks.get('0:1')!.standardId, 's-roof')
+  assert.equal(picks.get('0:2')!.standardId, null, 'two sizes equally close: do not guess')
+  assert.equal(picks.get('0:2')!.reason, 'Unsure')
+})

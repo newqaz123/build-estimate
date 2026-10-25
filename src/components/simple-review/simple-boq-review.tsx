@@ -440,12 +440,13 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
                       <td className="col-catalog" onClick={(e) => e.stopPropagation()}>
                         <button
                           type="button"
-                          className={`simple-review-pick ${pick?.standardId ? "" : "is-none"}`}
+                          className={`simple-review-pick ${pick?.standardId ? "" : "is-none"} ${pick?.reason === "Unsure" ? "is-unsure" : ""}`}
+                          title={pick?.reason === "Unsure" && pick.suggestedId ? `Not sure. Closest: ${standardsById.get(pick.suggestedId)?.description ?? ""}` : undefined}
                           disabled={approved || !catalog}
                           aria-label={`Catalog item row ${rowNumber}`}
                           onClick={() => setPickerKey(pickerKey === key ? null : key)}
                         >
-                          <span className="simple-review-pick-text">{standard ? standard.description : "No catalog item"}</span>
+                          <span className="simple-review-pick-text">{standard ? standard.description : pick?.reason === "Unsure" ? "Pick catalog item" : "No catalog item"}</span>
                           {standard && pick?.reason && pick.reason !== "Saved" ? <span className="simple-review-pick-reason">{pick.reason === "Exact" || pick.reason === "Alias" ? "match" : pick.reason === "Chosen" ? "chosen" : "best guess"}</span> : null}
                           <ChevronDown aria-hidden="true" />
                         </button>

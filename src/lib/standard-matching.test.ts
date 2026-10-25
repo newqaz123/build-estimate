@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
 	canonicalUnit,
+	keyWordConflict,
 	normalizeCatalogText,
 	unitMatchKey,
 	rankCatalogMatches,
@@ -232,3 +233,20 @@ test("rejects size/spec conflicts and ranks the agreeing sibling first", () => {
 		0,
 	);
 });
+
+test('keyWordConflict: a different key noun clashes; typos, glued words and extra specs do not', () => {
+  assert.deepEqual(keyWordConflict('Take off existing roof', 'Take off existing pipe'), { search: ['roof'], candidate: ['pipe'] })
+  assert.equal(keyWordConflict('Take off existingroof', 'Take off existing roof SS400'), null)
+  assert.equal(keyWordConflict('Roofinf sheet', 'Roofing sheet'), null)
+  assert.equal(keyWordConflict('Take off existing structure', 'Take off existing structure SS400'), null)
+  assert.notEqual(keyWordConflict('Install pump', 'Install pipe'), null, 'short words one letter apart only when one edit away')
+  assert.equal(keyWordConflict('Purlin C-150', 'Pipe C-150', ['ท่อ C-150', 'purlin c 150']), null, 'an agreeing alias wins')
+})
+
+test('rankCatalogMatches splits an OCR-glued word so the right item outranks a look-alike', () => {
+  const ranked = rankCatalogMatches('Take off existingroof', 'lot', [
+    { id: 'pipe', description: 'Take off existing pipe', unit: 'lot' },
+    { id: 'roof', description: 'Take off existing roof SS400', unit: 'lot' },
+  ], {})
+  assert.equal(ranked[0]!.id, 'roof')
+})

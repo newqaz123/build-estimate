@@ -3268,6 +3268,8 @@
 .simple-review-pick { display: flex; align-items: center; gap: 4px; width: 100%; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); text-align: left; font-size: 11.5px; cursor: pointer; }
 .simple-review-pick:disabled { cursor: default; border-color: transparent; background: transparent; }
 .simple-review-pick.is-none .simple-review-pick-text { color: var(--muted-text); }
+.simple-review-pick.is-unsure { border-style: dashed; border-color: color-mix(in oklab, var(--warning, #b88a00) 60%, var(--border)); }
+.simple-review-pick.is-unsure .simple-review-pick-text { color: color-mix(in oklab, var(--warning, #b88a00) 75%, var(--fg)); }
 .simple-review-pick-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .simple-review-pick-reason { flex: none; font-size: 10px; padding: 0 4px; border-radius: 3px; background: color-mix(in oklab, var(--accent) 12%, var(--surface)); color: var(--accent); }
 .simple-review-pick svg { width: 12px; height: 12px; flex: none; color: var(--muted-text); }
