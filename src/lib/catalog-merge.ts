@@ -41,7 +41,7 @@ export interface MergeUndoRecord {
 }
 
 /** Stored on the kept entry (lastMerge) and on archived entries (mergedInto). */
-export type MergeAwareStandard = StandardEntry & { lastMerge?: MergeUndoRecord; mergedInto?: string }
+export type MergeAwareStandard = StandardEntry
 
 export class CatalogMergeError extends Error {
   constructor(message: string, readonly status = 400) {

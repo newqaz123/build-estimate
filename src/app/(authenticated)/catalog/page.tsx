@@ -5,11 +5,12 @@ import { Input } from "@/components/ui/input"
 import { ProtoBadge } from "@/components/proto-badge"
 import { ProtoDataTable } from "@/components/proto-data-table"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
-import { Search, Plus, Check, X, Pencil, Trash2, Loader2 } from "lucide-react"
+import { Search, Plus, Check, X, Pencil, Trash2, Loader2, Merge, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import type { Boq, BoqItem } from "@/lib/boq-schema"
 import type { StandardEntry } from "@/lib/standard-schema"
 import { CatalogMatchModal } from "@/components/catalog-match-modal"
+import { CatalogMergeDialog, type CatalogMergeResultSummary } from "@/components/catalog-merge-dialog"
 import { normalizeCatalogText } from "@/lib/standard-matching"
 import { getBoqItemIdentityKey, getBoqItemRequestIdentity } from "@/lib/boq-item-identity"
 import { collectCatalogReviewItems, type CatalogReviewItem as ReviewItem } from "@/lib/catalog-review-queue"
@@ -74,6 +75,14 @@ export default function CatalogPage() {
   const [suggestingAll, setSuggestingAll] = useState(false)
   const [matchTarget, setMatchTarget] = useState<ReviewItem | null>(null)
   const [pricingTarget, setPricingTarget] = useState<StandardEntry | null>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [mergeTarget, setMergeTarget] = useState<{
+    entries: StandardEntry[]
+    keepId?: string
+    description?: string
+    unit?: string
+    intro?: string
+  } | null>(null)
   const [mutatingBoqs, setMutatingBoqs] = useState<Set<string>>(new Set())
   const mutatingBoqsRef = useRef<Set<string>>(new Set())
   const bulkMutationRef = useRef(false)
@@ -401,6 +410,42 @@ export default function CatalogPage() {
     }
   }
 
+  const toggleSelected = (id: string) => {
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const undoMerge = async (keepId: string) => {
+    try {
+      const res = await fetch("/api/standards/merge/undo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keepId }),
+      })
+      const body = await res.json().catch(() => ({})) as { error?: string }
+      if (!res.ok) throw new Error(body.error || "The merge could not be undone.")
+      toast.success("Merge undone. The items are separate again.")
+      await fetchData()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "The merge could not be undone.")
+    }
+  }
+
+  const handleMerged = async (result: CatalogMergeResultSummary) => {
+    setMergeTarget(null)
+    setSelectedIds(new Set())
+    setEditingId(null)
+    const rows = result.quoteRows === 1 ? "1 quote row" : `${result.quoteRows} quote rows`
+    toast.success(`Merged ${result.archivedIds.length + 1} items into one (${rows} moved).`, {
+      action: { label: "Undo", onClick: () => void undoMerge(result.keptId) },
+    })
+    await fetchData()
+  }
+
   const filteredStandards = standards.filter((s) => {
     if (s.archivedAt) return false
     if (!catalogSearch) return true
@@ -582,6 +627,20 @@ export default function CatalogPage() {
                   />
                 </div>
                 <div className="flex items-center gap-3">
+                  {selectedIds.size === 1 ? (
+                    <span className="text-xs text-muted-foreground" data-od-id="merge-hint">Pick one more item to merge</span>
+                  ) : null}
+                  {selectedIds.size >= 2 ? (
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => setMergeTarget({ entries: standards.filter((entry) => selectedIds.has(entry.id) && !entry.archivedAt) })}
+                      disabled={standardMutation !== null}
+                      data-od-id="merge-selected-btn"
+                    >
+                      <Merge className="w-3 h-3" />
+                      Merge selected ({selectedIds.size})
+                    </button>
+                  ) : null}
                   <span className="text-xs text-muted-foreground">{filteredStandards.length} entries</span>
                   <button className="btn btn-primary btn-sm" onClick={() => setAddOpen(true)} disabled={standardMutation !== null} data-od-id="add-entry-btn">
                     <Plus className="w-3 h-3" />
@@ -591,6 +650,7 @@ export default function CatalogPage() {
               </div>
               <ProtoDataTable
                 headers={[
+                  { label: 'Pick' },
                   { label: 'Description' },
                   { label: 'Unit' },
                   { label: 'Aliases' },
@@ -602,7 +662,7 @@ export default function CatalogPage() {
               >
                 {filteredStandards.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="text-center text-muted-foreground py-8">
+                    <td colSpan={8} className="text-center text-muted-foreground py-8">
                       No catalog entries found
                     </td>
                   </tr>
@@ -611,6 +671,15 @@ export default function CatalogPage() {
                     const isEditing = editingId === std.id
                     return (
                       <tr key={std.id} data-od-id={`catalog-row-${std.id}`}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(std.id)}
+                            onChange={() => toggleSelected(std.id)}
+                            aria-label={`Pick ${std.description} to merge`}
+                            data-od-id={`pick-${std.id}`}
+                          />
+                        </td>
                         {isEditing ? (
                           <>
                             <td>
@@ -709,6 +778,18 @@ export default function CatalogPage() {
                             </td>
                             <td className="text-right whitespace-nowrap">
                               <div className="flex items-center gap-1 justify-end">
+                                {std.lastMerge ? (
+                                  <button
+                                    className="btn btn-ghost btn-xs"
+                                    onClick={() => void undoMerge(std.id)}
+                                    disabled={standardMutation !== null}
+                                    aria-label={`Undo the last merge into ${std.description}`}
+                                    title="Undo the last merge"
+                                    data-od-id={`undo-merge-${std.id}`}
+                                  >
+                                    <Undo2 className="w-3 h-3" />
+                                  </button>
+                                ) : null}
                                 <button
                                   className="btn btn-ghost btn-xs"
                                   onClick={() => startEditing(std)}
@@ -864,6 +945,17 @@ export default function CatalogPage() {
           ) : null}
         </DialogContent>
       </Dialog>
+      {mergeTarget ? (
+        <CatalogMergeDialog
+          entries={mergeTarget.entries}
+          initialKeepId={mergeTarget.keepId}
+          initialDescription={mergeTarget.description}
+          initialUnit={mergeTarget.unit}
+          intro={mergeTarget.intro}
+          onClose={() => setMergeTarget(null)}
+          onMerged={(result) => void handleMerged(result)}
+        />
+      ) : null}
       {matchTarget ? (
         <CatalogMatchModal
           itemDesc={matchTarget.desc}

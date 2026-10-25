@@ -19,6 +19,10 @@ export interface StandardEntry {
   historicalPricing?: HistoricalPriceSummary
   lastMatched?: string
   archivedAt?: string
+  /** Set on an entry archived by a merge: the entry it was merged into. */
+  mergedInto?: string
+  /** Set on the kept entry: what the last merge changed, so it can be undone. */
+  lastMerge?: import('./catalog-merge').MergeUndoRecord
   createdAt: string
   updatedAt: string
 }

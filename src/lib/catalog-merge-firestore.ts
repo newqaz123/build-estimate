@@ -22,8 +22,9 @@ export interface CatalogMergeResult {
 
 /** Firestore rejects undefined; drop it (and the id, which is the doc key). */
 function toDoc<T extends { id: string }>(value: T): Record<string, unknown> {
-  const { id: _id, ...rest } = JSON.parse(JSON.stringify(value)) as T
-  return rest as Record<string, unknown>
+  const doc = JSON.parse(JSON.stringify(value)) as Record<string, unknown>
+  delete doc.id
+  return doc
 }
 
 async function readAll(transaction: Transaction | null, db: Firestore) {
