@@ -16,6 +16,7 @@ from typing import Any
 
 from boq_contract import RECONCILIATION_TOLERANCE, build_reconciliation, checked_contributing_total
 from boq_column_resolvers import resolve_columns
+from header_terms import fold_thai_header_terms
 
 
 OPTION = re.compile(
@@ -36,6 +37,10 @@ OVERHEAD_RE = re.compile(
 
 def _normal(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).strip()
+
+
+def _header_normal(value: Any) -> str:
+    return _normal(fold_thai_header_terms(str(value or "")))
 
 
 def _decimal(value: Any) -> Decimal | None:
@@ -88,14 +93,14 @@ def _cells(row: dict[str, Any]) -> dict[int, dict[str, Any]]:
 
 def _header(row: dict[str, Any], column: int) -> str:
     headers = row.get("headers", [])
-    return _normal(headers[column]) if column < len(headers) else ""
+    return _header_normal(headers[column]) if column < len(headers) else ""
 
 
 def _header_leaf(row: dict[str, Any], column: int) -> str:
     headers = row.get("headers", [])
     if column >= len(headers):
         return ""
-    return _normal(str(headers[column]).rsplit("/", 1)[-1])
+    return _header_normal(str(headers[column]).rsplit("/", 1)[-1])
 
 
 def _component_relative_header(row: dict[str, Any], column: int, component: str) -> str:
@@ -103,7 +108,7 @@ def _component_relative_header(row: dict[str, Any], column: int, component: str)
     headers = row.get("headers", [])
     if column >= len(headers):
         return ""
-    words = _normal(headers[column]).split()
+    words = _header_normal(headers[column]).split()
     if component not in words:
         return ""
     return " ".join(words[words.index(component) + 1:])
@@ -287,6 +292,36 @@ def _optional_fields(row: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+# Units a scanned BOQ uses; an OCR reading one character-confusion away from
+# one of these (and not itself a unit) is repaired, with a warning.
+_KNOWN_UNITS = frozenset({
+    "lot", "lot.", "ls", "l/s", "set", "set.", "sets", "m", "m.", "m2", "m2.", "m3", "m3.",
+    "no", "no.", "nos", "pcs", "pcs.", "pc", "ea", "kg", "kg.", "job", "pair", "roll",
+    "sq.m", "sq.m.", "sqm", "cu.m", "point", "pt", "bag", "box", "length",
+})
+_UNIT_CONFUSABLES = {"1": "l", "|": "l", "!": "l", "I": "l", "0": "o", "5": "s"}
+
+
+def repair_ocr_unit(unit: Any) -> str | None:
+    """Return the repaired unit, or None when the unit is fine or unknowable."""
+    if not isinstance(unit, str) or not unit.strip() or unit.strip().lower() in _KNOWN_UNITS:
+        return None
+    text = unit.strip()
+    positions = [index for index, char in enumerate(text) if char in _UNIT_CONFUSABLES]
+    if not positions or len(positions) > 3:
+        return None
+    found: set[str] = set()
+    for mask in range(1, 1 << len(positions)):
+        chars = list(text)
+        for bit, index in enumerate(positions):
+            if mask & (1 << bit):
+                chars[index] = _UNIT_CONFUSABLES[chars[index]]
+        candidate = "".join(chars)
+        if candidate.lower() in _KNOWN_UNITS:
+            found.add(candidate)
+    return found.pop() if len(found) == 1 else None
+
+
 def _priced_item(
     row: dict[str, Any], *, ordinal: int, desc: str, unit: str, qty: float,
     rate: float, total: float, component: str = "combined", kind: str = "standard",
@@ -348,8 +383,15 @@ def _has_invalid_numeric_format(row: dict[str, Any], roles: dict[str, int]) -> b
             continue
         raw = _value(row, column).strip()
         if raw not in NON_NUMBER and _decimal(raw) is None:
+            if role.startswith(("material_", "labour_")) and _COMPONENT_NOTE.fullmatch(raw):
+                # "Owner Supply" / "By owner" in a component price column means
+                # the component is not priced; it is not a malformed number.
+                continue
             return True
     return False
+
+
+_COMPONENT_NOTE = re.compile(r"[A-Za-z][A-Za-z .&/()'-]{2,}")
 
 
 def _has_continuation_cue(row: dict[str, Any]) -> bool:
@@ -414,8 +456,33 @@ def _continuation_map(rows: list[dict[str, Any]]) -> tuple[dict[str, list[dict[s
     return additions, consumed
 
 
+def _lead_descriptions(rows: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    """Pair a description-only row with the prices-only row that follows it.
+
+    OCR table structure often splits one wrapped BOQ line into a text row and
+    a numbers row. The pair is joined only when the priced row has no
+    description of its own, so no text is ever re-assigned between items.
+    """
+    leads: dict[str, dict[str, Any]] = {}
+    consumed: set[str] = set()
+    for lead, row in zip(rows, rows[1:]):
+        if (
+            lead.get("classification") == "item"
+            and row.get("classification") == "item"
+            and (lead["page"], lead["table"]) == (row["page"], row["table"])
+            and lead.get("headers") == row.get("headers")
+            and not _has_pricing_text(lead)
+            and len(_lines(lead, _find_columns(lead).get("desc"))) == 1
+            and _has_pricing(row)
+            and not _lines(row, _find_columns(row).get("desc"))
+        ):
+            leads[row["id"]] = lead
+            consumed.add(lead["id"])
+    return leads, consumed
+
+
 def _header_signature(row: dict[str, Any]) -> tuple[str, ...]:
-    return tuple(_normal(header) for header in row.get("headers", []))
+    return tuple(_header_normal(header) for header in row.get("headers", []))
 
 
 def _is_section_total(row: dict[str, Any]) -> bool:
@@ -426,6 +493,11 @@ def _is_section_total(row: dict[str, Any]) -> bool:
         not re.search(r"\b(?:grand|vat|discount|carried|brought)\b", label)
         and (label.startswith("total") or label.startswith("sub total"))
     )
+
+
+def _is_document_total_label(row: dict[str, Any]) -> bool:
+    label = _normal(row.get("rawText"))
+    return bool(re.search(r"\b(?:grand|sub|vat|discount|net|overhead)\b|subtotal", label))
 
 
 def _section_instances(
@@ -455,12 +527,33 @@ def _section_instances(
                 return ()
         return ()
 
+    previous_section: str | None = None
     for index, row in enumerate(rows):
         classification = row.get("classification")
         context = (row["page"], row["table"])
         signature = _header_signature(row)
         section_name = row.get("section")
         context_changed = last_context is not None and context != last_context
+        # Within one table a section never reverts to None unless the row
+        # builder closed it explicitly (document totals, sibling lump sums).
+        explicitly_closed = (
+            classification in {"item", "option", "total"}
+            and section_name is None
+            and previous_section is not None
+            and not context_changed
+            and active is not None
+            and names[active] != "Unsectioned"
+        )
+        previous_section = section_name
+        if explicitly_closed and classification == "total" and not _is_document_total_label(row):
+            # A plain "Total" closes the section it sums: it belongs to that
+            # section, and the rows after it start a fresh Unsectioned run.
+            row_instances[row["id"]] = active
+            active = None
+            last_context = context
+            continue
+        if explicitly_closed:
+            active = open_instance(None, signature)
 
         if classification == "section":
             repeated_signature = next_header_signature(index, context)
@@ -645,7 +738,9 @@ def _derive_components(row: dict[str, Any], roles: dict[str, int], desc: str) ->
     )], warnings)
 
 
-def _derive_row(row: dict[str, Any], continuations: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _derive_row(
+    row: dict[str, Any], continuations: list[dict[str, Any]], lead: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     roles = _find_columns(row)
     if _has_numeric_overflow(row, roles):
         return [], [_warning(
@@ -667,12 +762,16 @@ def _derive_row(row: dict[str, Any], continuations: list[dict[str, Any]]) -> tup
             "Merged multiline cell geometry does not support an unambiguous deterministic split.",
         )]
     descriptions = _lines(row, roles.get("desc"))
+    if not descriptions and lead is not None:
+        descriptions = _lines(lead, _find_columns(lead).get("desc"))
     if not descriptions:
         return [], [_warning(row, "unsupported_row", "No deterministic description evidence was found.")]
     desc = " ".join([descriptions[0], *[
         _value(tail, _find_columns(tail).get("desc")) for tail in continuations
     ]]).strip()
-    source_ids = [row["id"], *[tail["id"] for tail in continuations]]
+    source_ids = [
+        *([lead["id"]] if lead is not None else []), row["id"], *[tail["id"] for tail in continuations],
+    ]
 
     component = _derive_components(row, roles, desc)
     if component is not None:
@@ -845,6 +944,23 @@ def _source_total(
     ]
     if document_summaries:
         return document_summaries[-1]["value"], evidence_warnings
+    trailing_grand = candidates["grand"][-1] if candidates["grand"] else None
+    if (
+        base_candidates
+        and trailing_grand is not None
+        and trailing_grand["order"] > base_candidates[-1]["order"]
+        and not candidates["vat"]
+        and not candidates["discount"]
+        and not invalid_adjustment
+        and any(
+            row.get("classification") in {"item", "option"}
+            and not re.search(r"\b(?:vat|tax|discount|words)\b", _normal(row.get("rawText")))
+            for row in rows[base_candidates[-1]["order"] + 1:trailing_grand["order"]]
+        )
+    ):
+        # Priced lump sums sit between the last section total and an
+        # unadjusted grand total: only the grand total covers them.
+        return trailing_grand["value"], evidence_warnings
     if base_candidates:
         latest_by_instance: dict[int, dict[str, Any]] = {}
         for candidate in base_candidates:
@@ -982,6 +1098,9 @@ def _quote_summary(
             return None, set()
         discount_row, payable_row = discount_rows[0], payable_rows[0]
         discount = _amount_decimal(discount_row, adjustment=True)
+        if discount is None and _value(discount_row, _find_columns(discount_row).get("amount")).strip() in NON_NUMBER:
+            # A printed DISCOUNT line with a blank amount is a zero discount.
+            discount = Decimal(0)
         payable = _amount_decimal(payable_row)
         if discount is None or payable is None or source_decimal - discount != payable:
             return None, set()
@@ -1013,7 +1132,13 @@ def _section_total_warnings(
         if "grand total" not in label and not re.search(r"\b(?:vat|discount|carried|brought)\b", label) and (label.startswith("total") or label.startswith("sub total")):
             latest[instance] = (row, value)
     warnings: list[dict[str, Any]] = []
+    document_total = checked_contributing_total([
+        item for items in section_items.values() for item in items
+    ])
     for instance, (row, quoted) in latest.items():
+        if len(section_items) > 1 and abs(document_total - Decimal(str(quoted))) <= RECONCILIATION_TOLERANCE:
+            # The total closes the whole document, not just the open section.
+            continue
         derived = checked_contributing_total(section_items.get(instance, []))
         if abs(derived - Decimal(str(quoted))) > RECONCILIATION_TOLERANCE:
             warnings.append(_warning(
@@ -1029,6 +1154,8 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         raise ValueError("source rows must be a list")
     evidence = deepcopy(rows)
     continuation_map, consumed = _continuation_map(evidence)
+    lead_map, lead_consumed = _lead_descriptions(evidence)
+    consumed = consumed | lead_consumed
     row_instances, instance_names = _section_instances(evidence)
     sections: list[dict[str, Any]] = []
     sections_by_instance: dict[int, dict[str, Any]] = {}
@@ -1058,7 +1185,9 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             review_ids.append(row["id"])
             continue
         section = section_for(row)
-        items, row_warnings = _derive_row(row, continuation_map.get(row["id"], []))
+        items, row_warnings = _derive_row(
+            row, continuation_map.get(row["id"], []), lead_map.get(row["id"]),
+        )
         candidate_contribution = cumulative_contribution + _contributing_decimal(items)
         if items and _finite_float(candidate_contribution) is None:
             items = []
@@ -1068,6 +1197,14 @@ def derive_source_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             ))
         else:
             cumulative_contribution = candidate_contribution
+        for item in items:
+            repaired = repair_ocr_unit(item.get("unit"))
+            if repaired is not None:
+                row_warnings.append(_warning(
+                    row, "ocr_corrected_value",
+                    f"OCR read the unit as '{item['unit']}'; using '{repaired}'.",
+                ))
+                item["unit"] = repaired
         section["items"].extend(items)
         warnings.extend(row_warnings)
         if row_warnings:

@@ -10,6 +10,7 @@ COPY boq_contract.py .
 COPY boq_source_rows.py .
 COPY boq_compound_parser.py .
 COPY boq_column_resolvers.py .
+COPY header_terms.py .
 COPY page_normalizer.py .
 COPY main.py .
 COPY warmup.py .

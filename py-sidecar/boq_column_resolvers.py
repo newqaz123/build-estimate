@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import re
 from typing import Callable, Sequence
 
+from header_terms import fold_thai_header_terms
+
 
 @dataclass(frozen=True)
 class ColumnResolution:
@@ -17,7 +19,7 @@ Resolver = Callable[[Sequence[str]], ColumnResolution | None]
 
 
 def _normal(header: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", header.casefold()).strip()
+    return re.sub(r"[^a-z0-9]+", " ", fold_thai_header_terms(header).casefold()).strip()
 
 
 def _path(header: str) -> tuple[str, ...]:

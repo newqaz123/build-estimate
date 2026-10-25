@@ -8,6 +8,7 @@ from typing import Any
 
 from boq_contract import RECONCILIATION_TOLERANCE, RawCell, SourceRow
 from boq_parser import parse_number
+from header_terms import fold_thai_header_terms
 
 
 TOTAL_ROW = re.compile(
@@ -135,9 +136,11 @@ _METADATA_INDICATORS = frozenset({
 _STANDALONE_NUMBER = re.compile(r"^\(?[-+]?\d[\d,]*(?:\.\d+)?\)?$")
 
 
+# Thai BOQ header terms, longest first, mapped onto the English vocabulary.
 def _normalize_cell_text(text: str) -> str:
     """Normalize cell text for vocabulary matching."""
-    normalized = re.sub(r"[^a-z0-9\s]+", " ", text.lower()).strip()
+    lowered = fold_thai_header_terms(text).lower()
+    normalized = re.sub(r"[^a-z0-9\s]+", " ", lowered).strip()
     return re.sub(r"\s+", " ", normalized)
 
 
@@ -260,6 +263,137 @@ def _is_scope_title_row(anchor_cells: list[dict[str, Any]]) -> bool:
     return True
 
 
+_EMPTY_MARKERS = frozenset({"-", "—", "–", "n/a", "N/A"})
+# An outline number in the item column: "1", "1.2", "3.", or a letter "M.".
+_OUTLINE_NUMBER = re.compile(r"^(?:\d+(?:\.\d+)*\.?|[A-Z]\.)$")
+
+
+def _is_noise_only_row(anchor_cells: list[dict[str, Any]]) -> bool:
+    """A row whose only content is empty-value dashes (ruling-line residue)."""
+    texts = [cell["rawText"].strip() for cell in anchor_cells if cell["rawText"].strip()]
+    return bool(texts) and all(text in _EMPTY_MARKERS for text in texts)
+
+
+def _outline_title(anchor_cells: list[dict[str, Any]]) -> tuple[str, str] | None:
+    """Return (number, title) for an "item number | title" row without prices."""
+    cells = [
+        cell for cell in anchor_cells
+        if cell["rawText"].strip() and cell["rawText"].strip() not in _EMPTY_MARKERS
+    ]
+    if len(cells) != 2 or _row_has_numeric_evidence(cells[1:]):
+        return None
+    number, title = cells[0]["rawText"].strip(), cells[1]["rawText"].strip()
+    if not _OUTLINE_NUMBER.match(number) or len(title) < 3 or not any(c.isalpha() for c in title):
+        return None
+    if TOTAL_ROW.search(title) or NOTE_ROW.search(title):
+        return None
+    return number, title
+
+
+def _is_description_only_title(anchor_cells: list[dict[str, Any]]) -> bool:
+    """A single capitalised text cell with no prices (an unnumbered sub-heading)."""
+    cells = [
+        cell for cell in anchor_cells
+        if cell["rawText"].strip() and cell["rawText"].strip() not in _EMPTY_MARKERS
+    ]
+    if len(cells) != 1 or cells[0]["columnSpan"] != 1:
+        return False
+    text = cells[0]["rawText"].strip()
+    return (
+        "\n" not in text and 3 <= len(text) <= 60 and text[0].isupper()
+        and not _STANDALONE_NUMBER.match(text)
+        and not TOTAL_ROW.search(text) and not NOTE_ROW.search(text)
+    )
+
+
+def _is_values_only_row(anchor_cells: list[dict[str, Any]]) -> bool:
+    """Prices without any text: the priced half of a wrapped item row."""
+    texts = [cell["rawText"].strip() for cell in anchor_cells if cell["rawText"].strip()]
+    numbers = [text for text in texts if _STANDALONE_NUMBER.match(text)]
+    words = [text for text in texts if not _STANDALONE_NUMBER.match(text) and text not in _EMPTY_MARKERS]
+    # A unit token ("No.", "Lot") may sit beside the numbers.
+    return len(numbers) >= 2 and all(len(word) <= 6 for word in words)
+
+
+def _closes_outline(anchor_cells: list[dict[str, Any]], parents: dict[str, str], root: str) -> bool:
+    """True for a priced row numbered as a later sibling of the open root section."""
+    cells = [cell for cell in anchor_cells if cell["rawText"].strip()]
+    if len(cells) < 3 or not _row_has_numeric_evidence(cells[1:]):
+        return False
+    number = cells[0]["rawText"].strip().rstrip(".")
+    if not number.isdigit():
+        return False
+    root_number = next((key for key, label in parents.items() if label == root), "")
+    top = root_number.split(".")[0]
+    return top.isdigit() and int(number) > int(top)
+
+
+def _nest_outline(number: str, title: str, parents: dict[str, str]) -> str:
+    """Name an outline section, nesting dotted numbers under their parent."""
+    label = f"{number} {title}"
+    stem = number.rstrip(".")
+    if "." in stem:
+        parent = parents.get(stem.rsplit(".", 1)[0])
+        if parent:
+            label = f"{parent} / {label}"
+    parents[stem] = label
+    return label
+
+
+# Characters OCR commonly confuses in header labels, mapped to the letter the
+# header vocabulary expects ("Unlt" -> "Unit", "Materlal" -> "Material").
+_OCR_CONFUSABLES = {"l": "i", "1": "i", "0": "o", "!": "i", "|": "i"}
+
+
+def _fold_ocr_word(word: str) -> str:
+    lowered = word.lower()
+    if lowered in _PRICING_VOCABULARY_WORDS or not 3 <= len(word) <= 12:
+        return word
+    candidates = [lowered.replace("rn", "m")] if "rn" in lowered else []
+    positions = [index for index, char in enumerate(lowered) if char in _OCR_CONFUSABLES]
+    if len(positions) <= 4:
+        for mask in range(1, 1 << len(positions)):
+            chars = list(lowered)
+            for bit, index in enumerate(positions):
+                if mask & (1 << bit):
+                    chars[index] = _OCR_CONFUSABLES[chars[index]]
+            candidates.append("".join(chars))
+    for candidate in candidates:
+        if candidate in _PRICING_VOCABULARY_WORDS:
+            return candidate.capitalize() if word[:1].isupper() else candidate
+    return word
+
+
+def _fold_ocr_header(text: str) -> str:
+    """Repair OCR letter confusions in a header label, word by word."""
+    return re.sub(r"[A-Za-z0-9!|]+", lambda match: _fold_ocr_word(match.group(0)), text)
+
+
+def _infer_quantity_header(header_paths: list[list[str]], body: list[list[dict[str, Any]]]) -> None:
+    """Label an unlabelled numeric column immediately left of "Unit" as "Qty".
+
+    Scans lose the Q'ty label (OCR reads it as "41,0" or drops it); the column
+    is still identifiable from its position and its all-numeric body.
+    """
+    leaves = [_normalize_cell_text(path[-1]) if path else "" for path in header_paths]
+    if any(leaf in {"qty", "q ty", "quantity"} for leaf in leaves):
+        return
+    for column, leaf in enumerate(leaves):
+        if leaf not in {"unit", "uom"} or column == 0 or header_paths[column - 1]:
+            continue
+        values = [
+            cell["rawText"].strip()
+            for row in body for cell in row
+            if not cell["carried"] and cell["startColumnOffset"] == column - 1
+            and cell["columnSpan"] == 1 and cell["rawText"].strip()
+            and cell["rawText"].strip() not in _EMPTY_MARKERS
+        ]
+        numeric = [value for value in values if _STANDALONE_NUMBER.match(value)]
+        if len(numeric) >= 3 and len(numeric) / len(values) >= 0.7:
+            header_paths[column - 1].append("Qty")
+        return
+
+
 def _has_option_context(section: str | None, headers: list[str]) -> bool:
     return bool(
         OPTION_CONTEXT.search(section or "")
@@ -316,6 +450,10 @@ def build_source_rows(tables: list[Any], *, document: Any | None = None) -> list
         raise ValueError("tables must be a list")
     rows: list[dict[str, Any]] = []
     occurrences: Counter[tuple[int, int, int, str]] = Counter()
+    carried_headers: list[list[str]] | None = None
+    carried_section: str | None = None
+    outline_parents: dict[str, str] = {}
+    outline_root: str | None = None
 
     for table_value in tables:
         page = _strict_int(_read(table_value, "page"), "page", minimum=1)
@@ -333,6 +471,15 @@ def build_source_rows(tables: list[Any], *, document: Any | None = None) -> list
         header_paths: list[list[str]] = [[] for _ in range(column_count)]
         previous_was_header = False
         section: str | None = None
+        if (
+            _read(table_value, "continuesTable", False) is True
+            and carried_headers is not None
+            and len(carried_headers) == column_count
+        ):
+            # A headerless continuation page re-indexed onto the previous
+            # table's grid keeps that table's header band and open section.
+            header_paths = [list(path) for path in carried_headers]
+            section = carried_section
         indexed_cells = _index_cells_by_row(cells, row_count)
         for row_offset, covered_cells in enumerate(indexed_cells):
             anchor_cells = [cell for cell in covered_cells if not cell["carried"]]
@@ -349,17 +496,17 @@ def build_source_rows(tables: list[Any], *, document: Any | None = None) -> list
             if is_vocab_header:
                 cells_to_add = [
                     cell for cell in anchor_cells
-                    if cell["rawText"].strip() and _cell_is_pricing_header(cell["rawText"])
+                    if cell["rawText"].strip() and _cell_is_pricing_header(_fold_ocr_header(cell["rawText"]))
                 ]
             else:
                 cells_to_add = [
                     cell for cell in docling_header_cells
                     if cell["rawText"].strip()
-                    and _cell_is_pricing_header(cell["rawText"])
+                    and _cell_is_pricing_header(_fold_ocr_header(cell["rawText"]))
                     and not _cell_is_metadata(cell["rawText"])
                 ]
             for cell in cells_to_add:
-                token = cell["rawText"].strip()
+                token = _fold_ocr_header(cell["rawText"].strip())
                 for column in range(cell["startColumnOffset"], cell["endColumnOffset"]):
                     if not header_paths[column] or header_paths[column][-1].casefold() != token.casefold():
                         header_paths[column].append(token)
@@ -369,6 +516,9 @@ def build_source_rows(tables: list[Any], *, document: Any | None = None) -> list
             if section_cells:
                 section = " | ".join(section_cells)
             raw_text = " | ".join(cell["rawText"] for cell in anchor_cells if cell["rawText"])
+            row_is_header = is_vocab_header or bool(docling_header_cells)
+            if previous_was_header and not row_is_header:
+                _infer_quantity_header(header_paths, indexed_cells[row_offset:])
             headers = [" / ".join(path) for path in header_paths]
             # Classification: vocabulary header rows are "header".  Description-
             # spanning scope rows after a header band are "section".
@@ -376,14 +526,48 @@ def build_source_rows(tables: list[Any], *, document: Any | None = None) -> list
                 classification = "header"
             else:
                 classification = _classify(anchor_cells, raw_text, section, headers)
+                outline = _outline_title(anchor_cells) if classification == "item" else None
                 if (
                     classification == "item"
                     and previous_was_header
+                    and outline is None
                     and not _row_has_numeric_evidence(anchor_cells)
                     and _is_scope_title_row(anchor_cells)
                 ):
                     classification = "section"
                     section = raw_text.strip()
+                elif outline is not None:
+                    # "1 | Pipe line ..." anywhere in the table opens a section.
+                    classification = "section"
+                    section = _nest_outline(*outline, outline_parents)
+                    outline_root = section
+                elif classification == "item" and _is_noise_only_row(anchor_cells):
+                    classification = "note"
+                elif (
+                    classification in {"item", "total"}
+                    and outline_root is not None
+                    and (classification == "total" or _closes_outline(anchor_cells, outline_parents, outline_root))
+                ):
+                    # A priced sibling ("4 | Pressure test | 1 | Lot | ...") or a
+                    # document total ends the numbered section; the row belongs
+                    # to no section.
+                    section = None
+                    outline_root = None
+                elif (
+                    classification == "item"
+                    and outline_root is not None
+                    and _is_description_only_title(anchor_cells)
+                    and not (
+                        row_offset + 1 < len(indexed_cells)
+                        and _is_values_only_row([
+                            cell for cell in indexed_cells[row_offset + 1] if not cell["carried"]
+                        ])
+                    )
+                ):
+                    # An unnumbered heading inside a numbered section; a wrapped
+                    # description (next row carries only prices) is not one.
+                    classification = "section"
+                    section = f"{outline_root} / {raw_text.strip()}"
             evidence = json.dumps(covered_cells, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             evidence_hash = hashlib.sha256(evidence.encode("utf-8")).hexdigest()
             occurrence_key = (page, table, row_offset + 1, evidence_hash)
@@ -404,6 +588,8 @@ def build_source_rows(tables: list[Any], *, document: Any | None = None) -> list
             )
             rows.append(source_row.model_dump())
             previous_was_header = is_vocab_header or bool(docling_header_cells)
+        carried_headers = header_paths if any(header_paths) else None
+        carried_section = section
     return rows
 
 
@@ -551,6 +737,22 @@ def _source_row_evidence(row: dict[str, Any]) -> Counter[str]:
     )
 
 
+def _is_structure_row_warning(warning: dict[str, Any], source_rows: list[dict[str, Any]]) -> bool:
+    """A legacy unparsed_row (without coordinates) naming a recognised section row."""
+    if warning.get("code") != "unparsed_row":
+        return False
+    message = str(warning.get("message") or "")
+    prefix = "Could not normalize row:"
+    if not message.startswith(prefix):
+        return False
+    text = _normalize_cell_text(message[len(prefix):])
+    return bool(text) and any(
+        row.get("classification") == "section"
+        and text in {_normalize_cell_text(part) for part in str(row.get("rawText") or "").split("|")}
+        for row in source_rows
+    )
+
+
 def remap_legacy_warnings(
     warnings: list[dict[str, Any]],
     legacy_tables: list[dict[str, Any]],
@@ -564,6 +766,8 @@ def remap_legacy_warnings(
     for warning in warnings:
         source_ref = warning.get("sourceRef")
         output = {key: value for key, value in warning.items() if key != "sourceRef"}
+        if _is_structure_row_warning(warning, source_rows):
+            continue
         if not isinstance(source_ref, dict):
             remapped.append(output)
             continue
@@ -585,6 +789,13 @@ def remap_legacy_warnings(
         ]
         if len(candidates) == 1:
             candidate = candidates[0]
+            if (
+                warning.get("code") == "unparsed_row"
+                and candidate.get("classification") in {"section", "header", "note"}
+            ):
+                # The deterministic row builder recognised this row as
+                # structure, so the legacy "could not normalise" is noise.
+                continue
             output["sourceRef"] = {
                 "page": candidate["page"],
                 "table": candidate["table"],
