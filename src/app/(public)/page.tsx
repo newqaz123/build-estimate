@@ -1,11 +1,21 @@
 "use client";
 
 import { signIn } from "next-auth/react";
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { safeReviewReturnPath } from "@/lib/auth-return-url";
 
+// useSearchParams() opts the subtree into client-side rendering, so Next 16
+// requires a Suspense boundary around it for "/" to prerender at build time.
 export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
   const searchParams = useSearchParams();
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
