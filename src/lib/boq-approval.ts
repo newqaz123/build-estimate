@@ -100,6 +100,8 @@ export function planApproval(input: {
   choices: ApprovalChoice[]
   now: string
   unitMap?: Record<string, string>
+  /** False when the user said this is a repeat of an already approved quote: rows are linked but add no price history. */
+  countInPriceHistory?: boolean
 }): ApprovalPlan {
   const { boq, now } = input
   const unitMap = input.unitMap ?? {}
@@ -146,6 +148,7 @@ export function planApproval(input: {
         })
       }
       linked += 1
+      if (input.countInPriceHistory === false) return linkItem(item, standard, choice?.confidence ?? item.stdConfidence ?? 'manual')
       const sources = linkedSources.get(standard.id) ?? []
       sources.push({ boqId: boq.id, sectionIndex, ...getBoqItemRequestIdentity(item), sourceDescription: item.sourceDesc ?? item.desc })
       linkedSources.set(standard.id, sources)
@@ -198,6 +201,9 @@ export function planReopen(input: { boq: Boq; standards: StandardEntry[]; now: s
   if (boq.status !== 'approved') throw new ApprovalError('Only approved quotes can be reopened.', 409)
   const next: Boq = { ...boq, status: 'review', reopenedAt: now, updatedAt: now }
   delete next.approvedAt
+  // The repeat-quote answer is asked again on the next Approve.
+  delete next.duplicateOfBoqId
+  delete next.confirmedDistinctFrom
   const standards = input.standards
     .filter((standard) => (standard.sourceItems ?? []).some((source) => source.boqId === boq.id))
     .map((standard) => {

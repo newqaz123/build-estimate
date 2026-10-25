@@ -3,6 +3,7 @@ import type { StandardEntry } from '@/lib/standard-schema'
 import { toPublicBoq } from '@/lib/boq-public'
 import { BoqCanonicalValidationError, parseCanonicalBoqSections } from '@/lib/boq-canonical'
 import { ApprovalError, planApproval, planReopen, type ApprovalChoice, type ApprovalPlan } from '@/lib/boq-approval'
+import { findDuplicateQuotes } from '@/lib/boq-duplicates'
 
 export type BoqRouteContext = { params: Promise<{ id: string }> }
 
@@ -10,6 +11,17 @@ export interface ApprovalStoreState {
   boq: Boq
   standards: StandardEntry[]
   unitMap: Record<string, string>
+  /** Other approved quotes, to spot a repeat of one already in price history. */
+  approvedQuotes?: Boq[]
+}
+
+/** Answer to "this looks like a quote you already approved". */
+export type DuplicateDecision = 'same_quote' | 'different_quote'
+
+function parseDuplicateDecision(value: unknown): DuplicateDecision | undefined {
+  if (value === undefined || value === null) return undefined
+  if (value === 'same_quote' || value === 'different_quote') return value
+  throw new ApprovalError('duplicateDecision must be same_quote or different_quote.')
 }
 
 export interface ApprovalDependencies {
@@ -99,17 +111,45 @@ export function createApprovalHandlers(dependencies: ApprovalDependencies) {
       const record = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>
       const choices = parseChoices(record.choices)
       const edits = parseEdits(record)
+      const duplicateDecision = parseDuplicateDecision(record.duplicateDecision)
       const now = dependencies.now()
       const result = await dependencies.transact<ApprovalPlan>(id, (state) => {
-        const plan = planApproval({ boq: { ...state.boq, ...edits }, standards: state.standards, choices, now, unitMap: state.unitMap })
+        const candidate: Boq = { ...state.boq, ...edits }
+        const duplicates = findDuplicateQuotes(candidate, (state.approvedQuotes ?? []).filter((quote) => quote.status === 'approved' && quote.id !== candidate.id))
+        const repeat = duplicates.length > 0 && duplicateDecision !== 'different_quote'
+        const plan = planApproval({ boq: candidate, standards: state.standards, choices, now, unitMap: state.unitMap, countInPriceHistory: !repeat })
         if (plan.blocking.length > 0) {
           return { rejected: Response.json({ error: 'Fix these before approving', blocking: plan.blocking, notes: plan.notes }, { status: 400 }) }
         }
-        return plan
+        if (duplicates.length > 0 && !duplicateDecision) {
+          return {
+            rejected: Response.json({
+              error: 'This looks like a quote you already approved.',
+              code: 'duplicate_quote',
+              duplicates,
+            }, { status: 409 }),
+          }
+        }
+        const boq: Boq = { ...plan.boq }
+        delete boq.duplicateOfBoqId
+        delete boq.confirmedDistinctFrom
+        if (repeat) {
+          const original = (state.approvedQuotes ?? []).find((quote) => quote.id === duplicates[0].id)
+          boq.duplicateOfBoqId = original?.duplicateOfBoqId ?? duplicates[0].id
+        } else if (duplicates.length > 0) {
+          boq.confirmedDistinctFrom = duplicates.map((match) => match.id)
+        }
+        return { ...plan, boq }
       })
       if (result === null) return Response.json({ error: 'BOQ not found' }, { status: 404 })
       if ('rejected' in result) return result.rejected
-      return Response.json({ boq: toPublicBoq(result.boq), linked: result.linked, noCatalog: result.noCatalog, notes: result.notes })
+      return Response.json({
+        boq: toPublicBoq(result.boq),
+        linked: result.linked,
+        noCatalog: result.noCatalog,
+        notes: result.notes,
+        countedInPriceHistory: !result.boq.duplicateOfBoqId,
+      })
     } catch (error) {
       return errorResponse(error)
     }

@@ -6,7 +6,7 @@ import { createApprovalHandlers, type ApprovalDependencies } from './handler'
 
 const NOW = '2026-10-25T12:00:00.000Z'
 
-function makeStore() {
+function makeStore(approvedQuotes: Boq[] = []) {
   const store: { boq: Boq | null; standards: StandardEntry[]; writes: number } = {
     boq: {
       id: 'q1', project: 'P', vendor: 'V', workType: 'MEP', date: '2026-10-01', totalItems: 1, grandTotal: 50,
@@ -21,7 +21,7 @@ function makeStore() {
     now: () => NOW,
     transact: async (_id, plan) => {
       if (!store.boq) return null
-      const result = plan({ boq: store.boq, standards: store.standards, unitMap: {} })
+      const result = plan({ boq: store.boq, standards: store.standards, unitMap: {}, approvedQuotes })
       if ('rejected' in result) return result
       store.writes += 1
       store.boq = result.boq
@@ -77,4 +77,59 @@ test('approve validates input and auth', async () => {
   assert.equal((await anon.approve(post({}), ctx)).status, 401)
   const missing = createApprovalHandlers({ authenticate: async () => ({ user: {} }), now: () => NOW, transact: async () => null })
   assert.equal((await missing.approve(post({}), ctx)).status, 404)
+})
+
+function approvedTwin(id: string, overrides: Partial<Boq> = {}): Boq {
+  return {
+    id, project: 'Earlier', vendor: 'V', workType: 'MEP', date: '2026-10-01', totalItems: 3, grandTotal: 50,
+    status: 'approved', stdStatus: 'complete', approvedAt: '2026-10-02T00:00:00.000Z', createdAt: NOW, updatedAt: NOW,
+    sourceDigest: 'sha256:same',
+    sections: [{ header: 'S', items: [{ id: 'a', desc: 'Pipe', unit: 'm', qty: 5, rate: 10, total: 50, type: 'unit', stdStatus: 'matched', stdId: 's1' }] }],
+    ...overrides,
+  }
+}
+
+test('approve warns about a quote already approved from the same file and writes nothing', async () => {
+  const { store, handlers } = makeStore([approvedTwin('q0')])
+  store.boq = { ...store.boq!, sourceDigest: 'sha256:same' }
+  const res = await handlers.approve(post({ choices: [{ sectionIndex: 0, itemIndex: 0, standardId: 's1' }] }), ctx)
+  assert.equal(res.status, 409)
+  const json = await res.json()
+  assert.equal(json.code, 'duplicate_quote')
+  assert.deepEqual(json.duplicates.map((d: { id: string; reason: string }) => [d.id, d.reason]), [['q0', 'same_file']])
+  assert.equal(store.writes, 0)
+})
+
+test('approve as the same quote links rows but adds nothing to price history', async () => {
+  const { store, handlers } = makeStore([approvedTwin('q0')])
+  store.boq = { ...store.boq!, sourceDigest: 'sha256:same' }
+  const res = await handlers.approve(post({ duplicateDecision: 'same_quote', choices: [{ sectionIndex: 0, itemIndex: 0, standardId: 's1' }] }), ctx)
+  assert.equal(res.status, 200)
+  assert.equal((await res.json()).countedInPriceHistory, false)
+  assert.equal(store.boq!.status, 'approved')
+  assert.equal(store.boq!.duplicateOfBoqId, 'q0')
+  assert.equal((store.boq!.sections[0]!.items[0] as BoqPricedItem).stdId, 's1')
+  assert.equal(store.standards[0]!.sourceItems!.length, 0)
+
+  // Reopen clears the answer so the next Approve asks again.
+  await handlers.reopen(new Request('http://x', { method: 'POST' }), ctx)
+  assert.equal(store.boq!.duplicateOfBoqId, undefined)
+})
+
+test('approve as a different quote counts it and remembers the answer', async () => {
+  const { store, handlers } = makeStore([approvedTwin('q0')])
+  store.boq = { ...store.boq!, sourceDigest: 'sha256:same' }
+  const res = await handlers.approve(post({ duplicateDecision: 'different_quote', choices: [{ sectionIndex: 0, itemIndex: 0, standardId: 's1' }] }), ctx)
+  assert.equal(res.status, 200)
+  assert.equal((await res.json()).countedInPriceHistory, true)
+  assert.deepEqual(store.boq!.confirmedDistinctFrom, ['q0'])
+  assert.equal(store.standards[0]!.sourceItems!.length, 1)
+  assert.equal((await handlers.approve(post({ duplicateDecision: 'maybe' }), ctx)).status, 400)
+})
+
+test('approve without look-alike quotes needs no answer', async () => {
+  const { store, handlers } = makeStore([approvedTwin('q0', { sourceDigest: 'sha256:other', grandTotal: 999, vendor: 'Someone else' })])
+  assert.equal((await handlers.approve(post({}), ctx)).status, 200)
+  assert.equal(store.boq!.duplicateOfBoqId, undefined)
+  assert.equal(store.boq!.confirmedDistinctFrom, undefined)
 })

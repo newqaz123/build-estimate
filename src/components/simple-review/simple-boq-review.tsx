@@ -6,12 +6,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { AlertTriangle, Check, ChevronDown, Info, Loader2, RotateCcw, Search, Sparkles, X } from "lucide-react"
 import { toast } from "sonner"
 
+import { DuplicateQuoteNotice } from "@/components/duplicate-quote-notice"
 import { ExtractionReview } from "@/components/extraction-review"
 import { ProtoBadge } from "@/components/proto-badge"
 import { ReviewWorkspace } from "@/components/review-workspace"
 import { Button } from "@/components/ui/button"
 import { isPricedBoqItem } from "@/lib/boq-pricing"
 import { buildCanonicalRevisionKey } from "@/lib/boq-review-state"
+import type { DuplicateMatch } from "@/lib/boq-duplicates"
 import type { Boq, BoqItem, BoqPricedItem, WorkType } from "@/lib/boq-schema"
 import { parseVerificationApiResponse, type AiFallbackResponse, type AiSuccessResponse } from "@/lib/boq-verification"
 import { loadInlineCatalogSources } from "@/components/use-inline-catalog-matching"
@@ -79,9 +81,12 @@ function plainBlocking(text: string): string {
   return `Add the ${field === "worktype" ? "work type" : field} (top left).`
 }
 
-async function readError(response: Response, fallback: string): Promise<{ message: string; blocking?: string[] }> {
+async function readError(response: Response, fallback: string): Promise<{ message: string; blocking?: string[]; duplicates?: DuplicateMatch[] }> {
   try {
-    const body = (await response.json()) as { error?: unknown; blocking?: unknown }
+    const body = (await response.json()) as { error?: unknown; blocking?: unknown; code?: unknown; duplicates?: unknown }
+    if (body.code === "duplicate_quote" && Array.isArray(body.duplicates)) {
+      return { message: typeof body.error === "string" ? body.error : fallback, duplicates: body.duplicates as DuplicateMatch[] }
+    }
     const blocking = Array.isArray(body.blocking)
       ? body.blocking.map((entry) => (typeof entry === "string" ? entry : typeof entry === "object" && entry && "message" in entry ? String((entry as { message: unknown }).message) : "")).filter(Boolean)
       : undefined
@@ -107,6 +112,10 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
   const [busy, setBusy] = useState<"approve" | "reopen" | null>(null)
   const [blocking, setBlocking] = useState<string[]>([])
   const [missedCount, setMissedCount] = useState(0)
+  // Other quotes that look like this one (same PDF or same vendor/date/total/rows).
+  const [lookAlikes, setLookAlikes] = useState<DuplicateMatch[]>([])
+  // Set when Approve found an approved quote that looks the same; asks before counting prices twice.
+  const [approveConflict, setApproveConflict] = useState<DuplicateMatch[] | null>(null)
   const draft = useMemo(() => ({ ...boq, ...meta, sections }), [boq, meta, sections])
 
   // Reset local state when the server copy changes (approve, reopen, AI row fixes).
@@ -138,6 +147,16 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
     revision: boq.updatedAt,
     picks: new Map(current.revision === boq.updatedAt ? current.picks : []).set(key, pick),
   }))
+
+  useEffect(() => {
+    if (approved) return
+    const controller = new AbortController()
+    fetch(`/api/boqs/${encodeURIComponent(boq.id)}/duplicates`, { signal: controller.signal })
+      .then((response) => (response.ok ? response.json() : { duplicates: [] }))
+      .then((body: { duplicates?: DuplicateMatch[] }) => setLookAlikes(Array.isArray(body.duplicates) ? body.duplicates : []))
+      .catch(() => { /* the check is advisory; Approve checks again on the server */ })
+    return () => controller.abort()
+  }, [approved, boq.id, boq.updatedAt])
 
   const runAiCheck = useCallback(async (source: Boq) => {
     setAiCheck({ state: "running" })
@@ -225,7 +244,7 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
   const vendorMissing = !approved && meta.vendor.trim() === ""
   const dateMissing = !approved && meta.date.trim() === ""
 
-  const approve = async () => {
+  const approve = async (duplicateDecision?: "same_quote" | "different_quote") => {
     // Ask for every missing header field at once instead of one server round trip each.
     if (projectMissing || vendorMissing || dateMissing) {
       setBlocking([
@@ -238,19 +257,26 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
     }
     setBusy("approve")
     setBlocking([])
+    setApproveConflict(null)
     try {
       const response = await fetch(`/api/boqs/${encodeURIComponent(boq.id)}/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...meta, sections, choices: buildApprovalChoices(draft, picks) }),
+        body: JSON.stringify({ ...meta, sections, choices: buildApprovalChoices(draft, picks), ...(duplicateDecision ? { duplicateDecision } : {}) }),
       })
       if (!response.ok) {
         const error = await readError(response, "Could not approve this quote.")
+        if (error.duplicates?.length) {
+          setApproveConflict(error.duplicates)
+          return
+        }
         setBlocking((error.blocking?.length ? error.blocking : [error.message]).map(plainBlocking))
         return
       }
-      const body = (await response.json()) as { boq: Boq; linked: number; noCatalog: number }
-      toast.success(`Approved. ${body.linked} ${body.linked === 1 ? "price" : "prices"} saved to price history.`)
+      const body = (await response.json()) as { boq: Boq; linked: number; noCatalog: number; countedInPriceHistory?: boolean }
+      toast.success(body.countedInPriceHistory === false
+        ? "Approved as the same quote you approved before. Its prices were not counted again."
+        : `Approved. ${body.linked} ${body.linked === 1 ? "price" : "prices"} saved to price history.`)
       onBoqChange(body.boq)
     } catch {
       setBlocking(["Could not reach the server. Nothing was saved."])
@@ -321,7 +347,11 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
 
         <div className="simple-review-strip" role="status">
           {approved ? (
-            <span><Check aria-hidden="true" /> Approved{boq.approvedAt ? ` ${new Date(boq.approvedAt).toLocaleString()}` : ""}. Its prices are in price history. Reopen to make changes.</span>
+            boq.duplicateOfBoqId ? (
+              <span data-testid="approved-repeat"><Check aria-hidden="true" /> Approved{boq.approvedAt ? ` ${new Date(boq.approvedAt).toLocaleString()}` : ""} as a repeat of <Link href={`/boqs/${encodeURIComponent(boq.duplicateOfBoqId)}`} className="simple-review-link">an earlier quote</Link>, so its prices are not counted twice. Reopen to make changes.</span>
+            ) : (
+              <span><Check aria-hidden="true" /> Approved{boq.approvedAt ? ` ${new Date(boq.approvedAt).toLocaleString()}` : ""}. Its prices are in price history. Reopen to make changes.</span>
+            )
           ) : aiCheck?.state === "running" ? (
             <span><Loader2 className="animate-spin" aria-hidden="true" /> Checking the quote…</span>
           ) : aiCheck?.state === "done" && aiCheck.result.mode === "ai" ? (
@@ -338,6 +368,16 @@ export function SimpleBoqReview({ boq, onBoqChange }: { boq: Boq; onBoqChange: (
           {catalog ? <span className="simple-review-muted">{linkedCount} of {totals.rows} matched to catalog</span> : <span className="simple-review-muted">Loading catalog…</span>}
           {dirty && !approved ? <span className="simple-review-muted">Edits are saved when you approve.</span> : null}
         </div>
+
+        {approveConflict?.length && !approved ? (
+          <DuplicateQuoteNotice testId="approve-duplicate-question" title="This looks like a quote you already approved. Is it the same quote?" matches={approveConflict}>
+            <Button type="button" size="sm" disabled={busy !== null} onClick={() => void approve("same_quote")}>Same quote: approve, don’t count prices again</Button>
+            <Button type="button" size="sm" variant="outline" disabled={busy !== null} onClick={() => void approve("different_quote")}>Different quote: count its prices</Button>
+            <Button type="button" size="sm" variant="ghost" onClick={() => setApproveConflict(null)}>Cancel</Button>
+          </DuplicateQuoteNotice>
+        ) : lookAlikes.length && !approved ? (
+          <DuplicateQuoteNotice testId="review-duplicate-banner" title="You may already have this quote:" matches={lookAlikes} />
+        ) : null}
 
         {blocking.length ? (
           <div className="simple-review-blocking" role="alert">

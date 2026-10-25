@@ -11,11 +11,12 @@ import {
 	DialogDescription,
 	DialogFooter,
 } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Upload, FileText } from "lucide-react";
 import type { Boq } from "@/lib/boq-schema";
 import { uploadRejectionMessage } from "@/lib/boq-upload";
 import { BoqPreflight } from "@/components/boq-preflight";
+import { DuplicateQuoteNotice } from "@/components/duplicate-quote-notice";
 import type { PreflightUpload } from "@/lib/boq-preflight-schema";
 
 interface UploadModalProps {
@@ -50,6 +51,11 @@ export function UploadModal({
 	const [uploading, setUploading] = useState(false);
 	const [preflight, setPreflight] = useState<PreflightUpload | null>(null);
 	const [importError, setImportError] = useState<string | null>(null);
+	// Preflight id the user chose to continue with despite a same-file warning.
+	const [continuedDuplicateId, setContinuedDuplicateId] = useState<string | null>(null);
+	const duplicateUploads = preflight?.duplicates ?? [];
+	const showDuplicateWarning =
+		duplicateUploads.length > 0 && continuedDuplicateId !== preflight?.id;
 
 	const onDrop = useCallback((acceptedFiles: File[]) => {
 		if (acceptedFiles.length > 0) {
@@ -171,7 +177,30 @@ export function UploadModal({
 				</DialogHeader>
 
 				<div className="modal-body upload-modal-body">
-					{preflight && file ? (
+					{preflight && file && showDuplicateWarning ? (
+						<DuplicateQuoteNotice
+							testId="upload-duplicate-warning"
+							title="You already uploaded this PDF:"
+							matches={duplicateUploads}
+						>
+							<a
+								className={buttonVariants({ size: "sm" })}
+								href={`/boqs/${encodeURIComponent(duplicateUploads[0]!.id)}`}
+							>
+								Open the existing quote
+							</a>
+							<Button
+								size="sm"
+								variant="outline"
+								onClick={() => setContinuedDuplicateId(preflight.id)}
+							>
+								Continue anyway
+							</Button>
+							<Button size="sm" variant="ghost" onClick={handleCancelPreflight}>
+								Cancel
+							</Button>
+						</DuplicateQuoteNotice>
+					) : preflight && file ? (
 						<BoqPreflight
 							key={`${file.name}:${file.size}:${file.lastModified}:${preflight.id}`}
 							preflight={preflight}

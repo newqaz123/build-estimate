@@ -3284,3 +3284,11 @@
 .simple-review-picker-empty { padding: 6px; }
 .simple-review-ai-rows { margin-top: var(--space-3); }
 .simple-review-ai-rows > summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--fg-2); padding: 6px 0; }
+
+/* Duplicate-quote warnings (upload, review, approve). */
+.duplicate-quote-notice { display: flex; gap: var(--space-2); align-items: flex-start; margin: var(--space-2) var(--space-3) 0; padding: var(--space-2) var(--space-3); border: 1px solid color-mix(in oklab, var(--warning, #b7791f) 45%, var(--border)); border-radius: var(--radius-sm); background: color-mix(in oklab, var(--warning, #b7791f) 9%, var(--surface)); font-size: 12px; }
+.duplicate-quote-notice svg { width: 15px; height: 15px; flex: none; color: var(--warning, #b7791f); margin-top: 1px; }
+.duplicate-quote-notice ul { margin: 2px 0 0 16px; list-style: disc; }
+.duplicate-quote-notice a { text-decoration: underline; }
+.duplicate-quote-muted { color: var(--muted-foreground, #666); }
+.duplicate-quote-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
