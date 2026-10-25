@@ -12,11 +12,10 @@ import {
   buildEstimateAiUserMessage,
   filterCatalogContextToActiveEntries,
   normalizeEstimateAiResponse,
+  resolveEstimateAiConfig,
   standardEntryToEstimateAiCatalogEntry,
   validateEstimateAiRequest,
 } from '@/lib/estimate-ai'
-
-const SUPPORTED_PROVIDERS = new Set(['openai', 'openrouter'])
 
 function providerKeyAvailable(provider: string) {
   return provider === 'openrouter'
@@ -76,14 +75,15 @@ export async function POST(request: NextRequest) {
   const catalog = filterCatalogContextToActiveEntries(validation.value.catalog, serverCatalog)
   const requestWithServerCatalog = { ...validation.value, catalog }
 
-  const provider = validation.value.provider || settings?.llm?.provider || process.env.LLM_PROVIDER || 'openai'
-  const model = validation.value.model || settings?.llm?.model || process.env.LLM_MODEL
-  if (!SUPPORTED_PROVIDERS.has(provider)) {
+  // Provider/model come from server settings/env only, never from the browser.
+  const config = resolveEstimateAiConfig(settings?.llm, process.env)
+  if (!config.ok) {
     return NextResponse.json({
       ...buildEstimateAiManualFallback('The configured AI provider is unavailable.'),
       error: 'The configured AI provider is unavailable. Review the manual/new item below.',
     }, { status: 503 })
   }
+  const { provider, model } = config
   if (!providerKeyAvailable(provider)) {
     return NextResponse.json({
       ...buildEstimateAiManualFallback('The AI provider is not configured.'),

@@ -7,6 +7,7 @@ import {
   buildEstimateAiManualFallback,
   filterCatalogContextToActiveEntries,
   normalizeEstimateAiResponse,
+  resolveEstimateAiConfig,
   standardEntryToEstimateAiCatalogEntry,
   validateEstimateAiRequest,
   verifyEstimateAiSuggestion,
@@ -187,4 +188,40 @@ test('returns an ID-free manual fallback for unavailable or invalid AI output', 
   const invalid = normalizeEstimateAiResponse('not structured JSON', catalog)
   assert.equal(invalid.fallback, true)
   assert.equal(invalid.suggestions[0]?.stdId, undefined)
+})
+
+test('validateEstimateAiRequest drops browser-supplied provider and model', () => {
+  const result = validateEstimateAiRequest({
+    message: 'Add rebar',
+    provider: 'openrouter',
+    model: 'anthropic/claude-opus-expensive',
+  })
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.equal('provider' in result.value, false)
+  assert.equal('model' in result.value, false)
+})
+
+test('resolveEstimateAiConfig prefers saved workspace settings over env', () => {
+  assert.deepEqual(
+    resolveEstimateAiConfig({ provider: 'openrouter', model: 'openai/gpt-4o-mini' }, { LLM_PROVIDER: 'openai', LLM_MODEL: 'gpt-4o' }),
+    { ok: true, provider: 'openrouter', model: 'openai/gpt-4o-mini' },
+  )
+})
+
+test('resolveEstimateAiConfig falls back to env, then openai with no model override', () => {
+  assert.deepEqual(
+    resolveEstimateAiConfig(undefined, { LLM_PROVIDER: 'openrouter', LLM_MODEL: 'openai/gpt-4o' }),
+    { ok: true, provider: 'openrouter', model: 'openai/gpt-4o' },
+  )
+  assert.deepEqual(resolveEstimateAiConfig(null, {}), { ok: true, provider: 'openai' })
+  assert.deepEqual(resolveEstimateAiConfig({ provider: '  ', model: '' }, {}), { ok: true, provider: 'openai' })
+})
+
+test('resolveEstimateAiConfig rejects providers outside the allowlist', () => {
+  assert.deepEqual(
+    resolveEstimateAiConfig({ provider: 'evil-proxy' }, {}),
+    { ok: false, reason: 'unsupported-provider', provider: 'evil-proxy' },
+  )
+  assert.equal(resolveEstimateAiConfig(undefined, { LLM_PROVIDER: 'anthropic' }).ok, false)
 })

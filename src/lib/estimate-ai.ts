@@ -37,8 +37,6 @@ export interface EstimateAiRequest {
   }
   catalog: EstimateAiCatalogContext
   history: EstimateAiHistoryMessage[]
-  provider?: string
-  model?: string
 }
 
 export interface EstimateAiSuggestion {
@@ -190,8 +188,8 @@ export function validateEstimateAiRequest(input: unknown): ValidationResult {
   const projectName = isRecord(estimateInput) && boundedString(estimateInput.projectName, 300) ? estimateInput.projectName.trim() : ''
   const date = isRecord(estimateInput) && boundedString(estimateInput.date, 100) ? estimateInput.date.trim() : ''
   const notes = isRecord(estimateInput) && boundedString(estimateInput.notes, MAX_MESSAGE_LENGTH) ? estimateInput.notes.trim() : ''
-  const provider = boundedString(input.provider, 50, false) ? input.provider.trim() : undefined
-  const model = boundedString(input.model, 200, false) ? input.model.trim() : undefined
+  // provider/model are deliberately NOT read from the request: the browser
+  // must not choose which paid provider or model the server calls.
 
   return {
     ok: true,
@@ -200,10 +198,33 @@ export function validateEstimateAiRequest(input: unknown): ValidationResult {
       estimate: { projectName, date, notes, items },
       catalog: { available, selected },
       history,
-      ...(provider ? { provider } : {}),
-      ...(model ? { model } : {}),
     },
   }
+}
+
+export const ESTIMATE_AI_SUPPORTED_PROVIDERS = ['openai', 'openrouter'] as const
+export type EstimateAiProvider = typeof ESTIMATE_AI_SUPPORTED_PROVIDERS[number]
+
+export type EstimateAiConfig =
+  | { ok: true; provider: EstimateAiProvider; model?: string }
+  | { ok: false; reason: 'unsupported-provider'; provider: string }
+
+/**
+ * Resolve the estimate assistant's provider/model from server-side sources
+ * only: saved workspace settings first, then LLM_PROVIDER / LLM_MODEL env.
+ * The request body is never consulted.
+ */
+export function resolveEstimateAiConfig(
+  saved: { provider?: unknown; model?: unknown } | undefined | null,
+  env: Record<string, string | undefined>,
+): EstimateAiConfig {
+  const pick = (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : undefined)
+  const provider = pick(saved?.provider) ?? pick(env.LLM_PROVIDER) ?? 'openai'
+  if (!(ESTIMATE_AI_SUPPORTED_PROVIDERS as readonly string[]).includes(provider)) {
+    return { ok: false, reason: 'unsupported-provider', provider }
+  }
+  const model = pick(saved?.model) ?? pick(env.LLM_MODEL)
+  return { ok: true, provider: provider as EstimateAiProvider, ...(model ? { model } : {}) }
 }
 
 export function buildEstimateAiUserMessage(request: EstimateAiRequest): string {
