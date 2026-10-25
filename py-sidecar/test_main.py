@@ -260,6 +260,8 @@ class ConverterFallbackTests(unittest.TestCase):
             return ocr_converter if do_ocr else plain_converter
 
         with patch.object(main, 'get_converter', side_effect=fake_get_converter), \
+             patch.object(main, 'normalise_pdf', side_effect=lambda data: SimpleNamespace(
+                 content=data, warnings=[], scanned_pages=[1], pages=[])), \
              patch.object(main, 'build_parse_response', return_value={'ok': True}) as build:
             result = main.convert_pdf('blank.pdf', content, None)
 
@@ -267,6 +269,50 @@ class ConverterFallbackTests(unittest.TestCase):
         self.assertEqual(ocr_converter.calls, 1)
         self.assertEqual(plain_converter.calls, 1)
         build.assert_called_once()
+        warnings = build.call_args.kwargs['extra_warnings']
+        self.assertEqual([warning['code'] for warning in warnings], ['ocr_unavailable'])
+        self.assertIn('RapidOCR', warnings[0]['message'])
+
+    def test_convert_pdf_forwards_normaliser_warning_and_skips_ocr(self):
+        from pypdf import PdfWriter
+
+        pdf = io.BytesIO()
+        writer = PdfWriter()
+        writer.add_blank_page(width=100, height=100)
+        writer.write(pdf)
+        content = pdf.getvalue()
+        requested: list[bool] = []
+
+        class FakeConverter:
+            def convert(self, source, max_num_pages=500, max_file_size=20 * 1024 * 1024):
+                return SimpleNamespace(document=FakeDocument([1]))
+
+        def fake_get_converter(do_ocr=True):
+            requested.append(do_ocr)
+            return FakeConverter()
+
+        warning = {'code': 'ocr_unavailable', 'message': 'OCR is not available, so scanned page(s) 1 could not be read.'}
+        with patch.object(main, 'get_converter', side_effect=fake_get_converter), \
+             patch.object(main, 'normalise_pdf', side_effect=lambda data: SimpleNamespace(
+                 content=data, warnings=[warning], scanned_pages=[1], pages=[])), \
+             patch.object(main, 'build_parse_response', return_value={'ok': True}) as build:
+            main.convert_pdf('scan.pdf', content, None)
+        self.assertEqual(requested, [False])
+        self.assertEqual(build.call_args.kwargs['extra_warnings'], [warning])
+
+    def test_ocr_unavailable_warning_reaches_parse_response(self):
+        document = FakeDocument([])
+        warning = {'code': 'ocr_unavailable', 'message': 'OCR is not available.'}
+        response = main.build_parse_response('scan.pdf', document, extra_warnings=[warning])
+        self.assertEqual([item.code for item in response.warnings][:1], ['ocr_unavailable'])
+
+    def test_document_text_prefers_embedded_text_layer_per_page(self):
+        class TextDocument(FakeDocument):
+            def export_to_text(self, page_break_placeholder):
+                return page_break_placeholder.join(['ล ำ ดั บ split', 'OCR page two'])
+
+        text = main._document_text(TextDocument([]), ['ลำดับ รายการ จำนวนเงิน 12,550.00', ''])
+        self.assertEqual(text.split('\n\f\n'), ['ลำดับ รายการ จำนวนเงิน 12,550.00', 'OCR page two'])
 
 
 if __name__ == '__main__':

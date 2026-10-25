@@ -13,6 +13,7 @@ from boq_contract import ParseResponseV3, build_reconciliation
 from boq_compound_parser import derive_document
 from boq_parser import extract_boq_document
 from boq_source_rows import build_source_rows, remap_legacy_warnings
+from page_normalizer import normalise_pdf, page_texts
 
 app = FastAPI(title="Docling Sidecar", version="0.1.0")
 logger = logging.getLogger("docling_sidecar")
@@ -125,23 +126,28 @@ async def health():
 
 def _is_ocr_dependency_error(error: BaseException) -> bool:
     message = str(error).lower()
-    return any(token in message for token in ('tesserocr', 'tesseract', 'ocr engine', 'ocr'))
+    return any(token in message for token in ('tesserocr', 'tesseract', 'rapidocr', 'onnxruntime', 'torch', 'ocr engine', 'ocr'))
+
+
+OCR_UNAVAILABLE_CODE = "ocr_unavailable"
 
 
 @lru_cache(maxsize=2)
 def get_converter(do_ocr: bool = True):
     from docling.datamodel.base_models import InputFormat
-    from docling.datamodel.pipeline_options import PdfPipelineOptions, TesseractOcrOptions
+    from docling.datamodel.pipeline_options import PdfPipelineOptions, RapidOcrOptions
     from docling.document_converter import DocumentConverter, PdfFormatOption
 
     if do_ocr:
+        # RapidOCR (PP-OCR models on the torch backend) replaces Tesseract: it
+        # needs no system binary, installs from pip on macOS/Windows/Linux and
+        # measured clean on the scanned BOQ tables. Embedded text layers are
+        # still used as-is; OCR only runs on bitmap regions.
         pipeline_options = PdfPipelineOptions(
             do_ocr=True,
-            ocr_options=TesseractOcrOptions(lang=['eng', 'tha']),
+            ocr_options=RapidOcrOptions(backend="torch"),
         )
     else:
-        # Local dev often has Docling without system Tesseract/tesserocr. Embedded PDF
-        # text + table extraction still works for digital BOQs.
         pipeline_options = PdfPipelineOptions(do_ocr=False)
 
     return DocumentConverter(
@@ -229,14 +235,39 @@ def _table_data(table: Any) -> Any:
     return data
 
 
+def _document_text(document: Any, embedded_page_texts: list[str] | None) -> str:
+    """Docling text, with digital pages replaced by their pdfium text layer.
+
+    Docling's text export splits Thai combining vowels/tone marks into separate
+    glyph runs; pdfium's text layer keeps them attached. Image-only pages keep
+    Docling's OCR text.
+    """
+    docling_text = document.export_to_text(page_break_placeholder="\n\f\n")
+    if not embedded_page_texts:
+        return docling_text
+    docling_pages = docling_text.split("\n\f\n")
+    pages: list[str] = []
+    for index, embedded in enumerate(embedded_page_texts):
+        embedded = embedded.replace("\r\n", "\n").replace("\r", "\n")
+        if sum(1 for char in embedded if not char.isspace()) >= 20:
+            pages.append(embedded.strip())
+        elif index < len(docling_pages):
+            pages.append(docling_pages[index])
+        else:
+            pages.append("")
+    return "\n\f\n".join(pages)
+
+
 def build_parse_response(
     filename: str,
     document: Any,
     *,
     original_page_map: list[int] | None = None,
     original_page_count: int | None = None,
+    extra_warnings: list[dict[str, Any]] | None = None,
+    embedded_page_texts: list[str] | None = None,
 ) -> ParseResponseV3:
-    document_text = document.export_to_text(page_break_placeholder="\n\f\n")
+    document_text = _document_text(document, embedded_page_texts)
     tables: list[dict[str, Any]] = []
     raw_tables: list[dict[str, Any]] = []
     table_indices_by_page: dict[int, int] = {}
@@ -291,12 +322,24 @@ def build_parse_response(
         sections=sections,
         metadata=normalized["metadata"],
         # Helpers return dict-shaped payloads; cast keeps pyright aligned without runtime change.
-        warnings=cast(Any, [*extraction_warnings, *deterministic_warnings]),
+        warnings=cast(Any, [
+            *(extra_warnings or []), *extraction_warnings, *deterministic_warnings,
+        ]),
         sourceTotal=source_total,
         sourceQuoteSummary=cast(Any, source_quote_summary),
         reconciliation=cast(Any, reconciliation),
         totalItems=total_items,
     )
+
+
+def _ocr_unavailable_warning(detail: str) -> dict[str, Any]:
+    return {
+        "code": OCR_UNAVAILABLE_CODE,
+        "message": (
+            "OCR is not available, so scanned pages were not read. Install the "
+            "sidecar requirements (RapidOCR + torch) and retry. Detail: " + detail
+        ),
+    }
 
 
 def convert_pdf(filename: str, content: bytes, pages: list[int] | None = None):
@@ -307,27 +350,45 @@ def convert_pdf(filename: str, content: bytes, pages: list[int] | None = None):
     source_content = content
     if pages is not None:
         source_content, original_page_map, original_page_count = _selected_pdf(content, pages)
-    source = DocumentStream(name=filename, stream=BytesIO(source_content))
 
+    warnings: list[dict[str, Any]] = []
+    normalised = normalise_pdf(source_content)
+    warnings.extend(normalised.warnings)
+    source_content = normalised.content
+    scanned_pages = normalised.scanned_pages
+    ocr_ready = not any(w["code"] == OCR_UNAVAILABLE_CODE for w in warnings)
+    embedded_texts = page_texts(source_content)
+
+    source = DocumentStream(name=filename, stream=BytesIO(source_content))
     try:
-        result = get_converter(True).convert(source, max_num_pages=500, max_file_size=20 * 1024 * 1024)
+        result = get_converter(ocr_ready).convert(
+            source, max_num_pages=500, max_file_size=20 * 1024 * 1024,
+        )
     except ImportError as error:
-        # Docling raises ImportError during pipeline init when OCR engines are missing.
-        # That used to surface as a misleading HTTP 503 "Docling is not installed".
+        # Docling raises ImportError during pipeline init when OCR engines are
+        # missing. Convert without OCR but say so: scanned pages yield nothing.
         if not _is_ocr_dependency_error(error):
             raise
-        logger.warning(
-            "OCR unavailable (%s); converting with embedded-text pipeline",
-            error,
-        )
+        logger.warning("OCR unavailable (%s); converting with embedded-text pipeline", error)
+        if ocr_ready:
+            warnings.append(_ocr_unavailable_warning(f"{type(error).__name__}: {error}"))
         source = DocumentStream(name=filename, stream=BytesIO(source_content))
-        result = get_converter(False).convert(source, max_num_pages=500, max_file_size=20 * 1024 * 1024)
+        result = get_converter(False).convert(
+            source, max_num_pages=500, max_file_size=20 * 1024 * 1024,
+        )
+    if scanned_pages:
+        logger.info("scanned pages=%s normalisation=%s", scanned_pages, [
+            (page.page, page.rotation, round(page.skew, 2))
+            for page in normalised.pages if page.ocr_checked
+        ])
 
     return build_parse_response(
         filename,
         result.document,
         original_page_map=original_page_map,
         original_page_count=original_page_count,
+        extra_warnings=warnings,
+        embedded_page_texts=embedded_texts,
     )
 
 
