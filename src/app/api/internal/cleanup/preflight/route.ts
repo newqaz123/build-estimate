@@ -3,10 +3,9 @@ import { createFirestorePreflightStore, cleanupExpiredPreflightUploads } from '@
 import { getStorageBucket } from '@/lib/firebase-admin'
 import { getDb } from '@/lib/db'
 
-const secret = process.env.CLEANUP_SERVER_SECRET ?? ''
-
-export const { DELETE } = createPreflightCleanupHandler({
-  secret,
+export const { GET, DELETE } = createPreflightCleanupHandler({
+  secret: process.env.CLEANUP_SERVER_SECRET ?? '',
+  cronSecret: process.env.CRON_SECRET ?? '',
   cleanup: async () => {
     const store = createFirestorePreflightStore(getDb(), getStorageBucket())
     return cleanupExpiredPreflightUploads(store, new Date(), 100)

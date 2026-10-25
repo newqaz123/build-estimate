@@ -1,35 +1,45 @@
-import { timingSafeEqual } from 'node:crypto'
+import { createHash, timingSafeEqual } from 'node:crypto'
 
 export interface PreflightCleanupHandlerDependencies {
+  /** CLEANUP_SERVER_SECRET, sent by ops scripts as the `x-cleanup-secret` header (DELETE only). */
   secret: string
+  /** CRON_SECRET, sent by the scheduler as `Authorization: Bearer <secret>` (GET or DELETE). */
+  cronSecret?: string
   cleanup: () => Promise<number>
 }
 
+const UNAUTHORIZED = () => Response.json({ error: 'Unauthorized' }, { status: 401 })
+
+/** The proxy lets this one path through without a login; the handler checks its own secret. */
+export const PREFLIGHT_CLEANUP_PATH = '/api/internal/cleanup/preflight'
+
+function bearerToken(request: Request): string | null {
+  const header = request.headers.get('authorization')
+  if (!header) return null
+  const match = /^Bearer\s+(.+)$/i.exec(header.trim())
+  return match ? match[1]!.trim() : null
+}
+
 /**
- * Factory for creating the preflight cleanup handler with fail-closed secret validation.
- * When secret is empty, rejects all requests as a security measure.
+ * Fail-closed cleanup endpoint. A request is accepted only when it carries a
+ * secret that is configured on the server; an unset secret accepts nothing.
  */
 export function createPreflightCleanupHandler(
   dependencies: PreflightCleanupHandlerDependencies,
-): { DELETE: (request: Request) => Promise<Response> } {
-  const { secret, cleanup } = dependencies
+): { GET: (request: Request) => Promise<Response>; DELETE: (request: Request) => Promise<Response> } {
+  const { secret, cronSecret = '', cleanup } = dependencies
 
-  async function DELETE(request: Request): Promise<Response> {
-    // FAIL-CLOSED: Reject all requests when secret is not configured
-    if (!secret) {
-      return Response.json({ error: 'Unauthorized' }, { status: 401 })
+  function authorized(request: Request, allowHeaderSecret: boolean): boolean {
+    const bearer = bearerToken(request)
+    if (bearer !== null) {
+      return Boolean(cronSecret) && preflightCleanupSecretMatches(cronSecret, bearer)
     }
+    if (!allowHeaderSecret) return false
+    const provided = request.headers.get('x-cleanup-secret')
+    return Boolean(secret) && provided !== null && preflightCleanupSecretMatches(secret, provided)
+  }
 
-    const providedSecret = request.headers.get('x-cleanup-secret')
-    if (!providedSecret) {
-      return Response.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    // Use timing-safe comparison to prevent timing attacks
-    if (!preflightCleanupSecretMatches(secret, providedSecret)) {
-      return Response.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
+  async function run(): Promise<Response> {
     try {
       const deleted = await cleanup()
       return Response.json({ deleted }, { status: 200 })
@@ -39,25 +49,29 @@ export function createPreflightCleanupHandler(
     }
   }
 
-  return { DELETE }
+  // Schedulers such as Vercel Cron call with GET + Authorization: Bearer <CRON_SECRET>.
+  async function GET(request: Request): Promise<Response> {
+    if (!authorized(request, false)) return UNAUTHORIZED()
+    return run()
+  }
+
+  async function DELETE(request: Request): Promise<Response> {
+    if (!authorized(request, true)) return UNAUTHORIZED()
+    return run()
+  }
+
+  return { GET, DELETE }
 }
 
 /**
- * Exported for testing: uses timing-safe comparison to validate the cleanup secret.
- * This prevents timing attacks by ensuring comparison time is independent of input.
+ * Constant-time secret comparison. Both sides are hashed first so neither the
+ * content nor the length of the expected secret leaks through timing.
  */
 export function preflightCleanupSecretMatches(expected: string, actual: string): boolean {
-  if (typeof expected !== 'string' || typeof actual !== 'string') {
+  if (typeof expected !== 'string' || typeof actual !== 'string' || expected === '') {
     return false
   }
-
-  // Use timing-safe comparison with fixed-length buffers
-  const expectedBuffer = Buffer.from(expected)
-  const actualBuffer = Buffer.from(actual)
-
-  if (expectedBuffer.length !== actualBuffer.length) {
-    return false
-  }
-
-  return timingSafeEqual(expectedBuffer, actualBuffer)
+  const expectedDigest = createHash('sha256').update(expected).digest()
+  const actualDigest = createHash('sha256').update(actual).digest()
+  return timingSafeEqual(expectedDigest, actualDigest)
 }

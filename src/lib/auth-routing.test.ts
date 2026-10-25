@@ -4,7 +4,10 @@ import { authorizationDecision } from './auth-routing'
 
 test('signed-out API calls get a 401 decision, pages a login redirect, public paths pass', () => {
   assert.equal(authorizationDecision(false, '/api/boqs'), 'api-unauthorized')
-  assert.equal(authorizationDecision(false, '/api/internal/cleanup/preflight'), 'api-unauthorized')
+  assert.equal(authorizationDecision(false, '/api/internal/cleanup/preflight'), 'allow', 'cron path checks its own secret')
+  assert.equal(authorizationDecision(false, '/api/internal/cleanup/preflight/x'), 'api-unauthorized')
+  assert.equal(authorizationDecision(false, '/api/internal/cleanup'), 'api-unauthorized')
+  assert.equal(authorizationDecision(false, '/api/internal/other'), 'api-unauthorized')
   assert.equal(authorizationDecision(false, '/boqs'), 'login-redirect')
   assert.equal(authorizationDecision(false, '/apiary'), 'login-redirect')
   assert.equal(authorizationDecision(false, '/'), 'allow')

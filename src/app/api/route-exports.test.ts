@@ -19,7 +19,7 @@ const ROUTES: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['boqs/[id]/extraction-runs/[runId]/proposals/[proposalId]/add-source-item/route.ts', ['POST']],
   ['boqs/preflight/route.ts', ['POST']],
   ['boqs/preflight/[id]/route.ts', ['GET', 'PATCH', 'DELETE']],
-  ['internal/cleanup/preflight/route.ts', ['DELETE']],
+  ['internal/cleanup/preflight/route.ts', ['GET', 'DELETE']],
   ['standards/merge/route.ts', ['POST']],
   ['standards/merge/undo/route.ts', ['POST']],
 ]
