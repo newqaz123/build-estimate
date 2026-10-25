@@ -166,8 +166,20 @@ test('putModel can create model advice when the key is empty', async () => {
   const key = sampleKey()
 
   await cache.putModel(key, modelMapping)
-  assert.deepEqual(await cache.get(key), modelMapping)
+  // Stored as advice only: get() never serves model advice as an approved mapping.
+  assert.equal(await cache.get(key), null)
   assert.equal(docs.get(key)?.origin, 'model')
+})
+
+test('get serves only human-approved mappings (model advice is never approved history)', async () => {
+  const { store } = memoryStore()
+  const cache = createCatalogMappingCacheStore(store)
+  const key = sampleKey()
+
+  await cache.putModel(key, modelMapping)
+  assert.equal(await cache.get(key), null)
+  await cache.put(key, humanMapping)
+  assert.deepEqual(await cache.get(key), humanMapping)
 })
 
 test('human put can replace model advice for the same cache key', async () => {
@@ -176,7 +188,7 @@ test('human put can replace model advice for the same cache key', async () => {
   const key = sampleKey()
 
   await cache.putModel(key, modelMapping)
-  assert.deepEqual(await cache.get(key), modelMapping)
+  assert.equal(await cache.get(key), null)
 
   await cache.put(key, humanMapping)
   assert.deepEqual(await cache.get(key), humanMapping)

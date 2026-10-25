@@ -507,6 +507,8 @@ test('same-fingerprint POST returns stored body/metrics and skips model cache wr
     metrics: unknown
   }
   const firstCacheCount = d.mappingCache.modelPuts.length
+  // Model advice must never be cached as an approved mapping.
+  assert.equal(firstCacheCount, 0)
   assert.ok(firstBody.snapshot.actionableItemSuggestions.some(
     (item) => item.aiAdvice?.reason === 'first-generation',
   ))

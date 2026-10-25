@@ -198,6 +198,10 @@ export function createCatalogMappingCacheStore(
       const snapshot = await documents.get(cacheKey)
       if (!snapshot) return null
       const record = parseCatalogMappingRecord(snapshot.data)
+      // Only mappings a person approved count as approved history. Legacy
+      // model-advice documents stay in storage but are never served as approved,
+      // so they cannot be ranked as approved_history or skip review.
+      if (record.origin !== 'human') return null
       return toApprovedCatalogMapping(record)
     },
 

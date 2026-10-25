@@ -353,13 +353,8 @@ export function createActionableReviewHandlers(dependencies: ActionableReviewRou
         )
       }
 
-      for (const write of generated.modelCacheWrites) {
-        try {
-          await dependencies.mappingCache.putModel(write.key, write.mapping)
-        } catch {
-          // Model cache is best-effort advice only; never fail the shadow projection.
-        }
-      }
+      // Model advice is intentionally not written to the mapping cache; only an
+      // explicit human approval may create approved mappings.
 
       // Guardrails for tests: production dependencies omit these mutators.
       void dependencies.mutateBoq

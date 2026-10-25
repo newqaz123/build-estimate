@@ -140,7 +140,6 @@ export interface GenerateActionableReviewResult {
   metrics: ActionableReviewMetrics
   aiBatch: ActionableReviewAiBatchResult
   cacheKeysBySourceRowId: Record<string, string>
-  modelCacheWrites: Array<{ key: string; mapping: ApprovedCatalogMapping }>
 }
 
 function digest(value: unknown): string {
@@ -687,7 +686,6 @@ export async function generateActionableReview(
   }
 
   const adviceById = new Map(aiBatch.advice.map((entry) => [entry.sourceRowId, entry]))
-  const modelCacheWrites: Array<{ key: string; mapping: ApprovedCatalogMapping }> = []
   const suggestions: ActionableItemSuggestion[] = []
 
   for (const entry of prepared) {
@@ -702,22 +700,8 @@ export async function generateActionableReview(
       now,
     })
 
-    if (
-      advice?.decision === 'match'
-      && nonBlank(advice.catalogId)
-      && entry.candidates.some((candidate) => candidate.catalogId === advice.catalogId)
-    ) {
-      const mapping: ApprovedCatalogMapping = {
-        sourceSignature: entry.sourceSignature,
-        catalogId: advice.catalogId,
-        approvedBy: 'model-shadow',
-        approvedAt: now,
-      }
-      if (nonBlank(advice.conversionRuleId)) {
-        mapping.conversionRuleId = advice.conversionRuleId
-      }
-      modelCacheWrites.push({ key: entry.cacheKey, mapping })
-    }
+    // Model advice is never cached as an approved mapping: only the user's
+    // Approve may write approved history (see catalog-mapping-cache-storage).
 
     const suggestion: ActionableItemSuggestion = {
       id: buildSuggestionId({
@@ -824,6 +808,5 @@ export async function generateActionableReview(
     metrics,
     aiBatch,
     cacheKeysBySourceRowId,
-    modelCacheWrites,
   }
 }
