@@ -1,5 +1,6 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
+import { verifyAdminPassword } from "@/lib/admin-password";
 
 declare module "next-auth" {
 	interface Session {
@@ -19,7 +20,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 				password: { label: "Password", type: "password" },
 			},
 			async authorize(credentials) {
-				if (credentials?.password === process.env.ADMIN_PASSWORD) {
+				if (verifyAdminPassword(credentials?.password)) {
 					return {
 						id: "1",
 						name: "Admin",
