@@ -22,8 +22,9 @@ export async function POST(request: NextRequest) {
 
   const result = await executeVerification(body, {
     getSettings: () => getDocument<WorkspaceSettings>('settings', 'workspace'),
-    // JSON mode; callLLM retries as plain text if a model rejects response_format.
-  callProvider: (messages, provider, model, signal) => callLLM(messages, provider, model, signal, { responseFormat: 'json' }),
+    // JSON mode (callLLM retries as plain text if a model rejects response_format);
+    // temperature 0 so the same quote gets the same findings run to run.
+    callProvider: (messages, provider, model, signal) => callLLM(messages, provider, model, signal, { responseFormat: 'json', temperature: 0 }),
     env: process.env,
     timeoutMs: VERIFY_TIMEOUT_MS,
     // Categories are safe to log; review content, upstream bodies, and credentials are not.

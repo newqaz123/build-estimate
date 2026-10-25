@@ -19,7 +19,7 @@ const handler = createExtractionReviewHandler({
   createLeaseId: () => crypto.randomUUID(),
   getSettings: () => getDocument<WorkspaceSettings>('settings', 'workspace'),
   // JSON mode; callLLM retries as plain text if a model rejects response_format.
-  callProvider: (messages, provider, model, signal) => callLLM(messages, provider, model, signal, { responseFormat: 'json' }),
+  callProvider: (messages, provider, model, signal) => callLLM(messages, provider, model, signal, { responseFormat: 'json', temperature: 0 }),
   env: process.env,
   timeoutMs: REVIEW_TIMEOUT_MS,
   // Only safe categorical failure reasons are logged; no BOQ source data or provider payloads.

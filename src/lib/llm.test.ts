@@ -228,3 +228,11 @@ test('callLLM explains a reasoning model that used the whole token budget, and s
   assert.equal(logged.length, 1)
   assert.equal(logged[0]!.completionTokens, 4096)
 })
+
+test('callLLM sends temperature only when asked', async () => {
+  const { fetchImpl, calls } = mockFetch(() => okJson(completion('ok')))
+  await callLLM(messages, 'openrouter', undefined, undefined, opts({ fetchImpl, temperature: 0 }))
+  await callLLM(messages, 'openrouter', undefined, undefined, opts({ fetchImpl }))
+  assert.equal(calls[0]!.body.temperature, 0)
+  assert.equal('temperature' in calls[1]!.body, false)
+})

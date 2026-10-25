@@ -9,6 +9,8 @@ export interface LlmCallOptions {
   maxTokens?: number
   /** 'json' asks the provider for a JSON object response (OpenAI-compatible json_object). */
   responseFormat?: LlmResponseFormat
+  /** Sampling temperature; 0 for checks that should give the same answer each run. */
+  temperature?: number
   /** Test seams. */
   fetchImpl?: typeof fetch
   env?: Record<string, string | undefined>
@@ -144,6 +146,7 @@ export async function callLLM(
     model: activeModel,
     messages: json ? ensureJsonInstruction(messages) : messages,
     max_tokens: options.maxTokens ?? DEFAULT_LLM_MAX_TOKENS,
+    ...(options.temperature !== undefined && Number.isFinite(options.temperature) ? { temperature: options.temperature } : {}),
     ...(json ? { response_format: { type: 'json_object' } } : {}),
     ...(activeProvider === 'openrouter' && openRouterReasoning(env) ? { reasoning: openRouterReasoning(env) } : {}),
   }
