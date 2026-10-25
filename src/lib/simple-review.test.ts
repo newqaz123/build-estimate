@@ -117,7 +117,7 @@ test('preselectCatalog leaves a weak guess unselected but remembers the closest 
     item('b', 'Take off existingroof', 'lot', 1, 1),
     item('c', 'Steel pipe', 'm', 1, 1),
   ]), standards, {})
-  assert.deepEqual(picks.get('0:0'), { standardId: null, reason: 'Unsure', suggestedId: 's-pipe' })
+  assert.deepEqual(picks.get('0:0'), { standardId: null, reason: 'Unsure', suggestedId: 's-pipe', candidateIds: ['s-pipe', 's-roof'] })
   assert.equal(picks.get('0:1')!.standardId, 's-roof')
   assert.equal(picks.get('0:2')!.standardId, null, 'two sizes equally close: do not guess')
   assert.equal(picks.get('0:2')!.reason, 'Unsure')

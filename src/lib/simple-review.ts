@@ -121,6 +121,8 @@ export interface CatalogPick {
   reason: string
   /** 'Unsure' rows: the closest catalog item, offered first in the picker but NOT selected. */
   suggestedId?: string
+  /** 'Unsure' rows: the rule shortlist (best first) an AI second opinion may choose from. */
+  candidateIds?: string[]
 }
 
 /** A similar (not exact) best match within this many points of a different runner-up is a coin flip. */
@@ -134,16 +136,17 @@ export function weakPickReason(
   item: Pick<BoqPricedItem, 'desc' | 'unit'>,
   standards: StandardEntry[],
   unitMap: Record<string, string>,
-): { best: string; why: 'key word differs' | 'two items equally close' } | null {
+): { best: string; why: 'key word differs' | 'two items equally close'; candidateIds: string[] } | null {
   const active = standards.filter((standard) => !standard.archivedAt)
   const ranked = rankCatalogMatches(item.desc, item.unit, active, unitMap).filter((candidate) => candidate.unitCompatible && candidate.score > 0)
   const best = ranked[0]
   if (!best || best.matchReason !== 'fuzzy') return null
-  if (keyWordConflict(item.desc, best.description, best.aliases)) return { best: best.id, why: 'key word differs' }
+  const candidateIds = ranked.slice(0, 3).map((candidate) => candidate.id)
+  if (keyWordConflict(item.desc, best.description, best.aliases)) return { best: best.id, why: 'key word differs', candidateIds }
   const norm = (text: string) => text.trim().toLowerCase().replace(/\s+/g, ' ')
   const runnerUp = ranked.find((candidate) => candidate.id !== best.id && norm(candidate.description) !== norm(best.description))
   if (runnerUp && best.score - runnerUp.score <= AMBIGUOUS_MARGIN && !keyWordConflict(item.desc, runnerUp.description, runnerUp.aliases)) {
-    return { best: best.id, why: 'two items equally close' }
+    return { best: best.id, why: 'two items equally close', candidateIds }
   }
   return null
 }
@@ -170,7 +173,7 @@ export function preselectCatalog(boq: Pick<Boq, 'sections'>, standards: Standard
       const best = qualifyingLocalSuggestions({ ...item, stdStatus: 'unmatched' }, standards, unitMap)[0]
       const weak = best && best.confidence === 'fuzzy' ? weakPickReason(item, standards, unitMap) : null
       if (best && weak) {
-        picks.set(key, { standardId: null, reason: 'Unsure', suggestedId: best.standardId })
+        picks.set(key, { standardId: null, reason: 'Unsure', suggestedId: best.standardId, candidateIds: weak.candidateIds })
         return
       }
       picks.set(key, best
