@@ -1,6 +1,7 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { verifyAdminPassword } from "@/lib/admin-password";
+import { authorizationDecision } from "@/lib/auth-routing";
 
 declare module "next-auth" {
 	interface Session {
@@ -50,12 +51,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 			return session;
 		},
 		authorized({ auth, request: { nextUrl } }) {
-			const isLoggedIn = Boolean(auth?.user);
-			const isOnPublicPage = nextUrl.pathname === "/";
-			const isOnAuthApi = nextUrl.pathname.startsWith("/api/auth");
-			if (isOnPublicPage || isOnAuthApi) return true;
-			if (isLoggedIn) return true;
-			return false;
+			const decision = authorizationDecision(Boolean(auth?.user), nextUrl.pathname);
+			if (decision === "api-unauthorized") return Response.json({ error: "Unauthorized" }, { status: 401 });
+			return decision === "allow";
 		},
 	},
 });
