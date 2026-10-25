@@ -115,6 +115,10 @@ function benchmarkSummary(benchmark: BenchmarkSummary): ReactNode {
   )
 }
 
+function formatFactor(value: number): string {
+  return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(4)))
+}
+
 function lineDescription(row: BoqCatalogComparisonRow): ReactNode {
   return (
     <div className="compare-component-line-desc">
@@ -125,6 +129,11 @@ function lineDescription(row: BoqCatalogComparisonRow): ReactNode {
       ) : (
         <small className="compare-component-catalog compare-component-catalog-none">No safe candidate</small>
       )}
+      {row.conversion ? (
+        <small className="compare-component-conversion" data-od-id="compare-unit-conversion">
+          Compared as {currency(row.conversion.catalogRate)} per {row.conversion.catalogUnit} (1 {row.conversion.sourceUnit} = {formatFactor(row.conversion.catalogUnitsPerSourceUnit)} {row.conversion.catalogUnit})
+        </small>
+      ) : null}
     </div>
   )
 }

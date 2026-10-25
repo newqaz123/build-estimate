@@ -10,6 +10,7 @@ import { toast } from "sonner"
 import type { Boq, BoqItem } from "@/lib/boq-schema"
 import type { StandardEntry } from "@/lib/standard-schema"
 import { CatalogMatchModal } from "@/components/catalog-match-modal"
+import { CatalogConversionsPanel } from "@/components/catalog-conversions-panel"
 import { CatalogMergeDialog, type CatalogMergeResultSummary } from "@/components/catalog-merge-dialog"
 import { normalizeCatalogText } from "@/lib/standard-matching"
 import { getBoqItemIdentityKey, getBoqItemRequestIdentity } from "@/lib/boq-item-identity"
@@ -471,17 +472,18 @@ export default function CatalogPage() {
     )
   })
 
-  const selectTab = (nextTab: "review" | "catalog") => setTab(nextTab)
+  const tabOrder = ["review", "catalog", "conversions"] as const
+  const selectTab = (nextTab: (typeof tabOrder)[number]) => setTab(nextTab)
 
   const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
     let nextIndex = index
-    if (event.key === "ArrowRight") nextIndex = (index + 1) % 2
-    else if (event.key === "ArrowLeft") nextIndex = (index + 1) % 2
+    if (event.key === "ArrowRight") nextIndex = (index + 1) % tabOrder.length
+    else if (event.key === "ArrowLeft") nextIndex = (index + tabOrder.length - 1) % tabOrder.length
     else if (event.key === "Home") nextIndex = 0
-    else if (event.key === "End") nextIndex = 1
+    else if (event.key === "End") nextIndex = tabOrder.length - 1
     else return
     event.preventDefault()
-    const nextTab = nextIndex === 0 ? "review" : "catalog"
+    const nextTab = tabOrder[nextIndex]
     selectTab(nextTab)
     tabRefs.current[nextIndex]?.focus()
   }
@@ -499,6 +501,7 @@ export default function CatalogPage() {
       <div className="catalog-tabs" role="tablist" aria-label="Catalog views">
         <button ref={(node) => { tabRefs.current[0] = node }} id="catalog-tab-review" role="tab" aria-selected={tab === "review"} aria-controls="catalog-panel-review" tabIndex={tab === "review" ? 0 : -1} className={`tab-btn ${tab === 'review' ? 'active' : ''}`} onClick={() => selectTab('review')} onKeyDown={(event) => handleTabKeyDown(event, 0)} data-od-id="catalog-tab-review">Items to Review</button>
         <button ref={(node) => { tabRefs.current[1] = node }} id="catalog-tab-standard" role="tab" aria-selected={tab === "catalog"} aria-controls="catalog-panel-standard" tabIndex={tab === "catalog" ? 0 : -1} className={`tab-btn ${tab === 'catalog' ? 'active' : ''}`} onClick={() => selectTab('catalog')} onKeyDown={(event) => handleTabKeyDown(event, 1)} data-od-id="catalog-tab-standard">Standard Catalog</button>
+        <button ref={(node) => { tabRefs.current[2] = node }} id="catalog-tab-conversions" role="tab" aria-selected={tab === "conversions"} aria-controls="catalog-panel-conversions" tabIndex={tab === "conversions" ? 0 : -1} className={`tab-btn ${tab === 'conversions' ? 'active' : ''}`} onClick={() => selectTab('conversions')} onKeyDown={(event) => handleTabKeyDown(event, 2)} data-od-id="catalog-tab-conversions">Unit conversions</button>
       </div>
 
       {tab === 'review' && (
@@ -610,6 +613,12 @@ export default function CatalogPage() {
               </ProtoDataTable>
             </>
           )}
+        </div>
+      )}
+
+      {tab === 'conversions' && (
+        <div id="catalog-panel-conversions" role="tabpanel" aria-labelledby="catalog-tab-conversions" data-od-id="tab-conversions">
+          <CatalogConversionsPanel standards={standards} onChanged={fetchData} />
         </div>
       )}
 
