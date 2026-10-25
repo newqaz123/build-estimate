@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -442,6 +443,11 @@ test("atomic import saves exact bytes, propagates signal, and persists a draft",
 	assert.deepEqual(calls, ["save", "parse:http://localhost:5001", "persist"]);
 	assert.equal(draft.status, "draft");
 	assert.equal(persisted?.sourceStoragePath, "boqs/boq-1/source.pdf");
+	// The file fingerprint is stored so a repeat upload of the same PDF can be spotted.
+	assert.equal(
+		persisted?.sourceDigest,
+		"sha256:" + createHash("sha256").update(new Uint8Array([37, 80, 68, 70])).digest("hex"),
+	);
 });
 
 test("v3 stages and verifies evidence before atomically finalizing BOQ and run", async () => {
@@ -463,6 +469,7 @@ test("v3 stages and verifies evidence before atomically finalizing BOQ and run",
 		finalizeBoqAndRun: async (boq, run) => {
 			events.push("boq+run:finalize");
 			assert.equal(boq.activeExtractionRunId, "run-fixed");
+			assert.match(String(boq.sourceDigest), /^sha256:[0-9a-f]{64}$/);
 			assert.equal(run.status, "staging");
 			return "finalized";
 		},

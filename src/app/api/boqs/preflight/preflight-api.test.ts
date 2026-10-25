@@ -336,3 +336,26 @@ test('DELETE /api/boqs/preflight/[id] returns 404 for other users preflight', as
 
   assert.equal(response.status, 404)
 })
+
+test('POST /api/boqs/preflight lists existing quotes from the same file, and a failed check never blocks upload', async () => {
+  const base = {
+    authenticate: async () => ({ user: { id: 'u1' } }),
+    createPreflight: async () => mockPreflightUpload(),
+    getPreflight: async () => null,
+    consumePreflight: async () => ({ file: new File([], 'source.pdf'), pages: [], preflightId: '' }),
+    cancelPreflight: async () => {},
+  }
+  const upload = () => {
+    const formData = new FormData()
+    formData.append('file', new File([Buffer.from('%PDF')], 'test.pdf', { type: 'application/pdf' }))
+    return new Request('http://localhost/api/boqs/preflight', { method: 'POST', body: formData })
+  }
+  const match = { id: 'boq-9', project: 'P', vendor: 'V', date: '2026-10-01', status: 'approved' as const, grandTotal: 10, reason: 'same_file' as const }
+  const found = await createPreflightHandlers({ ...base, findDuplicateUploads: async () => [match] }).POST(upload())
+  assert.equal(found.status, 201)
+  assert.deepEqual((await found.json()).duplicates, [match])
+
+  const failing = await createPreflightHandlers({ ...base, findDuplicateUploads: async () => { throw new Error('db down') } }).POST(upload())
+  assert.equal(failing.status, 201)
+  assert.deepEqual((await failing.json()).duplicates, [])
+})

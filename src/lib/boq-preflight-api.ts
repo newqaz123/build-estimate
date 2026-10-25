@@ -5,6 +5,7 @@ import type {
 	PreflightImportOperation,
 } from "@/lib/boq-preflight-service";
 import { resolveActorId } from "@/lib/auth-actor";
+import type { DuplicateMatch } from "@/lib/boq-duplicates";
 
 interface AuthUser {
 	id?: string;
@@ -24,6 +25,8 @@ export interface PreflightApiDependencies {
 		operation?: PreflightImportOperation,
 	) => Promise<PreflightImportContext & { operationResult?: unknown }>;
 	cancelPreflight: (id: string, actorId: string) => Promise<void>;
+	/** Existing quotes made from the same PDF file. Failures never block the upload. */
+	findDuplicateUploads?: (file: File) => Promise<DuplicateMatch[]>;
 	requireSinglePdf?: (formData: File) => File;
 	parseConfirmedPageSelection?: (
 		value: unknown,
@@ -40,6 +43,7 @@ export function createPreflightHandlers(
 		getPreflight,
 		consumePreflight,
 		cancelPreflight,
+		findDuplicateUploads,
 		requireSinglePdf = (file: File) => file,
 	} = dependencies;
 
@@ -71,6 +75,14 @@ export function createPreflightHandlers(
 				return Response.json({ error: "Unauthorized" }, { status: 401 });
 			}
 			const result = await createPreflight(file, actorId);
+			let duplicates: DuplicateMatch[] = [];
+			if (findDuplicateUploads) {
+				try {
+					duplicates = await findDuplicateUploads(file);
+				} catch (error) {
+					console.error("Duplicate upload check failed:", error);
+				}
+			}
 
 			// Return safe metadata only (no sourceDigest)
 			return Response.json(
@@ -81,6 +93,7 @@ export function createPreflightHandlers(
 					status: result.status,
 					pages: result.pages,
 					confirmedPages: result.confirmedPages,
+					...(findDuplicateUploads ? { duplicates } : {}),
 				},
 				{ status: 201 },
 			);

@@ -110,6 +110,8 @@ export async function importPdfAtomically(
     await rollbackSource(sourcePath, dependencies)
     throw error
   }
+  // Remember which file this quote came from so a repeat upload can be spotted.
+  draftImport = { ...draftImport, boq: { ...draftImport.boq, sourceDigest: digestBytes(bytes) } }
 
   if (parsed.contractVersion === 3) {
     try {

@@ -7,6 +7,7 @@ const ROUTES: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['docling/parse/route.ts', ['POST']],
   ['boqs/[id]/route.ts', ['GET', 'PUT', 'DELETE']],
   ['boqs/[id]/source/route.ts', ['GET']],
+  ['boqs/[id]/duplicates/route.ts', ['GET']],
   ['boqs/[id]/re-extract/route.ts', ['POST']],
   ['boqs/[id]/extraction-runs/[runId]/review/route.ts', ['GET', 'POST']],
   ['boqs/[id]/extraction-runs/[runId]/proposals/accept-batch/route.ts', ['POST']],

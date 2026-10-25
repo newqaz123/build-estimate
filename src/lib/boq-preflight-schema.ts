@@ -24,6 +24,8 @@ export interface PreflightUpload {
   status: PreflightStatus
   pages: PreflightPage[]
   confirmedPages: number[] | null
+  /** Existing quotes made from the same PDF file (upload response only). */
+  duplicates?: import('./boq-duplicates').DuplicateMatch[]
 }
 
 function invalid(message: string): never {

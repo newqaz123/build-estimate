@@ -127,6 +127,12 @@ export interface Boq {
   metadataConfidence?: BoqMetadataConfidence
   /** Set by the one-step Approve; removed by Reopen to edit. */
   approvedAt?: string
+  /** sha256 of the uploaded PDF bytes ("sha256:<hex>"); used to spot repeat uploads. */
+  sourceDigest?: string
+  /** Set on Approve when the user said this is the same quote as another approved one; left out of price history. */
+  duplicateOfBoqId?: string
+  /** Approved quotes the user confirmed are different quotes despite looking the same. */
+  confirmedDistinctFrom?: string[]
   /** Last time an approved quote was reopened for editing. */
   reopenedAt?: string
   createdAt: string

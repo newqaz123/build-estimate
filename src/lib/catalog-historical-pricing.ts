@@ -3,6 +3,7 @@ import { isPricedBoqItem } from "./boq-pricing";
 import { deriveSourceCostAllocation } from "./boq-cost-allocation";
 import type { StandardEntry } from "./standard-schema";
 import { canonicalUnit, unitsCompatible } from "./standard-matching";
+import { countableApprovedQuotes } from "./boq-duplicates";
 
 export interface HistoricalPriceSource {
 	boqId: string;
@@ -101,8 +102,9 @@ export function buildCatalogHistoricalPricing(
 	const resolver = createHistoricalStandardResolver(standards);
 	const grouped = new Map<string, HistoricalPriceSource[]>();
 
-	for (const boq of boqs) {
-		if (boq.status !== "approved" || boq.id === options.excludeBoqId) continue;
+	// Repeat uploads of one quote are counted once (see countableApprovedQuotes).
+	for (const boq of countableApprovedQuotes(boqs)) {
+		if (boq.id === options.excludeBoqId) continue;
 		boq.sections.forEach((section, sectionIndex) => {
 			section.items.forEach((item) => {
 				if (
@@ -247,8 +249,8 @@ export function buildCatalogComponentPricing(
 		Record<CatalogComponentKey, Map<string, number[]>>
 	>();
 
-	for (const boq of boqs) {
-		if (boq.status !== "approved" || boq.id === options.excludeBoqId) {
+	for (const boq of countableApprovedQuotes(boqs)) {
+		if (boq.id === options.excludeBoqId) {
 			continue;
 		}
 

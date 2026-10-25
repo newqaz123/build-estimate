@@ -476,3 +476,16 @@ test("zero-valued allocation component is filtered rather than seeded as a bucke
 	assert.equal(pricing?.material.get("pcs"), undefined);
 	assert.equal(pricing?.labour.get("pcs")?.average, 40);
 });
+
+test("price history counts an exact repeat upload once and skips quotes marked as repeats", () => {
+	const first = { ...boq("b1", "approved", item("i1", 100)), sourceDigest: "sha256:same" };
+	const repeat = { ...boq("b2", "approved", item("i1", 100)), sourceDigest: "sha256:same" };
+	const marked = { ...boq("b3", "approved", item("i1", 300)), duplicateOfBoqId: "b1" };
+	const other = boq("b4", "approved", item("i1", 200));
+	const history = buildCatalogHistoricalPricing([standard], [first, repeat, marked, other]);
+	assert.deepEqual(
+		history.get("std-pipe")?.sources.map((source) => source.boqId).sort(),
+		["b1", "b4"],
+	);
+	assert.equal(history.get("std-pipe")?.average, 150);
+});

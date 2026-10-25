@@ -7,6 +7,7 @@ import { createPreflightAnalysisAdapter } from '@/lib/boq-preflight-analysis-ada
 import { validatePdfFile } from '@/lib/boq-import-request'
 import { getStorageBucket } from '@/lib/firebase-admin'
 import { getDb } from '@/lib/db'
+import { findDuplicateUploadsInFirestore } from '@/lib/boq-duplicate-lookup'
 
 export const { POST } = createPreflightHandlers({
   authenticate: auth,
@@ -63,5 +64,6 @@ export const { POST } = createPreflightHandlers({
     })
     return service.cancelPreflight(id, actorId)
   },
+  findDuplicateUploads: (file) => findDuplicateUploadsInFirestore(getDb(), file),
   requireSinglePdf: validatePdfFile,
 })
