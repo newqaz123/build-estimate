@@ -12,8 +12,6 @@ import type { DoclingSettings, FuzzySettings, LlmSettings, PromptSettings, Vendo
 
 const LLM_PROVIDERS = [
   { value: "openai", label: "OpenAI" },
-  { value: "anthropic", label: "Anthropic" },
-  { value: "google", label: "Google Gemini" },
   { value: "openrouter", label: "OpenRouter" },
 ] as const
 const SPECIALTIES = ["Structural", "MEP", "Finishing", "Full Scope"]

@@ -182,6 +182,22 @@ export function toStoredSettings(settings: WorkspaceSettings): StoredWorkspaceSe
   }
 }
 
+/**
+ * The LLM provider/model the server will actually use. A saved workspace
+ * choice wins; otherwise the server env (LLM_PROVIDER / LLM_MODEL) applies, so
+ * the Settings page shows the real runtime config instead of a static default.
+ */
+export function effectiveLlmSettings(
+  stored: LlmSettings | undefined | null,
+  env: Record<string, string | undefined>,
+): LlmSettings {
+  if (stored) return stored
+  const envProvider = env.LLM_PROVIDER?.trim().toLowerCase()
+  const provider: LlmSettings['provider'] = envProvider === 'openrouter' || envProvider === 'openai' ? envProvider : DEFAULT_SETTINGS.llm.provider
+  const model = env.LLM_MODEL?.trim() || (provider === 'openrouter' ? 'openai/gpt-4o' : DEFAULT_SETTINGS.llm.model)
+  return { provider, model }
+}
+
 export function fromStoredSettings(
   stored: StoredWorkspaceSettings | null | undefined,
 ): WorkspaceSettings {

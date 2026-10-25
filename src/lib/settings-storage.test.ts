@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   DEFAULT_SETTINGS,
   decodeNormalizeRules,
+  effectiveLlmSettings,
   fromStoredSettings,
   toStoredSettings,
 } from './settings-storage'
@@ -94,4 +95,12 @@ test('rejects unknown stages and negative budgets', () => {
       escalationEnabled: true,
     },
   }))
+})
+
+test('effective LLM settings: saved choice wins, otherwise the server env, otherwise the default', () => {
+  assert.deepEqual(effectiveLlmSettings({ provider: 'openai', model: 'gpt-4o-mini' }, { LLM_PROVIDER: 'openrouter', LLM_MODEL: 'x/y' }), { provider: 'openai', model: 'gpt-4o-mini' })
+  assert.deepEqual(effectiveLlmSettings(undefined, { LLM_PROVIDER: 'OpenRouter ', LLM_MODEL: ' vendor/model-1 ' }), { provider: 'openrouter', model: 'vendor/model-1' })
+  assert.deepEqual(effectiveLlmSettings(null, { LLM_PROVIDER: 'openrouter' }), { provider: 'openrouter', model: 'openai/gpt-4o' })
+  assert.deepEqual(effectiveLlmSettings(undefined, { LLM_PROVIDER: 'nope' }), DEFAULT_SETTINGS.llm)
+  assert.deepEqual(effectiveLlmSettings(undefined, {}), DEFAULT_SETTINGS.llm)
 })

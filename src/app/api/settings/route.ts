@@ -3,6 +3,7 @@ import { auth } from '@/lib/auth'
 import { getDocument, setDocument } from '@/lib/db'
 import {
   DEFAULT_SETTINGS,
+  effectiveLlmSettings,
   fromStoredSettings,
   parseActionableReviewSettings,
   type StoredWorkspaceSettings,
@@ -18,7 +19,8 @@ import type {
 
 const MAX_ENDPOINT_LENGTH = 2048
 const MAX_PROMPT_LENGTH = 20_000
-const PROVIDERS = new Set(['openai', 'anthropic', 'google', 'openrouter'])
+// Only providers the server runtime (callLLM) can actually call may be saved.
+const PROVIDERS = new Set(['openai', 'openrouter'])
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
@@ -89,10 +91,8 @@ export async function GET() {
 
   try {
     const existing = await getDocument<StoredWorkspaceSettings>('settings', WORKSPACE_SETTINGS_ID)
-    if (!existing) {
-      return NextResponse.json(DEFAULT_SETTINGS)
-    }
-    return NextResponse.json(fromStoredSettings(existing))
+    const settings = existing ? fromStoredSettings(existing) : DEFAULT_SETTINGS
+    return NextResponse.json({ ...settings, llm: effectiveLlmSettings(existing?.llm, process.env) })
   } catch (error) {
     console.error('Error fetching settings:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
