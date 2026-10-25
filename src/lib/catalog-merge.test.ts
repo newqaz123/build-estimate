@@ -54,9 +54,10 @@ test('parse requires a kept item and at least one other', () => {
 
 test('merge keeps chosen fields, unions sources, repoints rows/estimates/conversions and archives the rest', () => {
   const plan = planCatalogMerge({
-    standards, boqs, estimates, rules, now,
+    standards, boqs, estimates, rules, now, mappings: [{ id: 'm1', catalogId: 'b' }, { id: 'm2', catalogId: 'c' }],
     input: { keepId: 'a', mergeIds: ['b'], description: 'PVC pipe 4 inch', unit: 'm', aliases: [] },
   })
+  assert.deepEqual(plan.mappings, [{ id: 'm1', catalogId: 'a' }])
   assert.equal(plan.kept.description, 'PVC pipe 4 inch')
   assert.deepEqual(plan.kept.aliases.sort(), ['pipe 4', 'PVC pipe 4"'].sort())
   assert.equal(plan.kept.sourceItems?.length, 2)
@@ -100,12 +101,13 @@ test('preview combines price history of all picked entries', () => {
 
 test('undo restores the kept entry, unarchives the others and points rows back', () => {
   const plan = planCatalogMerge({
-    standards, boqs, estimates, rules, now,
+    standards, boqs, estimates, rules, now, mappings: [{ id: 'm1', catalogId: 'b' }],
     input: { keepId: 'a', mergeIds: ['b'], description: 'PVC pipe 4 inch', unit: 'm', aliases: [] },
   })
   const after: MergeAwareStandard[] = [plan.kept, ...plan.archived, standards[2]!]
   const afterBoqs = boqs.map((b) => plan.boqs.find((next) => next.id === b.id) ?? b)
-  const undo = planCatalogMergeUndo({ standards: after, boqs: afterBoqs, estimates: plan.estimates, rules: plan.rules, keepId: 'a', now })
+  const undo = planCatalogMergeUndo({ standards: after, boqs: afterBoqs, estimates: plan.estimates, rules: plan.rules, mappings: plan.mappings, keepId: 'a', now })
+  assert.deepEqual(undo.mappings, [{ id: 'm1', catalogId: 'b' }])
   assert.equal(undo.kept.description, 'PVC pipe 4"')
   assert.equal(undo.kept.sourceItems?.length, 1)
   assert.equal(undo.kept.lastMerge, undefined)

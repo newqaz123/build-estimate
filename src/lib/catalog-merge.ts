@@ -38,6 +38,14 @@ export interface MergeUndoRecord {
   rows: Array<{ boqId: string; sectionIndex: number; itemIndex: number; itemId?: string; fromId: string }>
   estimateRows: Array<{ estimateId: string; itemIndex: number; fromId: string }>
   rules: Array<{ id: string; fromId: string }>
+  /** Saved catalog mappings (catalogMappingCache) that pointed at a merged entry. */
+  mappings?: Array<{ id: string; fromId: string }>
+}
+
+/** A saved source→catalog mapping document; only its target matters here. */
+export interface CatalogMappingRef {
+  id: string
+  catalogId: string
 }
 
 /** Stored on the kept entry (lastMerge) and on archived entries (mergedInto). */
@@ -110,6 +118,7 @@ export interface PlannedCatalogMerge {
   boqs: Boq[]
   estimates: Estimate[]
   rules: HumanApprovedCatalogConversionRule[]
+  mappings: CatalogMappingRef[]
   undo: MergeUndoRecord
 }
 
@@ -118,11 +127,12 @@ export function planCatalogMerge(args: {
   boqs: Boq[]
   estimates?: Estimate[]
   rules?: HumanApprovedCatalogConversionRule[]
+  mappings?: CatalogMappingRef[]
   input: CatalogMergeInput
   now: string
   unitMap?: Record<string, string>
 }): PlannedCatalogMerge {
-  const { standards, boqs, estimates = [], rules = [], input, now, unitMap = {} } = args
+  const { standards, boqs, estimates = [], rules = [], mappings = [], input, now, unitMap = {} } = args
   const [keep, ...others] = pickEntries(standards, [input.keepId, ...input.mergeIds])
   const description = input.description || keep!.description
   const suggested = suggestMergeFields(keep!, others, description)
@@ -152,6 +162,7 @@ export function planCatalogMerge(args: {
     rows: [],
     estimateRows: [],
     rules: [],
+    mappings: [],
   }
 
   const nextKept: MergeAwareStandard = {
@@ -200,8 +211,15 @@ export function planCatalogMerge(args: {
     changedRules.push({ ...rule, catalogId: nextKept.id, version: rule.version + 1 })
   }
 
+  const changedMappings: CatalogMappingRef[] = []
+  for (const mapping of mappings) {
+    if (!mergedSet.has(mapping.catalogId)) continue
+    undo.mappings!.push({ id: mapping.id, fromId: mapping.catalogId })
+    changedMappings.push({ id: mapping.id, catalogId: nextKept.id })
+  }
+
   const archived = others.map((other) => ({ ...other, archivedAt: now, mergedInto: nextKept.id, updatedAt: now }))
-  return { kept: nextKept, archived, boqs: changedBoqs, estimates: changedEstimates, rules: changedRules, undo }
+  return { kept: nextKept, archived, boqs: changedBoqs, estimates: changedEstimates, rules: changedRules, mappings: changedMappings, undo }
 }
 
 export interface CatalogMergePreview {
@@ -251,6 +269,7 @@ export interface PlannedMergeUndo {
   boqs: Boq[]
   estimates: Estimate[]
   rules: HumanApprovedCatalogConversionRule[]
+  mappings: CatalogMappingRef[]
 }
 
 /** Undo the last merge into keepId: restore the kept entry, unarchive the others, point rows back. */
@@ -259,10 +278,11 @@ export function planCatalogMergeUndo(args: {
   boqs: Boq[]
   estimates?: Estimate[]
   rules?: HumanApprovedCatalogConversionRule[]
+  mappings?: CatalogMappingRef[]
   keepId: string
   now: string
 }): PlannedMergeUndo {
-  const { standards, boqs, estimates = [], rules = [], keepId, now } = args
+  const { standards, boqs, estimates = [], rules = [], mappings = [], keepId, now } = args
   const keep = standards.find((standard) => standard.id === keepId)
   if (!keep) throw new CatalogMergeError('Item not found.', 404)
   const record = keep.lastMerge
@@ -307,9 +327,16 @@ export function planCatalogMergeUndo(args: {
     if (!rule || rule.catalogId !== keepId) continue
     changedRules.push({ ...rule, catalogId: ref.fromId, version: rule.version + 1 })
   }
+  const changedMappings: CatalogMappingRef[] = []
+  for (const ref of record.mappings ?? []) {
+    const mapping = mappings.find((candidate) => candidate.id === ref.id)
+    if (!mapping || mapping.catalogId !== keepId) continue
+    changedMappings.push({ id: mapping.id, catalogId: ref.fromId })
+  }
   return {
     kept,
     restored,
+    mappings: changedMappings,
     boqs: [...touched].map((id) => boqById.get(id)!),
     estimates: [...touchedEstimates].map((id) => estimateById.get(id)!),
     rules: changedRules,

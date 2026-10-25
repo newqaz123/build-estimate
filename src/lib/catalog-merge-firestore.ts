@@ -2,11 +2,13 @@ import type { Firestore, Transaction } from 'firebase-admin/firestore'
 import type { Boq } from './boq-schema'
 import type { HumanApprovedCatalogConversionRule } from './catalog-conversion'
 import { CATALOG_CONVERSION_RULES_COLLECTION } from './catalog-conversion-storage'
+import { CATALOG_MAPPING_CACHE_COLLECTION } from './catalog-mapping-cache-storage'
 import {
   planCatalogMerge,
   planCatalogMergeUndo,
   previewCatalogMerge,
   type CatalogMergeInput,
+  type CatalogMappingRef,
   type CatalogMergePreview,
   type MergeAwareStandard,
 } from './catalog-merge'
@@ -18,6 +20,7 @@ export interface CatalogMergeResult {
   quoteRows: number
   estimateRows: number
   conversions: number
+  mappings: number
 }
 
 /** Firestore rejects undefined; drop it (and the id, which is the doc key). */
@@ -33,9 +36,12 @@ async function readAll(transaction: Transaction | null, db: Firestore) {
     const snap = transaction ? await transaction.get(query) : await query.get()
     return snap.docs.map((doc) => ({ ...doc.data(), id: doc.id }))
   }
-  const [standards, boqs, estimates, rules] = await Promise.all([
-    get('standards'), get('boqs'), get('estimates'), get(CATALOG_CONVERSION_RULES_COLLECTION),
+  const [standards, boqs, estimates, rules, mappingDocs] = await Promise.all([
+    get('standards'), get('boqs'), get('estimates'), get(CATALOG_CONVERSION_RULES_COLLECTION), get(CATALOG_MAPPING_CACHE_COLLECTION),
   ])
+  const mappings: CatalogMappingRef[] = mappingDocs
+    .filter((doc): doc is typeof doc & { catalogId: string } => typeof (doc as { catalogId?: unknown }).catalogId === 'string')
+    .map((doc) => ({ id: doc.id, catalogId: doc.catalogId }))
   const settingsRef = db.collection('settings').doc('workspace')
   const settings = transaction ? await transaction.get(settingsRef) : await settingsRef.get()
   const unitMap = ((settings.data() as { fuzzy?: { unitMap?: Record<string, string> } } | undefined)?.fuzzy?.unitMap) ?? {}
@@ -44,6 +50,7 @@ async function readAll(transaction: Transaction | null, db: Firestore) {
     boqs: boqs as Boq[],
     estimates: estimates as Estimate[],
     rules: rules as HumanApprovedCatalogConversionRule[],
+    mappings,
     unitMap,
   }
 }
@@ -62,12 +69,14 @@ export async function mergeCatalogEntriesInFirestore(db: Firestore, input: Catal
     for (const boq of plan.boqs) transaction.update(db.collection('boqs').doc(boq.id), { sections: JSON.parse(JSON.stringify(boq.sections)), updatedAt: now })
     for (const estimate of plan.estimates) transaction.update(db.collection('estimates').doc(estimate.id), { items: JSON.parse(JSON.stringify(estimate.items)), updatedAt: now })
     for (const rule of plan.rules) transaction.update(db.collection(CATALOG_CONVERSION_RULES_COLLECTION).doc(rule.id), { catalogId: rule.catalogId, version: rule.version })
+    for (const mapping of plan.mappings) transaction.update(db.collection(CATALOG_MAPPING_CACHE_COLLECTION).doc(mapping.id), { catalogId: mapping.catalogId })
     return {
       keptId: plan.kept.id,
       archivedIds: plan.archived.map((entry) => entry.id),
       quoteRows: plan.undo.rows.length,
       estimateRows: plan.undo.estimateRows.length,
       conversions: plan.rules.length,
+      mappings: plan.mappings.length,
     }
   })
 }
@@ -81,6 +90,7 @@ export async function undoCatalogMergeInFirestore(db: Firestore, keepId: string,
     for (const boq of plan.boqs) transaction.update(db.collection('boqs').doc(boq.id), { sections: JSON.parse(JSON.stringify(boq.sections)), updatedAt: now })
     for (const estimate of plan.estimates) transaction.update(db.collection('estimates').doc(estimate.id), { items: JSON.parse(JSON.stringify(estimate.items)), updatedAt: now })
     for (const rule of plan.rules) transaction.update(db.collection(CATALOG_CONVERSION_RULES_COLLECTION).doc(rule.id), { catalogId: rule.catalogId, version: rule.version })
+    for (const mapping of plan.mappings) transaction.update(db.collection(CATALOG_MAPPING_CACHE_COLLECTION).doc(mapping.id), { catalogId: mapping.catalogId })
     return { keptId: plan.kept.id, restoredIds: plan.restored.map((entry) => entry.id) }
   })
 }

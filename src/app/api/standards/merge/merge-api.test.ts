@@ -8,7 +8,7 @@ function deps(overrides: Partial<CatalogMergeDependencies> = {}) {
   const value: CatalogMergeDependencies = {
     authenticate: async () => ({ user: { id: 'u' } }),
     preview: async (input) => { calls.push(`preview:${input.keepId}`); return { entries: [], suggested: { description: '', unit: '', aliases: [] }, combined: null, unitsDiffer: false, linkedRows: 0, conversions: 0 } },
-    merge: async (input) => { calls.push(`merge:${input.keepId}:${input.mergeIds.join(',')}`); return { keptId: input.keepId, archivedIds: input.mergeIds, quoteRows: 2, estimateRows: 0, conversions: 0 } },
+    merge: async (input) => { calls.push(`merge:${input.keepId}:${input.mergeIds.join(',')}`); return { keptId: input.keepId, archivedIds: input.mergeIds, quoteRows: 2, estimateRows: 0, conversions: 0, mappings: 0 } },
     undo: async (keepId) => { calls.push(`undo:${keepId}`); return { keptId: keepId, restoredIds: ['b'] } },
     ...overrides,
   }
@@ -29,7 +29,7 @@ test('preview=1 never writes; plain POST merges', async () => {
   assert.equal((await handler(post('http://x/api/standards/merge?preview=1', { keepId: 'a', mergeIds: ['a', 'b'] }))).status, 200)
   const merged = await handler(post('http://x/api/standards/merge', { keepId: 'a', mergeIds: ['b'] }))
   assert.equal(merged.status, 200)
-  assert.deepEqual(await merged.json(), { keptId: 'a', archivedIds: ['b'], quoteRows: 2, estimateRows: 0, conversions: 0 })
+  assert.deepEqual(await merged.json(), { keptId: 'a', archivedIds: ['b'], quoteRows: 2, estimateRows: 0, conversions: 0, mappings: 0 })
   assert.deepEqual(calls, ['preview:a', 'merge:a:b'])
 })
 
