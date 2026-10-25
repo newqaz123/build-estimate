@@ -89,7 +89,7 @@ test('verification prompt treats review content as untrusted and constrains JSON
 test('normalization validates the complete AI response schema', () => {
   assert.deepEqual(normalizeAiVerification(JSON.stringify({ issues: [
     { code: 'unit_mismatch', severity: 'warning', itemId: 'item-1', message: 'Unit looks inconsistent.' },
-  ] })), [{ code: 'unit_mismatch', severity: 'warning', itemId: 'item-1', message: 'Unit looks inconsistent.' }])
+  ] })), [{ code: 'unit_mismatch', severity: 'warning', category: 'advisory', itemId: 'item-1', message: 'Unit looks inconsistent.' }])
   assert.throws(() => normalizeAiVerification('not json'), AiVerificationResponseError)
   assert.throws(() => normalizeAiVerification('{"answer":true}'), AiVerificationResponseError)
   assert.throws(() => normalizeAiVerification(JSON.stringify({ issues: [
@@ -118,10 +118,28 @@ test('normalization keeps valid AI issues when the model adds a stray entry or k
     ],
   }))
   assert.deepEqual(issues, [
-    { code: 'unit_mismatch', severity: 'warning', itemId: 'item-1', message: 'Unit looks inconsistent.' },
-    { code: 'metadata_missing', severity: 'warning', message: 'project is required' },
+    { code: 'unit_mismatch', severity: 'warning', category: 'advisory', itemId: 'item-1', message: 'Unit looks inconsistent.' },
+    { code: 'metadata_missing', severity: 'warning', category: 'advisory', message: 'project is required' },
   ])
   assert.deepEqual(normalizeAiVerification('{"issues":[]}'), [])
+})
+
+test('AI issues carry a category; a missing or unknown one is read as advisory', () => {
+  const issues = normalizeAiVerification(JSON.stringify({
+    issues: [
+      { code: 'rate_outlier', category: 'misread', severity: 'warning', itemId: 'a', message: 'Rate looks shifted.' },
+      { code: 'unit_mismatch', category: 'number_error', severity: 'warning', itemId: 'b', message: 'Unit contradicts qty.' },
+      { code: 'description_unclear', severity: 'warning', itemId: 'c', message: 'Short text.' },
+      { code: 'possible_duplicate', category: 'very_sure', severity: 'warning', itemId: 'd', message: 'Same as row 3.' },
+    ],
+  }))
+  assert.deepEqual(issues.map((issue) => issue.category), ['misread', 'number_error', 'advisory', 'advisory'])
+})
+
+test('the verification prompt asks for a category on every issue', () => {
+  const [system] = buildVerificationMessages({ boqId: 'b', vendor: 'v', project: 'p', workType: 'MEP', date: '2026-01-01', items: [], extractionWarnings: [] } as never)
+  assert.match(system!.content, /"category":"number_error\|misread\|advisory"/)
+  assert.match(system!.content, /when unsure use advisory/)
 })
 
 test('AI and local findings are merged without duplicates', () => {
