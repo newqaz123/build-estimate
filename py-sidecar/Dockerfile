@@ -12,6 +12,9 @@ COPY boq_compound_parser.py .
 COPY boq_column_resolvers.py .
 COPY header_terms.py .
 COPY page_normalizer.py .
+COPY table_geometry.py .
+COPY pdf_text_layer.py .
+COPY document_summary.py .
 COPY main.py .
 COPY warmup.py .
 RUN python warmup.py

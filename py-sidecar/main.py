@@ -14,6 +14,9 @@ from boq_compound_parser import derive_document
 from boq_parser import extract_boq_document
 from boq_source_rows import build_source_rows, remap_legacy_warnings
 from page_normalizer import normalise_pdf, page_texts
+from document_summary import pre_vat_total, summarise_text, summary_warnings
+from pdf_text_layer import TextLayer
+from table_geometry import prepare_tables
 
 app = FastAPI(title="Docling Sidecar", version="0.1.0")
 logger = logging.getLogger("docling_sidecar")
@@ -266,6 +269,7 @@ def build_parse_response(
     original_page_count: int | None = None,
     extra_warnings: list[dict[str, Any]] | None = None,
     embedded_page_texts: list[str] | None = None,
+    text_layer: TextLayer | None = None,
 ) -> ParseResponseV3:
     document_text = _document_text(document, embedded_page_texts)
     tables: list[dict[str, Any]] = []
@@ -292,12 +296,15 @@ def build_parse_response(
         })
         raw_tables.append({
             "page": page,
+            "sourcePage": filtered_page,
             "table": table_number,
             "cells": list(data.table_cells),
             "num_rows": data.num_rows,
             "num_cols": data.num_cols,
         })
-    source_rows = build_source_rows(raw_tables, document=document)
+    source_rows = build_source_rows(
+        prepare_tables(raw_tables, document=document, text_layer=text_layer), document=document,
+    )
     normalized = extract_boq_document(tables, document_text)
     deterministic = derive_document(source_rows)
     sections = deterministic["sections"]
@@ -309,6 +316,11 @@ def build_parse_response(
     source_total = deterministic["sourceTotal"]
     if source_total is None:
         source_total = normalized["sourceTotal"]
+    text_summary = summarise_text(embedded_page_texts)
+    if source_total is None and text_summary is not None:
+        printed_total = pre_vat_total(text_summary)
+        source_total = float(printed_total) if printed_total is not None else None
+    summary_warning_list = summary_warnings(text_summary, source_total)
     source_quote_summary = deterministic.get("sourceQuoteSummary")
     total_items, reconciliation = build_reconciliation(
         sections, source_total, source_quote_summary
@@ -324,6 +336,7 @@ def build_parse_response(
         # Helpers return dict-shaped payloads; cast keeps pyright aligned without runtime change.
         warnings=cast(Any, [
             *(extra_warnings or []), *extraction_warnings, *deterministic_warnings,
+            *summary_warning_list,
         ]),
         sourceTotal=source_total,
         sourceQuoteSummary=cast(Any, source_quote_summary),
@@ -382,14 +395,16 @@ def convert_pdf(filename: str, content: bytes, pages: list[int] | None = None):
             for page in normalised.pages if page.ocr_checked
         ])
 
-    return build_parse_response(
-        filename,
-        result.document,
-        original_page_map=original_page_map,
-        original_page_count=original_page_count,
-        extra_warnings=warnings,
-        embedded_page_texts=embedded_texts,
-    )
+    with TextLayer(source_content) as text_layer:
+        return build_parse_response(
+            filename,
+            result.document,
+            original_page_map=original_page_map,
+            original_page_count=original_page_count,
+            extra_warnings=warnings,
+            embedded_page_texts=embedded_texts,
+            text_layer=text_layer,
+        )
 
 
 @app.post("/parse", response_model=ParseResponseV3, response_model_exclude_none=True)
