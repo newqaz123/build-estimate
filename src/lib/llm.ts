@@ -76,10 +76,28 @@ function readContent(data: unknown, label: string): string {
   }
   const message = (choices[0] as { message?: { content?: unknown } } | null)?.message
   const content = message?.content
+  const finishReason = (choices[0] as { finish_reason?: unknown } | null)?.finish_reason
+  if ((typeof content !== 'string' || content.trim() === '') && finishReason === 'length') {
+    throw new Error(`${label} API ran out of output tokens before answering (finish_reason=length)`)
+  }
   if (typeof content !== 'string') {
     throw new Error(`${label} API returned a choice without text content`)
   }
   return content
+}
+
+const REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high'])
+
+/**
+ * OpenRouter reasoning control. Reasoning models (e.g. DeepSeek flash) can spend the
+ * whole max_tokens budget thinking and return no answer, so default to low effort.
+ * LLM_REASONING_EFFORT=off disables reasoning; =default sends nothing (provider default).
+ */
+export function openRouterReasoning(env: Record<string, string | undefined>): Record<string, unknown> | undefined {
+  const raw = env.LLM_REASONING_EFFORT?.trim().toLowerCase() || 'low'
+  if (raw === 'default') return undefined
+  if (raw === 'off' || raw === 'none') return { enabled: false }
+  return REASONING_EFFORTS.has(raw) ? { effort: raw } : { effort: 'low' }
 }
 
 /** OpenAI json_object mode requires the word "JSON" somewhere in the messages. */
@@ -125,6 +143,7 @@ export async function callLLM(
     messages: json ? ensureJsonInstruction(messages) : messages,
     max_tokens: options.maxTokens ?? DEFAULT_LLM_MAX_TOKENS,
     ...(json ? { response_format: { type: 'json_object' } } : {}),
+    ...(activeProvider === 'openrouter' && openRouterReasoning(env) ? { reasoning: openRouterReasoning(env) } : {}),
   }
 
   const startedAt = Date.now()
@@ -165,9 +184,10 @@ export async function callLLM(
   } finally {
     clearTimeout(timer)
   }
-  const content = readContent(data, config.label)
+  // Log usage before reading content: tokens are billed even when no answer comes back.
   const usage = readUsage(data)
   logUsage({ provider: activeProvider, model: activeModel, durationMs: Date.now() - startedAt, ...usage })
+  const content = readContent(data, config.label)
   return { content, provider: activeProvider, model: activeModel, ...(usage ? { usage } : {}) }
 }
 

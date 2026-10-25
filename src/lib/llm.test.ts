@@ -4,6 +4,7 @@ import {
   callLLM,
   createActionableReviewProviderCall,
   DEFAULT_LLM_MAX_TOKENS,
+  openRouterReasoning,
   type LlmCallOptions,
   type LlmUsageLogEntry,
 } from './llm'
@@ -194,4 +195,35 @@ test('callLLM records provider-reported cost when present (OpenRouter usage.cost
   const result = await callLLM(messages, 'openrouter', 'x/y', undefined, opts({ fetchImpl, logUsage: (entry) => logged.push(entry) }))
   assert.equal(result.usage?.costUsd, 0.0000423)
   assert.equal(logged[0]!.costUsd, 0.0000423)
+})
+
+test('callLLM asks OpenRouter for low reasoning effort by default and never sends it to OpenAI', async () => {
+  const router = mockFetch(() => okJson(completion('ok')))
+  await callLLM(messages, 'openrouter', 'x/y', undefined, opts({ fetchImpl: router.fetchImpl }))
+  assert.deepEqual(router.calls[0]!.body.reasoning, { effort: 'low' })
+  const openai = mockFetch(() => okJson(completion('ok')))
+  await callLLM(messages, 'openai', 'gpt-4o-mini', undefined, opts({ fetchImpl: openai.fetchImpl }))
+  assert.equal(openai.calls[0]!.body.reasoning, undefined)
+})
+
+test('openRouterReasoning follows LLM_REASONING_EFFORT', () => {
+  assert.deepEqual(openRouterReasoning({}), { effort: 'low' })
+  assert.deepEqual(openRouterReasoning({ LLM_REASONING_EFFORT: 'HIGH' }), { effort: 'high' })
+  assert.deepEqual(openRouterReasoning({ LLM_REASONING_EFFORT: 'off' }), { enabled: false })
+  assert.equal(openRouterReasoning({ LLM_REASONING_EFFORT: 'default' }), undefined)
+  assert.deepEqual(openRouterReasoning({ LLM_REASONING_EFFORT: 'bogus' }), { effort: 'low' })
+})
+
+test('callLLM explains a reasoning model that used the whole token budget, and still logs usage', async () => {
+  const logged: LlmUsageLogEntry[] = []
+  const { fetchImpl } = mockFetch(() => okJson({
+    choices: [{ finish_reason: 'length', message: { role: 'assistant', content: null, reasoning: 'thinking...' } }],
+    usage: { prompt_tokens: 1000, completion_tokens: 4096, total_tokens: 5096, cost: 0.0037 },
+  }))
+  await assert.rejects(
+    callLLM(messages, 'openrouter', 'x/y', undefined, opts({ fetchImpl, logUsage: (entry) => logged.push(entry) })),
+    /ran out of output tokens/,
+  )
+  assert.equal(logged.length, 1)
+  assert.equal(logged[0]!.completionTokens, 4096)
 })
