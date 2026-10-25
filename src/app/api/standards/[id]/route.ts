@@ -4,11 +4,32 @@ import { runTransaction } from '@/lib/db'
 import type { Boq, BoqItem } from '@/lib/boq-schema'
 import type { Estimate } from '@/lib/estimate-schema'
 import type { StandardEntry } from '@/lib/standard-schema'
-import { applyStandardToBoqItem, normalizeStandardEntry } from '../route'
+import { applyStandardToBoqItem, findDuplicateStandard, normalizeStandardEntry } from '../route'
 import { isPricedBoqItem } from '@/lib/boq-pricing'
 
 function normalizeText(value: string | undefined): string {
   return value?.trim().toLowerCase() ?? ''
+}
+
+/**
+ * Body of the 409 sent when an edit would make an entry identical (same
+ * description and unit) to another active entry. The client offers to merge.
+ */
+export function editDuplicateConflict(
+  standards: StandardEntry[],
+  editedId: string,
+  description: string,
+  unit: string,
+  unitMap: Record<string, string> = {},
+): { error: string; code: 'duplicate_standard'; existingId: string; existing: { description: string; unit: string } } | null {
+  const duplicate = findDuplicateStandard(standards, description, unit, unitMap, [editedId])
+  if (!duplicate) return null
+  return {
+    error: 'This item already exists. Merge them into one instead.',
+    code: 'duplicate_standard',
+    existingId: duplicate.id,
+    existing: { description: duplicate.description, unit: duplicate.unit },
+  }
 }
 
 export function computeBoqStdStatus(sections: Boq['sections']): Boq['stdStatus'] {
@@ -128,6 +149,20 @@ export async function PUT(
         updatedAt,
       }
 
+      const [allStandardsSnap, settingsSnap] = await Promise.all([
+        transaction.get(db.collection('standards')),
+        transaction.get(db.collection('settings').doc('workspace')),
+      ])
+      const unitMap = (settingsSnap.data() as { fuzzy?: { unitMap?: Record<string, string> } } | undefined)?.fuzzy?.unitMap ?? {}
+      const conflict = editDuplicateConflict(
+        allStandardsSnap.docs.map((doc) => ({ ...doc.data(), id: doc.id }) as StandardEntry),
+        id,
+        updatedStandard.description,
+        updatedStandard.unit,
+        unitMap,
+      )
+      if (conflict) return { conflict }
+
       const boqsQuery = db.collection('boqs')
       const boqsSnap = await transaction.get(boqsQuery)
       const boqs = boqsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as Boq)
@@ -157,6 +192,9 @@ export async function PUT(
 
     if ('error' in result) {
       return NextResponse.json({ error: result.error }, { status: 404 })
+    }
+    if ('conflict' in result) {
+      return NextResponse.json(result.conflict, { status: 409 })
     }
 
     return NextResponse.json(result)

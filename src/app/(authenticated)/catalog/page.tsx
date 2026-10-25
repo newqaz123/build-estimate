@@ -75,6 +75,12 @@ export default function CatalogPage() {
   const [suggestingAll, setSuggestingAll] = useState(false)
   const [matchTarget, setMatchTarget] = useState<ReviewItem | null>(null)
   const [pricingTarget, setPricingTarget] = useState<StandardEntry | null>(null)
+  const [duplicateEdit, setDuplicateEdit] = useState<{
+    edited: StandardEntry
+    existing: StandardEntry
+    description: string
+    unit: string
+  } | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [mergeTarget, setMergeTarget] = useState<{
     entries: StandardEntry[]
@@ -330,6 +336,14 @@ export default function CatalogPage() {
           aliases: editAliases.split(",").map((a) => a.trim()).filter(Boolean),
         }),
       })
+      if (res.status === 409) {
+        const conflict = await res.json().catch(() => ({})) as { code?: string; existingId?: string }
+        const existing = standards.find((entry) => entry.id === conflict.existingId)
+        if (conflict.code === "duplicate_standard" && existing) {
+          setDuplicateEdit({ edited: standard, existing, description: editDesc.trim(), unit: editUnit.trim() })
+          return
+        }
+      }
       if (!res.ok) throw new Error("Failed to update")
       toast.success("Standard updated")
       setEditingId((current) => current === id ? null : current)
@@ -943,6 +957,40 @@ export default function CatalogPage() {
               </p>
             </div>
           ) : null}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={Boolean(duplicateEdit)} onOpenChange={(open) => { if (!open) setDuplicateEdit(null) }}>
+        <DialogContent data-od-id="catalog-duplicate-edit-dialog">
+          <DialogHeader>
+            <DialogTitle>This item already exists</DialogTitle>
+            <DialogDescription>
+              {duplicateEdit
+                ? `“${duplicateEdit.existing.description}” (${duplicateEdit.existing.unit}) is already in the catalog. Merge them into one?`
+                : null}
+            </DialogDescription>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Merging keeps one item with both price histories. Nothing is deleted and you can undo it.
+          </p>
+          <DialogFooter>
+            <button className="btn btn-ghost" onClick={() => setDuplicateEdit(null)} data-od-id="duplicate-edit-keep-editing">Keep editing</button>
+            <button
+              className="btn btn-primary"
+              onClick={() => {
+                if (!duplicateEdit) return
+                setMergeTarget({
+                  entries: [duplicateEdit.existing, duplicateEdit.edited],
+                  keepId: duplicateEdit.existing.id,
+                  description: duplicateEdit.description,
+                  unit: duplicateEdit.unit,
+                })
+                setDuplicateEdit(null)
+              }}
+              data-od-id="duplicate-edit-merge"
+            >
+              Merge them into one
+            </button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
       {mergeTarget ? (

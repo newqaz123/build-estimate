@@ -478,3 +478,25 @@ test('duplicate standard check: same description (case/space-insensitive) and an
   assert.equal(findDuplicateStandard(entries, 'Pipe painting', 'lot'), undefined)
   assert.equal(findDuplicateStandard(entries, 'Old item', 'm'), undefined)
 })
+
+test('editing into an existing active entry is a 409 conflict that names the existing entry', async () => {
+  const { editDuplicateConflict } = await import('./[id]/route')
+  const now = '2026-10-25T00:00:00.000Z'
+  const entry = (id: string, description: string, unit: string, archivedAt?: string) => ({ id, description, unit, aliases: [], sourceBoqCount: 0, createdAt: now, updatedAt: now, ...(archivedAt ? { archivedAt } : {}) })
+  const standards = [entry('a', 'PVC pipe 4"', 'm'), entry('b', 'Elbow', 'ea'), entry('c', 'Old pipe', 'm', now)]
+  const conflict = editDuplicateConflict(standards, 'b', '  pvc   PIPE 4" ', 'เมตร')
+  assert.equal(conflict?.code, 'duplicate_standard')
+  assert.equal(conflict?.existingId, 'a')
+  assert.deepEqual(conflict?.existing, { description: 'PVC pipe 4"', unit: 'm' })
+  assert.equal(editDuplicateConflict(standards, 'a', 'PVC pipe 4"', 'm'), null, 'saving an entry unchanged is fine')
+  assert.equal(editDuplicateConflict(standards, 'b', 'Old pipe', 'm'), null, 'archived entries do not block')
+  assert.equal(editDuplicateConflict(standards, 'b', 'PVC pipe 4"', 'ea'), null, 'a different unit is a different item')
+})
+
+test('PUT checks for a duplicate before writing and answers 409', async () => {
+  const { readFileSync } = await import('node:fs')
+  const source = readFileSync(new URL('./[id]/route.ts', import.meta.url), 'utf8')
+  const put = source.slice(source.indexOf('export async function PUT'), source.indexOf('export async function DELETE'))
+  assert.ok(put.indexOf('editDuplicateConflict(') < put.indexOf('transaction.update(standardRef'))
+  assert.match(put, /NextResponse\.json\(result\.conflict, \{ status: 409 \}\)/)
+})

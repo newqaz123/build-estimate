@@ -29,3 +29,12 @@ test('catalog lets you pick items, merge them, and undo a merge', () => {
   assert.match(page, /label: "Undo"/)
   assert.match(page, /std\.lastMerge \?/)
 })
+
+test('an edit that duplicates another entry asks to merge and opens the merge dialog', () => {
+  const page = readFileSync(new URL('../app/(authenticated)/catalog/page.tsx', import.meta.url), 'utf8')
+  assert.match(page, /res\.status === 409/)
+  assert.match(page, /conflict\.code === "duplicate_standard"/)
+  assert.match(page, /This item already exists/)
+  assert.match(page, /Merge them into one\?/)
+  assert.match(page, /entries: \[duplicateEdit\.existing, duplicateEdit\.edited\]/)
+})
